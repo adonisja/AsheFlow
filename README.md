@@ -1,15 +1,14 @@
 # AsheFlow - Crew Management & Logistics Platform
 
-A comprehensive B2B SaaS solution for delivery crew management, time tracking, logistics coordination, and payroll processing.
+A comprehensive B2B SaaS solution for delivery crew management, scheduling, logistics coordination, and intelligent dispatching.
 
 ## 🚀 Project Overview
 
-AsheFlow is a multi-tenant platform designed to help delivery companies manage their workforce efficiently. The system provides:
+AsheFlow is a platform designed to help delivery companies manage their workforce efficiently. The system provides:
 
-- **Crew Management**: Employee profiles, roles, team assignments
-- **Time Management**: Clock in/out, timesheets, attendance tracking, scheduling
-- **Logistics**: Route assignments, delivery tracking, vehicle management
-- **Payroll**: Automated wage calculations, payment processing, deductions
+- **Crew Management**: Employee profiles, dynamic roles (Driver, Trainer, Walker), team assignments, relationship mapping (favorites/bans).
+- **Time Management**: Scheduling, granular Calendar PTO requests, and recurring Day-of-Week Off-Days.
+- **Intelligent Dispatching**: Algorithmic generation of daily truck assignments resolving worker preferences, off-days, and role constraints.
 
 ## 🏗️ Architecture
 
@@ -17,138 +16,92 @@ AsheFlow is a multi-tenant platform designed to help delivery companies manage t
 - **Framework**: FastAPI
 - **Database**: PostgreSQL
 - **ORM**: SQLAlchemy 2.0
-- **Authentication**: JWT + OAuth2
-- **Task Queue**: Celery + Redis
-- **API Documentation**: OpenAPI/Swagger
+- **Migrations**: Alembic
+- **Authentication**: AWS Cognito (JWT Verification via JWKS)
 
 ### Frontend (React)
-- **Framework**: React 18 + TypeScript
-- **Mobile**: React Native
-- **State Management**: Redux Toolkit
-- **UI Library**: Material-UI
-- **API Client**: Axios + React Query
+- **Framework**: React 18 + TypeScript (Vite)
+- **State Management**: React Context API
+- **UI & Styling**: Tailwind CSS, React-Select
+- **API Client**: Axios
 
 ### Infrastructure
 - **Containerization**: Docker + Docker Compose
-- **Cloud**: AWS/GCP/Azure
-- **CI/CD**: GitHub Actions
-- **Monitoring**: Prometheus + Grafana
+- **Provisioning**: Initial seed scripts for rapid populated dev environments (`seed.py`).
 
 ## 📁 Project Structure
 
-```
+```text
 AsheFlow/
 ├── backend/                 # Python FastAPI backend
+│   ├── alembic/             # Database migrations
 │   ├── app/
-│   │   ├── api/            # API endpoints
-│   │   ├── core/           # Core configuration
-│   │   ├── models/         # Database models
-│   │   ├── schemas/        # Pydantic schemas
-│   │   ├── services/       # Business logic
-│   │   └── utils/          # Utilities
-│   ├── tests/              # Backend tests
-│   ├── alembic/            # Database migrations
+│   │   ├── api/             # Auth/deps
+│   │   ├── models/          # SQLAlchemy Models (Employee, OffDay, Truck, etc.)
+│   │   ├── routers/         # API endpoints
+│   │   ├── schemas/         # Pydantic schemas
+│   │   └── services/        # Business logic (Dispatch Algorithm)
+│   ├── seed.py              # Data population script
 │   └── requirements.txt
-├── frontend/               # React web application
+├── frontend/                # React web application
 │   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── services/
-│   │   ├── store/
+│   │   ├── api/             # Axios API bindings
+│   │   ├── components/      # Reusable UI (Navbar, Layout, etc.)
+│   │   ├── contexts/        # AuthProvider & App State
+│   │   ├── pages/           # Pages (Dashboard, Preferences, Schedule)
 │   │   └── utils/
 │   └── package.json
-├── mobile/                 # React Native app
-├── docker/                 # Docker configurations
-└── docs/                   # Documentation
+├── docs/                    # Architecture decisions (ADRs), Diagrams, and Journals
+└── docker-compose.yml
 ```
 
 ## 🛠️ Development Setup
 
 ### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- PostgreSQL 15+
-- Redis
 - Docker & Docker Compose
+- AWS Cognito User Pool (Configured with App Client)
 
 ### Quick Start
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/adonisja/AsheFlow.git
    cd AsheFlow
    ```
 
-2. **Backend Setup**
+2. **Environment Variables**
+   - Create `backend/.env` based on `backend/.env.example`.
+   - Create `frontend/.env` based on `frontend/.env.template`.
+   - Ensure AWS Cognito keys (`AWS_COGNITO_USER_POOL_ID` and `AWS_REGION`) are synchronized across both.
+
+3. **Run the Application**
    ```bash
-   cd backend
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
+   docker-compose up --build
+   ```
+   *Alternatively, use the provided `start.sh` script to boot the environment.*
+
+4. **Run Database Migrations & Seed Data**
+   Open a new terminal while the containers are running:
+   ```bash
+   docker exec -it asheflow_backend alembic upgrade head
+   docker exec -it asheflow_backend python seed.py
    ```
 
-3. **Frontend Setup**
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-4. **Database Setup**
-   ```bash
-   docker-compose up -d postgres redis
-   cd backend
-   alembic upgrade head
-   ```
-
-5. **Run Development Servers**
-   ```bash
-   # Terminal 1 - Backend
-   cd backend
-   uvicorn app.main:app --reload
-
-   # Terminal 2 - Frontend
-   cd frontend
-   npm start
-   ```
+The application will be available at:
+- **Frontend**: http://localhost:3000
+- **Backend API Docs**: http://localhost:8000/docs
 
 ## 📋 Development Roadmap
 
-### Phase 1: Foundation (Weeks 1-2)
-- [ ] Project setup and structure
-- [ ] Database design and models
-- [ ] Authentication system
-- [ ] Multi-tenancy infrastructure
+- [x] **Phase 1: Data Models & Architecture** - SQL Schema, API bindings, SQLAlchemy setup.
+- [x] **Phase 2: Authentication** - AWS Cognito Integration, RBAC setup.
+- [x] **Phase 3: Frontend Infrastructure** - Vite + Tailwind layout, base API interceptors.
+- [x] **Phase 4: Worker Endpoints** - Preferences tab (Bans/Favs), Scheduling logic (Recurring Off-Days vs Exact Date PTO).
+- [ ] **Phase 5: Dispatch Engine UI** - Admin/Management dynamic dashboard for manual and algorithmic truck assignments.
 
-### Phase 2: Core Features (Weeks 3-6)
-- [ ] Crew management module
-- [ ] Time tracking system
-- [ ] Basic logistics features
-- [ ] Admin dashboard
+## 📝 Documentations
 
-### Phase 3: Advanced Features (Weeks 7-10)
-- [ ] Payroll automation
-- [ ] Advanced logistics (route optimization)
-- [ ] Reporting and analytics
-- [ ] Mobile app development
-
-### Phase 4: Production Ready (Weeks 11-12)
-- [ ] Performance optimization
-- [ ] Security hardening
-- [ ] CI/CD pipeline
-- [ ] Documentation completion
-
-## 🔐 Security Considerations
-
-- Multi-tenant data isolation
-- Role-based access control (RBAC)
-- Data encryption at rest and in transit
-- GDPR/compliance considerations
-- Audit logging
-
-## 📝 License
-
-[Your License Here]
-
-## 👥 Team
-
-[Your Team Information]
+For deeper technical context, check the `/docs` folder which contains:
+- **Journals (`/docs/journals`)**: Chronological daily development logs.
+- **Architectural Decision Records (`/docs/decisions`)**: Explanation of system design choices.
+- **Learning Guide (`/docs/LEARNING_GUIDE.md`)**: Running list of roadblocks and solutions.
