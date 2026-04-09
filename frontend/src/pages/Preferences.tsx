@@ -53,7 +53,16 @@ const Preferences = () => {
   const [selectedDate, setSelectedDate] = useState('');
 
   useEffect(() => {
-    axiosClient.get('/employees/').then(res => setEmployees(res.data)).catch(console.error);
+    axiosClient.get('/employees/')
+      .then(res => {
+        const sortedEmployees = res.data.sort((a: any, b: any) => {
+          const nameA = a.first_name || a.name || '';
+          const nameB = b.first_name || b.name || '';
+          return nameA.localeCompare(nameB);
+        });
+        setEmployees(sortedEmployees);
+      })
+      .catch(console.error);
   }, []);
 
   useEffect(() => {
