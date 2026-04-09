@@ -3,6 +3,7 @@ import Select from 'react-select';
 import axiosClient from '../api/axiosClient';
 import { getSchedule, createOffDay } from '../api/preferences';
 import { createTimeOffRequest } from '../api/timeOffRequests';
+import { CalendarDays, Clock, Users } from 'lucide-react';
 
 export interface ScheduleDay {
   date: string;
@@ -11,179 +12,199 @@ export interface ScheduleDay {
   crew: string[] | null;
 }
 
+const selectStyles = {
+  control: (base: any, state: any) => ({
+    ...base,
+    borderRadius: '0.75rem',
+    borderColor: state.isFocused ? 'hsl(240 5% 65%)' : 'hsl(240 6% 90%)',
+    boxShadow: state.isFocused ? '0 0 0 2px hsl(240 5% 65% / 0.2)' : 'none',
+    padding: '2px 4px',
+    fontSize: '0.875rem',
+    '&:hover': { borderColor: 'hsl(240 5% 65%)' },
+  }),
+  option: (base: any, state: any) => ({
+    ...base,
+    fontSize: '0.875rem',
+    backgroundColor: state.isSelected ? 'hsl(240 5% 16%)' : state.isFocused ? 'hsl(240 5% 96%)' : 'white',
+    color: state.isSelected ? 'white' : 'hsl(240 10% 10%)',
+  }),
+};
+
 const Schedule = () => {
-    const [employees, setEmployees] = useState<any[]>([]);
-    const [myId, setMyId] = useState<string>('');
-    const [scheduleData, setScheduleData] = useState<ScheduleDay[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [myId, setMyId] = useState<string>('');
+  const [scheduleData, setScheduleData] = useState<ScheduleDay[]>([]);
 
-    useEffect(() => {
-        axiosClient.get('/employees/').then(res => {
-            setEmployees(res.data);
-        }).catch(console.error);
-    }, []);
+  useEffect(() => {
+    axiosClient.get('/employees/')
+      .then(res => {
+        const sortedEmployees = res.data.sort((a: any, b: any) => {
+          const nameA = a.first_name || a.name || '';
+          const nameB = b.first_name || b.name || '';
+          return nameA.localeCompare(nameB);
+        });
+        setEmployees(sortedEmployees);
+      })
+      .catch(console.error);
+  }, []);
 
-    const fetchSchedule = async (employeeId: string) => {
-        if (!employeeId) return;
-        
-        const today = new Date();
-        const currentDayOfWeek = today.getDay(); // 0 is Sunday, 6 is Saturday
-        
-        // Find Sunday of the current week (or keep it if today is Sunday)
-        const startDate = new Date(today);
-        startDate.setDate(today.getDate() - currentDayOfWeek);
-        
-        // Next Saturday
-        const endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + 6);
+  const fetchSchedule = async (employeeId: string) => {
+    if (!employeeId) return;
+    const today = new Date();
+    const startDate = new Date(today);
+    startDate.setDate(today.getDate() - today.getDay());
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + 6);
 
-        // Format to YYYY-MM-DD to avoid timezone shifts
-        // We use local offsets because we want today according to user's computer
-        const formatYMD = (d: Date) => {
-            const year = d.getFullYear();
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        };
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-        const startDateStr = formatYMD(startDate);
-        const endDateStr = formatYMD(endDate);
+    try {
+      const data = await getSchedule(employeeId, fmt(startDate), fmt(endDate));
+      setScheduleData(data);
+    } catch (err) {
+      console.error("Failed to load schedule", err);
+    }
+  };
 
-        try {
-            const data = await getSchedule(employeeId, startDateStr, endDateStr);
-            setScheduleData(data);
-        } catch (err) {
-            console.error("Failed to load schedule", err);
-        }
-    };
+  useEffect(() => { fetchSchedule(myId); }, [myId]);
 
-    useEffect(() => {
-        fetchSchedule(myId);
-    }, [myId]);
+  const handleRequestRecurringOffDay = async (dateStr: string) => {
+    if (!myId) return;
+    const parts = dateStr.split('-');
+    const dateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    try {
+      await createOffDay(myId, days[dateObj.getDay()]);
+      await fetchSchedule(myId);
+    } catch (err) { console.error("Failed to request recurring off day", err); }
+  };
 
-    const handleRequestRecurringOffDay = async (dateStr: string) => {
-        if (!myId) return;
-        const parts = dateStr.split('-');
-        const dateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        const dayOfWeek = days[dateObj.getDay()]; 
+  const handleRequestSpecificPTO = async (dateStr: string) => {
+    if (!myId) return;
+    try {
+      await createTimeOffRequest(myId, dateStr);
+      await fetchSchedule(myId);
+    } catch (err: any) {
+      console.error("Failed to request specific PTO", err);
+      if (err.response?.data?.detail) alert(err.response.data.detail);
+    }
+  };
 
-        try {
-            await createOffDay(myId, dayOfWeek);
-            await fetchSchedule(myId);
-        } catch (err) {
-            console.error("Failed to request recurring off day", err);
-        }
-    };
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
 
-    const handleRequestSpecificPTO = async (dateStr: string) => {
-        if (!myId) return;
-        try {
-            await createTimeOffRequest(myId, dateStr);
-            await fetchSchedule(myId);
-        } catch (err: any) {
-            console.error("Failed to request specific PTO", err);
-            if (err.response?.data?.detail) {
-                alert(err.response.data.detail);
-            }
-        }
-    };
+  const employeeOptions = employees.map(emp => ({
+    value: emp.id,
+    label: `${emp.first_name || emp.name} (${emp.role})`
+  }));
 
-    // calculate today's date in YYYY-MM-DD for comparison
-    const formatedTodayStr = (() => {
-        const d = new Date();
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    })();
+  const getStatusBadge = (status: string) => {
+    if (status === 'Off (Recurring)' || status === 'Time Off') return 'badge-success';
+    if (status === 'Pending Off (Recurring)' || status === 'Pending Time Off') return 'badge-warning';
+    if (status === 'Assigned') return 'badge-info';
+    return 'badge bg-accent text-muted-foreground';
+  };
 
-    const employeeOptions = employees.map(emp => ({
-        value: emp.id,
-        label: `${emp.first_name || emp.name} (${emp.role})`
-    }));
+  const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-    return (
-        <div className="p-8 max-w-4xl mx-auto">
-            <h1 className="text-2xl font-bold mb-6">My Schedule</h1>
-            
-            <div className="mb-8 p-4 bg-white rounded-lg shadow">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Select Your Identity (For Demo)</label>
-                <Select
-                    options={employeeOptions}
-                    value={employeeOptions.find(o => o.value === myId) || null}
-                    onChange={(selected) => setMyId(selected?.value || '')}
-                    placeholder="-- Choose Employee --"
-                    isClearable
-                    className="w-full text-left"
-                />
-            </div>
+  return (
+    <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+      <h1 className="page-title">My Schedule</h1>
+      
+      <div className="card">
+        <label className="block text-sm font-medium text-foreground mb-2">Select Employee</label>
+        <Select
+          options={employeeOptions}
+          value={employeeOptions.find(o => o.value === myId) || null}
+          onChange={(selected) => setMyId(selected?.value || '')}
+          placeholder="Choose employee..."
+          isClearable
+          styles={selectStyles}
+        />
+      </div>
 
-            {myId && (
-                <div className="space-y-4">
-                    {scheduleData.map((item, index) => {
-                        const parts = item.date.split('-');
-                        const displayDateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-                        const isFutureOrToday = item.date >= formatedTodayStr;
+      {myId && (
+        <div className="space-y-3">
+          {scheduleData.map((item, index) => {
+            const parts = item.date.split('-');
+            const displayDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+            const isFutureOrToday = item.date >= todayStr;
+            const dayName = daysOfWeek[displayDate.getDay()];
+            const isToday = item.date === todayStr;
 
-                        const daysOfWeekLocal = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                        const dayOfWeekStr = daysOfWeekLocal[displayDateObj.getDay()];
-
-                        let statusColor = "text-gray-600";
-                        if (item.status === 'Off (Recurring)' || item.status === 'Time Off') statusColor = "text-green-600 font-bold";
-                        if (item.status === 'Pending Off (Recurring)' || item.status === 'Pending Time Off') statusColor = "text-yellow-600 font-bold";
-                        if (item.status === 'Assigned') statusColor = "text-blue-600 font-bold";
-
-                        return (
-                            <div key={index} className="bg-white p-4 rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center border">
-                                <div>
-                                    <h3 className="text-lg font-semibold text-gray-800">
-                                        {dayOfWeekStr}, {displayDateObj.toLocaleDateString()}
-                                    </h3>
-                                    <p className={`text-sm ${statusColor} mt-1`}>Status: {item.status}</p>
-                                    
-                                    {item.status === 'Assigned' && (
-                                        <div className="mt-3 p-3 bg-blue-50 rounded border border-blue-100">
-                                            <p className="font-semibold text-blue-800">Truck: {item.truck_name}</p>
-                                            {item.crew && item.crew.length > 0 && (
-                                                <ul className="list-disc list-inside mt-1 text-sm text-blue-700">
-                                                    {item.crew.map((member, idx) => (
-                                                        <li key={idx}>{member}</li>
-                                                    ))}
-                                                </ul>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="mt-4 sm:mt-0 flex flex-col gap-2">
-                                    {item.status === 'Available' && isFutureOrToday && (
-                                        <>
-                                            <button 
-                                                onClick={() => handleRequestSpecificPTO(item.date)}
-                                                className="bg-blue-600 text-white px-4 py-2 rounded shadow hover:bg-blue-700 transition text-sm"
-                                            >
-                                                Request Date Off (PTO)
-                                            </button>
-                                            <button 
-                                                onClick={() => handleRequestRecurringOffDay(item.date)}
-                                                className="bg-indigo-100 text-indigo-800 px-4 py-2 rounded shadow hover:bg-indigo-200 transition text-sm border border-indigo-200"
-                                            >
-                                                Request Every {dayOfWeekStr} Off
-                                            </button>
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-                        )
-                    })}
+            return (
+              <div 
+                key={index} 
+                className={`card-elevated transition-all ${isToday ? 'ring-2 ring-primary/20' : ''}`}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+                        <CalendarDays className="w-4 h-4 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-foreground">
+                          {dayName}
+                          {isToday && <span className="ml-2 text-xs text-muted-foreground font-normal">Today</span>}
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                          {displayDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                        </p>
+                      </div>
+                    </div>
                     
-                    {scheduleData.length === 0 && (
-                        <p className="text-gray-500 italic">No schedule data available for this week.</p>
+                    <span className={getStatusBadge(item.status)}>{item.status}</span>
+
+                    {item.status === 'Assigned' && (
+                      <div className="mt-2 p-3 rounded-xl bg-info/5 border border-info/10">
+                        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                          <Clock className="w-3.5 h-3.5 text-info" />
+                          Truck: {item.truck_name}
+                        </div>
+                        {item.crew && item.crew.length > 0 && (
+                          <div className="flex items-start gap-2 mt-2 text-sm text-muted-foreground">
+                            <Users className="w-3.5 h-3.5 mt-0.5 text-info" />
+                            <span>{item.crew.join(', ')}</span>
+                          </div>
+                        )}
+                      </div>
                     )}
+                  </div>
+
+                  {item.status === 'Available' && isFutureOrToday && (
+                    <div className="flex flex-col gap-2 sm:items-end">
+                      <button 
+                        onClick={() => handleRequestSpecificPTO(item.date)}
+                        className="btn-primary text-xs px-4 py-2"
+                      >
+                        Request PTO
+                      </button>
+                      <button 
+                        onClick={() => handleRequestRecurringOffDay(item.date)}
+                        className="btn-secondary text-xs px-4 py-2"
+                      >
+                        Every {dayName} Off
+                      </button>
+                    </div>
+                  )}
                 </div>
-            )}
+              </div>
+            );
+          })}
+          
+          {scheduleData.length === 0 && (
+            <div className="card text-center py-12">
+              <CalendarDays className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
+              <p className="text-subtle">No schedule data available for this week.</p>
+            </div>
+          )}
         </div>
-    );
+      )}
+    </div>
+  );
 };
 
 export default Schedule;
