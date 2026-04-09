@@ -112,7 +112,7 @@ const Preferences = () => {
         validEmployees = validEmployees.filter(e => e.role !== 'driver');
       }
     }
-    const roles = Array.from(new Set(validEmployees.map(e => e.role)));
+    const roles = Array.from(new Set(validEmployees.map(e => e.role))).sort();
     return roles.map(role => ({
       label: role.charAt(0).toUpperCase() + role.slice(1) + 's',
       options: validEmployees
