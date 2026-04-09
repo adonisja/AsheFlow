@@ -3,7 +3,7 @@ import Select from 'react-select';
 import axiosClient from '../api/axiosClient';
 import { getSchedule, createOffDay } from '../api/preferences';
 import { createTimeOffRequest } from '../api/timeOffRequests';
-import { CalendarDays, Clock, Users } from 'lucide-react';
+import { CalendarDays, Clock, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 
 export interface ScheduleDay {
   date: string;
@@ -34,6 +34,7 @@ const Schedule = () => {
   const [employees, setEmployees] = useState<any[]>([]);
   const [myId, setMyId] = useState<string>('');
   const [scheduleData, setScheduleData] = useState<ScheduleDay[]>([]);
+  const [weekOffset, setWeekOffset] = useState<number>(0);
 
   useEffect(() => {
     axiosClient.get('/employees/')
@@ -48,16 +49,17 @@ const Schedule = () => {
       .catch(console.error);
   }, []);
 
-  const fetchSchedule = async (employeeId: string) => {
+const fetchSchedule = async (employeeId: string, offset: number) => {
     if (!employeeId) return;
     const today = new Date();
+    today.setDate(today.getDate() + offset * 7); // Apply week offset
     const startDate = new Date(today);
     startDate.setDate(today.getDate() - today.getDay());
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + 6);
 
     const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
+    
     try {
       const data = await getSchedule(employeeId, fmt(startDate), fmt(endDate));
       setScheduleData(data);
@@ -66,7 +68,7 @@ const Schedule = () => {
     }
   };
 
-  useEffect(() => { fetchSchedule(myId); }, [myId]);
+  useEffect(() => { fetchSchedule(myId, weekOffset); }, [myId, weekOffset]);
 
   const handleRequestRecurringOffDay = async (dateStr: string) => {
     if (!myId) return;
@@ -75,7 +77,7 @@ const Schedule = () => {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     try {
       await createOffDay(myId, days[dateObj.getDay()]);
-      await fetchSchedule(myId);
+      await fetchSchedule(myId, weekOffset);
     } catch (err) { console.error("Failed to request recurring off day", err); }
   };
 
@@ -83,7 +85,7 @@ const Schedule = () => {
     if (!myId) return;
     try {
       await createTimeOffRequest(myId, dateStr);
-      await fetchSchedule(myId);
+      await fetchSchedule(myId, weekOffset);
     } catch (err: any) {
       console.error("Failed to request specific PTO", err);
       if (err.response?.data?.detail) alert(err.response.data.detail);
@@ -113,16 +115,43 @@ const Schedule = () => {
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">My Schedule</h1>
       
-      <div className="card">
-        <label className="block text-sm font-medium text-foreground mb-2">Select Employee</label>
-        <Select
-          options={employeeOptions}
-          value={employeeOptions.find(o => o.value === myId) || null}
-          onChange={(selected) => setMyId(selected?.value || '')}
-          placeholder="Choose employee..."
-          isClearable
-          styles={selectStyles}
-        />
+      <div className="card flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-foreground mb-2">Select Employee</label>
+          <Select
+            options={employeeOptions}
+            value={employeeOptions.find(o => o.value === myId) || null}
+            onChange={(selected) => setMyId(selected?.value || '')}
+            placeholder="Choose employee..."
+            isClearable
+            styles={selectStyles}
+          />
+        </div>
+        {myId && (
+          <div className="flex items-center gap-2 pt-6">
+            <button 
+              onClick={() => setWeekOffset(prev => prev - 1)}
+              className="btn-secondary px-3 py-2 flex items-center"
+            >
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              Prev
+            </button>
+            <button
+              onClick={() => setWeekOffset(0)}
+              className="btn-secondary px-4 py-2 font-medium"
+              disabled={weekOffset === 0}
+            >
+              Current Week
+            </button>
+            <button 
+              onClick={() => setWeekOffset(prev => prev + 1)}
+              className="btn-secondary px-3 py-2 flex items-center"
+            >
+              Next
+              <ChevronRight className="w-4 h-4 ml-1" />
+            </button>
+          </div>
+        )}
       </div>
 
       {myId && (
