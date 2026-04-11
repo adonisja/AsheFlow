@@ -4,17 +4,20 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker
+from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_off_day import EmployeeOffDay
+from app.models.notification import Notification
 from app.schemas.employee_off_day import EmployeeOffDayCreate, EmployeeOffDayResponse
 
 router = APIRouter(prefix="/employee-off-days", tags=["employee-off-days"])
-allow_mgmt = RoleChecker(["management", "admin"])
+allow_mgmt       = RoleChecker(["management", "admin", "dispatch"])
+allow_field_staff = RoleChecker(["driver", "walker", "trainer", "trainee"])
+allow_any_auth   = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
 
 
 @router.post("/", response_model=EmployeeOffDayResponse, status_code=status.HTTP_201_CREATED)
-def create_employee_off_day(employee_off_day: EmployeeOffDayCreate, db: Session = Depends(get_db)):
+def create_employee_off_day(employee_off_day: EmployeeOffDayCreate, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Add a recurring off day for an employee.
 
     Args:
@@ -38,7 +41,7 @@ def create_employee_off_day(employee_off_day: EmployeeOffDayCreate, db: Session 
     return db_off_day
 
 @router.get("/", response_model=list[EmployeeOffDayResponse])
-def get_all_employee_off_days(db:Session = Depends(get_db)):
+def get_all_employee_off_days(db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
     """Return all employee off-day records.
 
     Args:
@@ -50,7 +53,7 @@ def get_all_employee_off_days(db:Session = Depends(get_db)):
     return db.query(EmployeeOffDay).all()
 
 @router.get("/{employee_id}", response_model=list[EmployeeOffDayResponse])
-def get_employee_off_days(employee_id: UUID, db: Session = Depends(get_db)):
+def get_employee_off_days(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Return all off days for a specific employee.
 
     Args:
@@ -63,7 +66,7 @@ def get_employee_off_days(employee_id: UUID, db: Session = Depends(get_db)):
     return db.query(EmployeeOffDay).filter(EmployeeOffDay.employee_id == employee_id).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
-def delete_all_off_days(employee_id: UUID, db: Session = Depends(get_db)):
+def delete_all_off_days(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
     """Delete all recurring off days for an employee.
 
     Args:
@@ -82,7 +85,7 @@ def delete_all_off_days(employee_id: UUID, db: Session = Depends(get_db)):
     db.commit()
 
 @router.delete("/{off_day_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db)):
+def delete_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
     """Delete a single employee off-day record by its ID.
 
     Args:
@@ -105,6 +108,11 @@ def approve_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), cu
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
     off_day.status = "approved"
+    db.add(Notification(
+        employee_id=off_day.employee_id,
+        type="offday_approved",
+        message=f"Your request to have {off_day.day_of_week}s off has been approved."
+    ))
     db.commit()
     db.refresh(off_day)
     return off_day
@@ -115,6 +123,11 @@ def reject_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), cur
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
     off_day.status = "rejected"
+    db.add(Notification(
+        employee_id=off_day.employee_id,
+        type="offday_rejected",
+        message=f"Your request to have {off_day.day_of_week}s off was not approved."
+    ))
     db.commit()
     db.refresh(off_day)
     return off_day

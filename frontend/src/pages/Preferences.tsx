@@ -2,16 +2,13 @@ import React, { useState, useEffect } from 'react';
 import Select from 'react-select';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { 
-  getRelationships, createRelationship, deleteRelationship,
-  getOffDays, createOffDay, deleteOffDay, approveOffDay, rejectOffDay,
-  type EmployeeRelationship, type EmployeeOffDay
-} from '../api/preferences';
 import {
-  getTimeOffRequests, createTimeOffRequest, deleteTimeOffRequest,
-  approveTimeOffRequest, rejectTimeOffRequest, type TimeOffRequest
-} from '../api/timeOffRequests';
-import { Heart, ShieldOff, CalendarOff, CalendarClock, X, Check, Ban } from 'lucide-react';
+  getRelationships, createRelationship, deleteRelationship,
+  type EmployeeRelationship
+} from '../api/preferences';
+import { getAllEmployeeRelationships } from '../api/employeeRelationships';
+import NotificationBanner from '../components/NotificationBanner';
+import { Heart, ShieldOff, X, ArrowLeftRight } from 'lucide-react';
 
 const selectStyles = {
   control: (base: any, state: any) => ({
@@ -40,87 +37,122 @@ const selectStyles = {
 };
 
 const Preferences = () => {
-  const { groups = [] } = useAuth();
-  const isMgmt = groups.some((r: string) => ['admin', 'management'].includes(r));
-  const [myId, setMyId] = useState('');
+  const { groups = [], user } = useAuth();
+  const isAdmin = groups.includes('admin');
+  const isTrainee = groups.includes('trainee');
+  const canFavBan = groups.some(r => ['driver', 'walker', 'trainer'].includes(r));
+  const canReassign = groups.some(r => ['walker', 'trainer'].includes(r));
+
+  const [myId, setMyId] = useState<string>(isAdmin ? '' : (user?.userId || user?.username || ''));
   const [employees, setEmployees] = useState<any[]>([]);
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
-  const [offDays, setOffDays] = useState<EmployeeOffDay[]>([]);
-  const [timeOffRequests, setTimeOffRequests] = useState<TimeOffRequest[]>([]);
   const [targetFavId, setTargetFavId] = useState('');
   const [targetBanId, setTargetBanId] = useState('');
-  const [selectedOffDay, setSelectedOffDay] = useState('Monday');
-  const [selectedDate, setSelectedDate] = useState('');
+
+  // Truck reassignment — today-only, walker/trainer only
+  const [changeRequests, setChangeRequests] = useState<any[]>([]);
+  const [changeRequestReason, setChangeRequestReason] = useState('');
+  const [changeRequestError, setChangeRequestError] = useState('');
+
+  const [allRelationships, setAllRelationships] = useState<Record<string, { favs: string[], bans: string[] }>>({});
 
   useEffect(() => {
     axiosClient.get('/employees/')
       .then(res => {
-        const sortedEmployees = res.data.sort((a: any, b: any) => {
-          const nameA = a.first_name || a.name || '';
-          const nameB = b.first_name || b.name || '';
-          return nameA.localeCompare(nameB);
-        });
-        setEmployees(sortedEmployees);
+        const sorted = res.data.sort((a: any, b: any) =>
+          (a.first_name || a.name || '').localeCompare(b.first_name || b.name || '')
+        );
+        setEmployees(sorted);
+        if (!isAdmin && user && !myId) {
+          const self = sorted.find((e: any) => e.id === user.userId || e.id === user.username);
+          if (self) setMyId(self.id);
+        }
       })
       .catch(console.error);
-  }, []);
+
+    if (isAdmin) {
+      getAllEmployeeRelationships().then(setAllRelationships).catch(console.error);
+    }
+  }, [isAdmin, user]);
 
   useEffect(() => {
-    if (myId) loadPreferences(myId);
-    else { setRelationships([]); setOffDays([]); setTimeOffRequests([]); }
+    if (myId) {
+      loadPreferences(myId);
+      loadChangeRequests(myId);
+    } else {
+      setRelationships([]);
+    }
   }, [myId]);
 
   const loadPreferences = async (id: string) => {
     try {
-      const [rels, days, tReqs] = await Promise.all([
-        getRelationships(id), getOffDays(id), getTimeOffRequests(id)
-      ]);
-      setRelationships(rels); setOffDays(days); setTimeOffRequests(tReqs);
-    } catch (err) { console.error("Error loading preferences:", err); }
+      const rels = await getRelationships(id);
+      setRelationships(rels);
+      if (isAdmin) getAllEmployeeRelationships().then(setAllRelationships).catch(console.error);
+    } catch (err) { console.error(err); }
+  };
+
+  const loadChangeRequests = async (id: string) => {
+    try {
+      const res = await axiosClient.get(`/assignment-change-requests/employee/${id}`);
+      setChangeRequests(res.data);
+    } catch (err) { console.error(err); }
+  };
+
+  const today = new Date().toISOString().split('T')[0];
+
+  const handleSubmitChangeRequest = async () => {
+    if (!myId) return;
+    setChangeRequestError('');
+    try {
+      await axiosClient.post('/assignment-change-requests/', {
+        employee_id: myId,
+        requested_date: today,
+        reason: changeRequestReason || undefined,
+      });
+      setChangeRequestReason('');
+      loadChangeRequests(myId);
+    } catch (err: any) {
+      setChangeRequestError(err.response?.data?.detail || 'Failed to submit request.');
+    }
+  };
+
+  const handleCancelChangeRequest = async (id: string) => {
+    try {
+      await axiosClient.delete(`/assignment-change-requests/${id}`);
+      loadChangeRequests(myId);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to cancel request.');
+    }
   };
 
   const handleAddFav = async () => { if (!myId || !targetFavId) return; await createRelationship(myId, targetFavId, 'fav'); loadPreferences(myId); setTargetFavId(''); };
   const handleAddBan = async () => { if (!myId || !targetBanId) return; await createRelationship(myId, targetBanId, 'ban'); loadPreferences(myId); setTargetBanId(''); };
-  const handleAddOffDay = async () => { if (!myId) return; await createOffDay(myId, selectedOffDay); loadPreferences(myId); setSelectedOffDay('Monday'); };
-  const handleAddTimeOffReq = async () => {
-    if (!myId || !selectedDate) return;
-    try { await createTimeOffRequest(myId, selectedDate); loadPreferences(myId); setSelectedDate(''); }
-    catch (err: any) { alert(err?.response?.data?.detail || 'Failed'); }
-  };
   const handleDeleteRelationship = async (id: string) => { await deleteRelationship(id); loadPreferences(myId); };
-  const handleDeleteOffDay = async (id: string) => { await deleteOffDay(id); loadPreferences(myId); };
-  const handleApproveOffDay = async (id: string) => { await approveOffDay(id); loadPreferences(myId); };
-  const handleRejectOffDay = async (id: string) => { await rejectOffDay(id); loadPreferences(myId); };
-  const handleDeleteTimeOffReq = async (id: string) => { await deleteTimeOffRequest(id); loadPreferences(myId); };
-  const handleApproveTimeOffReq = async (id: string) => { await approveTimeOffRequest(id); loadPreferences(myId); };
-  const handleRejectTimeOffReq = async (id: string) => { await rejectTimeOffRequest(id); loadPreferences(myId); };
 
   const getEmpName = (id: string) => {
     const emp = employees.find(e => e.id === id);
     return emp ? `${emp.first_name || emp.name} (${emp.role})` : id;
   };
 
-  const employeeOptions = employees.map(emp => ({
-    value: emp.id, label: `${emp.first_name || emp.name} (${emp.role})`
-  }));
+  const EXEMPT_ROLES = ['management', 'admin', 'dispatch', 'trainee'];
+  const employeeOptions = employees
+    .filter(emp => !EXEMPT_ROLES.includes(emp.role))
+    .map(emp => ({ value: emp.id, label: `${emp.first_name || emp.name} (${emp.role})` }));
 
   const getGroupedOptions = (excludeId?: string, isSelector?: boolean) => {
-    let validEmployees = excludeId ? employees.filter(e => e.id !== excludeId) : employees;
+    let valid = excludeId ? employees.filter(e => e.id !== excludeId) : employees;
+    valid = valid.filter(e => !EXEMPT_ROLES.includes(e.role));
     if (isSelector) {
-      const currentEmp = employees.find(e => e.id === excludeId);
-      if (currentEmp && currentEmp.role === 'driver') {
-        validEmployees = validEmployees.filter(e => e.role !== 'driver');
-      }
+      const current = employees.find(e => e.id === excludeId);
+      if (current?.role === 'driver') valid = valid.filter(e => e.role !== 'driver');
     }
-    const roles = Array.from(new Set(validEmployees.map(e => e.role))).sort();
+    const roles = Array.from(new Set(valid.map(e => e.role))).sort();
     return roles.map(role => ({
       label: role.charAt(0).toUpperCase() + role.slice(1) + 's',
-      options: validEmployees
-        .filter(emp => emp.role === role)
-        .map(emp => ({
-          value: emp.id, 
-          label: `${emp.first_name || emp.name} (${emp.role})`
-        }))
+      options: valid.filter(e => e.role === role).map(e => ({
+        value: e.id, label: `${e.first_name || e.name} (${e.role})`
+      }))
     }));
   };
 
@@ -134,120 +166,137 @@ const Preferences = () => {
     return 'badge bg-accent text-muted-foreground';
   };
 
+  // For the reassignment section, only show pending/today's requests
+  const hasPendingToday = changeRequests.some(r => r.requested_date === today && r.status === 'pending');
+  const recentRequests = changeRequests.slice(0, 5);
+
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Preferences</h1>
 
-      <div className="card">
-        <label className="block text-sm font-medium text-foreground mb-2">Select Employee</label>
-        <Select
-          options={getGroupedOptions()}
-          value={employeeOptions.find(o => o.value === myId) || null}
-          onChange={(sel) => setMyId(sel?.value || '')}
-          placeholder="Search for an identity to impersonate..."
-          isClearable
-          isSearchable
-          styles={selectStyles}
-        />
-      </div>
+      {myId && !isAdmin && <NotificationBanner employeeId={myId} />}
+
+      {isAdmin && (
+        <div className="card">
+          <label className="block text-sm font-medium text-foreground mb-2">Select Employee</label>
+          <Select
+            options={getGroupedOptions()}
+            value={employeeOptions.find(o => o.value === myId) || null}
+            onChange={(sel) => setMyId(sel?.value || '')}
+            placeholder="Search for an employee..."
+            isClearable
+            isSearchable
+            styles={selectStyles}
+          />
+        </div>
+      )}
 
       {myId && (
         <div className="space-y-6">
-          {/* Favorites */}
-          <Section icon={Heart} title="Favorites" iconColor="text-success">
-            <div className="flex gap-3 mb-4">
-              <div className="flex-1">
-                <Select 
-                  options={getGroupedOptions(myId, true)}
-                  value={employeeOptions.find(o => o.value === targetFavId) || null} 
-                  onChange={(s) => setTargetFavId(s?.value || '')} 
-                  placeholder="Search and select to add..." 
-                  isClearable 
-                  isSearchable
-                  styles={selectStyles} 
-                />
+          {/* Truck Reassignment — walker/trainer only, today-only */}
+          {(canReassign || isAdmin) && (
+            <Section icon={ArrowLeftRight} title="Truck Reassignment Request" iconColor="text-warning">
+              <p className="text-sm text-subtle mb-4">
+                Request to be moved to a different truck for <strong>today</strong>. You must be currently assigned to submit. Dispatch will review.
+              </p>
+              {!hasPendingToday ? (
+                <div className="flex flex-col gap-3 mb-4">
+                  <input
+                    type="text"
+                    value={changeRequestReason}
+                    onChange={(e) => setChangeRequestReason(e.target.value)}
+                    placeholder="Reason (optional)"
+                    className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                  />
+                  {changeRequestError && (
+                    <p className="text-xs text-danger">{changeRequestError}</p>
+                  )}
+                  <button
+                    onClick={handleSubmitChangeRequest}
+                    className="btn-primary text-xs self-start"
+                  >
+                    Request Reassignment for Today
+                  </button>
+                </div>
+              ) : (
+                <p className="text-sm text-warning mb-4">You have a pending reassignment request for today.</p>
+              )}
+              <ul className="space-y-2">
+                {recentRequests.length === 0 && (
+                  <li className="text-subtle py-4 text-center text-sm">No reassignment requests yet.</li>
+                )}
+                {recentRequests.map((req) => (
+                  <li key={req.id} className="flex items-center justify-between p-3 rounded-xl bg-accent/50">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium text-foreground">{req.requested_date}</span>
+                      {req.reason && <span className="text-xs text-subtle">{req.reason}</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={statusBadge(req.status)}>{req.status}</span>
+                      {req.status === 'pending' && (
+                        <button
+                          onClick={() => handleCancelChangeRequest(req.id)}
+                          className="btn-ghost text-muted-foreground p-1.5 hover:text-danger"
+                          title="Cancel request"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+
+          {/* Favorites — driver/walker/trainer only (not trainee) */}
+          {(canFavBan || isAdmin) && (
+            <Section icon={Heart} title="Favorites" iconColor="text-success">
+              <div className="flex gap-3 mb-4">
+                <div className="flex-1">
+                  <Select
+                    options={getGroupedOptions(myId, true)}
+                    value={employeeOptions.find(o => o.value === targetFavId) || null}
+                    onChange={(s) => setTargetFavId(s?.value || '')}
+                    placeholder="Search and select to add..."
+                    isClearable
+                    isSearchable
+                    styles={selectStyles}
+                  />
+                </div>
+                <button onClick={handleAddFav} className="btn-primary text-xs">Add</button>
               </div>
-              <button onClick={handleAddFav} className="btn-primary text-xs">Add</button>
-            </div>
-            <ItemList items={favs} getLabel={(f) => getEmpName(f.target_employee_id)} onDelete={(f) => handleDeleteRelationship(f.id)} emptyText="No favorites yet." />
-          </Section>
+              <ItemList items={favs} getLabel={(f) => getEmpName(f.target_employee_id)} onDelete={(f) => handleDeleteRelationship(f.id)} emptyText="No favorites yet." />
+            </Section>
+          )}
 
-          {/* Bans */}
-          <Section icon={ShieldOff} title="Blocked" iconColor="text-danger">
-            <div className="flex gap-3 mb-4">
-              <div className="flex-1">
-                <Select 
-                  options={getGroupedOptions(myId)} 
-                  value={employeeOptions.find(o => o.value === targetBanId) || null} 
-                  onChange={(s) => setTargetBanId(s?.value || '')} 
-                  placeholder="Search and select to block..." 
-                  isClearable 
-                  isSearchable
-                  styles={selectStyles} 
-                />
+          {/* Blocked — driver/walker/trainer only (not trainee) */}
+          {(canFavBan || isAdmin) && (
+            <Section icon={ShieldOff} title="Blocked" iconColor="text-danger">
+              <div className="flex gap-3 mb-4">
+                <div className="flex-1">
+                  <Select
+                    options={getGroupedOptions(myId)}
+                    value={employeeOptions.find(o => o.value === targetBanId) || null}
+                    onChange={(s) => setTargetBanId(s?.value || '')}
+                    placeholder="Search and select to block..."
+                    isClearable
+                    isSearchable
+                    styles={selectStyles}
+                  />
+                </div>
+                <button onClick={handleAddBan} className="btn-primary text-xs">Add</button>
               </div>
-              <button onClick={handleAddBan} className="btn-primary text-xs">Add</button>
-            </div>
-            <ItemList items={bans} getLabel={(b) => getEmpName(b.target_employee_id)} onDelete={(b) => handleDeleteRelationship(b.id)} emptyText="No blocks yet." />
-          </Section>
+              <ItemList items={bans} getLabel={(b) => getEmpName(b.target_employee_id)} onDelete={(b) => handleDeleteRelationship(b.id)} emptyText="No blocks yet." />
+            </Section>
+          )}
 
-          {/* Off Days */}
-          <Section icon={CalendarOff} title="Recurring Off Days" iconColor="text-info">
-            <div className="flex gap-3 mb-4">
-              <select className="input-field flex-1" value={selectedOffDay} onChange={(e) => setSelectedOffDay(e.target.value)}>
-                {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-              <button onClick={handleAddOffDay} className="btn-primary text-xs">Add</button>
+          {/* Trainees see a placeholder explaining what they'll unlock */}
+          {isTrainee && !isAdmin && (
+            <div className="card text-center py-8">
+              <p className="text-sm text-subtle">Dispatch preferences (favorites & blocks) become available after graduating from the training program.</p>
             </div>
-            <ul className="space-y-2">
-              {offDays.map(od => (
-                <li key={od.id} className="flex items-center justify-between p-3 rounded-xl bg-accent/50">
-                  <div className="flex items-center gap-3">
-                    <span className="font-medium text-sm text-foreground">{od.day_of_week}</span>
-                    <span className={statusBadge(od.status)}>{od.status}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isMgmt && od.status === 'pending' && (
-                      <>
-                        <button onClick={() => handleApproveOffDay(od.id)} className="btn-ghost text-success p-1.5"><Check className="w-4 h-4" /></button>
-                        <button onClick={() => handleRejectOffDay(od.id)} className="btn-ghost text-danger p-1.5"><Ban className="w-4 h-4" /></button>
-                      </>
-                    )}
-                    <button onClick={() => handleDeleteOffDay(od.id)} className="btn-ghost text-muted-foreground p-1.5 hover:text-danger"><X className="w-4 h-4" /></button>
-                  </div>
-                </li>
-              ))}
-              {offDays.length === 0 && <li className="text-subtle py-4 text-center">No off days set.</li>}
-            </ul>
-          </Section>
-
-          {/* Time Off Requests */}
-          <Section icon={CalendarClock} title="Specific Time Off" iconColor="text-warning">
-            <div className="flex gap-3 mb-4">
-              <input type="date" className="input-field flex-1" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
-              <button onClick={handleAddTimeOffReq} className="btn-primary text-xs">Request</button>
-            </div>
-            <ul className="space-y-2">
-              {timeOffRequests.map(req => (
-                <li key={req.id} className="flex items-center justify-between p-3 rounded-xl bg-accent/50">
-                  <div className="flex items-center gap-3">
-                    <span className="font-medium text-sm text-foreground">{req.date}</span>
-                    <span className={statusBadge(req.status)}>{req.status}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isMgmt && req.status === 'pending' && (
-                      <>
-                        <button onClick={() => handleApproveTimeOffReq(req.id)} className="btn-ghost text-success p-1.5"><Check className="w-4 h-4" /></button>
-                        <button onClick={() => handleRejectTimeOffReq(req.id)} className="btn-ghost text-danger p-1.5"><Ban className="w-4 h-4" /></button>
-                      </>
-                    )}
-                    <button onClick={() => handleDeleteTimeOffReq(req.id)} className="btn-ghost text-muted-foreground p-1.5 hover:text-danger"><X className="w-4 h-4" /></button>
-                  </div>
-                </li>
-              ))}
-              {timeOffRequests.length === 0 && <li className="text-subtle py-4 text-center">No requests yet.</li>}
-            </ul>
-          </Section>
+          )}
         </div>
       )}
     </div>

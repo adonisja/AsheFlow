@@ -4,14 +4,20 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import RoleChecker, get_current_user
 from app.models.truck import Truck
 from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse
 
 router = APIRouter(prefix="/trucks", tags=["trucks"])
 
+# All authenticated users may read trucks (dispatch board, schedule view need the full list).
+# Write operations restricted to management/admin.
+allow_any_auth   = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+allow_write      = RoleChecker(["management", "admin"])
+
 
 @router.post("/", response_model=TruckResponse, status_code=status.HTTP_201_CREATED)
-def create_truck(truck: TruckCreate, db: Session = Depends(get_db)):
+def create_truck(truck: TruckCreate, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
     """Create and persist a new truck record.
 
     Args:
@@ -29,7 +35,7 @@ def create_truck(truck: TruckCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/", response_model=list[TruckResponse])
-def get_trucks(db: Session = Depends(get_db)):
+def get_trucks(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Return all active trucks.
 
     Args:
@@ -42,7 +48,7 @@ def get_trucks(db: Session = Depends(get_db)):
 
 
 @router.get("/{truck_id}", response_model=TruckResponse)
-def get_truck(truck_id: UUID, db: Session = Depends(get_db)):
+def get_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Fetch a single truck by ID.
 
     Args:
@@ -62,7 +68,7 @@ def get_truck(truck_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.put("/{truck_id}", response_model=TruckResponse)
-def update_truck(truck_id: UUID, truck: TruckUpdate, db: Session = Depends(get_db)):
+def update_truck(truck_id: UUID, truck: TruckUpdate, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
     """Update an existing truck's fields.
 
     Args:
@@ -89,7 +95,7 @@ def update_truck(truck_id: UUID, truck: TruckUpdate, db: Session = Depends(get_d
 
 
 @router.put("/{truck_id}/deactivate", response_model=TruckResponse)
-def deactivate_truck(truck_id: UUID, db: Session = Depends(get_db)):
+def deactivate_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
     """Set a truck's active status to False.
 
     Args:
@@ -113,7 +119,7 @@ def deactivate_truck(truck_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.delete("/{truck_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_truck(truck_id: UUID, db: Session = Depends(get_db)):
+def delete_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
     """Soft-delete a truck by setting ``is_active`` to False.
 
     Args:
