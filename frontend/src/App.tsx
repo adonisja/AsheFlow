@@ -1,44 +1,137 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/auth/Login';
 import Layout from './components/layout/Layout';
 import Preferences from './pages/Preferences';
 import Schedule from './pages/Schedule';
+import DispatchDashboard from './pages/DispatchDashboard';
+import TrainerDashboard from './pages/TrainerDashboard';
+import TraineeManagement from './pages/TraineeManagement';
+import TraineeDashboard from './pages/TraineeDashboard';
+import FieldOps from './pages/FieldOps';
+import Incidents from './pages/Incidents';
+import AdminDashboard from './pages/AdminDashboard';
+import ScheduleChanges from './pages/ScheduleChanges';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import DispatchView from './components/dashboard/DispatchView';
+import ManagementView from './components/dashboard/ManagementView';
+import WorkerView from './components/dashboard/WorkerView';
+import { Users, Truck, Calendar } from 'lucide-react';
+
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
   const { isAuthenticated, isLoading, groups } = useAuth();
 
   if (isLoading) {
-    return <div className="flex h-screen items-center justify-center">Loading Application...</div>;
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm text-muted-foreground">Loading...</span>
+        </div>
+      </div>
+    );
   }
 
-  // 1. Not Authenticated? Boot them to login.
   if (!isAuthenticated) return <Navigate to="/login" />;
 
-  // 2. Are they trying to access a page they don't have roles for?
   if (allowedRoles.length > 0) {
     const hasRole = groups.some(role => allowedRoles.includes(role));
     if (!hasRole) {
-      return <div className="flex h-screen items-center justify-center text-red-500">Access Denied: Insufficient Permissions (Required: {allowedRoles.join(', ')})</div>;
+      return (
+        <div className="flex h-[60vh] items-center justify-center">
+          <div className="card text-center max-w-md">
+            <p className="text-danger font-medium">Access Denied</p>
+            <p className="text-subtle mt-2">You need one of these roles: {allowedRoles.join(', ')}</p>
+          </div>
+        </div>
+      );
     }
   }
 
   return <>{children}</>;
 };
 
+type DashView = 'dispatch' | 'management' | 'worker';
+
 function Dashboard() {
   const { user, groups } = useAuth();
 
+  const isDispatch   = groups.includes('dispatch');
+  const isManagement = groups.includes('management');
+  const isAdmin      = groups.includes('admin');
+
+  // Determine default view and which tabs admin can switch between
+  const defaultView = (): DashView => {
+    if (isDispatch) return 'dispatch';
+    if (isManagement) return 'management';
+    return 'worker';
+  };
+
+  const [activeView, setActiveView] = useState<DashView>(defaultView);
+
+  const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
+
+  const viewLabel: Record<DashView, string> = {
+    dispatch: 'dispatch overview',
+    management: 'management reports',
+    worker: 'personal overview',
+  };
+
   return (
-    <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
-      <div className="px-4 py-5 sm:p-6">
-        <h1 className="text-2xl font-bold text-gray-900">AsheFlow Dashboard</h1>
-        <p className="mt-4 text-gray-700">Welcome back, <span className="font-semibold">{user?.displayName || user?.username}</span>!</p>
-        <p className="mt-2 text-sm text-gray-500 bg-gray-100 p-3 rounded mt-4">
-          Your active roles: <span className="font-mono">{groups.length > 0 ? groups.join(', ') : 'None'}</span>
-        </p>
+    <div className="space-y-8 animate-slide-up">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="page-title">
+            Good {greeting}, {user?.displayName || user?.username}
+          </h1>
+          <p className="text-subtle mt-1">Here's your {viewLabel[activeView]} for today.</p>
+        </div>
+
+        {/* Admin view switcher */}
+        {isAdmin && (
+          <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm">
+            {(['dispatch', 'management', 'worker'] as DashView[]).map(v => (
+              <button
+                key={v}
+                onClick={() => setActiveView(v)}
+                className={`px-3 py-1.5 rounded-lg font-medium capitalize transition-colors ${
+                  activeView === v
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {[
+          { label: 'Role', value: groups.join(', ') || 'Pending', icon: Users },
+          { label: 'Status', value: 'Active', icon: Truck },
+          { label: 'Today', value: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }), icon: Calendar },
+        ].map(stat => (
+          <div key={stat.label} className="card-elevated flex items-center gap-4">
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-accent">
+              <stat.icon className="w-5 h-5 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">{stat.label}</p>
+              <p className="text-sm font-semibold text-foreground mt-0.5 capitalize">{stat.value}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Role-branched content */}
+      {activeView === 'dispatch'   && <DispatchView />}
+      {activeView === 'management' && <ManagementView />}
+      {activeView === 'worker'     && <WorkerView />}
     </div>
   );
 }
@@ -59,30 +152,75 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            {/* Example Protected Route for Dispatch only */}
             <Route
               path="/dispatch"
               element={
-                <ProtectedRoute allowedRoles={['admin', 'management', 'dispatch']}>
-                  <div className="p-8"><h1 className="text-2xl font-bold text-red-600">Restricted Dispatch Center</h1></div>
+                <ProtectedRoute allowedRoles={['admin', 'dispatch']}>
+                  <DispatchDashboard />
                 </ProtectedRoute>
               }
             />
-            {/* Asset Management Route */}
             <Route
               path="/assets"
               element={
                 <ProtectedRoute allowedRoles={['admin', 'management']}>
-                  <div className="p-8"><h1 className="text-2xl font-bold text-blue-600">Assets & Users Management</h1></div>
+                  <div className="space-y-4">
+                    <h1 className="page-title">Assets & Users</h1>
+                    <div className="card">
+                      <p className="text-subtle">Asset management coming soon.</p>
+                    </div>
+                  </div>
                 </ProtectedRoute>
               }
             />
             <Route path="/schedule" element={<ProtectedRoute><Schedule /></ProtectedRoute>} />
+            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'admin']}><FieldOps /></ProtectedRoute>} />
+            <Route
+              path="/schedule-changes"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'admin']}>
+                  <ScheduleChanges />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/incidents" element={<ProtectedRoute><Incidents /></ProtectedRoute>} />
             <Route
               path="/preferences"
               element={
                 <ProtectedRoute>
                   <Preferences />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/trainer-dashboard"
+              element={
+                <ProtectedRoute allowedRoles={['trainer']}>
+                  <TrainerDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/trainee-management"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'management']}>
+                  <TraineeManagement />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/my-training"
+              element={
+                <ProtectedRoute allowedRoles={['trainee']}>
+                  <TraineeDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <AdminDashboard />
                 </ProtectedRoute>
               }
             />

@@ -6,6 +6,7 @@ from sqlalchemy import and_
 
 
 from app.database import get_db
+from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
 from app.schemas.employee_relationship import EmployeeRelationshipResponse, EmployeeRelationshipCreate
@@ -13,8 +14,12 @@ from app.schemas.employee_relationship import EmployeeRelationshipResponse, Empl
 
 router = APIRouter(prefix="/employee-relationships", tags=["employee-relationships"])
 
+allow_field_staff = RoleChecker(["driver", "walker", "trainer"])
+allow_mgmt        = RoleChecker(["management", "admin", "dispatch"])
+allow_any_auth    = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+
 @router.post("/", response_model=EmployeeRelationshipResponse, status_code=status.HTTP_201_CREATED)
-def create_employee_relationship(employee_relationship: EmployeeRelationshipCreate, db: Session = Depends(get_db)):
+def create_employee_relationship(employee_relationship: EmployeeRelationshipCreate, db: Session = Depends(get_db), _: dict = Depends(allow_field_staff)):
     """Create a fav or ban relationship between two employees, enforcing role-based limits.
 
     For ``fav`` relationships, enforces per-role caps defined by FAV_LIMITS.
@@ -93,7 +98,7 @@ def create_employee_relationship(employee_relationship: EmployeeRelationshipCrea
     return db_relationship
 
 @router.get("/", response_model=list[EmployeeRelationshipResponse])
-def get_all_employee_relationships(db: Session = Depends(get_db)):
+def get_all_employee_relationships(db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
     """Return all employee relationship records.
 
     Args:
@@ -106,7 +111,7 @@ def get_all_employee_relationships(db: Session = Depends(get_db)):
 
 
 @router.get("/{employee_id}", response_model=list[EmployeeRelationshipResponse])
-def get_employee_realtionships(employee_id: UUID, db: Session = Depends(get_db)):
+def get_employee_realtionships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Return all relationships where the given employee is the source.
 
     Args:
@@ -119,7 +124,7 @@ def get_employee_realtionships(employee_id: UUID, db: Session = Depends(get_db))
     return db.query(EmployeeRelationship).filter(EmployeeRelationship.employee_id == employee_id).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
-def clear_employee_off_days(employee_id: UUID, db: Session = Depends(get_db)):
+def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
     """Delete all relationships where the given employee is the source.
 
     Args:
@@ -138,7 +143,7 @@ def clear_employee_off_days(employee_id: UUID, db: Session = Depends(get_db)):
     db.commit()
 
 @router.delete("/{employee_relationship_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_employee_relationships(employee_relationship_id: UUID, db: Session = Depends(get_db)):
+def delete_employee_relationships(employee_relationship_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Delete a single employee relationship record by its ID.
 
     Args:

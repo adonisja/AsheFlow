@@ -1,4 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 240 10% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 10%;
+    --primary: 240 5% 16%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 5% 34%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 240 5% 93%;
+    --accent-foreground: 240 5% 16%;
+    --border: 240 6% 90%;
+    --ring: 240 5% 65%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --danger: 0 84% 60%;
+    --danger-foreground: 0 0% 100%;
+    --info: 221 83% 53%;
+    --info-foreground: 0 0% 100%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-card rounded-2xl border border-border/60 p-6;
+  }
+
+  .card-elevated {
+    @apply card shadow-sm hover:shadow-md transition-shadow duration-300;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
+           bg-primary text-primary-foreground font-medium text-sm
+           hover:bg-primary/90 active:scale-[0.98] transition-all duration-200;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
+           bg-secondary text-secondary-foreground font-medium text-sm border border-border
+           hover:bg-accent active:scale-[0.98] transition-all duration-200;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
+           bg-danger text-danger-foreground font-medium text-sm
+           hover:bg-danger/90 active:scale-[0.98] transition-all duration-200;
+  }
+
+  .btn-success {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
+           bg-success text-success-foreground font-medium text-sm
+           hover:bg-success/90 active:scale-[0.98] transition-all duration-200;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl
+           text-muted-foreground font-medium text-sm
+           hover:bg-accent hover:text-accent-foreground transition-all duration-200;
+  }
+
+  .input-field {
+    @apply w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm
+           text-foreground placeholder:text-muted-foreground
+           focus:outline-none focus:ring-2 focus:ring-ring/20 focus:border-ring
+           transition-all duration-200;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply badge bg-success/10 text-success;
+  }
+
+  .badge-warning {
+    @apply badge bg-warning/10 text-warning;
+  }
+
+  .badge-danger {
+    @apply badge bg-danger/10 text-danger;
+  }
+
+  .badge-info {
+    @apply badge bg-info/10 text-info;
+  }
+
+  .section-title {
+    @apply text-lg font-semibold text-foreground tracking-tight;
+  }
+
+  .page-title {
+    @apply text-2xl font-bold text-foreground tracking-tight;
+  }
+
+  .text-subtle {
+    @apply text-sm text-muted-foreground;
+  }
+}

@@ -1,3 +1,12 @@
+# Test users from sync_test_users.py
+TEST_USERS = [
+    {"id": "d16be5f0-c021-70de-6a50-cc22a3880062", "name": "Timmy Trainee", "role": "trainee", "discord_id": "trainee#1234"},
+    {"id": "b17b2530-0001-7015-b225-8b6346628d27", "name": "Manny Manager", "role": "management", "discord_id": "manager#1234"},
+    {"id": "b11b2560-b041-707a-9b49-23883a0d86f1", "name": "Terry Trainer", "role": "trainer", "discord_id": "trainer#1234"},
+    {"id": "e14b05e0-4031-705e-56a2-59fbe66b8171", "name": "Danny Driver", "role": "driver", "discord_id": "driver#1234"},
+    {"id": "a1db5550-9041-7079-2b61-a921e9d7807a", "name": "Dizzy Dispatch", "role": "dispatch", "discord_id": "dispatch#1234"},
+    {"id": "514ba500-b0d1-7071-302c-8e1a5f5cb0f9", "name": "Wally Walker", "role": "walker", "discord_id": "walker#1234"},
+]
 """
 Seed script for AsheFlow Dispatch system.
 Run from inside the backend container:
@@ -52,6 +61,7 @@ FAV_LIMITS = {
     "driver":  {"driver": 0, "trainer": 1, "walker": 2},
     "trainer": {"driver": 1, "trainer": 1, "walker": 2},
     "walker":  {"driver": 1, "trainer": 1, "walker": 2},
+    "trainee": {"driver": 0, "trainer": 0, "walker": 0},
 }
 
 
@@ -77,63 +87,87 @@ def random_off_days() -> list[str]:
 def seed():
     db = SessionLocal()
 
+
     try:
-        # ── Clear existing data (children before parents) ──────────────────
-        print("Clearing existing seed data...")
+        # ── Clear only relationships and assignments, not employees ───────
+        print("Clearing relationships and assignments...")
         db.query(EmployeeRelationship).delete()
         db.query(EmployeeOffDay).delete()
         db.query(AssignmentMember).delete()
         db.query(TruckAssignment).delete()
-        db.query(Truck).delete()
-        db.query(Employee).delete()
         db.commit()
 
-        # ── Create employees ───────────────────────────────────────────────
-        print("Creating employees...")
-        employees = []
 
+        # ── Create test users if not present ──────────────────────────────
+        print("Ensuring test users exist...")
+        employees = []
+        for u in TEST_USERS:
+            emp = db.query(Employee).filter_by(id=uuid.UUID(u["id"])).first()
+            if not emp:
+                emp = Employee(
+                    id=uuid.UUID(u["id"]),
+                    name=u["name"],
+                    role=u["role"],
+                    discord_id=u["discord_id"],
+                    is_active=True
+                )
+                db.add(emp)
+            employees.append(emp)
+
+        # ── Create seed employees if not present ─────────────────────────
+        print("Ensuring seed employees exist...")
         for name in DRIVER_NAMES:
-            emp = Employee(
-                id=uuid.uuid4(),
-                name=name,
-                discord_id=make_discord_id(name),
-                role="driver",
-                is_active=True
-            )
-            db.add(emp)
+            emp = db.query(Employee).filter_by(name=name, role="driver").first()
+            if not emp:
+                emp = Employee(
+                    id=uuid.uuid4(),
+                    name=name,
+                    discord_id=make_discord_id(name),
+                    role="driver",
+                    is_active=True
+                )
+                db.add(emp)
             employees.append(emp)
 
         for name in TRAINER_NAMES:
-            emp = Employee(
-                id=uuid.uuid4(),
-                name=name,
-                discord_id=make_discord_id(name),
-                role="trainer",
-                is_active=True
-            )
-            db.add(emp)
+            emp = db.query(Employee).filter_by(name=name, role="trainer").first()
+            if not emp:
+                emp = Employee(
+                    id=uuid.uuid4(),
+                    name=name,
+                    discord_id=make_discord_id(name),
+                    role="trainer",
+                    is_active=True
+                )
+                db.add(emp)
             employees.append(emp)
 
         for name in WALKER_NAMES:
-            emp = Employee(
-                id=uuid.uuid4(),
-                name=name,
-                discord_id=make_discord_id(name),
-                role="walker",
-                is_active=True
-            )
-            db.add(emp)
+            emp = db.query(Employee).filter_by(name=name, role="walker").first()
+            if not emp:
+                emp = Employee(
+                    id=uuid.uuid4(),
+                    name=name,
+                    discord_id=make_discord_id(name),
+                    role="walker",
+                    is_active=True
+                )
+                db.add(emp)
             employees.append(emp)
 
         db.commit()
-        print(f"  Created {len(employees)} employees")
+        print(f"  Ensured {len(employees)} employees exist")
 
         # ── Create trucks ──────────────────────────────────────────────────
-        print("Creating trucks...")
+        print("Ensuring trucks exist...")
+        truck_count = 0
         for name in TRUCK_NAMES:
-            db.add(Truck(id=uuid.uuid4(), name=name, is_active=True))
+            truck = db.query(Truck).filter_by(name=name).first()
+            if not truck:
+                db.add(Truck(id=uuid.uuid4(), name=name, is_active=True))
+                truck_count += 1
         db.commit()
-        print(f"  Created {len(TRUCK_NAMES)} trucks")
+        print(f"  Ensured {len(TRUCK_NAMES)} trucks exist, added {truck_count} new trucks")
 
         # ── Create off days ────────────────────────────────────────────────
         print("Creating off days...")
@@ -155,6 +189,8 @@ def seed():
         rel_count = 0
 
         for emp in employees:
+            if emp.role not in FAV_LIMITS:
+                continue  # Only drivers, trainers, walkers get relationships
             others = [e for e in employees if e.id != emp.id]
             fav_ids = set()
 
