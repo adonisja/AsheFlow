@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import RoleChecker
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.time_off_request import TimeOffRequest
 from app.models.truck_assignment import TruckAssignment
@@ -14,12 +15,16 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
+allow_any_auth = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+allow_mgmt     = RoleChecker(["dispatch", "management", "admin"])
+
 @router.get("/{employee_id}")
 def get_employee_schedule(
-    employee_id: UUID, 
-    start_date: date, 
-    end_date: date, 
-    db: Session = Depends(get_db)
+    employee_id: UUID,
+    start_date: date,
+    end_date: date,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_any_auth),
 ):
     # Determine all dates to process
     delta = end_date - start_date
@@ -77,21 +82,28 @@ def get_employee_schedule(
         for crew_am, crew_emp in all_crew_members:
             if crew_am.assignment_id not in crews:
                 crews[crew_am.assignment_id] = []
-            crews[crew_am.assignment_id].append(f"{crew_am.role}: {crew_emp.name}")
+            crews[crew_am.assignment_id].append({
+                "id": str(crew_emp.id),
+                "name": crew_emp.name,
+                "role": crew_am.role
+            })
 
     # 4. Construct the schedule response
     results = []
+    # Base recurring off day logic (case-insensitive)
+    recurring_off_day_map_lower = {k.lower(): v for k, v in recurring_off_day_map.items()}
+
     for d in days:
-        day_str = d.strftime('%A')
+        day_str = d.strftime('%A').lower()
         status = "Available"
         truck_name = None
         crew = None
 
         # Base recurring off day logic
-        if day_str in recurring_off_day_map:
-            if recurring_off_day_map[day_str] == "approved":
+        if day_str in recurring_off_day_map_lower:
+            if recurring_off_day_map_lower[day_str] == "approved":
                 status = "Off (Recurring)"
-            elif recurring_off_day_map[day_str] == "pending":
+            elif recurring_off_day_map_lower[day_str] == "pending":
                 status = "Pending Off (Recurring)"
         
         # Override with exact date requests (supercedes recurring if conflicting or pending)
@@ -117,3 +129,50 @@ def get_employee_schedule(
         })
 
     return results
+
+@router.get("/available/{target_date}")
+def get_available_employees(
+    target_date: date,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_mgmt),
+):
+    day_name = target_date.strftime("%A")
+
+    has_recurring_off = (
+        db.query(EmployeeOffDay)
+        .filter(
+            EmployeeOffDay.employee_id == Employee.id,
+            EmployeeOffDay.day_of_week.ilike(day_name),
+            EmployeeOffDay.status == 'approved'
+        )
+        .exists()
+    )
+
+    has_specific_off = (
+        db.query(TimeOffRequest)
+        .filter(
+            TimeOffRequest.employee_id == Employee.id,
+            TimeOffRequest.date == target_date,
+            TimeOffRequest.status == 'approved'
+        )
+        .exists()
+    )
+
+    available_employees = (
+        db.query(Employee)
+        .filter(
+            Employee.is_active == True,
+            ~has_recurring_off,
+            ~has_specific_off
+        )
+        .order_by(Employee.role, Employee.name)
+        .all()
+    )
+
+    pool = {"driver": [], "trainer": [], "walker": []}
+    for e in available_employees:
+        role = str(e.role).lower()
+        if role in pool:
+            pool[role].append({"id": str(e.id), "first_name": getattr(e, 'first_name', getattr(e, 'name', '')), "name": getattr(e, 'name', getattr(e, 'first_name', '')), "role": role})
+
+    return pool

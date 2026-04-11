@@ -15,6 +15,7 @@ interface AuthContextType {
   groups: string[];
   isAuthenticated: boolean;
   isLoading: boolean;
+  checkAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,6 +26,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   const checkAuth = async () => {
+    setIsLoading(true);
     try {
       // 1. Get the current user
       const currentUser = await getCurrentUser();
@@ -72,6 +74,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     groups,
     isAuthenticated: !!user,
     isLoading,
+    checkAuth,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

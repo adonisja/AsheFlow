@@ -13,7 +13,7 @@ def get_available_pool(db: Session, target_date: date = None)->dict:
         target_date: Date to check availability for. Defaults to today.
 
     Returns:
-        A dict with keys ``"drivers"``, ``"trainers"``, and ``"walkers"``, each
+        A dict with keys ``"drivers"``, ``"trainers"``, ``"trainees"``, and ``"walkers"``, each
         containing a list of Employee ORM objects available on that date.
     """
     target_date = target_date or date.today()
@@ -35,7 +35,7 @@ def get_available_pool(db: Session, target_date: date = None)->dict:
     available_employees = (
         db.query(Employee)
         .filter(
-            Employee.role.in_(["driver", "trainer", "walker"]),
+            Employee.role.in_(["driver", "trainer", "trainee", "walker"]),
             Employee.is_active == True,
             ~has_off_day_today
         )
@@ -45,6 +45,7 @@ def get_available_pool(db: Session, target_date: date = None)->dict:
     available_pool = {
         "drivers": [],
         "trainers": [],
+        "trainees": [],
         "walkers": []
     }
 
@@ -54,6 +55,8 @@ def get_available_pool(db: Session, target_date: date = None)->dict:
             available_pool["drivers"].append(employee)
         elif employee.role == "trainer":
             available_pool["trainers"].append(employee)
+        elif employee.role == "trainee":
+            available_pool["trainees"].append(employee)
         elif employee.role == "walker":
             available_pool["walkers"].append(employee)
 

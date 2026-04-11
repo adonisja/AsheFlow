@@ -1,0 +1,835 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import axiosClient from '../api/axiosClient';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** Read a File as a base64 data-URI string */
+const fileToDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+// Human-readable labels for inspection items
+const ITEM_LABELS: Record<string, string> = {
+  tyres: 'Tyres',
+  lights: 'Lights',
+  mirrors: 'Mirrors',
+  brakes: 'Brakes',
+  fluids: 'Fluids',
+  horn: 'Horn',
+  wipers: 'Wipers',
+  seatbelts: 'Seatbelts',
+  cargo_security: 'Cargo Security',
+  fuel_level: 'Fuel Level',
+};
+
+// ---------------------------------------------------------------------------
+// Vehicle Inspection Panel
+// ---------------------------------------------------------------------------
+function InspectionPanel({ employeeId }: { employeeId: string }) {
+  const [items, setItems] = useState<string[]>([]);
+  const [results, setResults] = useState<Record<string, boolean | null>>({});
+  const [notes, setNotes] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [submittedData, setSubmittedData] = useState<{ has_failures: boolean; items: Record<string, boolean>; notes?: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!employeeId) return;
+
+    // Load checklist items and check if already submitted today
+    Promise.all([
+      axiosClient.get('/field-ops/inspection/items'),
+      axiosClient.get(`/field-ops/inspection/${employeeId}`),
+    ]).then(([itemsRes, historyRes]) => {
+      const canonical: string[] = itemsRes.data.items ?? [];
+      setItems(canonical);
+      setResults(Object.fromEntries(canonical.map(k => [k, null])));
+
+      const today = todayStr();
+      const todayRecord = historyRes.data.find((r: any) => r.date === today);
+      if (todayRecord) {
+        setSubmitted(true);
+        setSubmittedData({ has_failures: todayRecord.has_failures, items: todayRecord.items, notes: todayRecord.notes });
+      }
+    }).catch(console.error);
+  }, [employeeId]);
+
+  const setResult = (item: string, pass: boolean) => {
+    setResults(prev => ({ ...prev, [item]: pass }));
+  };
+
+  const allAnswered = items.length > 0 && items.every(k => results[k] !== null);
+
+  const handleSubmit = async () => {
+    if (!allAnswered) return alert('Please mark every item as pass or fail before submitting.');
+    setLoading(true);
+    try {
+      const payload = {
+        driver_id: employeeId,
+        date: todayStr(),
+        items: results as Record<string, boolean>,
+        notes: notes.trim() || null,
+      };
+      await axiosClient.post('/field-ops/inspection', payload);
+      const has_failures = Object.values(results).some(v => v === false);
+      setSubmitted(true);
+      setSubmittedData({ has_failures, items: results as Record<string, boolean>, notes: notes.trim() || undefined });
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Inspection submission failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <ClipboardCheck className="w-4 h-4 text-primary" />
+        </div>
+        <h2 className="section-title">Pre-Trip Inspection</h2>
+      </div>
+
+      {submitted && submittedData ? (
+        <div className={`p-4 rounded-xl border text-sm space-y-3 ${submittedData.has_failures ? 'bg-destructive/10 border-destructive/30' : 'bg-success/10 border-success/30'}`}>
+          <p className={`font-semibold ${submittedData.has_failures ? 'text-destructive' : 'text-success'}`}>
+            {submittedData.has_failures ? 'Inspection submitted — failures noted. Report to management.' : 'Inspection complete — all items passed.'}
+          </p>
+          <div className="grid grid-cols-2 gap-1">
+            {Object.entries(submittedData.items).map(([k, pass]) => (
+              <div key={k} className="flex items-center gap-1.5 text-xs text-foreground">
+                {pass
+                  ? <CheckCircle2 className="w-3.5 h-3.5 text-success shrink-0" />
+                  : <XCircle className="w-3.5 h-3.5 text-destructive shrink-0" />}
+                <span>{ITEM_LABELS[k] ?? k}</span>
+              </div>
+            ))}
+          </div>
+          {submittedData.notes && (
+            <p className="text-xs text-subtle italic">Notes: {submittedData.notes}</p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-subtle">Complete this checklist before departing. Tap Pass or Fail for each item.</p>
+          <div className="divide-y divide-border">
+            {items.map(item => {
+              const val = results[item];
+              return (
+                <div key={item} className="flex items-center justify-between py-2.5">
+                  <span className="text-sm font-medium text-foreground">{ITEM_LABELS[item] ?? item}</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setResult(item, true)}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${val === true ? 'bg-success text-white border-success' : 'border-border text-subtle hover:border-success hover:text-success'}`}
+                    >
+                      Pass
+                    </button>
+                    <button
+                      onClick={() => setResult(item, false)}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${val === false ? 'bg-destructive text-white border-destructive' : 'border-border text-subtle hover:border-destructive hover:text-destructive'}`}
+                    >
+                      Fail
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Additional notes (optional)…"
+            rows={2}
+            className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={!allAnswered || loading}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {loading ? 'Submitting…' : 'Submit Inspection'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Check-In Panel
+// ---------------------------------------------------------------------------
+function CheckInPanel({ employeeId }: { employeeId: string }) {
+  const [checkedIn, setCheckedIn] = useState(false);
+  const [checkedInAt, setCheckedInAt] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Check if already checked in today
+  useEffect(() => {
+    if (!employeeId) return;
+    axiosClient.get(`/field-ops/check-in/${employeeId}`)
+      .then(res => {
+        const today = todayStr();
+        const todayRecord = res.data.find((r: any) => r.date === today);
+        if (todayRecord) {
+          setCheckedIn(true);
+          if (todayRecord.photo_url) setPreviewUrl(todayRecord.photo_url);
+          if (todayRecord.checked_in_at) {
+            const t = new Date(todayRecord.checked_in_at);
+            setCheckedInAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          }
+        }
+      })
+      .catch(console.error);
+  }, [employeeId]);
+
+  const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    const encoded = await fileToDataUrl(file);
+    setDataUrl(encoded);
+  };
+
+  const handleCheckIn = async () => {
+    if (!dataUrl) return alert('Please take a photo before checking in.');
+    setLoading(true);
+    try {
+      const res = await axiosClient.post('/field-ops/check-in', {
+        employee_id: employeeId,
+        date: todayStr(),
+        photo_url: dataUrl,
+      });
+      setCheckedIn(true);
+      if (res.data.checked_in_at) {
+        const t = new Date(res.data.checked_in_at);
+        setCheckedInAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Check-in failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <LogIn className="w-4 h-4 text-success" />
+        </div>
+        <h2 className="section-title">Check-In</h2>
+      </div>
+
+      {checkedIn ? (
+        <div className="p-6 rounded-xl bg-success/10 border border-success/30 text-center space-y-3">
+          <p className="text-sm font-semibold text-success">You are checked in for today.</p>
+          {checkedInAt && (
+            <p className="text-xs text-subtle">Checked in at <span className="font-medium text-foreground">{checkedInAt}</span></p>
+          )}
+          {previewUrl && (
+            <img src={previewUrl} alt="Check-in" className="mx-auto rounded-xl max-h-48 object-cover border border-success/20" />
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-subtle">Take a photo to confirm your attendance at the start of your shift.</p>
+          <label className="flex items-center justify-center gap-2 w-full py-4 border-2 border-dashed border-border rounded-xl cursor-pointer hover:border-primary/50 transition-colors text-sm text-muted-foreground">
+            <Camera className="w-4 h-4" />
+            {previewUrl ? 'Retake Photo' : 'Open Camera / Select Photo'}
+            <input ref={inputRef} type="file" accept="image/*" capture="environment" onChange={handleCapture} className="hidden" />
+          </label>
+          {previewUrl && (
+            <img src={previewUrl} alt="Preview" className="mx-auto rounded-xl max-h-48 object-cover border border-border" />
+          )}
+          <button
+            onClick={handleCheckIn}
+            disabled={!dataUrl || loading}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {loading ? 'Checking in…' : 'Confirm Check-In'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Departure Panel
+// ---------------------------------------------------------------------------
+function DeparturePanel({ employeeId }: { employeeId: string }) {
+  const [departed, setDeparted] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    axiosClient.get(`/field-ops/departure/${employeeId}`)
+      .then(res => {
+        const today = todayStr();
+        const todayRecord = res.data.find((r: any) => r.date === today);
+        if (todayRecord) {
+          setDeparted(true);
+          if (todayRecord.itinerary_photo_url) setPreviewUrl(todayRecord.itinerary_photo_url);
+        }
+      })
+      .catch(console.error);
+  }, [employeeId]);
+
+  const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPreviewUrl(URL.createObjectURL(file));
+    setDataUrl(await fileToDataUrl(file));
+  };
+
+  const handleDepart = async () => {
+    if (!dataUrl) return alert('Please photograph the itinerary before departing.');
+    setLoading(true);
+    try {
+      await axiosClient.post('/field-ops/departure', {
+        employee_id: employeeId,
+        date: todayStr(),
+        itinerary_photo_url: dataUrl,
+      });
+      setDeparted(true);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Departure record failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <LogOut className="w-4 h-4 text-primary" />
+        </div>
+        <h2 className="section-title">Departure</h2>
+      </div>
+
+      {departed ? (
+        <div className="p-6 rounded-xl bg-primary/10 border border-primary/30 text-center space-y-3">
+          <p className="text-sm font-semibold text-primary">Departure recorded. Safe travels!</p>
+          {previewUrl && (
+            <img src={previewUrl} alt="Itinerary" className="mx-auto rounded-xl max-h-48 object-cover border border-primary/20" />
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-subtle">Photograph today's route itinerary before you leave.</p>
+          <label className="flex items-center justify-center gap-2 w-full py-4 border-2 border-dashed border-border rounded-xl cursor-pointer hover:border-primary/50 transition-colors text-sm text-muted-foreground">
+            <Camera className="w-4 h-4" />
+            {previewUrl ? 'Retake Photo' : 'Photograph Itinerary'}
+            <input type="file" accept="image/*" capture="environment" onChange={handleCapture} className="hidden" />
+          </label>
+          {previewUrl && (
+            <img src={previewUrl} alt="Preview" className="mx-auto rounded-xl max-h-48 object-cover border border-border" />
+          )}
+          <button
+            onClick={handleDepart}
+            disabled={!dataUrl || loading}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {loading ? 'Recording…' : 'Confirm Departure'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Return / End-of-Day Panel
+// ---------------------------------------------------------------------------
+function ReturnPanel({ employeeId }: { employeeId: string }) {
+  const [departed, setDeparted] = useState(false);
+  const [returned, setReturned] = useState(false);
+  const [returnedAt, setReturnedAt] = useState<string | null>(null);
+  const [departedAt, setDepartedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    axiosClient.get(`/field-ops/departure/${employeeId}`)
+      .then(res => {
+        const today = todayStr();
+        const todayRecord = res.data.find((r: any) => r.date === today);
+        if (todayRecord) {
+          setDeparted(true);
+          if (todayRecord.departed_at) {
+            const t = new Date(todayRecord.departed_at);
+            setDepartedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          }
+          if (todayRecord.returned_at) {
+            setReturned(true);
+            const t = new Date(todayRecord.returned_at);
+            setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          }
+        }
+      })
+      .catch(console.error);
+  }, [employeeId]);
+
+  const handleReturn = async () => {
+    setLoading(true);
+    try {
+      const res = await axiosClient.post(`/field-ops/return/${employeeId}`);
+      setReturned(true);
+      if (res.data.returned_at) {
+        const t = new Date(res.data.returned_at);
+        setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to record return.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Don't render until the driver has departed
+  if (!departed) return null;
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <Home className="w-4 h-4 text-success" />
+        </div>
+        <h2 className="section-title">End of Day — Return</h2>
+      </div>
+
+      {returned ? (
+        <div className="p-6 rounded-xl bg-success/10 border border-success/30 text-center space-y-2">
+          <p className="text-sm font-semibold text-success">You have returned for the day.</p>
+          {returnedAt && departedAt && (
+            <p className="text-xs text-subtle">
+              Departed <span className="font-medium text-foreground">{departedAt}</span>
+              {' · '}
+              Returned <span className="font-medium text-foreground">{returnedAt}</span>
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-subtle">
+            Confirm you are back at the yard to close out your shift.
+            {departedAt && (
+              <> You departed at <span className="font-medium text-foreground">{departedAt}</span>.</>
+            )}
+          </p>
+          <button
+            onClick={handleReturn}
+            disabled={loading}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {loading ? 'Recording…' : 'Confirm Return'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fuel / Mileage Log Panel
+// ---------------------------------------------------------------------------
+function FuelMileagePanel({ employeeId }: { employeeId: string }) {
+  type LogRecord = {
+    id: string;
+    odometer_start: number;
+    odometer_end: number | null;
+    fuel_added: number | null;
+    notes: string | null;
+  };
+
+  const [log, setLog] = useState<LogRecord | null>(null);
+  const [startOdo, setStartOdo] = useState('');
+  const [endOdo, setEndOdo] = useState('');
+  const [fuelAdded, setFuelAdded] = useState('');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    axiosClient.get(`/field-ops/fuel-log/${employeeId}`)
+      .then(res => {
+        const today = todayStr();
+        const todayRecord = res.data.find((r: any) => r.date === today);
+        if (todayRecord) setLog(todayRecord);
+      })
+      .catch(console.error);
+  }, [employeeId]);
+
+  const handleStartShift = async () => {
+    const odo = parseInt(startOdo, 10);
+    if (isNaN(odo) || odo < 0) return alert('Enter a valid odometer reading.');
+    setLoading(true);
+    try {
+      const res = await axiosClient.post('/field-ops/fuel-log', {
+        driver_id: employeeId,
+        date: todayStr(),
+        odometer_start: odo,
+      });
+      setLog(res.data);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to save fuel log.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEndShift = async () => {
+    const odoEnd = parseInt(endOdo, 10);
+    if (isNaN(odoEnd) || odoEnd < (log?.odometer_start ?? 0)) return alert('End odometer must be ≥ start odometer.');
+    setLoading(true);
+    try {
+      const res = await axiosClient.patch(`/field-ops/fuel-log/${employeeId}`, {
+        odometer_end: odoEnd,
+        fuel_added: fuelAdded ? parseInt(fuelAdded, 10) : null,
+        notes: notes.trim() || null,
+      });
+      setLog(res.data);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to update fuel log.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const distance = log?.odometer_end != null ? log.odometer_end - log.odometer_start : null;
+  const endOfDayDone = log?.odometer_end != null;
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <Gauge className="w-4 h-4 text-primary" />
+        </div>
+        <h2 className="section-title">Fuel & Mileage Log</h2>
+      </div>
+
+      {!log ? (
+        /* Start of shift — enter odometer */
+        <div className="space-y-3">
+          <p className="text-sm text-subtle">Record the truck's odometer reading before departing.</p>
+          <div>
+            <label className="block text-xs text-subtle mb-1">Odometer Start (km)</label>
+            <input
+              type="number"
+              min={0}
+              value={startOdo}
+              onChange={e => setStartOdo(e.target.value)}
+              placeholder="e.g. 45230"
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+          <button
+            onClick={handleStartShift}
+            disabled={!startOdo || loading}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {loading ? 'Saving…' : 'Log Start Odometer'}
+          </button>
+        </div>
+      ) : endOfDayDone ? (
+        /* Fully completed */
+        <div className="p-4 rounded-xl bg-success/10 border border-success/30 text-sm space-y-2">
+          <p className="font-semibold text-success">Fuel & mileage log complete.</p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-foreground">
+            <span className="text-subtle">Start:</span><span>{log.odometer_start} km</span>
+            <span className="text-subtle">End:</span><span>{log.odometer_end} km</span>
+            {distance != null && <><span className="text-subtle">Distance:</span><span>{distance} km</span></>}
+            {log.fuel_added != null && <><span className="text-subtle">Fuel added:</span><span>{log.fuel_added} L</span></>}
+          </div>
+          {log.notes && <p className="text-xs text-subtle italic">Notes: {log.notes}</p>}
+        </div>
+      ) : (
+        /* End of shift — patch in return values */
+        <div className="space-y-3">
+          <div className="p-3 rounded-xl bg-accent/30 border border-border text-xs text-foreground">
+            Start odometer: <span className="font-medium">{log.odometer_start} km</span>
+          </div>
+          <p className="text-sm text-subtle">Record your return odometer and any fuel added.</p>
+          <div>
+            <label className="block text-xs text-subtle mb-1">Odometer End (km)</label>
+            <input
+              type="number"
+              min={log.odometer_start}
+              value={endOdo}
+              onChange={e => setEndOdo(e.target.value)}
+              placeholder={`≥ ${log.odometer_start}`}
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-subtle mb-1">Fuel Added (L) — optional</label>
+            <input
+              type="number"
+              min={0}
+              value={fuelAdded}
+              onChange={e => setFuelAdded(e.target.value)}
+              placeholder="e.g. 40"
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Notes (optional)…"
+            rows={2}
+            className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+          />
+          <button
+            onClick={handleEndShift}
+            disabled={!endOdo || loading}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {loading ? 'Saving…' : 'Log End Odometer'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Walker Rating Panel — drivers only, walkers fetched from today's crew
+// ---------------------------------------------------------------------------
+interface CrewMember { id: string; name: string; role: string; }
+
+type WalkerEntry = {
+  stars: number;
+  comment: string;
+  // null = attendance not yet marked; true = present; false = no-show
+  present: boolean | null;
+  submitted: boolean;
+};
+
+function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
+  const [walkers, setWalkers] = useState<CrewMember[]>([]);
+  const [entries, setEntries] = useState<Record<string, WalkerEntry>>({});
+  const [crewLoading, setCrewLoading] = useState(true);
+
+  useEffect(() => {
+    if (!employeeId) return;
+
+    Promise.all([
+      axiosClient.get(`/field-ops/crew/${employeeId}`),
+      axiosClient.get(`/field-ops/rating/driver/${employeeId}`, { params: { target_date: todayStr() } }),
+    ])
+      .then(([crewRes, ratingsRes]) => {
+        const crew: CrewMember[] = crewRes.data.crew ?? [];
+        setWalkers(crew.filter(m => m.role === 'walker'));
+
+        // Pre-populate from already-submitted records
+        const pre: Record<string, WalkerEntry> = {};
+        for (const r of ratingsRes.data) {
+          pre[r.walker_id] = {
+            stars: r.stars ?? 0,
+            comment: r.comment ?? '',
+            present: r.present,
+            submitted: true,
+          };
+        }
+        setEntries(pre);
+      })
+      .catch(console.error)
+      .finally(() => setCrewLoading(false));
+  }, [employeeId]);
+
+  const markAttendance = (id: string, present: boolean) => {
+    setEntries(prev => ({
+      ...prev,
+      [id]: { stars: 0, comment: '', ...prev[id], present, submitted: false },
+    }));
+  };
+
+  const update = (id: string, field: 'stars' | 'comment', value: any) => {
+    setEntries(prev => ({
+      ...prev,
+      [id]: { stars: 0, comment: '', present: true, submitted: false, ...prev[id], [field]: value },
+    }));
+  };
+
+  const submit = async (walker: CrewMember) => {
+    const e = entries[walker.id];
+    // Fix #10: guard against undefined entry or attendance not yet marked
+    if (!e || e.present === null) return;
+    if (e.present && !e.stars) return alert('Please select a star rating.');
+    try {
+      const payload: any = {
+        driver_id: employeeId,
+        walker_id: walker.id,
+        date: todayStr(),
+        present: e?.present ?? true,
+      };
+      if (e?.present) {
+        payload.stars = e.stars;
+        payload.comment = e.comment || null;
+      }
+      await axiosClient.post('/field-ops/rating', payload);
+      setEntries(prev => ({ ...prev, [walker.id]: { ...prev[walker.id], submitted: true } }));
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Failed to submit.');
+    }
+  };
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <Star className="w-4 h-4 text-warning" />
+        </div>
+        <h2 className="section-title">Walker Attendance & Rating</h2>
+      </div>
+      <p className="text-sm text-subtle">Mark attendance first, then rate walkers who were present. Visible to management only.</p>
+
+      {crewLoading ? (
+        <p className="text-sm text-subtle text-center py-4">Loading today's crew…</p>
+      ) : walkers.length === 0 ? (
+        <div className="py-6 text-center text-sm text-subtle bg-accent/20 rounded-xl border border-border/50">
+          No walkers assigned to your truck today.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {walkers.map(walker => {
+            const e = entries[walker.id] ?? { stars: 0, comment: '', present: null, submitted: false };
+            return (
+              <div key={walker.id} className="p-4 rounded-xl border border-border bg-background space-y-3">
+                <p className="font-semibold text-sm text-foreground">{walker.name}</p>
+
+                {e.submitted ? (
+                  e.present ? (
+                    <p className="text-xs text-success font-medium">
+                      Rating submitted — {e.stars}★
+                    </p>
+                  ) : (
+                    <p className="text-xs text-warning font-medium">Marked as no-show.</p>
+                  )
+                ) : (
+                  <>
+                    {/* Step 1: attendance */}
+                    <div className="flex gap-2 items-center">
+                      <span className="text-xs text-subtle">Attendance:</span>
+                      <button
+                        onClick={() => markAttendance(walker.id, true)}
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${e.present === true ? 'bg-success text-white border-success' : 'border-border text-subtle hover:border-success hover:text-success'}`}
+                      >
+                        Present
+                      </button>
+                      <button
+                        onClick={() => markAttendance(walker.id, false)}
+                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${e.present === false ? 'bg-warning text-white border-warning' : 'border-border text-subtle hover:border-warning hover:text-warning'}`}
+                      >
+                        No-Show
+                      </button>
+                    </div>
+
+                    {/* Step 2: rating (only if present) */}
+                    {e.present === true && (
+                      <>
+                        <div className="flex gap-1">
+                          {[1, 2, 3, 4, 5].map(star => (
+                            <button
+                              key={star}
+                              onClick={() => update(walker.id, 'stars', star)}
+                              className={`text-2xl leading-none transition-colors ${star <= e.stars ? 'text-warning' : 'text-border hover:text-warning/50'}`}
+                            >
+                              ★
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          value={e.comment}
+                          onChange={ev => update(walker.id, 'comment', ev.target.value)}
+                          placeholder="Add a comment (optional)…"
+                          rows={2}
+                          className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
+                        />
+                      </>
+                    )}
+
+                    {e.present !== null && (
+                      <button
+                        onClick={() => submit(walker)}
+                        disabled={e.present === true && !e.stars}
+                        className="btn-primary text-xs w-full disabled:opacity-50"
+                      >
+                        {e.present ? 'Submit Rating' : 'Confirm No-Show'}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+export default function FieldOps() {
+  const { groups, user } = useAuth();
+  const isDriver = groups.includes('driver');
+
+  const [employeeId, setEmployeeId] = useState('');
+
+  // Resolve the logged-in user's employee DB record
+  useEffect(() => {
+    if (!user) return;
+    axiosClient.get('/employees/')
+      .then(res => {
+        const self = res.data.find(
+          (e: any) => e.discord_id === user.username || e.id === user.userId
+        );
+        if (self) setEmployeeId(self.id);
+      })
+      .catch(console.error);
+  }, [user]);
+
+  if (!employeeId) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+        <h1 className="page-title">Field Operations</h1>
+        <div className="card text-center py-10 text-subtle text-sm">Loading your profile…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+      <h1 className="page-title">Field Operations</h1>
+      <CheckInPanel employeeId={employeeId} />
+      {isDriver && <InspectionPanel employeeId={employeeId} />}
+      {isDriver && <FuelMileagePanel employeeId={employeeId} />}
+      <DeparturePanel employeeId={employeeId} />
+      {isDriver && <ReturnPanel employeeId={employeeId} />}
+      {isDriver && <WalkerRatingPanel employeeId={employeeId} />}
+    </div>
+  );
+}

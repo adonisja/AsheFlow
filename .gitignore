@@ -90,8 +90,12 @@ secrets/
 Thumbs.db
 .DS_Store
 
-# docs
-docs/
 
 # AI models
-.claude/
+.claude/token.json
+*.pem
+*.key
+cognito_keys.json
+*.p12
+*.pfx
+

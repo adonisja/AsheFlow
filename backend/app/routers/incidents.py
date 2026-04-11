@@ -1,0 +1,356 @@
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.api.deps import RoleChecker, get_current_user
+from app.models.incident import Incident
+from app.models.employee import Employee
+from app.models.truck import Truck
+from app.models.truck_assignment import TruckAssignment
+from app.models.assignment_member import AssignmentMember
+from app.models.notification import Notification
+from app.schemas.incident import (
+    IncidentCreate, IncidentResponse, IncidentListItem,
+    VALID_CATEGORIES, VALID_SEVERITIES, CATEGORY_DEFAULT_SEVERITY,
+)
+
+router = APIRouter(prefix="/incidents", tags=["incidents"])
+
+allow_field_staff = RoleChecker(["driver", "walker", "trainer", "trainee"])
+allow_management  = RoleChecker(["dispatch", "management", "admin"])
+
+
+def _resolve_assignment(reporter_id: UUID, date, db: Session) -> tuple[Optional[UUID], Optional[UUID]]:
+    """Return (truck_id, assignment_id) for the reporter on the given date, or (None, None)."""
+    member = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == reporter_id,
+            TruckAssignment.date == date,
+        )
+        .first()
+    )
+    if not member:
+        return None, None
+    assignment = db.query(TruckAssignment).filter(TruckAssignment.id == member.assignment_id).first()
+    if not assignment:
+        return None, None
+    return assignment.truck_id, assignment.id
+
+
+def _resolve_driver_id(assignment_id: UUID, db: Session) -> Optional[UUID]:
+    """Return the employee_id of the driver on the given assignment, or None."""
+    driver_member = (
+        db.query(AssignmentMember)
+        .filter(
+            AssignmentMember.assignment_id == assignment_id,
+            AssignmentMember.role == "driver",
+        )
+        .first()
+    )
+    return driver_member.employee_id if driver_member else None
+
+
+def _notify_management(incident: Incident, reporter: Employee, db: Session):
+    """Send notifications to all active dispatch/management/admin for this incident."""
+    severity = incident.severity
+    notif_type = f"incident_{severity}"  # incident_info | incident_warning | incident_critical
+
+    category_label = incident.category.replace("_", " ").title()
+    message = (
+        f"{severity.upper()} — {category_label} incident reported by {reporter.name} "
+        f"on {incident.date.strftime('%a, %b %d')}. "
+        f"{incident.description[:120]}{'…' if len(incident.description) > 120 else ''}"
+    )
+
+    recipients = db.query(Employee).filter(
+        Employee.role.in_(["dispatch", "management", "admin"]),
+        Employee.is_active == True,
+    ).all()
+
+    for emp in recipients:
+        db.add(Notification(
+            employee_id=emp.id,
+            type=notif_type,
+            message=message,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Submit
+# ---------------------------------------------------------------------------
+
+@router.post("/", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
+def submit_incident(
+    payload: IncidentCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_field_staff),
+):
+    """Submit a new incident report.
+
+    Validates category and severity. Severity cannot be below the category
+    default (e.g. an injury cannot be filed as info). Truck is auto-resolved
+    from today's dispatch assignment. Notifies all dispatch/management/admin.
+    """
+    if payload.category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Choose from: {', '.join(sorted(VALID_CATEGORIES))}")
+
+    if payload.severity not in VALID_SEVERITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid severity. Choose from: info, warning, critical.")
+
+    # Enforce minimum severity per category
+    severity_rank = {"info": 0, "warning": 1, "critical": 2}
+    min_severity = CATEGORY_DEFAULT_SEVERITY.get(payload.category, "info")
+    if severity_rank[payload.severity] < severity_rank[min_severity]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Severity for '{payload.category}' cannot be lower than '{min_severity}'.",
+        )
+
+    reporter = db.query(Employee).filter(Employee.id == payload.reporter_id).first()
+    if not reporter:
+        raise HTTPException(status_code=404, detail="Reporter not found.")
+
+    truck_id, assignment_id = _resolve_assignment(payload.reporter_id, payload.date, db)
+
+    # Auto-resolve driver — for non-drivers, find the driver on the same truck
+    driver_id: Optional[UUID] = None
+    if reporter.role != "driver" and assignment_id:
+        driver_id = _resolve_driver_id(assignment_id, db)
+    elif reporter.role == "driver":
+        driver_id = reporter.id
+
+    incident = Incident(
+        reporter_id=payload.reporter_id,
+        truck_id=truck_id,
+        driver_id=driver_id,
+        date=payload.date,
+        category=payload.category,
+        severity=payload.severity,
+        description=payload.description,
+        photo_url=payload.photo_url,
+        incident_time=payload.incident_time,
+        packages_tba=payload.packages_tba,
+        incident_location=payload.incident_location,
+        witness_name=payload.witness_name,
+        body_part_affected=payload.body_part_affected,
+        medical_attention_required=payload.medical_attention_required,
+    )
+    db.add(incident)
+    db.flush()
+
+    _notify_management(incident, reporter, db)
+
+    db.commit()
+    db.refresh(incident)
+    return incident
+
+
+# ---------------------------------------------------------------------------
+# Reporter — own incidents
+# ---------------------------------------------------------------------------
+
+@router.get("/my", response_model=List[IncidentResponse])
+def get_my_incidents(
+    reporter_id: UUID = Query(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_field_staff),
+):
+    """Return all incidents submitted by the given reporter, newest first."""
+    return (
+        db.query(Incident)
+        .filter(Incident.reporter_id == reporter_id)
+        .order_by(Incident.created_at.desc())
+        .all()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Management — all incidents
+# ---------------------------------------------------------------------------
+
+@router.get("/", response_model=List[IncidentListItem])
+def list_incidents(
+    severity: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    resolved: Optional[bool] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_management),
+):
+    """Return all incidents with optional filters. Management/dispatch/admin only.
+
+    Results include reporter name and truck name for display. Sorted newest first.
+    """
+    q = db.query(Incident)
+    if severity:
+        q = q.filter(Incident.severity == severity)
+    if category:
+        q = q.filter(Incident.category == category)
+    if resolved is not None:
+        q = q.filter(Incident.resolved == resolved)
+    if date_from:
+        q = q.filter(Incident.date >= date_from)
+    if date_to:
+        q = q.filter(Incident.date <= date_to)
+
+    incidents = q.order_by(Incident.created_at.desc()).all()
+
+    # Hydrate reporter name and truck name
+    result = []
+    for inc in incidents:
+        reporter = db.query(Employee).filter(Employee.id == inc.reporter_id).first()
+        truck = db.query(Truck).filter(Truck.id == inc.truck_id).first() if inc.truck_id else None
+        driver = db.query(Employee).filter(Employee.id == inc.driver_id).first() if inc.driver_id else None
+        item = IncidentListItem(
+            id=inc.id,
+            reporter_id=inc.reporter_id,
+            reporter_name=reporter.name if reporter else None,
+            truck_id=inc.truck_id,
+            truck_name=truck.name if truck else None,
+            driver_id=inc.driver_id,
+            driver_name=driver.name if driver else None,
+            date=inc.date,
+            category=inc.category,
+            severity=inc.severity,
+            description=inc.description,
+            resolved=inc.resolved,
+            resolved_at=inc.resolved_at,
+            created_at=inc.created_at,
+        )
+        result.append(item)
+    return result
+
+
+@router.get("/unresolved-urgent", response_model=List[IncidentListItem])
+def get_unresolved_urgent(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_management),
+):
+    """Return unresolved warning + critical incidents, newest first.
+
+    Used by the management dashboard panel to show the active incident queue.
+    """
+    incidents = (
+        db.query(Incident)
+        .filter(
+            Incident.resolved == False,
+            Incident.severity.in_(["warning", "critical"]),
+        )
+        .order_by(Incident.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    result = []
+    for inc in incidents:
+        reporter = db.query(Employee).filter(Employee.id == inc.reporter_id).first()
+        truck = db.query(Truck).filter(Truck.id == inc.truck_id).first() if inc.truck_id else None
+        driver = db.query(Employee).filter(Employee.id == inc.driver_id).first() if inc.driver_id else None
+        result.append(IncidentListItem(
+            id=inc.id,
+            reporter_id=inc.reporter_id,
+            reporter_name=reporter.name if reporter else None,
+            truck_id=inc.truck_id,
+            truck_name=truck.name if truck else None,
+            driver_id=inc.driver_id,
+            driver_name=driver.name if driver else None,
+            date=inc.date,
+            category=inc.category,
+            severity=inc.severity,
+            description=inc.description,
+            resolved=inc.resolved,
+            resolved_at=inc.resolved_at,
+            created_at=inc.created_at,
+        ))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Resolve
+# ---------------------------------------------------------------------------
+
+@router.patch("/{incident_id}/resolve", response_model=IncidentResponse)
+def resolve_incident(
+    incident_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_management),
+):
+    """Mark an incident as resolved. Records who resolved it and when."""
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    if incident.resolved:
+        raise HTTPException(status_code=400, detail="Incident is already resolved.")
+
+    resolver = db.query(Employee).filter(
+        Employee.discord_id == current_user.get("username", "")
+    ).first()
+
+    incident.resolved = True
+    incident.resolved_by = resolver.id if resolver else None
+    incident.resolved_at = datetime.now(timezone.utc)
+
+    # Notify reporter
+    db.add(Notification(
+        employee_id=incident.reporter_id,
+        type="incident_resolved",
+        message=f"Your {incident.category.replace('_', ' ')} incident report from {incident.date.strftime('%a, %b %d')} has been reviewed and marked resolved.",
+    ))
+
+    db.commit()
+    db.refresh(incident)
+    return incident
+
+
+# ---------------------------------------------------------------------------
+# Incident Trend Summary — management reporting
+# ---------------------------------------------------------------------------
+
+@router.get("/summary")
+def get_incident_summary(
+    days: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_management),
+):
+    """Return incident counts grouped by severity and category over the last N days.
+
+    Used by the management dashboard Incident Trend panel.
+    """
+    since = date.today() - timedelta(days=days - 1)
+
+    incidents = (
+        db.query(Incident)
+        .filter(Incident.date >= since)
+        .all()
+    )
+
+    by_severity = {"info": 0, "warning": 0, "critical": 0}
+    by_category: dict = {}
+    unresolved = 0
+
+    for inc in incidents:
+        if inc.severity in by_severity:
+            by_severity[inc.severity] += 1
+        cat = inc.category
+        by_category[cat] = by_category.get(cat, 0) + 1
+        if not inc.resolved:
+            unresolved += 1
+
+    return {
+        "days": days,
+        "since": since.isoformat(),
+        "total": len(incidents),
+        "unresolved": unresolved,
+        "by_severity": by_severity,
+        "by_category": [
+            {"category": k, "label": k.replace("_", " ").title(), "count": v}
+            for k, v in sorted(by_category.items(), key=lambda x: x[1], reverse=True)
+        ],
+    }

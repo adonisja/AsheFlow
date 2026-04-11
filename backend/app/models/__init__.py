@@ -5,3 +5,11 @@ from app.models.assignment_member import AssignmentMember
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.employee_relationship import EmployeeRelationship
 from app.models.time_off_request import TimeOffRequest
+from app.models.feedback import Feedback
+from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
+from app.models.notification import Notification
+from app.models.field_ops import CheckIn, Departure, WalkerRating, VehicleInspection, FuelMileageLog
+from app.models.trainer_continuation_request import TrainerContinuationRequest
+from app.models.assignment_change_request import AssignmentChangeRequest
+from app.models.schedule_change_request import ScheduleChangeRequest
+from app.models.incident import Incident
