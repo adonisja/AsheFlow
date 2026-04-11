@@ -11,10 +11,10 @@ class TimeOffRequest(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     employee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
     date = Column(Date, nullable=False)
-    status = Column(String, default="pending", nullable=False)  # pending, approved, rejected
+    status = Column(String, default="pending", nullable=False)  # pending, approved, rejected, expired
 
     __table_args__ = (
-        CheckConstraint(status.in_(['pending', 'approved', 'rejected']), name='valid_time_off_status'),
+        CheckConstraint(status.in_(['pending', 'approved', 'rejected', 'expired']), name='valid_time_off_status'),
     )
 
     employee = relationship("Employee")

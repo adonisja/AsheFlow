@@ -25,7 +25,7 @@ class AssignmentMember(Base):
     __tablename__ = "assignment_members"
     __table_args__ = (
         UniqueConstraint("assignment_id", "employee_id", name="uq_assignment_member"),
-        CheckConstraint("role IN ('driver', 'trainer', 'walker')", name="ck_assignment_members_role"),
+        CheckConstraint("role IN ('driver', 'trainer', 'trainee', 'walker')", name="ck_assignment_members_role"),
     )
 
     id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/employees", tags=["employees"])
 
 
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
-def create_employee(employee: EmployeeCreate, current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])), db: Session = Depends(get_db)):
+def create_employee(employee: EmployeeCreate, current_user: dict = Depends(RoleChecker(["management", "admin"])), db: Session = Depends(get_db)):
     """Create and persist a new employee record.
 
     Args:
@@ -30,7 +30,7 @@ def create_employee(employee: EmployeeCreate, current_user: dict = Depends(RoleC
 
 
 @router.get("/", response_model=list[EmployeeResponse])
-def get_all_employees(current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch", "tech", "driver", "walker", "trainer"])), db: Session = Depends(get_db)):
+def get_all_employees(current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch", "driver", "walker", "trainer", "trainee"])), db: Session = Depends(get_db)):
     """Return all active employees.
 
     Args:
@@ -43,7 +43,7 @@ def get_all_employees(current_user: dict = Depends(RoleChecker(["management", "a
 
 
 @router.get("/{employee_id}", response_model=EmployeeResponse)
-def get_employee(employee_id: UUID, current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch", "tech", "driver", "walker", "trainer"])), db: Session = Depends(get_db)):
+def get_employee(employee_id: UUID, current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch", "driver", "walker", "trainer", "trainee"])), db: Session = Depends(get_db)):
     """Fetch a single employee by ID.
 
     Args:
@@ -63,7 +63,7 @@ def get_employee(employee_id: UUID, current_user: dict = Depends(RoleChecker(["m
 
 
 @router.put("/{employee_id}", response_model=EmployeeResponse)
-def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])), db: Session = Depends(get_db)):
+def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: dict = Depends(RoleChecker(["management", "admin"])), db: Session = Depends(get_db)):
     """Update an existing employee's fields.
 
     Args:

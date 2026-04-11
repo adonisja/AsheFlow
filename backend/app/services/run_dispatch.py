@@ -1,91 +1,242 @@
 from datetime import date
-
 from sqlalchemy.orm import Session
-
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
+from app.models.employee import Employee
 from app.services.available_pool import get_available_pool
 from app.services.base_weights import get_base_weights
 from app.services.assign_drivers import assign_drivers
 from app.services.assign_trainers import assign_trainers
+from app.services.assign_trainees import assign_trainees
 from app.services.assign_walkers import assign_walkers
+from app.services.graduate_trainees import graduate_eligible_trainees
 from app.services.constants import MIN_TRAINERS_PER_TRUCK, MIN_WALKERS_PER_TRUCK
+from app.services.training_injection import inject_curriculum
+from app.services.rebalance_crews import rebalance_crews
+from app.models.trainer_continuation_request import TrainerContinuationRequest
+from app.models.training import TrainingRecord
 
 
-def run_dispatch(db: Session, target_date: date = None) -> dict:
-    """Execute the full dispatch pipeline for a given date and persist the results.
-
-    Fetches active trucks and the available employee pool, validates driver
-    sufficiency, then assigns drivers, trainers, and walkers in order.
-    Committed truck assignments and assignment members are written to the database.
-
-    Args:
-        db: Database session.
-        target_date: Date to run dispatch for. Defaults to today.
-
-    Returns:
-        A tuple of ``(assigned_crews, warnings)`` where ``assigned_crews`` is a
-        dict mapping truck_id to a list of crew dicts ``{"id": ..., "role": ...}``,
-        and ``warnings`` is a list of staffing or ban-conflict warning dicts.
-
-    Raises:
-        ValueError: If there are fewer available drivers than active trucks.
-    """
+def run_dispatch(db: Session, target_date: date = None, total_employees: int = None, total_trucks: int = None) -> dict:
     target_date = target_date or date.today()
 
-    # only dispatch active trucks — inactive trucks are excluded from today's pool
-    trucks = db.query(Truck).filter(Truck.is_active == True).all()
-    truck_ids = [truck.id for truck in trucks]
+    # Check and graduate any trainees who have completed 5 assignments before generating the pool
+    graduation_warnings = graduate_eligible_trainees(db, target_date)
 
-    # all trucks start with equal weight; assignment services will adjust from here
-    base_weights = get_base_weights(truck_ids)
-    # initialize empty crew lists so assignment functions can append without key errors
-    assigned_crews = {truck_id: [] for truck_id in truck_ids}
-
-    # available_pool = {"drivers": [...], "trainers": [...], "walkers": [...]}
-    # excludes employees on approved days off for target_date
     available_pool = get_available_pool(db, target_date)
 
-    # drivers are hard-required: one per truck, no fallback — raise early to prevent partial state
+    trucks = db.query(Truck).filter(Truck.is_active == True).all()
+    if total_trucks is not None and total_trucks > 0:
+        trucks = trucks[:total_trucks]
+
+    truck_ids = [truck.id for truck in trucks]
     num_trucks = len(truck_ids)
+
+    staffing_warnings = []
+
+    # --- Headcount cap: trim pool to total_employees if provided ---
+    if total_employees is not None and total_employees > 0:
+        current_total = (
+            len(available_pool["drivers"])
+            + len(available_pool["trainers"])
+            + len(available_pool["trainees"])
+            + len(available_pool["walkers"])
+        )
+        if current_total > total_employees:
+            allowed_walkers = max(
+                0,
+                total_employees
+                - len(available_pool["drivers"])
+                - len(available_pool["trainers"])
+                - len(available_pool["trainees"]),
+            )
+            available_pool["walkers"] = available_pool["walkers"][:allowed_walkers]
+
+            current_total = (
+                len(available_pool["drivers"])
+                + len(available_pool["trainers"])
+                + len(available_pool["trainees"])
+            )
+            if current_total > total_employees:
+                allowed_trainees = max(
+                    0,
+                    total_employees
+                    - len(available_pool["drivers"])
+                    - len(available_pool["trainers"]),
+                )
+                available_pool["trainees"] = available_pool["trainees"][:allowed_trainees]
+
+                current_total = len(available_pool["drivers"]) + len(available_pool["trainers"])
+                if current_total > total_employees:
+                    allowed_trainers = max(0, total_employees - len(available_pool["drivers"]))
+                    available_pool["trainers"] = available_pool["trainers"][:allowed_trainers]
+
+    # --- Driver warning: must have exactly 1 driver per truck ---
     num_drivers = len(available_pool["drivers"])
     if num_drivers < num_trucks:
         missing = num_trucks - num_drivers
-        raise ValueError(
-            f"Insufficient drivers: {num_drivers} available for {num_trucks} trucks. "
-            f"{missing} slot(s) require manual assignment before dispatch can run."
-        )
-
-    # trainer/walker shortfalls don't block dispatch — trucks can run understaffed, but ops should know
-    staffing_warnings = []
-    num_trainers = len(available_pool["trainers"])
-    num_walkers = len(available_pool["walkers"])
-
-    if num_trainers < num_trucks * MIN_TRAINERS_PER_TRUCK:
-        missing = num_trucks * MIN_TRAINERS_PER_TRUCK - num_trainers
         staffing_warnings.append({
-            "type": "understaffed_trainers",
-            "message": f"Only {num_trainers} trainers available for {num_trucks} trucks. {missing} trainer slot(s) will go unfilled."
+            "type": "understaffed_drivers",
+            "message": (
+                f"Insufficient drivers: {num_drivers} available for {num_trucks} trucks. "
+                f"{missing} truck(s) will have no driver. Please assign manually."
+            ),
         })
 
-    if num_walkers < num_trucks * MIN_WALKERS_PER_TRUCK:
-        missing = num_trucks * MIN_WALKERS_PER_TRUCK - num_walkers
-        staffing_warnings.append({
-            "type": "understaffed_walkers",
-            "message": f"Only {num_walkers} walkers available for {num_trucks} trucks. {missing} walker slot(s) will go unfilled."
-        })
+    # --- Trainer / walker warnings only fire when headcount was explicitly capped ---
+    # In auto mode (no total_employees), all available staff are distributed evenly
+    # so there are no unfilled slots — just fewer per truck.
+    if total_employees is not None and total_employees > 0:
+        num_trainers = len(available_pool["trainers"])
+        num_walkers  = len(available_pool["walkers"])
+        if num_trainers < num_trucks * MIN_TRAINERS_PER_TRUCK:
+            missing = num_trucks * MIN_TRAINERS_PER_TRUCK - num_trainers
+            staffing_warnings.append({
+                "type": "understaffed_trainers",
+                "message": (
+                    f"Only {num_trainers} trainers available for {num_trucks} trucks. "
+                    f"{missing} trainer slot(s) will go unfilled."
+                ),
+            })
+        if num_walkers < num_trucks * MIN_WALKERS_PER_TRUCK:
+            missing = num_trucks * MIN_WALKERS_PER_TRUCK - num_walkers
+            staffing_warnings.append({
+                "type": "understaffed_walkers",
+                "message": (
+                    f"Only {num_walkers} walkers available for {num_trucks} trucks. "
+                    f"{missing} walker slot(s) will go unfilled."
+                ),
+            })
 
-    # order matters: trainers need drivers already placed so ban checks reference real truck occupants,
-    # and walkers need both drivers and trainers placed for tridirectional/override logic
+    # --- Cap excess trainers and re-slot them as walkers ---
+    max_trainers_needed = num_trucks * MIN_TRAINERS_PER_TRUCK
+    all_trainers = available_pool.get("trainers", [])
+    if len(all_trainers) > max_trainers_needed:
+        excess_trainers = all_trainers[max_trainers_needed:]
+        for t in excess_trainers:
+            t["role"] = "walker"
+        available_pool["walkers"].extend(excess_trainers)
+        available_pool["trainers"] = all_trainers[:max_trainers_needed]
+
+    base_weights = get_base_weights(truck_ids)
+    assigned_crews = {truck_id: [] for truck_id in truck_ids}
+
     assign_drivers(available_pool["drivers"], assigned_crews, base_weights, db)
     trainer_warnings = assign_trainers(available_pool["trainers"], assigned_crews, base_weights, db)
-    walker_warnings = assign_walkers(available_pool["walkers"], assigned_crews, base_weights, db)
-    # merge all warning types into one list for the response — staffing warnings have a "type" key,
-    # ban-conflict warnings have "employee_id" / "banned_by"
-    warnings = staffing_warnings + trainer_warnings + walker_warnings
 
-    # write one TruckAssignment row per truck, then one AssignmentMember row per crew member
+    # --- Continuation request pre-pass ---
+    # Build trainer_id -> truck_id from the now-placed trainers.
+    trainer_to_truck = {
+        m["id"]: truck_id
+        for truck_id, crew in assigned_crews.items()
+        for m in crew if m["role"] == "trainer"
+    }
+
+    # Fetch all accepted continuation requests whose trainee is in today's pool.
+    trainee_ids_in_pool = [t.id for t in available_pool["trainees"]]
+    accepted_requests = (
+        db.query(TrainerContinuationRequest)
+        .filter(
+            TrainerContinuationRequest.status == "accepted",
+            TrainerContinuationRequest.trainee_id.in_(trainee_ids_in_pool),
+        )
+        .all()
+    ) if trainee_ids_in_pool else []
+
+    # Group accepted requests by trainer — multiple trainees may target the same trainer.
+    from collections import defaultdict
+    from datetime import datetime, timezone
+    requests_by_trainer: dict = defaultdict(list)
+    for req in accepted_requests:
+        requests_by_trainer[req.trainer_id].append(req)
+
+    pulled_trainee_ids: set = set()
+
+    for trainer_id, reqs in requests_by_trainer.items():
+        # Trainer must be dispatched to a truck today.
+        if trainer_id not in trainer_to_truck:
+            # Trainer unavailable — all their accepted requests are nullified,
+            # trainees remain in rolling pool.
+            for req in reqs:
+                req.status = "nullified"
+                req.resolved_at = datetime.now(timezone.utc)
+            continue
+
+        # Resolve priority ordering for this trainer's requests:
+        # 1. Ranked requests first (lower priority integer = higher priority).
+        # 2. Unranked (priority is None) treated as lowest.
+        # 3. LIFO tiebreaker within same rank tier: most recent TrainingRecord
+        #    with this trainer wins (most recently trained together = higher priority).
+        def sort_key(req):
+            # Most recent record_date where this trainee trained with this trainer
+            last_together = (
+                db.query(TrainingRecord.record_date)
+                .filter(
+                    TrainingRecord.trainee_id == req.trainee_id,
+                    TrainingRecord.trainer_id == trainer_id,
+                )
+                .order_by(TrainingRecord.record_date.desc())
+                .first()
+            )
+            lifo_date = last_together[0] if last_together else None
+            # Sort: ranked first (None ranks sort last), then most-recent lifo_date desc
+            rank = req.priority if req.priority is not None else 999999
+            # Negate lifo_date for descending sort using a comparable tuple
+            lifo_ts = lifo_date.toordinal() if lifo_date else 0
+            return (rank, -lifo_ts)
+
+        sorted_reqs = sorted(reqs, key=sort_key)
+
+        # Only the first (highest priority) trainee gets pulled to this trainer today.
+        # Remaining re-enter the rolling pool.
+        truck_id = trainer_to_truck[trainer_id]
+        winner = sorted_reqs[0]
+        losers = sorted_reqs[1:]
+
+        # Pull winner: inject directly into assigned_crews, remove from rolling pool.
+        assigned_crews[truck_id].append({
+            "id": winner.trainee_id,
+            "role": "trainee",
+            "paired_trainer_id": trainer_id,
+        })
+        pulled_trainee_ids.add(winner.trainee_id)
+        winner.status = "nullified"
+        winner.resolved_at = datetime.now(timezone.utc)
+
+        # Losers: nullify their requests, they rejoin the rolling pool normally.
+        for req in losers:
+            req.status = "nullified"
+            req.resolved_at = datetime.now(timezone.utc)
+
+    # Also nullify any still-pending requests for today's trainees (auto-expiry).
+    pending_requests = (
+        db.query(TrainerContinuationRequest)
+        .filter(
+            TrainerContinuationRequest.status == "pending",
+            TrainerContinuationRequest.trainee_id.in_(trainee_ids_in_pool),
+        )
+        .all()
+    ) if trainee_ids_in_pool else []
+    for req in pending_requests:
+        req.status = "nullified"
+        req.resolved_at = datetime.now(timezone.utc)
+
+    db.flush()
+
+    # Remove pulled trainees from the rolling pool before Pass 3.
+    remaining_trainees = [
+        t for t in available_pool["trainees"]
+        if t.id not in pulled_trainee_ids
+    ]
+
+    trainee_warnings = assign_trainees(remaining_trainees, assigned_crews, db)
+    walker_warnings = assign_walkers(available_pool["walkers"], assigned_crews, base_weights, db)
+    
+    rebalance_moves = rebalance_crews(assigned_crews, db)
+
+    warnings = graduation_warnings + staffing_warnings + trainer_warnings + trainee_warnings + walker_warnings
+
     for truck_id, crew in assigned_crews.items():
         truck_assignment = TruckAssignment(
             truck_id=truck_id,
@@ -93,18 +244,39 @@ def run_dispatch(db: Session, target_date: date = None) -> dict:
             status="planned"
         )
         db.add(truck_assignment)
-        # flush to generate truck_assignment.id without committing, so members can reference it
         db.flush()
 
         for member in crew:
             assignment_member = AssignmentMember(
                 assignment_id=truck_assignment.id,
                 employee_id=member["id"],
-                role=member["role"]
+                role="walker" if member.get("role") == "walker" else member["role"]
             )
             db.add(assignment_member)
 
-    # single commit for the whole dispatch — keeps the DB consistent if anything fails mid-write
     db.commit()
 
-    return assigned_crews, warnings
+    # Curriculum Injection Logic: Hook into the trainee assignment flow
+    inject_curriculum(db, target_date, assigned_crews)
+
+    formatted_crews = {}
+    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == target_date).all()
+    for assignment in assignments:
+        members_query = db.query(AssignmentMember, Employee).join(
+            Employee, AssignmentMember.employee_id == Employee.id
+        ).filter(
+            AssignmentMember.assignment_id == assignment.id
+        ).all()
+        
+        crew_list = []
+        for am, emp in members_query:
+            crew_list.append({
+                "assignment_id": str(am.id),
+                "employee_id": str(emp.id),
+                "name": emp.name,
+                "role": am.role
+            })
+            
+        formatted_crews[str(assignment.truck_id)] = crew_list
+
+    return formatted_crews, warnings

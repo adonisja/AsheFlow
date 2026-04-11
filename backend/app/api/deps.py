@@ -1,6 +1,8 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session
 from app.core.security import verify_cognito_token
+from app.database import get_db
 
 # This tells FastAPI an endpoint requires a "Bearer" token in the Authorization header.
 # It also adds the "Authorize" padlock button to our /docs Swagger UI automatically!
@@ -38,11 +40,35 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         )
     
     # 3. Return the user data so the router can use it (e.g., to look up the DB record)
+    # Cognito access tokens include 'username' (the Cognito username = Discord ID in this app).
     return {
         "id": user_id,
         "email": email,
+        "username": payload.get("username", ""),
         "cognito_groups": payload.get("cognito:groups", [])
     }
+
+def get_caller_employee(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Resolve the Employee DB record for the authenticated caller.
+
+    Matches on discord_id == current_user['username'] (Cognito username).
+    Raises 403 if no employee record exists for the caller — prevents ghost
+    users from submitting field-ops records on behalf of real employees.
+    """
+    from app.models.employee import Employee  # local import to avoid circular
+    employee = db.query(Employee).filter(
+        Employee.discord_id == current_user.get("username", "")
+    ).first()
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No employee record found for your account.",
+        )
+    return employee
+
 
 class RoleChecker:
     """Dependency class to check if a user has the required roles."""

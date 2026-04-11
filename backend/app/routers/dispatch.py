@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from uuid import UUID
@@ -10,48 +11,88 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck import Truck
-from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate
+from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate, DispatchConfig
 from app.services.run_dispatch import run_dispatch
-from app.schemas.dispatch import ManualAssignmentUpdate
-
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
-# Create a dependency instance allowing only dispatch and management roles
-allow_dispatch_mgmt = RoleChecker(["dispatch", "management", "admin"])
+# Dispatch operations are limited to dispatch role and admin only.
+# Management (supervisory) accesses fleet data via reporting endpoints, not the operational dispatch tool.
+allow_dispatch_mgmt = RoleChecker(["dispatch", "admin"])
+
+@router.get("/{dispatch_date}", status_code=status.HTTP_200_OK)
+def get_daily_dispatch(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt)
+):
+    """Retrieve all truck assignments and their crews for a specific date."""
+    
+    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    
+    if not assignments:
+        return {
+            "date": dispatch_date,
+            "assigned_crews": {},
+            "warnings": []
+        }
+        
+    assigned_crews = {}
+    
+    for assignment in assignments:
+        members_query = db.query(AssignmentMember, Employee).join(
+            Employee, AssignmentMember.employee_id == Employee.id
+        ).filter(
+            AssignmentMember.assignment_id == assignment.id
+        ).all()
+        
+        crew_list = []
+        for am, emp in members_query:
+            crew_list.append({
+                "assignment_id": str(am.id),
+                "employee_id": str(emp.id),
+                "name": emp.name,
+                "role": am.role
+            })
+            
+        assigned_crews[str(assignment.truck_id)] = crew_list
+        
+    return {
+        "date": dispatch_date,
+        "assigned_crews": assigned_crews,
+        "warnings": []
+    }
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def trigger_dispatch(
+    config: Optional[DispatchConfig] = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_dispatch_mgmt)
-    ):
-    """Run today's dispatch if one does not already exist.
-
-    Args:
-        db: Database session injected by FastAPI.
-        current_user: Authenticated user dict injected by FastAPI.
-
-    Returns:
-        A dict containing ``date``, ``assigned_crews`` (truck UUID → crew list),
-        and ``warnings`` (list of staffing or ban-conflict warning dicts).
-
-    Raises:
-        HTTPException(409): If a dispatch already exists for today.
-        HTTPException(400): If there are insufficient drivers to run dispatch.
-    """
-    today = date.today()
+):
+    """Run today's dispatch if one does not already exist."""
+    
+    target_date = config.date if config and config.date else date.today()
 
     # prevent double-dispatch — if any TruckAssignment row exists for today, reject immediately
-    existing = db.query(TruckAssignment).filter(TruckAssignment.date == today).first()
+    existing = db.query(TruckAssignment).filter(TruckAssignment.date == target_date).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Dispatch already exists for {today}"
+            detail=f"Dispatch already exists for {target_date}"
         )
 
     # ValueError is raised by run_dispatch when there aren't enough drivers to cover all trucks
     try:
-        assigned_crews, warnings = run_dispatch(db, today)
+        total_employees = config.total_employees if config else None
+        total_trucks = config.total_trucks if config else None
+        
+        if not total_trucks or total_trucks <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Total number of trucks is required to run dispatch."
+            )
+            
+        assigned_crews, warnings = run_dispatch(db, target_date, total_employees, total_trucks)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -70,7 +111,7 @@ def trigger_dispatch(
             })
 
     return {
-        "date": today,
+        "date": target_date,
         # truck_id keys are UUIDs — cast to str so FastAPI can serialize them as JSON object keys
         "assigned_crews": {str(k): v for k, v in assigned_crews.items()},
         "warnings": serialized_warnings
@@ -141,6 +182,62 @@ def manual_assignment(
             detail=f"Employee {assignment_in.employee_id} is already assigned on {assignment_in.date}"
         )
         
+    # Handle Trainee Bumping Logic
+    if assignment_in.role == "trainee":
+        # Check if the truck already has a trainee
+        existing_trainee_assignment = db.query(AssignmentMember).filter(
+            AssignmentMember.assignment_id == truck_assignment.id,
+            AssignmentMember.role == "trainee"
+        ).first()
+
+        if existing_trainee_assignment:
+            bumped_trainee_id = existing_trainee_assignment.employee_id
+            db.delete(existing_trainee_assignment)
+            db.flush()
+
+            # Find another truck with a trainer but NO trainee
+            # First get all trucks for this date
+            all_truck_assignments = db.query(TruckAssignment).filter(
+                TruckAssignment.date == assignment_in.date
+            ).all()
+
+            fallback_assignment_id = None
+            for ta in all_truck_assignments:
+                if ta.id == truck_assignment.id:
+                    continue
+                
+                members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
+                has_trainer = any(m.role == "trainer" for m in members)
+                has_trainee = any(m.role == "trainee" for m in members)
+
+                if has_trainer and not has_trainee:
+                    fallback_assignment_id = ta.id
+                    break
+            
+            # If no truck with trainer and without trainee, just find any truck without a trainee, or just any truck.
+            if not fallback_assignment_id:
+                for ta in all_truck_assignments:
+                    if ta.id == truck_assignment.id:
+                        continue
+                    members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
+                    has_trainee = any(m.role == "trainee" for m in members)
+                    if not has_trainee:
+                        fallback_assignment_id = ta.id
+                        break
+            
+            if fallback_assignment_id:
+                bumped_member = AssignmentMember(
+                    assignment_id=fallback_assignment_id,
+                    employee_id=bumped_trainee_id,
+                    role="trainee"
+                )
+                db.add(bumped_member)
+            else:
+                # If nowhere to put them, maybe convert to walker on some truck or just leave unassigned?
+                # We will just unassign them if there's no room, which is handled since we deleted them.
+                pass
+
+
     new_member = AssignmentMember(
         assignment_id=truck_assignment.id,
         employee_id=assignment_in.employee_id,
@@ -294,3 +391,26 @@ def swap_assignment(
         }
     }
 
+
+@router.delete("/{dispatch_date}", status_code=status.HTTP_204_NO_CONTENT)
+def clear_daily_dispatch(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt)
+):
+    """Clear all truck assignments for a specific date.
+    Returns 403 if the user tries to delete a dispatch for a past date.
+    """
+    if dispatch_date < date.today() and current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete assignment records for past days."
+        )
+
+    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    for a in assignments:
+        db.query(AssignmentMember).filter(AssignmentMember.assignment_id == a.id).delete()
+        db.delete(a)
+    db.commit()
+    
+    return

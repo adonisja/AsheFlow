@@ -26,6 +26,9 @@ def assign_drivers(
 
     # iterate once per truck — exactly one driver is consumed per loop
     for truck_id in base_weights.keys():
+        if not remaining_drivers:
+            break
+
         # build a weight list that mirrors the current remaining_drivers order
         driver_weights = []
         for driver in remaining_drivers:

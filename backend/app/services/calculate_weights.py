@@ -121,3 +121,5 @@ def calculate_weights(
                 if perform_bidirectional_check(employee_id, fan_id, db):
                     base_weights_copy[boosted_truck_id] += MUTUAL_BONUS["bidirectional"]
 
+    return base_weights_copy
+
