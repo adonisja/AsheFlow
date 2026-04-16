@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine
 from app import models
 from app.models.base import Base
+from app.core.config import settings
 from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, dispatch, schedule, time_off_requests, feedback, training, notifications, field_ops, continuation_requests, assignment_change_requests, incidents, schedule_change_requests
 
 # Alembic is now managing the database schema.
@@ -10,19 +11,11 @@ from app.routers import employees, trucks, truck_assignments, assignment_members
 
 app = FastAPI(title="AsheFlow Dispatch API")
 
-# Configure CORS
+# Configure CORS — origins loaded from CORS_ORIGINS env var (comma-separated).
+# Dev default is set in config.py; override with CORS_ORIGINS in production.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "http://localhost:3004",
-        "http://localhost:3005",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

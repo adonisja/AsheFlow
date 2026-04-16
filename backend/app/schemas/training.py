@@ -1,12 +1,12 @@
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 from datetime import date, datetime
 
 
 class TrainingTaskBase(BaseModel):
-    topic_title: str
-    description: Optional[str] = None
+    topic_title: str = Field(..., max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
     is_completed: bool = False
     is_mandatory: bool = True
     is_training_debt: bool = False
@@ -27,9 +27,9 @@ class TrainingTaskResponse(TrainingTaskBase):
 class TrainingRecordBase(BaseModel):
     record_date: date
     current_day_number: int
-    trainer_comments: Optional[str] = None
-    manager_comments: Optional[str] = None
-    trainee_comments: Optional[str] = None
+    trainer_comments: Optional[str] = Field(None, max_length=2000)
+    manager_comments: Optional[str] = Field(None, max_length=2000)
+    trainee_comments: Optional[str] = Field(None, max_length=2000)
     trainer_rating: Optional[int] = None
     is_locked: bool = False
 
@@ -49,16 +49,19 @@ class TrainingRecordResponse(TrainingRecordBase):
     model_config = ConfigDict(from_attributes=True)
 
 class TrainerCommentCreate(BaseModel):
-    comments: str
+    comments: str = Field(..., max_length=2000)
 
 class ManagerCommentCreate(BaseModel):
-    comments: str
+    comments: str = Field(..., max_length=2000)
 
 class TraineeReviewCreate(BaseModel):
-    trainee_comments: str
-    trainer_rating: int
+    trainee_comments: str = Field(..., max_length=2000)
+    trainer_rating: int = Field(..., ge=1, le=5)
 
 class TraineeReassignRequest(BaseModel):
     trainee_id: UUID
     new_trainer_id: UUID
     target_date: date
+
+class TaskUpdate(BaseModel):
+    is_completed: bool

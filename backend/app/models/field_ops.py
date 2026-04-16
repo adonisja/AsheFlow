@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, Boolean, Date, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Float, Integer, Boolean, Date, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from app.models.base import Base
@@ -7,6 +7,9 @@ from app.models.base import Base
 
 class CheckIn(Base):
     __tablename__ = "check_ins"
+    __table_args__ = (
+        UniqueConstraint("employee_id", "date", name="uq_check_ins_employee_date"),
+    )
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     employee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -17,6 +20,9 @@ class CheckIn(Base):
 
 class Departure(Base):
     __tablename__ = "departures"
+    __table_args__ = (
+        UniqueConstraint("employee_id", "date", name="uq_departures_employee_date"),
+    )
 
     id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     employee_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -28,6 +34,9 @@ class Departure(Base):
 
 class WalkerRating(Base):
     __tablename__ = "walker_ratings"
+    __table_args__ = (
+        UniqueConstraint("driver_id", "walker_id", "date", name="uq_walker_ratings_driver_walker_date"),
+    )
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     driver_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -41,7 +50,7 @@ class WalkerRating(Base):
 
 # Standard checklist item names
 INSPECTION_ITEMS = [
-    "tyres",
+    "tires",
     "lights",
     "mirrors",
     "brakes",
@@ -60,14 +69,17 @@ class FuelMileageLog(Base):
     odometer_start submitted at departure; odometer_end and fuel_added patched at return.
     """
     __tablename__ = "fuel_mileage_logs"
+    __table_args__ = (
+        UniqueConstraint("driver_id", "date", name="uq_fuel_mileage_logs_driver_date"),
+    )
 
     id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     driver_id       = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     truck_id        = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="SET NULL"), nullable=True, index=True)
     date            = Column(Date, nullable=False, index=True)
-    odometer_start  = Column(Integer, nullable=False)           # km / miles at start of shift
-    odometer_end    = Column(Integer, nullable=True)            # patched at return
-    fuel_added      = Column(Integer, nullable=True)            # litres or gallons, patched at return
+    odometer_start  = Column(Float, nullable=False)             # miles at start of shift
+    odometer_end    = Column(Float, nullable=True)              # patched at return
+    fuel_added      = Column(Float, nullable=True)              # gallons, patched at return
     notes           = Column(Text, nullable=True)
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -75,6 +87,9 @@ class FuelMileageLog(Base):
 class VehicleInspection(Base):
     """Pre-trip vehicle inspection checklist completed by the driver each morning."""
     __tablename__ = "vehicle_inspections"
+    __table_args__ = (
+        UniqueConstraint("driver_id", "date", name="uq_vehicle_inspections_driver_date"),
+    )
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     driver_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)

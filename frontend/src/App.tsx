@@ -12,6 +12,9 @@ import FieldOps from './pages/FieldOps';
 import Incidents from './pages/Incidents';
 import AdminDashboard from './pages/AdminDashboard';
 import ScheduleChanges from './pages/ScheduleChanges';
+import Assets from './pages/Assets';
+import VehicleCompliance from './pages/VehicleCompliance';
+import WalkerPerformance from './pages/WalkerPerformance';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
@@ -51,6 +54,16 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 
   return <>{children}</>;
 };
+
+function RoleRedirect() {
+  const { groups } = useAuth();
+  if (groups.includes('admin'))       return <Navigate to="/admin" replace />;
+  if (groups.includes('dispatch'))    return <Navigate to="/dispatch" replace />;
+  if (groups.includes('management'))  return <Navigate to="/management" replace />;
+  if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
+  if (groups.includes('trainee'))     return <Navigate to="/my-training" replace />;
+  return <Dashboard />;
+}
 
 type DashView = 'dispatch' | 'management' | 'worker';
 
@@ -112,13 +125,13 @@ function Dashboard() {
       {/* Stats row */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { label: 'Role', value: groups.join(', ') || 'Pending', icon: Users },
-          { label: 'Status', value: 'Active', icon: Truck },
-          { label: 'Today', value: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }), icon: Calendar },
+          { label: 'Role', value: groups.join(', ') || 'Pending', icon: Users, color: 'text-primary' },
+          { label: 'Status', value: 'Active', icon: Truck, color: 'text-success' },
+          { label: 'Today', value: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }), icon: Calendar, color: 'text-info' },
         ].map(stat => (
           <div key={stat.label} className="card-elevated flex items-center gap-4">
-            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-accent">
-              <stat.icon className="w-5 h-5 text-muted-foreground" />
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary/5">
+              <stat.icon className={`w-5 h-5 ${stat.color}`} />
             </div>
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wider">{stat.label}</p>
@@ -148,7 +161,7 @@ function App() {
               path="/"
               element={
                 <ProtectedRoute>
-                  <Dashboard />
+                  <RoleRedirect />
                 </ProtectedRoute>
               }
             />
@@ -164,17 +177,14 @@ function App() {
               path="/assets"
               element={
                 <ProtectedRoute allowedRoles={['admin', 'management']}>
-                  <div className="space-y-4">
-                    <h1 className="page-title">Assets & Users</h1>
-                    <div className="card">
-                      <p className="text-subtle">Asset management coming soon.</p>
-                    </div>
-                  </div>
+                  <Assets />
                 </ProtectedRoute>
               }
             />
-            <Route path="/schedule" element={<ProtectedRoute><Schedule /></ProtectedRoute>} />
-            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'admin']}><FieldOps /></ProtectedRoute>} />
+            <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin']}><Schedule /></ProtectedRoute>} />
+            {/* field-ops: drivers use check-in/departure/inspections; walkers/trainers/trainees can submit ratings */}
+            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'admin']}><FieldOps /></ProtectedRoute>} />
+            {/* schedule-changes: dispatch excluded — not their job */}
             <Route
               path="/schedule-changes"
               element={
@@ -183,7 +193,8 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/incidents" element={<ProtectedRoute><Incidents /></ProtectedRoute>} />
+            {/* incidents: all authenticated roles can file or view incidents */}
+            <Route path="/incidents" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><Incidents /></ProtectedRoute>} />
             <Route
               path="/preferences"
               element={
@@ -195,7 +206,7 @@ function App() {
             <Route
               path="/trainer-dashboard"
               element={
-                <ProtectedRoute allowedRoles={['trainer']}>
+                <ProtectedRoute allowedRoles={['trainer', 'admin']}>
                   <TrainerDashboard />
                 </ProtectedRoute>
               }
@@ -213,6 +224,30 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['trainee']}>
                   <TraineeDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/management"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <ManagementView />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/vehicle-compliance"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <VehicleCompliance />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/walker-performance"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <WalkerPerformance />
                 </ProtectedRoute>
               }
             />

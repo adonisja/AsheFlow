@@ -17,19 +17,20 @@ allow_any_auth   = RoleChecker(["driver", "walker", "trainer", "trainee", "dispa
 
 
 @router.post("/", response_model=EmployeeOffDayResponse, status_code=status.HTTP_201_CREATED)
-def create_employee_off_day(employee_off_day: EmployeeOffDayCreate, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
+def create_employee_off_day(
+    employee_off_day: EmployeeOffDayCreate,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
     """Add a recurring off day for an employee.
 
-    Args:
-        employee_off_day: Validated payload containing employee_id and day_of_week.
-        db: Database session.
-
-    Returns:
-        The newly created EmployeeOffDay record.
-
-    Raises:
-        HTTPException(404): If the referenced employee does not exist.
+    Field staff can only create off-days for themselves. Management/admin can
+    create for any employee.
     """
+    mgmt_roles = {"management", "admin"}
+    if caller.role not in mgmt_roles and caller.id != employee_off_day.employee_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only add off-days for yourself.")
+
     db_employee = db.query(Employee).filter(Employee.id == employee_off_day.employee_id).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
@@ -53,16 +54,19 @@ def get_all_employee_off_days(db: Session = Depends(get_db), _: dict = Depends(a
     return db.query(EmployeeOffDay).all()
 
 @router.get("/{employee_id}", response_model=list[EmployeeOffDayResponse])
-def get_employee_off_days(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
+def get_employee_off_days(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
     """Return all off days for a specific employee.
 
-    Args:
-        employee_id: UUID of the employee.
-        db: Database session.
-
-    Returns:
-        List of EmployeeOffDay records for the given employee.
+    Field staff can only read their own off-days. Management/admin can read any.
     """
+    mgmt_roles = {"management", "admin", "dispatch"}
+    if caller.role not in mgmt_roles and caller.id != employee_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your own off-days.")
+
     return db.query(EmployeeOffDay).filter(EmployeeOffDay.employee_id == employee_id).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)

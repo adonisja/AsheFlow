@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Select from 'react-select';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -6,36 +6,336 @@ import {
   getRelationships, createRelationship, deleteRelationship,
   type EmployeeRelationship
 } from '../api/preferences';
-import { getAllEmployeeRelationships } from '../api/employeeRelationships';
 import NotificationBanner from '../components/NotificationBanner';
-import { Heart, ShieldOff, X, ArrowLeftRight } from 'lucide-react';
+import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, ChevronDown, ChevronUp } from 'lucide-react';
 
 const selectStyles = {
   control: (base: any, state: any) => ({
     ...base,
     borderRadius: '0.75rem',
-    borderColor: state.isFocused ? 'hsl(240 5% 65%)' : 'hsl(240 6% 90%)',
-    boxShadow: state.isFocused ? '0 0 0 2px hsl(240 5% 65% / 0.2)' : 'none',
+    borderColor: state.isFocused ? 'hsl(243 75% 59%)' : 'hsl(220 13% 91%)',
+    boxShadow: state.isFocused ? '0 0 0 2px hsl(243 75% 59% / 0.15)' : 'none',
     padding: '2px 4px',
     fontSize: '0.875rem',
-    '&:hover': { borderColor: 'hsl(240 5% 65%)' },
+    '&:hover': { borderColor: 'hsl(243 75% 59%)' },
   }),
   option: (base: any, state: any) => ({
     ...base,
     fontSize: '0.875rem',
-    backgroundColor: state.isSelected ? 'hsl(240 5% 16%)' : state.isFocused ? 'hsl(240 5% 96%)' : 'white',
-    color: state.isSelected ? 'white' : 'hsl(240 10% 10%)',
+    backgroundColor: state.isSelected ? 'hsl(243 75% 59%)' : state.isFocused ? 'hsl(243 100% 97%)' : 'white',
+    color: state.isSelected ? 'white' : 'hsl(224 30% 12%)',
   }),
   groupHeading: (base: any) => ({
     ...base,
     fontSize: '0.75rem',
     fontWeight: '600',
-    color: 'hsl(240 5% 40%)',
+    color: 'hsl(220 9% 46%)',
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   }),
 };
 
+// ---------------------------------------------------------------------------
+// Admin Analytics View
+// ---------------------------------------------------------------------------
+
+const FIELD_ROLES = ['driver', 'walker', 'trainer'];
+
+function PreferenceAnalytics() {
+  const [rels, setRels]   = useState<EmployeeRelationship[]>([]);
+  const [emps, setEmps]   = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [matrixTab, setMatrixTab] = useState<'fav' | 'ban'>('fav');
+  const [expandedFav, setExpandedFav] = useState<string | null>(null);
+  const [expandedBan, setExpandedBan] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.allSettled([
+      axiosClient.get('/employee-relationships/').then(r => setRels(r.data)),
+      axiosClient.get('/employees/?limit=500').then(r => setEmps(r.data)),
+    ]).finally(() => setLoading(false));
+  }, []);
+
+  const empMap = useMemo(() => Object.fromEntries(emps.map(e => [e.id, e])), [emps]);
+
+  const favs = useMemo(() => rels.filter(r => r.relationship_type === 'fav'), [rels]);
+  const bans = useMemo(() => rels.filter(r => r.relationship_type === 'ban'), [rels]);
+
+  // KPIs
+  const fieldStaff = useMemo(() => emps.filter(e => FIELD_ROLES.includes(e.role)), [emps]);
+  const staffWithPrefs = useMemo(() => new Set(rels.map(r => r.employee_id)).size, [rels]);
+  const coveragePct = fieldStaff.length > 0 ? Math.round((staffWithPrefs / fieldStaff.length) * 100) : 0;
+
+  // Mutual bans
+  const mutualBans = useMemo(() => {
+    const banSet = new Set(bans.map(r => `${r.employee_id}:${r.target_employee_id}`));
+    const seen = new Set<string>();
+    const pairs: { a: string; b: string }[] = [];
+    for (const r of bans) {
+      const reverse = `${r.target_employee_id}:${r.employee_id}`;
+      const key = [r.employee_id, r.target_employee_id].sort().join(':');
+      if (banSet.has(reverse) && !seen.has(key)) {
+        seen.add(key);
+        pairs.push({ a: r.employee_id, b: r.target_employee_id });
+      }
+    }
+    return pairs;
+  }, [bans]);
+
+  // Role interaction matrix
+  const roles = ['driver', 'walker', 'trainer'];
+  const matrix = useMemo(() => {
+    const m: Record<string, Record<string, { favs: number; bans: number }>> = {};
+    for (const src of roles) {
+      m[src] = {};
+      for (const tgt of roles) m[src][tgt] = { favs: 0, bans: 0 };
+    }
+    for (const r of rels) {
+      const src = empMap[r.employee_id]?.role;
+      const tgt = empMap[r.target_employee_id]?.role;
+      if (src && tgt && m[src]?.[tgt]) {
+        if (r.relationship_type === 'fav') m[src][tgt].favs++;
+        else m[src][tgt].bans++;
+      }
+    }
+    return m;
+  }, [rels, empMap]);
+
+  // Most favoured / most banned
+  const favCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const r of favs) c[r.target_employee_id] = (c[r.target_employee_id] || 0) + 1;
+    return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }, [favs]);
+
+  const banCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const r of bans) c[r.target_employee_id] = (c[r.target_employee_id] || 0) + 1;
+    return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }, [bans]);
+
+  // Who favours / bans a given target
+  const favouredBy = (id: string) => favs.filter(r => r.target_employee_id === id);
+  const bannedBy   = (id: string) => bans.filter(r => r.target_employee_id === id);
+  const isMutualBan = (id: string) => mutualBans.some(p => p.a === id || p.b === id);
+
+  const empLabel = (id: string) => {
+    const e = empMap[id];
+    return e ? `${e.name} (${e.role})` : id;
+  };
+
+  const matrixMax = useMemo(() => {
+    let max = 0;
+    for (const src of roles) for (const tgt of roles) {
+      const v = matrixTab === 'fav' ? matrix[src]?.[tgt]?.favs : matrix[src]?.[tgt]?.bans;
+      if (v > max) max = v;
+    }
+    return max || 1;
+  }, [matrix, matrixTab]);
+
+  if (loading) {
+    return (
+      <div className="flex h-60 items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8 animate-slide-up">
+      {/* Header */}
+      <div>
+        <h1 className="page-title flex items-center gap-2">
+          <BarChart2 className="w-5 h-5 text-primary" /> Preference Analytics
+        </h1>
+        <p className="text-subtle mt-1">System-wide fav and ban patterns across all field staff.</p>
+      </div>
+
+      {/* KPI row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { label: 'Total Favs',       value: favs.length,      color: 'text-success' },
+          { label: 'Total Bans',       value: bans.length,      color: 'text-danger'  },
+          { label: 'Staff Coverage',   value: `${coveragePct}%`, color: coveragePct >= 80 ? 'text-success' : 'text-warning' },
+          { label: 'Mutual Conflicts', value: mutualBans.length, color: mutualBans.length > 0 ? 'text-danger' : 'text-subtle' },
+        ].map(stat => (
+          <div key={stat.label} className="card-elevated">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider">{stat.label}</p>
+            <p className={`text-2xl font-bold mt-1 ${stat.color}`}>{stat.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Role Interaction Matrix */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <Users className="w-5 h-5 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">Role Interaction Matrix</h2>
+          <div className="ml-auto flex items-center gap-1 bg-accent rounded-lg p-1 text-xs">
+            {(['fav', 'ban'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setMatrixTab(t)}
+                className={`px-3 py-1 rounded-md font-medium capitalize transition-colors ${matrixTab === t ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {t === 'fav' ? 'Favs' : 'Bans'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-subtle mb-4">Row = who set the preference · Column = who it targets</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr>
+                <th className="pb-2 pr-4 text-left text-xs text-muted-foreground uppercase tracking-wider w-24">From ↓ To →</th>
+                {roles.map(tgt => (
+                  <th key={tgt} className="pb-2 px-4 text-center text-xs text-muted-foreground uppercase tracking-wider capitalize">{tgt}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {roles.map(src => (
+                <tr key={src}>
+                  <td className="py-3 pr-4 text-xs font-semibold text-foreground capitalize">{src}</td>
+                  {roles.map(tgt => {
+                    const val = matrixTab === 'fav' ? matrix[src]?.[tgt]?.favs : matrix[src]?.[tgt]?.bans;
+                    const intensity = val / matrixMax;
+                    const bg = matrixTab === 'fav'
+                      ? `rgba(34,197,94,${intensity * 0.35})`
+                      : `rgba(239,68,68,${intensity * 0.35})`;
+                    return (
+                      <td key={tgt} className="py-3 px-4 text-center">
+                        <span
+                          className="inline-block w-12 h-8 leading-8 rounded-lg text-sm font-bold text-foreground"
+                          style={{ background: val > 0 ? bg : 'transparent' }}
+                        >
+                          {val}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Most Favoured + Most Banned side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Most Favoured */}
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <Heart className="w-5 h-5 text-success" />
+            <h2 className="text-base font-semibold text-foreground">Most Favoured</h2>
+          </div>
+          {favCounts.length === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No favs recorded.</p>
+          ) : (
+            <div className="space-y-1">
+              {favCounts.map(([id, count], i) => {
+                const isOpen = expandedFav === id;
+                const favBy = favouredBy(id);
+                return (
+                  <div key={id} className="rounded-xl border border-border overflow-hidden">
+                    <button
+                      onClick={() => setExpandedFav(isOpen ? null : id)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/30 transition-colors text-left"
+                    >
+                      <span className="text-xs text-subtle w-5 text-right shrink-0">#{i + 1}</span>
+                      <span className="flex-1 text-sm font-medium text-foreground truncate">{empLabel(id)}</span>
+                      <span className="text-sm font-bold text-success shrink-0">{count} ★</span>
+                      {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+                    </button>
+                    {isOpen && (
+                      <div className="px-4 pb-3 pt-1 border-t border-border bg-accent/10 space-y-1">
+                        <p className="text-xs text-subtle uppercase tracking-wider mb-2">Favoured by</p>
+                        {favBy.map(r => (
+                          <p key={r.id} className="text-xs text-foreground">{empLabel(r.employee_id)}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Most Banned */}
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <ShieldOff className="w-5 h-5 text-danger" />
+            <h2 className="text-base font-semibold text-foreground">Most Banned</h2>
+          </div>
+          {banCounts.length === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No bans recorded.</p>
+          ) : (
+            <div className="space-y-1">
+              {banCounts.map(([id, count], i) => {
+                const isOpen = expandedBan === id;
+                const banBy = bannedBy(id);
+                const mutual = isMutualBan(id);
+                return (
+                  <div key={id} className={`rounded-xl border overflow-hidden ${mutual ? 'border-danger/40' : 'border-border'}`}>
+                    <button
+                      onClick={() => setExpandedBan(isOpen ? null : id)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/30 transition-colors text-left"
+                    >
+                      <span className="text-xs text-subtle w-5 text-right shrink-0">#{i + 1}</span>
+                      <span className="flex-1 text-sm font-medium text-foreground truncate">{empLabel(id)}</span>
+                      {mutual && <span className="text-xs font-bold text-danger bg-danger/10 px-1.5 py-0.5 rounded shrink-0">mutual</span>}
+                      <span className="text-sm font-bold text-danger shrink-0">{count} ✕</span>
+                      {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+                    </button>
+                    {isOpen && (
+                      <div className="px-4 pb-3 pt-1 border-t border-border bg-accent/10 space-y-1">
+                        <p className="text-xs text-subtle uppercase tracking-wider mb-2">Banned by</p>
+                        {banBy.map(r => (
+                          <p key={r.id} className="text-xs text-foreground">{empLabel(r.employee_id)}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Mutual Conflicts */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <AlertTriangle className="w-5 h-5 text-danger" />
+          <h2 className="text-base font-semibold text-foreground">Mutual Conflicts</h2>
+          <span className="ml-auto text-xs text-subtle">Hard dispatch constraints — both parties ban each other</span>
+        </div>
+        {mutualBans.length === 0 ? (
+          <div className="text-center py-8 opacity-60">
+            <AlertTriangle className="w-10 h-10 mb-3 text-success mx-auto" />
+            <p className="text-sm font-medium">No mutual conflicts.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {mutualBans.map(({ a, b }) => (
+              <div key={`${a}:${b}`} className="py-3 flex items-center justify-between gap-4">
+                <span className="text-sm font-medium text-foreground">{empLabel(a)}</span>
+                <span className="text-xs font-bold text-danger px-2 py-0.5 rounded bg-danger/10">↔ mutual ban</span>
+                <span className="text-sm font-medium text-foreground text-right">{empLabel(b)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Field staff preference page
+// ---------------------------------------------------------------------------
 const Preferences = () => {
   const { groups = [], user } = useAuth();
   const isAdmin = groups.includes('admin');
@@ -43,7 +343,7 @@ const Preferences = () => {
   const canFavBan = groups.some(r => ['driver', 'walker', 'trainer'].includes(r));
   const canReassign = groups.some(r => ['walker', 'trainer'].includes(r));
 
-  const [myId, setMyId] = useState<string>(isAdmin ? '' : (user?.userId || user?.username || ''));
+  const [myId, setMyId] = useState<string>(user?.userId || user?.username || '');
   const [employees, setEmployees] = useState<any[]>([]);
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
   const [targetFavId, setTargetFavId] = useState('');
@@ -54,25 +354,20 @@ const Preferences = () => {
   const [changeRequestReason, setChangeRequestReason] = useState('');
   const [changeRequestError, setChangeRequestError] = useState('');
 
-  const [allRelationships, setAllRelationships] = useState<Record<string, { favs: string[], bans: string[] }>>({});
-
   useEffect(() => {
+    if (isAdmin) return;
     axiosClient.get('/employees/')
       .then(res => {
         const sorted = res.data.sort((a: any, b: any) =>
           (a.first_name || a.name || '').localeCompare(b.first_name || b.name || '')
         );
         setEmployees(sorted);
-        if (!isAdmin && user && !myId) {
+        if (user && !myId) {
           const self = sorted.find((e: any) => e.id === user.userId || e.id === user.username);
           if (self) setMyId(self.id);
         }
       })
       .catch(console.error);
-
-    if (isAdmin) {
-      getAllEmployeeRelationships().then(setAllRelationships).catch(console.error);
-    }
   }, [isAdmin, user]);
 
   useEffect(() => {
@@ -84,11 +379,12 @@ const Preferences = () => {
     }
   }, [myId]);
 
+  if (isAdmin) return <PreferenceAnalytics />;
+
   const loadPreferences = async (id: string) => {
     try {
       const rels = await getRelationships(id);
       setRelationships(rels);
-      if (isAdmin) getAllEmployeeRelationships().then(setAllRelationships).catch(console.error);
     } catch (err) { console.error(err); }
   };
 
@@ -174,27 +470,12 @@ const Preferences = () => {
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Preferences</h1>
 
-      {myId && !isAdmin && <NotificationBanner employeeId={myId} />}
-
-      {isAdmin && (
-        <div className="card">
-          <label className="block text-sm font-medium text-foreground mb-2">Select Employee</label>
-          <Select
-            options={getGroupedOptions()}
-            value={employeeOptions.find(o => o.value === myId) || null}
-            onChange={(sel) => setMyId(sel?.value || '')}
-            placeholder="Search for an employee..."
-            isClearable
-            isSearchable
-            styles={selectStyles}
-          />
-        </div>
-      )}
+      {myId && <NotificationBanner employeeId={myId} />}
 
       {myId && (
         <div className="space-y-6">
           {/* Truck Reassignment — walker/trainer only, today-only */}
-          {(canReassign || isAdmin) && (
+          {canReassign && (
             <Section icon={ArrowLeftRight} title="Truck Reassignment Request" iconColor="text-warning">
               <p className="text-sm text-subtle mb-4">
                 Request to be moved to a different truck for <strong>today</strong>. You must be currently assigned to submit. Dispatch will review.
@@ -250,7 +531,7 @@ const Preferences = () => {
           )}
 
           {/* Favorites — driver/walker/trainer only (not trainee) */}
-          {(canFavBan || isAdmin) && (
+          {canFavBan && (
             <Section icon={Heart} title="Favorites" iconColor="text-success">
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
@@ -271,7 +552,7 @@ const Preferences = () => {
           )}
 
           {/* Blocked — driver/walker/trainer only (not trainee) */}
-          {(canFavBan || isAdmin) && (
+          {canFavBan && (
             <Section icon={ShieldOff} title="Blocked" iconColor="text-danger">
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
@@ -292,7 +573,7 @@ const Preferences = () => {
           )}
 
           {/* Trainees see a placeholder explaining what they'll unlock */}
-          {isTrainee && !isAdmin && (
+          {isTrainee && (
             <div className="card text-center py-8">
               <p className="text-sm text-subtle">Dispatch preferences (favorites & blocks) become available after graduating from the training program.</p>
             </div>

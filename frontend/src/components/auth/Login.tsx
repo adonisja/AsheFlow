@@ -77,17 +77,24 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm animate-slide-up">
+    <div className="flex min-h-screen items-center justify-center px-4 relative overflow-hidden"
+         style={{ background: 'linear-gradient(135deg, hsl(243 75% 97%), hsl(220 20% 97%), hsl(252 85% 97%))' }}>
+      {/* Decorative blobs */}
+      <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full opacity-20"
+           style={{ background: 'radial-gradient(circle, hsl(243 75% 59% / 0.3), transparent 70%)' }} />
+      <div className="absolute bottom-[-20%] right-[-10%] w-[400px] h-[400px] rounded-full opacity-15"
+           style={{ background: 'radial-gradient(circle, hsl(262 83% 58% / 0.3), transparent 70%)' }} />
+
+      <div className="w-full max-w-sm animate-slide-up relative z-10">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-10">
-          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary">
+          <div className="flex items-center justify-center w-11 h-11 rounded-xl gradient-primary shadow-lg shadow-primary/30">
             <Truck className="h-5 w-5 text-primary-foreground" />
           </div>
-          <span className="text-2xl font-bold text-foreground tracking-tight">AsheFlow</span>
+          <span className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-primary to-violet">AsheFlow</span>
         </div>
 
-        <div className="card-elevated p-8">
+        <div className="card-elevated p-8 backdrop-blur-sm bg-card/90">
           <h2 className="text-xl font-semibold text-center text-foreground mb-1">
             {isNewPasswordRequired ? 'Update Password' : (isSignUp ? 'Create your account' : 'Welcome back')}
           </h2>
@@ -96,13 +103,13 @@ export default function Login() {
           </p>
 
           {error && (
-            <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium">
+            <div className="bg-danger/5 text-danger px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-danger/20">
               {error}
             </div>
           )}
           
           {successMsg && (
-            <div className="bg-success/5 text-success px-4 py-3 rounded-xl mb-6 text-sm font-medium">
+            <div className="bg-success/5 text-success px-4 py-3 rounded-xl mb-6 text-sm font-medium border border-success/20">
               {successMsg}
             </div>
           )}
@@ -180,7 +187,7 @@ export default function Login() {
                     setError('');
                     setSuccessMsg('');
                   }} 
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  className="text-sm text-muted-foreground hover:text-primary transition-colors"
                 >
                   {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
                 </button>
