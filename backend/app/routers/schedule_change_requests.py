@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -18,10 +18,11 @@ router = APIRouter(prefix="/schedule-change-requests", tags=["schedule-change-re
 VALID_DAYS = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
 VALID_TYPES = {"add_day", "drop_day", "full_rework"}
 
-# Field staff + dispatch can submit; management/admin review
-allow_submitter = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch"])
+# Field staff submit; management/admin review. Dispatch is excluded — schedule
+# changes are a field-staff concern; dispatch operates on the published schedule.
+allow_submitter = RoleChecker(["driver", "walker", "trainer", "trainee"])
 allow_reviewer  = RoleChecker(["management", "admin"])
-allow_any_auth  = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+allow_any_auth  = RoleChecker(["driver", "walker", "trainer", "trainee", "management", "admin"])
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +35,7 @@ class ScheduleChangeRequestCreate(BaseModel):
     days_to_add: List[str] = []
     days_to_drop: List[str] = []
     proposed_schedule: Optional[List[str]] = None
-    reason: Optional[str] = None
+    reason: Optional[str] = Field(None, max_length=500)
 
     @field_validator("request_type")
     @classmethod
@@ -178,14 +179,16 @@ def get_my_schedule_change_requests(
 def get_all_schedule_change_requests(
     db: Session = Depends(get_db),
     _: dict = Depends(allow_reviewer),
+    filter_status: Optional[str] = Query(None, alias="status", description="Filter by status: pending, approved, rejected. Omit for all."),
 ):
-    """Return all pending schedule change requests with employee details. Management/admin only."""
-    requests = (
-        db.query(ScheduleChangeRequest)
-        .filter(ScheduleChangeRequest.status == "pending")
-        .order_by(ScheduleChangeRequest.created_at.asc())
-        .all()
-    )
+    """Return schedule change requests with employee details. Management/admin only.
+
+    Use ?status=pending (default view), ?status=approved, ?status=rejected, or omit for all.
+    """
+    q = db.query(ScheduleChangeRequest)
+    if filter_status is not None:
+        q = q.filter(ScheduleChangeRequest.status == filter_status)
+    requests = q.order_by(ScheduleChangeRequest.created_at.asc()).all()
 
     result = []
     for req in requests:
@@ -213,6 +216,7 @@ def approve_schedule_change_request(
     request_id: UUID,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_reviewer),
+    reviewer: Employee = Depends(get_caller_employee),
 ):
     """Approve and auto-apply a schedule change request.
 
@@ -228,10 +232,6 @@ def approve_schedule_change_request(
     ).first()
     if not req:
         raise HTTPException(status_code=404, detail="Pending schedule change request not found.")
-
-    reviewer = db.query(Employee).filter(
-        Employee.discord_id == current_user.get("username", "")
-    ).first()
 
     # --- Apply the schedule changes ---
 
@@ -278,7 +278,7 @@ def approve_schedule_change_request(
     # Mark request resolved
     req.status = "approved"
     req.resolved_at = datetime.now(timezone.utc)
-    req.reviewed_by = reviewer.id if reviewer else None
+    req.reviewed_by = reviewer.id
 
     # Notify employee
     type_label = {
@@ -307,6 +307,7 @@ def reject_schedule_change_request(
     request_id: UUID,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_reviewer),
+    reviewer: Employee = Depends(get_caller_employee),
 ):
     """Reject a pending schedule change request. No schedule changes are applied."""
     req = db.query(ScheduleChangeRequest).filter(
@@ -316,13 +317,9 @@ def reject_schedule_change_request(
     if not req:
         raise HTTPException(status_code=404, detail="Pending schedule change request not found.")
 
-    reviewer = db.query(Employee).filter(
-        Employee.discord_id == current_user.get("username", "")
-    ).first()
-
     req.status = "rejected"
     req.resolved_at = datetime.now(timezone.utc)
-    req.reviewed_by = reviewer.id if reviewer else None
+    req.reviewed_by = reviewer.id
 
     db.add(Notification(
         employee_id=req.employee_id,

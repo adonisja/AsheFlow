@@ -1,0 +1,192 @@
+"""
+conftest.py — shared test fixtures for the entire test suite.
+
+pytest automatically loads this file before running any tests. Fixtures
+defined here are available to every test file without needing to import them.
+
+KEY CONCEPTS:
+- We use SQLite in-memory (:memory:) instead of the real PostgreSQL container.
+  SQLAlchemy's ORM works identically with both — the service code doesn't know
+  or care which database it's talking to.
+- Each test gets a completely fresh database via the `db` fixture. Nothing
+  leaks between tests.
+- Helper functions (make_employee, make_truck, etc.) let individual tests
+  create exactly the rows they need with minimal boilerplate.
+"""
+
+import uuid
+from datetime import date
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# We import only the models the dispatch services use.
+# We deliberately do NOT import models that use PostgreSQL-specific column
+# types like JSONB (VehicleInspection) — SQLite can't create those tables.
+# Instead of Base.metadata.create_all (all tables), we create a targeted
+# MetaData from only the tables we need.
+from sqlalchemy import MetaData
+from app.models.base import Base
+from app.models.employee import Employee
+from app.models.truck import Truck
+from app.models.truck_assignment import TruckAssignment
+from app.models.assignment_member import AssignmentMember
+from app.models.employee_relationship import EmployeeRelationship
+from app.models.employee_off_day import EmployeeOffDay
+from app.models.trainer_continuation_request import TrainerContinuationRequest
+from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
+from app.models.notification import Notification
+
+# Collect only the Table objects for models we actually need in tests.
+# Any model imported above registers its Table in Base.metadata.
+# We build a targeted MetaData containing only those tables.
+#
+# Why not Base.metadata.create_all? Some models (VehicleInspection) use
+# PostgreSQL-specific JSONB columns that SQLite cannot compile. This targeted
+# list gives SQLite exactly the schema the dispatch services touch, nothing more.
+DISPATCH_TABLES = [
+    Employee.__table__,
+    Truck.__table__,
+    TruckAssignment.__table__,
+    AssignmentMember.__table__,
+    EmployeeRelationship.__table__,
+    EmployeeOffDay.__table__,
+    TrainerContinuationRequest.__table__,
+    TrainingCurriculum.__table__,
+    TrainingRecord.__table__,
+    TrainingTask.__table__,
+    Notification.__table__,
+]
+
+
+# ---------------------------------------------------------------------------
+# Database fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def db():
+    """
+    Yield a fresh SQLite in-memory database session for one test.
+
+    HOW IT WORKS:
+    1. create_engine(':memory:') — creates a database that lives only in RAM.
+       It disappears when the connection closes. No files, no cleanup needed.
+    2. connect_args={'check_same_thread': False} — SQLite's default is to
+       refuse multi-thread access. We disable that check because SQLAlchemy's
+       session management is safe even though pytest may use threads.
+    3. Base.metadata.create_all(engine) — runs CREATE TABLE for every model
+       that inherits from Base. This gives us the full schema.
+    4. 'yield session' — the test runs here. After it finishes (pass or fail),
+       execution resumes after yield for cleanup.
+    5. session.close() + engine.dispose() — tears down the connection and
+       frees the in-memory database.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+    )
+    # Only create the tables the dispatch services touch.
+    # Base.metadata.create_all would also try to create VehicleInspection
+    # which uses PostgreSQL's JSONB type — SQLite can't compile that.
+    meta = MetaData()
+    for table in DISPATCH_TABLES:
+        table.to_metadata(meta)
+    meta.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    yield session  # <-- test runs here
+
+    session.close()
+    engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Row-builder helpers
+# ---------------------------------------------------------------------------
+# These are plain functions (not fixtures) — call them inside tests to insert
+# exactly the rows you need. Keeping defaults minimal means each test only
+# specifies what's relevant to what it's testing.
+
+def make_employee(db, role: str = "driver", name: str = "Test Employee") -> Employee:
+    """Insert and return an active Employee with a fresh UUID."""
+    emp = Employee(
+        id=uuid.uuid4(),
+        name=name,
+        role=role,
+        is_active=True,
+        discord_id=str(uuid.uuid4()),  # unique per employee
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
+def make_truck(db, name: str = "Truck A") -> Truck:
+    """Insert and return a Truck with a fresh UUID."""
+    truck = Truck(
+        id=uuid.uuid4(),
+        name=name,
+        is_active=True,
+    )
+    db.add(truck)
+    db.commit()
+    db.refresh(truck)
+    return truck
+
+
+def make_assignment(db, truck: Truck, target_date: date = None) -> TruckAssignment:
+    """Insert and return a TruckAssignment for a truck on a given date."""
+    ta = TruckAssignment(
+        id=uuid.uuid4(),
+        truck_id=truck.id,
+        date=target_date or date.today(),
+    )
+    db.add(ta)
+    db.commit()
+    db.refresh(ta)
+    return ta
+
+
+def make_member(db, assignment: TruckAssignment, employee: Employee, role: str) -> AssignmentMember:
+    """Link an employee to a TruckAssignment as a specific role."""
+    member = AssignmentMember(
+        id=uuid.uuid4(),
+        assignment_id=assignment.id,
+        employee_id=employee.id,
+        role=role,
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+def make_relationship(db, employee: Employee, target: Employee, rel_type: str) -> EmployeeRelationship:
+    """Insert a fav or ban relationship between two employees."""
+    rel = EmployeeRelationship(
+        id=uuid.uuid4(),
+        employee_id=employee.id,
+        target_employee_id=target.id,
+        relationship_type=rel_type,
+    )
+    db.add(rel)
+    db.commit()
+    db.refresh(rel)
+    return rel
+
+
+def make_off_day(db, employee: Employee, day_of_week: str, status: str = "approved") -> EmployeeOffDay:
+    """Insert a recurring off-day for an employee."""
+    off = EmployeeOffDay(
+        id=uuid.uuid4(),
+        employee_id=employee.id,
+        day_of_week=day_of_week,
+        status=status,
+    )
+    db.add(off)
+    db.commit()
+    db.refresh(off)
+    return off

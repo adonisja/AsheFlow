@@ -1,7 +1,9 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from uuid import UUID
 from datetime import date, time, datetime
 from typing import Optional
+
+_MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5 MB
 
 VALID_CATEGORIES = {
     "vehicle", "injury", "stolen_packages", "customer_complaint",
@@ -23,22 +25,30 @@ CATEGORY_DEFAULT_SEVERITY = {
 
 
 class IncidentCreate(BaseModel):
-    reporter_id: UUID
+    # reporter_id is intentionally omitted — it is resolved server-side from
+    # the authenticated caller's employee record to prevent identity forgery.
     date: date
     category: str
     severity: str
-    description: str
+    description: str = Field(..., max_length=2000)
     photo_url: Optional[str] = None
 
     # Stolen packages
     incident_time: Optional[time] = None
     packages_tba: Optional[int] = None
-    incident_location: Optional[str] = None
-    witness_name: Optional[str] = None
+    incident_location: Optional[str] = Field(None, max_length=300)
+    witness_name: Optional[str] = Field(None, max_length=200)
 
     # Injury
-    body_part_affected: Optional[str] = None
+    body_part_affected: Optional[str] = Field(None, max_length=200)
     medical_attention_required: Optional[bool] = None
+
+    @field_validator("photo_url")
+    @classmethod
+    def check_photo_size(cls, v):
+        if v is not None and len(v.encode("utf-8")) > _MAX_PHOTO_BYTES:
+            raise ValueError("photo_url exceeds the 5 MB size limit.")
+        return v
 
 
 class IncidentResponse(BaseModel):

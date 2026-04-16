@@ -1,11 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import axiosClient from '../api/axiosClient';
 import {
   Shield, Users, Truck, Database, AlertTriangle, ClipboardCheck,
-  BarChart2, RefreshCw, CheckCircle2, XCircle,
+  BarChart2, RefreshCw, CheckCircle2, XCircle, MessageSquare, Bug, Lightbulb,
 } from 'lucide-react';
 
-const API = 'http://localhost:8000/api/v1';
+type Feedback = {
+  id: string;
+  employee_id: string | null;
+  type: 'bug' | 'feature_request' | 'general';
+  message: string;
+  status: 'new' | 'in_progress' | 'resolved';
+  created_at: string;
+};
 
 type Employee = {
   id: string;
@@ -26,16 +33,28 @@ export default function AdminDashboard() {
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [incidents, setIncidents] = useState<any[]>([]);
   const [trainingToday, setTrainingToday] = useState<any[]>([]);
+  const [feedback, setFeedback] = useState<Feedback[]>([]);
+  const [feedbackFilter, setFeedbackFilter] = useState<'all' | 'new' | 'in_progress' | 'resolved'>('all');
   const [loading, setLoading] = useState(true);
+  const [rosterPage, setRosterPage] = useState(0);
+
+  const ROSTER_PAGE_SIZE = 50;
 
   const fetchAll = () => {
     setLoading(true);
     Promise.allSettled([
-      axios.get(`${API}/employees/`).then(r => setEmployees(r.data)),
-      axios.get(`${API}/trucks/`).then(r => setTrucks(r.data)),
-      axios.get(`${API}/incidents/?resolved=false`).then(r => setIncidents(r.data)),
-      axios.get(`${API}/training/daily/active`).then(r => setTrainingToday(r.data)),
+      axiosClient.get('/employees/?include_inactive=true&limit=500').then(r => setEmployees(r.data)),
+      axiosClient.get('/trucks/?include_inactive=true').then(r => setTrucks(r.data)),
+      axiosClient.get('/incidents/?resolved=false').then(r => setIncidents(r.data)),
+      axiosClient.get('/training/daily/active').then(r => setTrainingToday(r.data)),
+      axiosClient.get('/feedback/?limit=200').then(r => setFeedback(r.data)),
     ]).finally(() => setLoading(false));
+  };
+
+  const handleUpdateFeedbackStatus = (id: string, newStatus: Feedback['status']) => {
+    axiosClient.patch(`/feedback/${id}/status`, { status: newStatus })
+      .then(r => setFeedback(prev => prev.map(f => f.id === id ? r.data : f)))
+      .catch(console.error);
   };
 
   useEffect(() => { fetchAll(); }, []);
@@ -52,20 +71,20 @@ export default function AdminDashboard() {
 
   const handleDeactivateEmployee = (id: string) => {
     if (!window.confirm('Deactivate this employee?')) return;
-    axios.put(`${API}/employees/${id}/deactivate`).then(() => {
+    axiosClient.put(`/employees/${id}/deactivate`).then(() => {
       setEmployees(prev => prev.map(e => e.id === id ? { ...e, is_active: false } : e));
     }).catch(console.error);
   };
 
   const handleDeactivateTruck = (id: string) => {
     if (!window.confirm('Deactivate this truck?')) return;
-    axios.put(`${API}/trucks/${id}/deactivate`).then(() => {
+    axiosClient.put(`/trucks/${id}/deactivate`).then(() => {
       setTrucks(prev => prev.map(t => t.id === id ? { ...t, is_active: false } : t));
     }).catch(console.error);
   };
 
   const handleResolveIncident = (id: string) => {
-    axios.patch(`${API}/incidents/${id}/resolve`).then(() => {
+    axiosClient.patch(`/incidents/${id}/resolve`).then(() => {
       setIncidents(prev => prev.filter(i => i.id !== id));
     }).catch(console.error);
   };
@@ -251,7 +270,7 @@ export default function AdminDashboard() {
         <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
           <Users className="w-5 h-5 text-primary" />
           <h2 className="text-base font-semibold text-foreground">Employee Roster</h2>
-          <span className="ml-auto text-xs text-subtle">{employees.filter(e => e.is_active).length} active</span>
+          <span className="ml-auto text-xs text-subtle">{employees.filter(e => e.is_active).length} active · {employees.length} total</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -265,7 +284,7 @@ export default function AdminDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {employees.map(e => (
+              {employees.slice(rosterPage * ROSTER_PAGE_SIZE, (rosterPage + 1) * ROSTER_PAGE_SIZE).map(e => (
                 <tr key={e.id} className={`${!e.is_active ? 'opacity-40' : ''}`}>
                   <td className="py-2 pr-4 font-medium text-foreground">{e.name}</td>
                   <td className="py-2 pr-4 capitalize text-muted-foreground">{e.role}</td>
@@ -296,6 +315,161 @@ export default function AdminDashboard() {
             </tbody>
           </table>
         </div>
+        {/* Pagination controls */}
+        {employees.length > ROSTER_PAGE_SIZE && (
+          <div className="flex items-center justify-between pt-4 mt-2 border-t border-border">
+            <p className="text-xs text-subtle">
+              {rosterPage * ROSTER_PAGE_SIZE + 1}–{Math.min((rosterPage + 1) * ROSTER_PAGE_SIZE, employees.length)} of {employees.length} employees
+            </p>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setRosterPage(p => p - 1)}
+                disabled={rosterPage === 0}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Previous
+              </button>
+              {Array.from({ length: Math.ceil(employees.length / ROSTER_PAGE_SIZE) }).map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setRosterPage(i)}
+                  className={`w-7 h-7 text-xs rounded-lg border transition-colors ${
+                    i === rosterPage
+                      ? 'bg-primary text-white border-primary'
+                      : 'border-border hover:bg-accent'
+                  }`}
+                >
+                  {i + 1}
+                </button>
+              ))}
+              <button
+                onClick={() => setRosterPage(p => p + 1)}
+                disabled={rosterPage >= Math.ceil(employees.length / ROSTER_PAGE_SIZE) - 1}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Feedback Inbox */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4 flex-wrap">
+          <MessageSquare className="w-5 h-5 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">Feedback Inbox</h2>
+          <span className="ml-1 text-xs text-subtle">
+            {feedback.filter(f => f.status === 'new').length} new
+          </span>
+          <div className="ml-auto flex items-center gap-1 flex-wrap">
+            {(['all', 'new', 'in_progress', 'resolved'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFeedbackFilter(f)}
+                className={`px-2.5 py-1 text-xs rounded-lg border transition-colors capitalize ${
+                  feedbackFilter === f
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border hover:bg-accent text-muted-foreground'
+                }`}
+              >
+                {f.replace('_', ' ')}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {feedback.length === 0 ? (
+          <div className="text-center py-8 opacity-60">
+            <MessageSquare className="w-10 h-10 mb-3 text-muted-foreground mx-auto" />
+            <p className="text-sm font-medium">No feedback submitted yet.</p>
+          </div>
+        ) : (() => {
+          const visible = feedback.filter(f => feedbackFilter === 'all' || f.status === feedbackFilter);
+          if (visible.length === 0) {
+            return <p className="text-sm text-subtle text-center py-6">No feedback matching this filter.</p>;
+          }
+          return (
+            <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
+              {visible.map(f => {
+                const typeIcon = f.type === 'bug'
+                  ? <Bug className="w-3.5 h-3.5" />
+                  : f.type === 'feature_request'
+                    ? <Lightbulb className="w-3.5 h-3.5" />
+                    : <MessageSquare className="w-3.5 h-3.5" />;
+
+                const typeLabel: Record<string, string> = {
+                  bug: 'Bug Report',
+                  feature_request: 'Feature Request',
+                  general: 'General',
+                };
+
+                const statusColors: Record<string, string> = {
+                  new: 'bg-info/10 text-info',
+                  in_progress: 'bg-warning/10 text-warning',
+                  resolved: 'bg-success/10 text-success',
+                };
+
+                const daysSince = Math.floor(
+                  (Date.now() - new Date(f.created_at).getTime()) / 86_400_000
+                );
+                const ageCls = daysSince >= 7
+                  ? 'bg-danger/10 text-danger'
+                  : daysSince >= 3
+                    ? 'bg-warning/10 text-warning'
+                    : 'bg-accent text-muted-foreground';
+
+                return (
+                  <div key={f.id} className="p-3 rounded-xl border border-border bg-background space-y-2">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-accent text-foreground capitalize">
+                          {typeIcon}{typeLabel[f.type] ?? f.type}
+                        </span>
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${statusColors[f.status] ?? 'bg-accent text-muted-foreground'}`}>
+                          {f.status.replace('_', ' ')}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${ageCls}`}>
+                          {daysSince === 0 ? 'today' : `${daysSince}d ago`}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 ml-auto">
+                        {f.status !== 'in_progress' && (
+                          <button
+                            onClick={() => handleUpdateFeedbackStatus(f.id, 'in_progress')}
+                            className="text-xs px-2 py-1 rounded-lg border border-warning/40 text-warning hover:bg-warning/10 transition-colors"
+                          >
+                            In Progress
+                          </button>
+                        )}
+                        {f.status !== 'resolved' && (
+                          <button
+                            onClick={() => handleUpdateFeedbackStatus(f.id, 'resolved')}
+                            className="text-xs px-2 py-1 rounded-lg border border-success/40 text-success hover:bg-success/10 transition-colors"
+                          >
+                            Resolve
+                          </button>
+                        )}
+                        {f.status === 'resolved' && (
+                          <button
+                            onClick={() => handleUpdateFeedbackStatus(f.id, 'new')}
+                            className="text-xs px-2 py-1 rounded-lg border border-border text-muted-foreground hover:bg-accent transition-colors"
+                          >
+                            Reopen
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-foreground leading-relaxed">{f.message}</p>
+                    {f.employee_id && (
+                      <p className="text-xs text-subtle">Submitted by employee ID: {f.employee_id}</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Truck roster */}

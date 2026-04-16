@@ -1,13 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2 } from 'lucide-react';
+import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 
 interface Warning {
   type?: string;
   message?: string;
   employee_id?: string;
   banned_by?: string[];
+}
+
+interface UnavailableStaff {
+  id: string;
+  name: string;
+  role: string;
+  discord_id: string;
+  phone_number: string | null;
+  reason: 'time_off_request' | 'recurring_off_day';
 }
 
 interface DispatchResult {
@@ -31,6 +40,9 @@ export default function DispatchDashboard() {
   const [availablePool, setAvailablePool] = useState<Record<string, any>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unavailableStaff, setUnavailableStaff] = useState<UnavailableStaff[]>([]);
+  const [showCallInList, setShowCallInList] = useState(false);
+  const [addingStaffId, setAddingStaffId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTrucksAndEmployees();
@@ -39,7 +51,52 @@ export default function DispatchDashboard() {
   useEffect(() => {
     fetchDispatchData();
     fetchAvailablePool();
+    fetchUnavailableStaff();
   }, [selectedDate]);
+
+  const fetchUnavailableStaff = async () => {
+    try {
+      const res = await axiosClient.get(`/dispatch/unavailable-staff/${selectedDate}`);
+      setUnavailableStaff(res.data.unavailable_staff || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleAddUnavailableStaff = async (member: UnavailableStaff) => {
+    if (!dispatchData) return;
+    // For drivers: find first truck with no driver. For others: find first truck at all.
+    let targetTruckId: string | undefined;
+    if (member.role === 'driver') {
+      const entry = Object.entries(dispatchData.assigned_crews).find(
+        ([, crew]) => !crew.some((m: any) => m.role === 'driver')
+      );
+      if (!entry) {
+        setError('All trucks already have a driver. Use the unassigned panel to place manually.');
+        return;
+      }
+      targetTruckId = entry[0];
+    } else {
+      // For trainers/walkers: place on the first available truck
+      targetTruckId = Object.keys(dispatchData.assigned_crews)[0];
+    }
+    if (!targetTruckId) return;
+    setAddingStaffId(member.id);
+    try {
+      await axiosClient.post('/dispatch/assign', {
+        employee_id: member.id,
+        truck_id: targetTruckId,
+        date: selectedDate,
+        role: member.role,
+      });
+      await fetchDispatchData();
+      setUnavailableStaff(prev => prev.filter(s => s.id !== member.id));
+    } catch (err: any) {
+      setError(err.response?.data?.detail || `Failed to add ${member.name} to dispatch.`);
+    } finally {
+      setAddingStaffId(null);
+    }
+  };
 
   const fetchAvailablePool = async () => {
     try {
@@ -49,14 +106,10 @@ export default function DispatchDashboard() {
       const allRes = await axiosClient.get('/employees/');
       const allEmpMap: Record<string, any> = allRes.data.reduce((acc: any, e: any) => ({ ...acc, [e.id]: e }), {});
 
-      // Only include dispatch-eligible roles that are actually available today
-      ['driver', 'trainer', 'walker'].forEach(role => {
+      // Include all dispatch-eligible roles from the availability-filtered response
+      ['driver', 'trainer', 'walker', 'trainee'].forEach(role => {
         (res.data[role] || []).forEach((e: any) => { pool[e.id] = allEmpMap[e.id] || e; });
       });
-      // Trainees aren't returned by /schedule/available — include active trainees from the full list
-      allRes.data
-        .filter((e: any) => e.role === 'trainee' && e.is_active)
-        .forEach((e: any) => { pool[e.id] = e; });
 
       setAvailablePool(pool);
     } catch (e) {
@@ -148,12 +201,14 @@ export default function DispatchDashboard() {
           new_truck_id: targetTruckId
         });
       } else {
-        // ASSIGN: from unassigned to truck
+        // ASSIGN: from unassigned to truck — use the employee's actual role
+        const emp = availablePool[employeeId] || employees[employeeId];
+        const role = emp?.role || 'walker';
         await axiosClient.post('/dispatch/assign', {
           employee_id: employeeId,
           truck_id: targetTruckId,
           date: selectedDate,
-          role: "walker" // default fallback
+          role,
         });
       }
       await fetchDispatchData(); // Refresh on drop
@@ -236,9 +291,19 @@ export default function DispatchDashboard() {
   return (
     <div className="space-y-6 animate-slide-up">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="page-title">Dispatch Center</h1>
-          <p className="text-subtle mt-1">Manage and assign daily routes</p>
+        <div className="flex items-center gap-3">
+          <div>
+            <h1 className="page-title">Dispatch Center</h1>
+            <p className="text-subtle mt-1">Manage and assign daily routes</p>
+          </div>
+          <button
+            onClick={() => { fetchDispatchData(); fetchAvailablePool(); fetchUnavailableStaff(); }}
+            disabled={isLoading}
+            className="btn-ghost text-muted-foreground hover:text-foreground disabled:opacity-40"
+            title="Refresh dispatch data"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
         
         <div className="flex flex-wrap items-center gap-3">
@@ -309,18 +374,72 @@ export default function DispatchDashboard() {
 
       {/* WARNINGS Block */}
       {dispatchData?.warnings && dispatchData.warnings.length > 0 && (
-        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
+        <div className="card space-y-3 border-warning border mb-4 bg-warning/5">
           <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
-            <AlertCircle className="w-4 h-4" /> 
+            <AlertCircle className="w-4 h-4" />
             Dispatch Warnings ({dispatchData.warnings.length})
           </h3>
           <ul className="text-sm list-disc list-inside text-warning pl-4 space-y-1">
             {dispatchData.warnings.map((w, idx) => (
-              <li key={idx}>
-                {w.message ? w.message : `Ban Conflict on Employee ${employees[w.employee_id!]?.name || w.employee_id}`}
-              </li>
+              <li key={idx}>{w.message}</li>
             ))}
           </ul>
+
+          {/* Staff shortage call-in list — fires on any understaffed warning when staff are unavailable */}
+          {dispatchData.warnings.some(w => w.type === 'understaffed_drivers' || w.type === 'understaffed_trainers' || w.type === 'understaffed_walkers') && unavailableStaff.length > 0 && (
+            <div className="border-t border-warning/30 pt-3 space-y-2">
+              <button
+                onClick={() => setShowCallInList(p => !p)}
+                className="flex items-center gap-2 text-sm font-medium text-warning hover:text-warning/80 transition-colors"
+              >
+                <Phone className="w-4 h-4" />
+                {showCallInList ? 'Hide' : 'Show'} call-in list ({unavailableStaff.length} staff member{unavailableStaff.length !== 1 ? 's' : ''} unavailable)
+                {showCallInList ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {showCallInList && (
+                <div className="space-y-2 pt-1">
+                  <p className="text-xs text-subtle">
+                    These staff members are off today. Call to confirm availability before adding to dispatch.
+                  </p>
+                  {unavailableStaff.map((member: UnavailableStaff) => (
+                    <div
+                      key={member.id}
+                      className="flex items-center justify-between rounded-lg bg-card border border-border px-3 py-2"
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium text-foreground">{member.name}</p>
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-subtle capitalize">{member.role}</span>
+                        </div>
+                        <p className="text-xs text-subtle mt-0.5">
+                          {member.reason === 'time_off_request' ? 'Approved time-off request' : 'Recurring day off'}
+                          {member.phone_number && (
+                            <span className="ml-2 font-medium text-foreground">{member.phone_number}</span>
+                          )}
+                          {member.discord_id && (
+                            <span className="ml-2 text-primary">@{member.discord_id}</span>
+                          )}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleAddUnavailableStaff(member)}
+                        disabled={addingStaffId === member.id}
+                        className="flex items-center gap-1 text-xs font-medium bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {addingStaffId === member.id ? (
+                          <div className="w-3 h-3 border border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Plus className="w-3 h-3" />
+                        )}
+                        Add to dispatch
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

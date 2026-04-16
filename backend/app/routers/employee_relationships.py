@@ -19,7 +19,12 @@ allow_mgmt        = RoleChecker(["management", "admin", "dispatch"])
 allow_any_auth    = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
 
 @router.post("/", response_model=EmployeeRelationshipResponse, status_code=status.HTTP_201_CREATED)
-def create_employee_relationship(employee_relationship: EmployeeRelationshipCreate, db: Session = Depends(get_db), _: dict = Depends(allow_field_staff)):
+def create_employee_relationship(
+    employee_relationship: EmployeeRelationshipCreate,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_field_staff),
+    caller: Employee = Depends(get_caller_employee),
+):
     """Create a fav or ban relationship between two employees, enforcing role-based limits.
 
     For ``fav`` relationships, enforces per-role caps defined by FAV_LIMITS.
@@ -42,6 +47,13 @@ def create_employee_relationship(employee_relationship: EmployeeRelationshipCrea
     # defines how many favs each role can have per target role — drivers can't fav other drivers,
     # but can fav 1 trainer and 2 walkers; trainers and walkers are symmetric
     FAV_LIMITS = {"driver": {"driver": 0, "trainer": 1, "walker": 2}, "trainer": {"driver": 1, "trainer": 1, "walker": 2}, "walker": {"driver": 1, "trainer": 1, "walker": 2}}
+
+    # Ownership — field staff can only create relationships for themselves
+    if caller.id != employee_relationship.employee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only create relationships for yourself.",
+        )
 
     db_employee = db.query(Employee).filter(Employee.id == employee_relationship.employee_id).first()
 
@@ -111,16 +123,21 @@ def get_all_employee_relationships(db: Session = Depends(get_db), _: dict = Depe
 
 
 @router.get("/{employee_id}", response_model=list[EmployeeRelationshipResponse])
-def get_employee_realtionships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
+def get_employee_relationships(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
     """Return all relationships where the given employee is the source.
 
-    Args:
-        employee_id: UUID of the employee whose relationships to retrieve.
-        db: Database session.
-
-    Returns:
-        List of EmployeeRelationship records for the given employee.
+    Field staff can only read their own relationships. Management/admin/dispatch can read any.
     """
+    mgmt_roles = {"management", "admin", "dispatch"}
+    if caller.role not in mgmt_roles and caller.id != employee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own relationships.",
+        )
     return db.query(EmployeeRelationship).filter(EmployeeRelationship.employee_id == employee_id).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
@@ -143,21 +160,27 @@ def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db
     db.commit()
 
 @router.delete("/{employee_relationship_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_employee_relationships(employee_relationship_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
+def delete_employee_relationships(
+    employee_relationship_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
     """Delete a single employee relationship record by its ID.
 
-    Args:
-        employee_relationship_id: UUID of the EmployeeRelationship record to remove.
-        db: Database session.
-
-    Raises:
-        HTTPException(404): If no relationship with the given ID exists.
+    Field staff can only delete their own relationships. Management/admin can delete any.
     """
     relationship = db.query(EmployeeRelationship).filter(
         EmployeeRelationship.id == employee_relationship_id
     ).first()
     if not relationship:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
-    
+
+    mgmt_roles = {"management", "admin"}
+    if caller.role not in mgmt_roles and caller.id != relationship.employee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only delete your own relationships.",
+        )
+
     db.delete(relationship)
     db.commit()

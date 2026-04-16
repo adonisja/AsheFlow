@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, XCircle, X, Bell } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
 interface Notification {
   id: string;
   employee_id: string;
-  type: 'pto_approved' | 'pto_rejected' | 'offday_approved' | 'offday_rejected';
+  type: string;
   message: string;
   is_read: boolean;
   created_at: string;
@@ -15,28 +15,35 @@ interface Props {
   employeeId: string;
 }
 
-const typeStyle: Record<string, { bg: string; border: string; icon: React.ReactNode }> = {
-  pto_approved: {
-    bg: 'bg-success/10',
-    border: 'border-success/30',
-    icon: <CheckCircle2 className="w-4 h-4 text-success shrink-0 mt-0.5" />,
-  },
-  pto_rejected: {
-    bg: 'bg-danger/10',
-    border: 'border-danger/30',
-    icon: <XCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />,
-  },
-  offday_approved: {
-    bg: 'bg-success/10',
-    border: 'border-success/30',
-    icon: <CheckCircle2 className="w-4 h-4 text-success shrink-0 mt-0.5" />,
-  },
-  offday_rejected: {
-    bg: 'bg-danger/10',
-    border: 'border-danger/30',
-    icon: <XCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />,
-  },
-};
+function styleForType(type: string): { bg: string; border: string; icon: React.ReactNode } {
+  if (type.endsWith('_approved') || type.endsWith('_approved')) {
+    return {
+      bg: 'bg-success/10',
+      border: 'border-success/30',
+      icon: <CheckCircle2 className="w-4 h-4 text-success shrink-0 mt-0.5" />,
+    };
+  }
+  if (type.endsWith('_rejected')) {
+    return {
+      bg: 'bg-danger/10',
+      border: 'border-danger/30',
+      icon: <XCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />,
+    };
+  }
+  if (type.includes('critical') || type.includes('warning')) {
+    return {
+      bg: 'bg-warning/10',
+      border: 'border-warning/30',
+      icon: <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />,
+    };
+  }
+  // Default — informational
+  return {
+    bg: 'bg-info/10',
+    border: 'border-info/30',
+    icon: <Info className="w-4 h-4 text-info shrink-0 mt-0.5" />,
+  };
+}
 
 const NotificationBanner: React.FC<Props> = ({ employeeId }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -75,7 +82,7 @@ const NotificationBanner: React.FC<Props> = ({ employeeId }) => {
         )}
       </div>
       {notifications.map((n) => {
-        const style = typeStyle[n.type] ?? typeStyle.pto_approved;
+        const style = styleForType(n.type);
         return (
           <div
             key={n.id}

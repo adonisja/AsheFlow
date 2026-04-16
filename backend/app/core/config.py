@@ -1,11 +1,25 @@
+from typing import List
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     aws_region: str
     aws_cognito_user_pool_id: str
     aws_cognito_app_client_id: str
-    
-    database_url: str = "postgresql://asheflow:asheflow_dev_password@localhost:5432/asheflow_db"
+
+    # Required — no default so a missing .env causes a clear startup error rather
+    # than silently connecting to a hardcoded dev credential in production.
+    database_url: str
+
+    # Comma-separated list of allowed CORS origins.
+    # Dev default covers common Vite/CRA ports; override in production.
+    cors_origins: str = (
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002,"
+        "http://localhost:3003,http://localhost:3004,http://localhost:3005,"
+        "http://localhost:5173,http://127.0.0.1:5173"
+    )
+
+    def get_cors_origins(self) -> List[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     class Config:
         env_file = ".env"

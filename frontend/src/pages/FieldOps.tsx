@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge } from 'lucide-react';
+import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 
@@ -23,7 +23,8 @@ const fileToDataUrl = (file: File): Promise<string> =>
 
 // Human-readable labels for inspection items
 const ITEM_LABELS: Record<string, string> = {
-  tyres: 'Tyres',
+  tires: 'Tires',
+  tyres: 'Tires', // legacy key fallback
   lights: 'Lights',
   mirrors: 'Mirrors',
   brakes: 'Brakes',
@@ -68,7 +69,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
   }, [employeeId]);
 
   const setResult = (item: string, pass: boolean) => {
-    setResults(prev => ({ ...prev, [item]: pass }));
+    setResults(prev => ({ ...prev, [item]: prev[item] === pass ? null : pass }));
   };
 
   const allAnswered = items.length > 0 && items.every(k => results[k] !== null);
@@ -140,7 +141,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
                     </button>
                     <button
                       onClick={() => setResult(item, false)}
-                      className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${val === false ? 'bg-destructive text-white border-destructive' : 'border-border text-subtle hover:border-destructive hover:text-destructive'}`}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${val === false ? 'bg-danger text-foreground border-danger' : 'border-border text-subtle hover:border-danger hover:text-danger'}`}
                     >
                       Fail
                     </button>
@@ -452,6 +453,28 @@ function ReturnPanel({ employeeId }: { employeeId: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Unit conversion helpers — DB always stores miles and gallons (imperial)
+// ---------------------------------------------------------------------------
+const KM_PER_MILE = 1.60934;
+const L_PER_GAL   = 3.78541;
+
+// Display value: DB miles → display unit
+const toDisplay = (miles: number, unit: 'imperial' | 'metric') =>
+  unit === 'metric' ? parseFloat((miles * KM_PER_MILE).toFixed(1)) : miles;
+
+// Display value → DB miles (for writing)
+const toMiles = (val: number, unit: 'imperial' | 'metric') =>
+  unit === 'metric' ? parseFloat((val / KM_PER_MILE).toFixed(2)) : val;
+
+// Display fuel: DB gallons → display unit
+const fuelToDisplay = (gal: number, unit: 'imperial' | 'metric') =>
+  unit === 'metric' ? parseFloat((gal * L_PER_GAL).toFixed(2)) : gal;
+
+// Display fuel → DB gallons
+const fuelToGallons = (val: number, unit: 'imperial' | 'metric') =>
+  unit === 'metric' ? parseFloat((val / L_PER_GAL).toFixed(2)) : val;
+
+// ---------------------------------------------------------------------------
 // Fuel / Mileage Log Panel
 // ---------------------------------------------------------------------------
 function FuelMileagePanel({ employeeId }: { employeeId: string }) {
@@ -469,6 +492,7 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
   const [fuelAdded, setFuelAdded] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [unit, setUnit] = useState<'imperial' | 'metric'>('imperial');
 
   useEffect(() => {
     if (!employeeId) return;
@@ -481,15 +505,37 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
       .catch(console.error);
   }, [employeeId]);
 
+  // When the driver flips units, convert displayed input values automatically
+  const handleUnitToggle = (newUnit: 'imperial' | 'metric') => {
+    if (newUnit === unit) return;
+    if (startOdo) {
+      const miles = toMiles(parseFloat(startOdo), unit);
+      setStartOdo(String(toDisplay(miles, newUnit)));
+    }
+    if (endOdo) {
+      const miles = toMiles(parseFloat(endOdo), unit);
+      setEndOdo(String(toDisplay(miles, newUnit)));
+    }
+    if (fuelAdded) {
+      const gal = fuelToGallons(parseFloat(fuelAdded), unit);
+      setFuelAdded(String(fuelToDisplay(gal, newUnit)));
+    }
+    setUnit(newUnit);
+  };
+
+  const distUnit = unit === 'metric' ? 'km' : 'mi';
+  const fuelUnit = unit === 'metric' ? 'L' : 'gal';
+
   const handleStartShift = async () => {
-    const odo = parseInt(startOdo, 10);
-    if (isNaN(odo) || odo < 0) return alert('Enter a valid odometer reading.');
+    const displayVal = parseFloat(startOdo);
+    if (isNaN(displayVal) || displayVal < 0) return alert('Enter a valid odometer reading.');
+    const miles = toMiles(displayVal, unit);
     setLoading(true);
     try {
       const res = await axiosClient.post('/field-ops/fuel-log', {
         driver_id: employeeId,
         date: todayStr(),
-        odometer_start: odo,
+        odometer_start: miles,  // always stored as miles
       });
       setLog(res.data);
     } catch (err: any) {
@@ -500,13 +546,16 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
   };
 
   const handleEndShift = async () => {
-    const odoEnd = parseInt(endOdo, 10);
-    if (isNaN(odoEnd) || odoEnd < (log?.odometer_start ?? 0)) return alert('End odometer must be ≥ start odometer.');
+    const displayEnd = parseFloat(endOdo);
+    const milesEnd = toMiles(displayEnd, unit);
+    if (isNaN(milesEnd) || milesEnd < (log?.odometer_start ?? 0)) {
+      return alert('End odometer must be ≥ start odometer.');
+    }
     setLoading(true);
     try {
       const res = await axiosClient.patch(`/field-ops/fuel-log/${employeeId}`, {
-        odometer_end: odoEnd,
-        fuel_added: fuelAdded ? parseInt(fuelAdded, 10) : null,
+        odometer_end: milesEnd,
+        fuel_added: fuelAdded ? fuelToGallons(parseFloat(fuelAdded), unit) : null,
         notes: notes.trim() || null,
       });
       setLog(res.data);
@@ -517,30 +566,51 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
     }
   };
 
-  const distance = log?.odometer_end != null ? log.odometer_end - log.odometer_start : null;
+  // Display values from DB (always stored in miles/gallons)
+  const displayStart = log ? toDisplay(log.odometer_start, unit) : null;
+  const displayEnd   = log?.odometer_end != null ? toDisplay(log.odometer_end, unit) : null;
+  const displayDist  = displayStart != null && displayEnd != null ? displayEnd - displayStart : null;
+  const displayFuel  = log?.fuel_added != null ? fuelToDisplay(log.fuel_added, unit) : null;
   const endOfDayDone = log?.odometer_end != null;
+
+  // Unit toggle pill — shown in panel header
+  const UnitToggle = () => (
+    <div className="flex items-center gap-1 ml-auto bg-accent rounded-lg p-0.5">
+      {(['imperial', 'metric'] as const).map(u => (
+        <button
+          key={u}
+          onClick={() => handleUnitToggle(u)}
+          className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+            unit === u ? 'bg-primary text-primary-foreground shadow-sm' : 'text-subtle hover:text-foreground'
+          }`}
+        >
+          {u === 'imperial' ? 'mi / gal' : 'km / L'}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="card space-y-4">
       <div className="flex items-center gap-3">
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent shrink-0">
           <Gauge className="w-4 h-4 text-primary" />
         </div>
         <h2 className="section-title">Fuel & Mileage Log</h2>
+        <UnitToggle />
       </div>
 
       {!log ? (
-        /* Start of shift — enter odometer */
         <div className="space-y-3">
           <p className="text-sm text-subtle">Record the truck's odometer reading before departing.</p>
           <div>
-            <label className="block text-xs text-subtle mb-1">Odometer Start (km)</label>
+            <label className="block text-xs text-subtle mb-1">Odometer Start ({distUnit})</label>
             <input
               type="number"
               min={0}
               value={startOdo}
               onChange={e => setStartOdo(e.target.value)}
-              placeholder="e.g. 45230"
+              placeholder={unit === 'imperial' ? 'e.g. 28120' : 'e.g. 45230'}
               className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
@@ -553,43 +623,41 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
           </button>
         </div>
       ) : endOfDayDone ? (
-        /* Fully completed */
         <div className="p-4 rounded-xl bg-success/10 border border-success/30 text-sm space-y-2">
           <p className="font-semibold text-success">Fuel & mileage log complete.</p>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-foreground">
-            <span className="text-subtle">Start:</span><span>{log.odometer_start} km</span>
-            <span className="text-subtle">End:</span><span>{log.odometer_end} km</span>
-            {distance != null && <><span className="text-subtle">Distance:</span><span>{distance} km</span></>}
-            {log.fuel_added != null && <><span className="text-subtle">Fuel added:</span><span>{log.fuel_added} L</span></>}
+            <span className="text-subtle">Start:</span><span>{displayStart} {distUnit}</span>
+            <span className="text-subtle">End:</span><span>{displayEnd} {distUnit}</span>
+            {displayDist != null && <><span className="text-subtle">Distance:</span><span>{displayDist} {distUnit}</span></>}
+            {displayFuel != null && <><span className="text-subtle">Fuel added:</span><span>{displayFuel} {fuelUnit}</span></>}
           </div>
           {log.notes && <p className="text-xs text-subtle italic">Notes: {log.notes}</p>}
         </div>
       ) : (
-        /* End of shift — patch in return values */
         <div className="space-y-3">
           <div className="p-3 rounded-xl bg-accent/30 border border-border text-xs text-foreground">
-            Start odometer: <span className="font-medium">{log.odometer_start} km</span>
+            Start odometer: <span className="font-medium">{displayStart} {distUnit}</span>
           </div>
           <p className="text-sm text-subtle">Record your return odometer and any fuel added.</p>
           <div>
-            <label className="block text-xs text-subtle mb-1">Odometer End (km)</label>
+            <label className="block text-xs text-subtle mb-1">Odometer End ({distUnit})</label>
             <input
               type="number"
-              min={log.odometer_start}
+              min={displayStart ?? 0}
               value={endOdo}
               onChange={e => setEndOdo(e.target.value)}
-              placeholder={`≥ ${log.odometer_start}`}
+              placeholder={`≥ ${displayStart}`}
               className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
           <div>
-            <label className="block text-xs text-subtle mb-1">Fuel Added (L) — optional</label>
+            <label className="block text-xs text-subtle mb-1">Fuel Added ({fuelUnit}) — optional</label>
             <input
               type="number"
               min={0}
               value={fuelAdded}
               onChange={e => setFuelAdded(e.target.value)}
-              placeholder="e.g. 40"
+              placeholder={unit === 'imperial' ? 'e.g. 10' : 'e.g. 40'}
               className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
           </div>
@@ -658,17 +726,19 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
       .finally(() => setCrewLoading(false));
   }, [employeeId]);
 
+  const ENTRY_DEFAULTS: WalkerEntry = { stars: 0, comment: '', present: null, submitted: false };
+
   const markAttendance = (id: string, present: boolean) => {
     setEntries(prev => ({
       ...prev,
-      [id]: { stars: 0, comment: '', ...prev[id], present, submitted: false },
+      [id]: { ...ENTRY_DEFAULTS, ...prev[id], present },
     }));
   };
 
   const update = (id: string, field: 'stars' | 'comment', value: any) => {
     setEntries(prev => ({
       ...prev,
-      [id]: { stars: 0, comment: '', present: true, submitted: false, ...prev[id], [field]: value },
+      [id]: { ...ENTRY_DEFAULTS, ...prev[id], [field]: value },
     }));
   };
 
@@ -791,26 +861,273 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Admin Analytics View
+// ---------------------------------------------------------------------------
+function AdminFieldOpsView() {
+  const [checkIns, setCheckIns]         = useState<any[]>([]);
+  const [departures, setDepartures]     = useState<any[]>([]);
+  const [inspections, setInspections]   = useState<any[]>([]);
+  const [fuelLogs, setFuelLogs]         = useState<any[]>([]);
+  const [noShows, setNoShows]           = useState<any[]>([]);
+  const [loading, setLoading]           = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    Promise.allSettled([
+      axiosClient.get('/field-ops/check-ins/summary').then(r => setCheckIns(r.data)),
+      axiosClient.get('/field-ops/returns/summary').then(r => setDepartures(r.data)),
+      axiosClient.get('/field-ops/inspections/summary').then(r => setInspections(r.data)),
+      axiosClient.get('/field-ops/fuel-logs/summary').then(r => setFuelLogs(r.data)),
+      axiosClient.get('/field-ops/no-shows').then(r => setNoShows(r.data)),
+    ]).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const trucksOut      = departures.filter(d => d.status === 'out').length;
+  const trucksReturned = departures.filter(d => d.status === 'returned').length;
+
+  const fmt = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+
+  const fmtDuration = (mins: number | null) => {
+    if (mins == null) return '—';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex h-60 items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8 animate-slide-up">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="page-title flex items-center gap-2">
+            <MapPin className="w-5 h-5 text-primary" /> Field Operations
+          </h1>
+          <p className="text-subtle mt-1">Today's field activity — check-ins, departures, inspections, and fuel.</p>
+        </div>
+        <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
+          <BarChart2 className="w-4 h-4" /> Refresh
+        </button>
+      </div>
+
+      {/* KPI row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { label: 'Checked In',      value: checkIns.length,                                             color: 'text-info' },
+          { label: 'Trucks Out',      value: trucksOut,                                                    color: trucksOut > 0 ? 'text-warning' : 'text-subtle' },
+          { label: 'Returned',        value: trucksReturned,                                               color: 'text-success' },
+          { label: 'No-Shows Today',  value: noShows.length,                                               color: noShows.length > 0 ? 'text-danger' : 'text-subtle' },
+        ].map(stat => (
+          <div key={stat.label} className="card-elevated flex items-center gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">{stat.label}</p>
+              <p className={`text-2xl font-bold mt-0.5 ${stat.color}`}>{stat.value}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Departures & Returns */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <LogOut className="w-5 h-5 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">Departures & Returns</h2>
+          <span className="ml-auto text-xs text-subtle">{departures.length} driver{departures.length !== 1 ? 's' : ''}</span>
+        </div>
+        {departures.length === 0 ? (
+          <p className="text-sm text-subtle text-center py-6">No departures recorded today.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
+                  <th className="pb-2 pr-4">Driver</th>
+                  <th className="pb-2 pr-4">Departed</th>
+                  <th className="pb-2 pr-4">Returned</th>
+                  <th className="pb-2 pr-4">Duration</th>
+                  <th className="pb-2">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {departures.map((d: any) => (
+                  <tr key={d.employee_id}>
+                    <td className="py-2 pr-4 font-medium text-foreground">{d.driver_name}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{fmt(d.departed_at)}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{fmt(d.returned_at)}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{fmtDuration(d.duration_minutes)}</td>
+                    <td className="py-2">
+                      {d.status === 'returned' ? (
+                        <span className="inline-flex items-center gap-1 text-success text-xs font-semibold">
+                          <CheckCircle2 className="w-3 h-3" /> Returned
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-warning text-xs font-semibold">
+                          <MapPin className="w-3 h-3" /> Out
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Inspections */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <ClipboardCheck className="w-5 h-5 text-info" />
+          <h2 className="text-base font-semibold text-foreground">Pre-Trip Inspections</h2>
+          {inspections.length > 0 && (
+            <span className="ml-auto text-xs text-subtle">
+              {inspections.filter(i => i.has_failures).length} failed · {inspections.filter(i => !i.has_failures).length} passed
+            </span>
+          )}
+        </div>
+        {inspections.length === 0 ? (
+          <p className="text-sm text-subtle text-center py-6">No inspections submitted today.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
+                  <th className="pb-2 pr-4">Driver</th>
+                  <th className="pb-2 pr-4">Truck</th>
+                  <th className="pb-2 pr-4">Submitted</th>
+                  <th className="pb-2 pr-4">Result</th>
+                  <th className="pb-2">Failed Items</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {inspections.map((insp: any) => (
+                  <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
+                    <td className="py-2 pr-4 font-medium text-foreground">{insp.driver_name}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{insp.truck_name ?? '—'}</td>
+                    <td className="py-2 pr-4 text-muted-foreground text-xs">{fmt(insp.submitted_at)}</td>
+                    <td className="py-2 pr-4">
+                      {insp.has_failures ? (
+                        <span className="inline-flex items-center gap-1 text-danger text-xs font-semibold">
+                          <AlertTriangle className="w-3 h-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-success text-xs font-semibold">
+                          <CheckCircle2 className="w-3 h-3" /> Passed
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 text-xs text-danger">
+                      {insp.failed_items?.length > 0
+                        ? insp.failed_items.map((item: string) => item.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())).join(', ')
+                        : <span className="text-subtle">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Fuel & Mileage */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <Fuel className="w-5 h-5 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">Fuel & Mileage</h2>
+          <span className="ml-auto text-xs text-subtle">{fuelLogs.length} log{fuelLogs.length !== 1 ? 's' : ''}</span>
+        </div>
+        {fuelLogs.length === 0 ? (
+          <p className="text-sm text-subtle text-center py-6">No fuel logs submitted today.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
+                  <th className="pb-2 pr-4">Driver</th>
+                  <th className="pb-2 pr-4">Truck</th>
+                  <th className="pb-2 pr-4">Start Odo</th>
+                  <th className="pb-2 pr-4">End Odo</th>
+                  <th className="pb-2 pr-4">Distance</th>
+                  <th className="pb-2">Fuel Added</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {fuelLogs.map((log: any) => (
+                  <tr key={log.log_id}>
+                    <td className="py-2 pr-4 font-medium text-foreground">{log.driver_name}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{log.truck_name ?? '—'}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{log.odometer_start.toLocaleString()}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{log.odometer_end != null ? log.odometer_end.toLocaleString() : '—'}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">{log.distance != null ? `${log.distance.toLocaleString()} mi` : '—'}</td>
+                    <td className="py-2 text-muted-foreground">{log.fuel_added != null ? `${log.fuel_added} gal` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Walker No-Shows */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <XCircle className="w-5 h-5 text-danger" />
+          <h2 className="text-base font-semibold text-foreground">Walker No-Shows</h2>
+          {noShows.length > 0 && (
+            <span className="ml-auto text-xs font-bold bg-danger text-white px-2 py-0.5 rounded-full">{noShows.length}</span>
+          )}
+        </div>
+        {noShows.length === 0 ? (
+          <div className="text-center py-8 opacity-60">
+            <CheckCircle2 className="w-10 h-10 mb-3 text-success mx-auto" />
+            <p className="text-sm font-medium">No no-shows recorded today.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {noShows.map((ns: any) => (
+              <div key={ns.walker_id} className="py-2 flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">{ns.walker_name}</span>
+                <span className="text-xs text-muted-foreground">Driver: {ns.driver_name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 export default function FieldOps() {
   const { groups, user } = useAuth();
+  const isAdmin  = groups.includes('admin');
   const isDriver = groups.includes('driver');
 
   const [employeeId, setEmployeeId] = useState('');
 
-  // Resolve the logged-in user's employee DB record
+  // Resolve the logged-in user's employee DB record (only needed for driver view)
   useEffect(() => {
-    if (!user) return;
-    axiosClient.get('/employees/')
-      .then(res => {
-        const self = res.data.find(
-          (e: any) => e.discord_id === user.username || e.id === user.userId
-        );
-        if (self) setEmployeeId(self.id);
-      })
+    if (isAdmin || !user) return;
+    axiosClient.get('/employees/me')
+      .then(res => setEmployeeId(res.data.id))
       .catch(console.error);
-  }, [user]);
+  }, [user, isAdmin]);
+
+  if (isAdmin) {
+    return <AdminFieldOpsView />;
+  }
 
   if (!employeeId) {
     return (

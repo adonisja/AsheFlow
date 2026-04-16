@@ -118,7 +118,6 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
     setLoading(true);
     try {
       await axiosClient.post('/incidents/', {
-        reporter_id: employeeId,
         date: todayStr(),
         category,
         severity,
@@ -316,7 +315,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
 
   useEffect(() => {
     if (!employeeId) return;
-    axiosClient.get('/incidents/my', { params: { reporter_id: employeeId } })
+    axiosClient.get('/incidents/my')
       .then(res => setIncidents(res.data))
       .catch(console.error);
   }, [employeeId, refreshKey]);
@@ -511,12 +510,10 @@ export default function Incidents() {
   const [activeTab, setActiveTab] = useState<'submit' | 'management'>(isFieldStaff ? 'submit' : 'management');
 
   useEffect(() => {
-    if (!user) return;
-    axiosClient.get('/employees/').then(res => {
-      const self = res.data.find((e: any) => e.discord_id === user.username || e.id === user.userId);
-      if (self) { setEmployeeId(self.id); setReporterName(self.name || self.first_name || user.username); }
-    }).catch(console.error);
-  }, [user]);
+    axiosClient.get('/employees/me')
+      .then(res => { setEmployeeId(res.data.id); setReporterName(res.data.name || ''); })
+      .catch(console.error);
+  }, []);
 
   const tabs = [
     ...(isFieldStaff ? [{ key: 'submit', label: 'Submit / My Reports' }] : []),

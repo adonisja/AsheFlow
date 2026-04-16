@@ -1,13 +1,29 @@
 from datetime import date, datetime
 from uuid import UUID
 from typing import Optional, Dict, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+
+# Base64-encoded images can be large; cap at 5 MB (as a UTF-8 string length).
+# A 5 MB binary image becomes ~6.7 MB as base64 — this cap is intentionally
+# generous to allow high-res photos while preventing unbounded DB writes.
+_MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+def _validate_photo_url(v: Optional[str]) -> Optional[str]:
+    if v is not None and len(v.encode("utf-8")) > _MAX_PHOTO_BYTES:
+        raise ValueError("photo_url exceeds the 5 MB size limit.")
+    return v
 
 
 class CheckInCreate(BaseModel):
     employee_id: UUID
     date: date
     photo_url: Optional[str] = None
+
+    @field_validator("photo_url")
+    @classmethod
+    def check_photo_size(cls, v):
+        return _validate_photo_url(v)
 
 
 class CheckInResponse(CheckInCreate):
@@ -20,6 +36,11 @@ class DepartureCreate(BaseModel):
     employee_id: UUID
     date: date
     itinerary_photo_url: Optional[str] = None
+
+    @field_validator("itinerary_photo_url")
+    @classmethod
+    def check_photo_size(cls, v):
+        return _validate_photo_url(v)
 
 
 class DepartureResponse(DepartureCreate):
@@ -35,7 +56,7 @@ class WalkerRatingCreate(BaseModel):
     date: date
     present: bool = True
     stars: Optional[int] = None   # null for no-shows
-    comment: Optional[str] = None
+    comment: Optional[str] = Field(None, max_length=500)
 
 
 class WalkerRatingResponse(WalkerRatingCreate):
@@ -47,14 +68,14 @@ class WalkerRatingResponse(WalkerRatingCreate):
 class FuelMileageLogCreate(BaseModel):
     driver_id: UUID
     date: date
-    odometer_start: int
-    notes: Optional[str] = None
+    odometer_start: float
+    notes: Optional[str] = Field(None, max_length=500)
 
 
 class FuelMileageLogPatch(BaseModel):
-    odometer_end: Optional[int] = None
-    fuel_added: Optional[int] = None
-    notes: Optional[str] = None
+    odometer_end: Optional[float] = None
+    fuel_added: Optional[float] = None
+    notes: Optional[str] = Field(None, max_length=500)
 
 
 class FuelMileageLogResponse(BaseModel):
@@ -62,9 +83,9 @@ class FuelMileageLogResponse(BaseModel):
     driver_id: UUID
     truck_id: Optional[UUID] = None
     date: date
-    odometer_start: int
-    odometer_end: Optional[int] = None
-    fuel_added: Optional[int] = None
+    odometer_start: float
+    odometer_end: Optional[float] = None
+    fuel_added: Optional[float] = None
     notes: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -75,18 +96,18 @@ class FuelMileageSummaryItem(BaseModel):
     driver_name: str
     truck_name: Optional[str]
     date: date
-    odometer_start: int
-    odometer_end: Optional[int]
-    distance: Optional[int]   # odometer_end - odometer_start
-    fuel_added: Optional[int]
+    odometer_start: float
+    odometer_end: Optional[float]
+    distance: Optional[float]   # odometer_end - odometer_start
+    fuel_added: Optional[float]
 
 
 class VehicleInspectionCreate(BaseModel):
     driver_id: UUID
     date: date
-    # item_name → True (pass) / False (fail)
-    items: Dict[str, bool]
-    notes: Optional[str] = None
+    # item_name → True (pass) / False (fail); StrictBool rejects int/string coercion
+    items: Dict[str, StrictBool]
+    notes: Optional[str] = Field(None, max_length=500)
 
 
 class VehicleInspectionResponse(BaseModel):

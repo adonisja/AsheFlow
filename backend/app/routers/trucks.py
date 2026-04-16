@@ -1,10 +1,10 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_current_user
+from app.api.deps import RoleChecker, get_current_user, Pagination
 from app.models.truck import Truck
 from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse
 
@@ -35,16 +35,22 @@ def create_truck(truck: TruckCreate, db: Session = Depends(get_db), _: dict = De
 
 
 @router.get("/", response_model=list[TruckResponse])
-def get_trucks(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
-    """Return all active trucks.
-
-    Args:
-        db: Database session.
-
-    Returns:
-        List of active Truck records.
-    """
-    return db.query(Truck).filter(Truck.is_active == True).all()
+def get_trucks(
+    pg: Pagination = Depends(),
+    include_inactive: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    caller: dict = Depends(allow_any_auth),
+):
+    """Return trucks. Active-only by default; pass ?include_inactive=true for management/admin."""
+    if include_inactive:
+        # Only privileged roles may see inactive trucks
+        groups = caller.get("cognito_groups", [])
+        if not any(g in groups for g in ("management", "admin")):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+        q = db.query(Truck)
+    else:
+        q = db.query(Truck).filter(Truck.is_active == True)
+    return pg.apply(q).all()
 
 
 @router.get("/{truck_id}", response_model=TruckResponse)
@@ -113,6 +119,18 @@ def deactivate_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = De
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
 
     db_truck.is_active = False
+    db.commit()
+    db.refresh(db_truck)
+    return db_truck
+
+
+@router.put("/{truck_id}/reactivate", response_model=TruckResponse)
+def reactivate_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
+    """Set a truck's active status back to True."""
+    db_truck = db.query(Truck).filter(Truck.id == truck_id).first()
+    if not db_truck:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
+    db_truck.is_active = True
     db.commit()
     db.refresh(db_truck)
     return db_truck
