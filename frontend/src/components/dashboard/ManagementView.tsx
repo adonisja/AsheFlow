@@ -1,33 +1,64 @@
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import React, { useEffect, useState, useCallback } from 'react';
+import axiosClient from '../../api/axiosClient';
+import { useAuth } from '../../contexts/AuthContext';
 import {
-  AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users,
+  AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2, LayoutDashboard, RefreshCw,
 } from 'lucide-react';
 
-const API = 'http://localhost:8000/api/v1';
-
 export default function ManagementView() {
+  const { user } = useAuth();
+  const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
   const [incidentSummary, setIncidentSummary] = useState<any>(null);
   const [walkerStats, setWalkerStats] = useState<any[]>([]);
   const [noShows, setNoShows] = useState<any[]>([]);
   const [trainingPipeline, setTrainingPipeline] = useState<any>(null);
   const [inspectionFailures, setInspectionFailures] = useState<any>(null);
+  const [todayInspections, setTodayInspections]     = useState<any[]>([]);
   const [fleetStatus, setFleetStatus] = useState<any[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    axios.get(`${API}/incidents/summary?days=7`).then(r => setIncidentSummary(r.data)).catch(console.error);
-    axios.get(`${API}/field-ops/walker-stats`).then(r => setWalkerStats(r.data)).catch(console.error);
-    axios.get(`${API}/field-ops/no-shows`).then(r => setNoShows(r.data)).catch(console.error);
-    axios.get(`${API}/training/pipeline-summary`).then(r => setTrainingPipeline(r.data)).catch(console.error);
-    axios.get(`${API}/field-ops/inspection-failures/summary?days=7`).then(r => setInspectionFailures(r.data)).catch(console.error);
-    axios.get(`${API}/field-ops/returns/summary`).then(r => setFleetStatus(r.data)).catch(console.error);
+  const loadAll = useCallback(async () => {
+    setIsRefreshing(true);
+    await Promise.allSettled([
+      axiosClient.get('/incidents/summary?days=7').then(r => setIncidentSummary(r.data)),
+      axiosClient.get('/field-ops/walker-stats').then(r => setWalkerStats(r.data)),
+      axiosClient.get('/field-ops/no-shows').then(r => setNoShows(r.data)),
+      axiosClient.get('/training/pipeline-summary').then(r => setTrainingPipeline(r.data)),
+      axiosClient.get('/field-ops/inspection-failures/summary?days=7').then(r => setInspectionFailures(r.data)),
+      axiosClient.get('/field-ops/inspections/summary').then(r => setTodayInspections(r.data)),
+      axiosClient.get('/field-ops/returns/summary').then(r => setFleetStatus(r.data)),
+    ]);
+    setIsRefreshing(false);
   }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   const returnedCount = fleetStatus.filter(d => d.status === 'returned').length;
   const outCount = fleetStatus.length - returnedCount;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-slide-up">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-9 h-9 rounded-xl gradient-primary shadow-sm shadow-primary/30">
+            <LayoutDashboard className="w-4 h-4 text-primary-foreground" />
+          </div>
+          <div>
+            <h1 className="page-title">Good {greeting}, {user?.displayName || user?.username}</h1>
+            <p className="text-subtle mt-0.5">Management overview for {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.</p>
+          </div>
+        </div>
+        <button
+          onClick={loadAll}
+          disabled={isRefreshing}
+          className="btn-ghost text-muted-foreground hover:text-foreground disabled:opacity-40"
+          title="Refresh dashboard"
+        >
+          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
@@ -136,7 +167,7 @@ export default function ManagementView() {
           {walkerStats.length === 0 ? (
             <p className="text-sm text-subtle text-center py-6">No walker data this week.</p>
           ) : (
-            <div className="space-y-2 max-h-[260px] overflow-y-auto">
+            <div className="space-y-2 max-h-[220px] overflow-y-auto">
               {walkerStats.map(w => (
                 <div key={w.walker_id} className="flex items-center justify-between gap-2 p-2 rounded-lg hover:bg-accent/30 transition-colors">
                   <div className="min-w-0">
@@ -154,6 +185,7 @@ export default function ManagementView() {
               ))}
             </div>
           )}
+          <a href="/walker-performance" className="block text-center text-xs text-primary hover:underline pt-3">View all-time grades & history →</a>
         </div>
 
         {/* Training pipeline */}
@@ -195,11 +227,74 @@ export default function ManagementView() {
         </div>
       </div>
 
-      {/* Vehicle compliance */}
+      {/* Today's inspection results */}
+      <div className="card border-border/60">
+        <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+          <ShieldAlert className="w-5 h-5 text-warning" />
+          <h2 className="text-base font-semibold text-foreground">Pre-Trip Inspections — Today</h2>
+          {todayInspections.length > 0 && (
+            <span className="ml-auto text-xs text-subtle">
+              {todayInspections.filter((i: any) => i.has_failures).length} failed ·{' '}
+              {todayInspections.filter((i: any) => !i.has_failures).length} passed
+            </span>
+          )}
+        </div>
+
+        {todayInspections.length === 0 ? (
+          <p className="text-sm text-subtle text-center py-6">No inspections submitted today.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
+                  <th className="pb-2 pr-4">Driver</th>
+                  <th className="pb-2 pr-4">Truck</th>
+                  <th className="pb-2 pr-4">Submitted</th>
+                  <th className="pb-2 pr-4">Result</th>
+                  <th className="pb-2">Failed Items</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {todayInspections.map((insp: any) => (
+                  <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
+                    <td className="py-2 pr-4 font-medium text-foreground whitespace-nowrap">{insp.driver_name}</td>
+                    <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{insp.truck_name ?? '—'}</td>
+                    <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap text-xs">
+                      {insp.submitted_at
+                        ? new Date(insp.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : '—'}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {insp.has_failures ? (
+                        <span className="inline-flex items-center gap-1 text-danger text-xs font-semibold">
+                          <AlertTriangle className="w-3 h-3" /> Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-success text-xs font-semibold">
+                          <CheckCircle2 className="w-3 h-3" /> Passed
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 text-xs text-danger">
+                      {insp.has_failures && insp.failed_items?.length > 0
+                        ? insp.failed_items.map((item: string) =>
+                            item.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+                          ).join(', ')
+                        : <span className="text-subtle">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Inspection failure patterns */}
       <div className="card border-border/60">
         <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
           <Truck className="w-5 h-5 text-primary" />
-          <h2 className="text-base font-semibold text-foreground">Vehicle Compliance (7d)</h2>
+          <h2 className="text-base font-semibold text-foreground">Inspection Failure Patterns (7d)</h2>
           {inspectionFailures && (
             <span className="ml-auto text-xs text-subtle">
               {inspectionFailures.total_inspections} inspection{inspectionFailures.total_inspections !== 1 ? 's' : ''} submitted
@@ -211,15 +306,22 @@ export default function ManagementView() {
         ) : inspectionFailures.failures.length === 0 ? (
           <p className="text-sm text-subtle text-center py-6">No inspection failures in the last 7 days.</p>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {inspectionFailures.failures.map((f: any) => (
-              <div key={f.item} className="p-3 rounded-xl border border-danger/20 bg-danger/5 text-center">
-                <p className="text-lg font-bold text-danger">{f.failure_count}</p>
-                <p className="text-xs font-medium text-foreground mt-0.5 leading-tight">{f.label}</p>
-                <p className="text-xs text-subtle mt-0.5">{f.failure_rate}% fail rate</p>
-              </div>
-            ))}
-          </div>
+          <>
+            <p className="text-xs text-subtle mb-4">
+              How many inspections flagged each item as failed across all drivers and trucks this week.
+              A high fail rate signals a recurring mechanical issue — visit <a href="/vehicle-compliance" className="text-primary hover:underline">Vehicle Compliance</a> to see which trucks and drivers are responsible.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {inspectionFailures.failures.map((f: any) => (
+                <div key={f.item} className="p-3 rounded-xl border border-danger/20 bg-danger/5 text-center">
+                  <p className="text-lg font-bold text-danger">{f.failure_count}</p>
+                  <p className="text-xs font-medium text-foreground mt-0.5 leading-tight">{f.label}</p>
+                  <p className="text-xs text-subtle mt-0.5">{f.failure_rate}% of inspections</p>
+                </div>
+              ))}
+            </div>
+            <a href="/vehicle-compliance" className="block text-center text-xs text-primary hover:underline pt-4">View full compliance report →</a>
+          </>
         )}
       </div>
     </div>

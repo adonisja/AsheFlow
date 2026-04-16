@@ -169,10 +169,10 @@ def get_available_employees(
         .all()
     )
 
-    pool = {"driver": [], "trainer": [], "walker": []}
+    pool = {"driver": [], "trainer": [], "walker": [], "trainee": []}
     for e in available_employees:
         role = str(e.role).lower()
         if role in pool:
-            pool[role].append({"id": str(e.id), "first_name": getattr(e, 'first_name', getattr(e, 'name', '')), "name": getattr(e, 'name', getattr(e, 'first_name', '')), "role": role})
+            pool[role].append({"id": str(e.id), "name": e.name, "role": role})
 
     return pool

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,28 +6,39 @@
 
 @layer base {
   :root {
-    --background: 0 0% 98%;
-    --foreground: 240 10% 10%;
+    /* Rich modern palette — indigo/slate foundation */
+    --background: 220 20% 97%;
+    --foreground: 224 30% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 10%;
-    --primary: 240 5% 16%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 240 5% 34%;
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 46%;
-    --accent: 240 5% 93%;
-    --accent-foreground: 240 5% 16%;
-    --border: 240 6% 90%;
-    --ring: 240 5% 65%;
-    --success: 142 71% 45%;
+    --card-foreground: 224 30% 12%;
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 224 20% 30%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 243 100% 97%;
+    --accent-foreground: 243 75% 50%;
+    --border: 220 13% 91%;
+    --ring: 243 75% 59%;
+
+    /* Semantic colors — vibrant and intentional */
+    --success: 160 84% 39%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 100%;
-    --danger: 0 84% 60%;
+    --warning: 35 92% 52%;
+    --warning-foreground: 35 95% 12%;
+    --danger: 0 72% 51%;
     --danger-foreground: 0 0% 100%;
-    --info: 221 83% 53%;
+    --info: 199 89% 48%;
     --info-foreground: 0 0% 100%;
+
+    /* Extended palette for gradients & decorative use */
+    --primary-light: 243 100% 97%;
+    --primary-glow: 252 85% 60%;
+    --teal: 172 66% 50%;
+    --teal-foreground: 0 0% 100%;
+    --violet: 262 83% 58%;
+    --violet-foreground: 0 0% 100%;
   }
 
   * {
@@ -38,39 +49,58 @@
     @apply bg-background text-foreground antialiased;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.3);
+  }
 }
 
 @layer components {
   .card {
-    @apply bg-card rounded-2xl border border-border/60 p-6;
+    @apply bg-card rounded-2xl border border-border/60 p-6 shadow-sm;
   }
 
   .card-elevated {
-    @apply card shadow-sm hover:shadow-md transition-shadow duration-300;
+    @apply card shadow-md hover:shadow-lg transition-all duration-300 hover:-translate-y-0.5;
   }
 
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-primary text-primary-foreground font-medium text-sm
-           hover:bg-primary/90 active:scale-[0.98] transition-all duration-200;
+           hover:bg-primary/90 active:scale-[0.98] transition-all duration-200
+           shadow-sm shadow-primary/25;
   }
 
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-secondary text-secondary-foreground font-medium text-sm border border-border
-           hover:bg-accent active:scale-[0.98] transition-all duration-200;
+           hover:bg-accent hover:text-accent-foreground active:scale-[0.98] transition-all duration-200;
   }
 
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-danger text-danger-foreground font-medium text-sm
-           hover:bg-danger/90 active:scale-[0.98] transition-all duration-200;
+           hover:bg-danger/90 active:scale-[0.98] transition-all duration-200
+           shadow-sm shadow-danger/25;
   }
 
   .btn-success {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-success text-success-foreground font-medium text-sm
-           hover:bg-success/90 active:scale-[0.98] transition-all duration-200;
+           hover:bg-success/90 active:scale-[0.98] transition-all duration-200
+           shadow-sm shadow-success/25;
   }
 
   .btn-ghost {
@@ -82,12 +112,12 @@
   .input-field {
     @apply w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm
            text-foreground placeholder:text-muted-foreground
-           focus:outline-none focus:ring-2 focus:ring-ring/20 focus:border-ring
+           focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary
            transition-all duration-200;
   }
 
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium;
+    @apply inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold;
   }
 
   .badge-success {
@@ -116,5 +146,14 @@
 
   .text-subtle {
     @apply text-sm text-muted-foreground;
+  }
+
+  /* Gradient utilities */
+  .gradient-primary {
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
+  }
+
+  .gradient-card {
+    background: linear-gradient(135deg, hsl(var(--primary-light)), hsl(var(--accent)));
   }
 }

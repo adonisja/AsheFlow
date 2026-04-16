@@ -26,7 +26,7 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
 
     available_pool = get_available_pool(db, target_date)
 
-    trucks = db.query(Truck).filter(Truck.is_active == True).all()
+    trucks = db.query(Truck).filter(Truck.is_active == True).order_by(Truck.name).all()
     if total_trucks is not None and total_trucks > 0:
         trucks = trucks[:total_trucks]
 
@@ -110,12 +110,13 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
             })
 
     # --- Cap excess trainers and re-slot them as walkers ---
+    # Excess trainers are appended to the walker pool as Employee ORM objects.
+    # assign_walkers writes role="walker" into assigned_crews regardless of the
+    # ORM object's role field, so no mutation of the Employee object is needed.
     max_trainers_needed = num_trucks * MIN_TRAINERS_PER_TRUCK
     all_trainers = available_pool.get("trainers", [])
     if len(all_trainers) > max_trainers_needed:
         excess_trainers = all_trainers[max_trainers_needed:]
-        for t in excess_trainers:
-            t["role"] = "walker"
         available_pool["walkers"].extend(excess_trainers)
         available_pool["trainers"] = all_trainers[:max_trainers_needed]
 
@@ -235,7 +236,68 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
     
     rebalance_moves = rebalance_crews(assigned_crews, db)
 
-    warnings = graduation_warnings + staffing_warnings + trainer_warnings + trainee_warnings + walker_warnings
+    raw_warnings = graduation_warnings + staffing_warnings + trainer_warnings + trainee_warnings + walker_warnings
+
+    # Collect all employee UUIDs referenced in ban/reassignment warnings and bulk-resolve names.
+    ref_ids = set()
+    for w in raw_warnings:
+        if "type" in w and w["type"] in ("ban_override_reassignment",):
+            ref_ids.update([w.get("evicted_employee_id"), w.get("in_favour_of_employee_id")])
+        elif "employee_id" in w and "type" not in w:
+            ref_ids.add(w["employee_id"])
+            ref_ids.update(w.get("banned_by", []))
+    ref_ids.discard(None)
+
+    name_map: dict = {}
+    if ref_ids:
+        rows = db.query(Employee.id, Employee.name).filter(Employee.id.in_(ref_ids)).all()
+        name_map = {r.id: r.name for r in rows}
+
+    # Resolve truck names for reassignment warnings.
+    truck_ids_needed = set()
+    for w in raw_warnings:
+        if "type" in w and w["type"] == "ban_override_reassignment":
+            truck_ids_needed.update([w.get("from_truck_id"), w.get("evicted_to_truck_id")])
+    truck_ids_needed.discard(None)
+
+    from app.models.truck import Truck as TruckModel
+    truck_name_map: dict = {}
+    if truck_ids_needed:
+        truck_rows = db.query(TruckModel.id, TruckModel.name).filter(TruckModel.id.in_(truck_ids_needed)).all()
+        truck_name_map = {r.id: r.name for r in truck_rows}
+
+    warnings = []
+    for w in raw_warnings:
+        if "type" in w and w["type"] == "ban_override_reassignment":
+            evicted_name = name_map.get(w["evicted_employee_id"], str(w["evicted_employee_id"]))
+            favour_name  = name_map.get(w["in_favour_of_employee_id"], str(w["in_favour_of_employee_id"]))
+            from_truck   = truck_name_map.get(w["from_truck_id"], str(w["from_truck_id"]))
+            to_truck     = truck_name_map.get(w["evicted_to_truck_id"], "another truck") if w.get("evicted_to_truck_id") else "another truck"
+            warnings.append({
+                "type": "ban_override_reassignment",
+                "message": (
+                    f"{evicted_name} was moved from {from_truck} to {to_truck} "
+                    f"because {favour_name} has a ban conflict with them and is preferred by the driver/trainer."
+                ),
+            })
+        elif "type" not in w and "employee_id" in w:
+            # ban-conflict warning — employee could not avoid all bans
+            emp_name    = name_map.get(w["employee_id"], str(w["employee_id"]))
+            banned_names = [name_map.get(bid, str(bid)) for bid in w.get("banned_by", [])]
+            truck_id    = next(
+                (tid for tid, crew in assigned_crews.items() if any(m["id"] == w["employee_id"] for m in crew)),
+                None,
+            )
+            placed_truck = truck_name_map.get(truck_id, "a truck") if truck_id else "a truck"
+            warnings.append({
+                "type": "ban_conflict",
+                "message": (
+                    f"{emp_name} was placed on {placed_truck} despite a ban conflict"
+                    + (f" with {', '.join(banned_names)}" if banned_names else "") + "."
+                ),
+            })
+        else:
+            warnings.append(w)
 
     for truck_id, crew in assigned_crews.items():
         truck_assignment = TruckAssignment(

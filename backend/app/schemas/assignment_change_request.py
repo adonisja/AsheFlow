@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 from datetime import date, datetime
 from typing import Optional
@@ -7,7 +7,7 @@ from typing import Optional
 class AssignmentChangeRequestCreate(BaseModel):
     employee_id: UUID
     requested_date: date
-    reason: Optional[str] = None
+    reason: Optional[str] = Field(None, max_length=500)
 
 
 class AssignmentChangeRequestResponse(BaseModel):

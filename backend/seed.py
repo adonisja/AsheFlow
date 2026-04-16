@@ -28,14 +28,26 @@ from app.models.employee_relationship import EmployeeRelationship
 DRIVER_NAMES = [
     "Marcus Johnson", "Darius Webb", "Terrence Hill", "Calvin Brooks",
     "Antoine Reeves", "Jaylen Foster", "DeShawn Morris", "Malik Turner",
-    "Alicia Monroe"
+    "Alicia Monroe",
+    # +7
+    "Rodney Hargrove", "Dominique Vance", "Curtis Layne", "Lamar Osei",
+    "Brianna Tate", "Xavier Pugh", "Cedric Holloway",
 ]
 
 TRAINER_NAMES = [
     "Brandon Hayes", "Kenji Watanabe", "Omar Khalil", "Devon Hughes",
     "Rasheed Grant", "Carlos Mendez", "Tyrone Baker", "Isaiah Fletcher",
     "Nathan Cross", "Elijah Stone", "Samuel Okafor", "Victor Reyes",
-    "Patrick Donnelly", "Andre Williams", "Keisha Simmons", "Tanya Griffith"
+    "Patrick Donnelly", "Andre Williams", "Keisha Simmons", "Tanya Griffith",
+    # +32 (3x original 16)
+    "Marcus Bell", "Jerome Whitfield", "Darnell Holt", "Latoya Simms",
+    "Reginald Frost", "Monique Slade", "Courtney Vega", "Lionel Thorn",
+    "Adrienne Locke", "Wendell Pryor", "Shanice Dupont", "Frederick Obi",
+    "Cynthia Rowe", "Bertram Shaw", "Jolene Caine", "Preston Gill",
+    "Octavia Finch", "Sterling Mack", "Vivienne Paul", "Damien Hurst",
+    "Rosalind Kerr", "Clifton Yates", "Imani Cross", "Harvey Dunn",
+    "Naomi Paige", "Winston Lamb", "Felicia Sage", "Dorian Marsh",
+    "Lucinda Bowen", "Raphael Knox", "Sabrina Hale", "Tristan Ford",
 ]
 
 WALKER_NAMES = [
@@ -48,7 +60,33 @@ WALKER_NAMES = [
     "Parker James", "Sawyer Evans", "Spencer Ward", "Blake Dixon",
     "Drew Perkins", "Jules Watts", "Ari Marsh", "Remy Hawkins",
     "Phoenix Hunt", "Sage Barker", "Lennon Drake", "Harlow Reid",
-    "Indigo Burns", "Zephyr Cole", "Onyx Fields", "Cleo Saunders"
+    "Indigo Burns", "Zephyr Cole", "Onyx Fields", "Cleo Saunders",
+    # +80 (3x original 40)
+    "Miles Paxton", "Toni Sherwood", "Beau Langley", "Iris Cannon",
+    "Levi Stanton", "Nora Hensley", "Cruz Delgado", "Eden Whitmore",
+    "Jett Calloway", "Sylvia Ramos", "Bram Whitaker", "Cora Vasquez",
+    "Finn Gallagher", "Stella Norris", "Reid Ashford", "Lydia Crane",
+    "Knox Ellison", "Mila Dorsey", "Ace Burrows", "Wren Osborne",
+    "Cole Maddox", "Isla Thornton", "Shane Beckett", "Nova Castillo",
+    "Drew Holt", "Piper Barlow", "Lane Sinclair", "Zara Quinn",
+    "Beck Aldridge", "Faye Holden", "Reef Sutton", "Gwen Marlow",
+    "Dash Prescott", "Tess Drummond", "Wade Colton", "Rue Hadley",
+    "Clay Mercer", "Nell Harmon", "Trace Linden", "Skye Rafferty",
+    "Jace Dunmore", "Lola Pemberton", "Colt Waverly", "Demi Foxworth",
+    "Brice Colman", "Rae Quinton", "Slade Montague", "Vera Langston",
+    "Holt Brennan", "Fern Kingsley", "Crew Dalton", "Opal Sheridan",
+    "Vance Whitlow", "Gia Redmond", "Flint Adler", "Prue Wakefield",
+    "Rush Emberton", "Thea Lockwood", "Gage Moreland", "Blythe Randall",
+    "Stone Callahan", "Ciel Ashby", "Ridge Thornton", "Bex Warfield",
+    "Wilder Caine", "Flo Pennington", "Tate Holloway", "Seren Blackwood",
+    "Birch Danforth", "Lux Greyson", "Fox Merritt", "Clio Stanhope",
+    "Rowe Callister", "Dune Ashwood", "Poet Harrington", "Sloane Waverly",
+    "Fen Colbert", "Briar Sutcliffe",
+]
+
+TRAINEE_NAMES = [
+    "Jordan Ames", "Keonte Briggs", "Priya Chandran",
+    "Marcus Deleon", "Simone Easton",
 ]
 
 TRUCK_NAMES = ["Morgan", "Atlas", "Eagle", "Omega", "Falcon", "Gemini", "Jackal"]
@@ -150,6 +188,19 @@ def seed():
                     name=name,
                     discord_id=make_discord_id(name),
                     role="walker",
+                    is_active=True
+                )
+                db.add(emp)
+            employees.append(emp)
+
+        for name in TRAINEE_NAMES:
+            emp = db.query(Employee).filter_by(name=name, role="trainee").first()
+            if not emp:
+                emp = Employee(
+                    id=uuid.uuid4(),
+                    name=name,
+                    discord_id=make_discord_id(name),
+                    role="trainee",
                     is_active=True
                 )
                 db.add(emp)

@@ -1,7 +1,7 @@
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from uuid import UUID
 from sqlalchemy.orm import Session
 
@@ -13,12 +13,40 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate, DispatchConfig
 from app.services.run_dispatch import run_dispatch
+from app.services.available_pool import get_unavailable_staff
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
 # Dispatch operations are limited to dispatch role and admin only.
 # Management (supervisory) accesses fleet data via reporting endpoints, not the operational dispatch tool.
 allow_dispatch_mgmt = RoleChecker(["dispatch", "admin"])
+
+@router.get("/unavailable-staff/{dispatch_date}", status_code=status.HTTP_200_OK)
+def get_unavailable_staff_for_date(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+    roles: List[str] = Query(default=["driver", "trainer", "walker"]),
+):
+    """Return active field staff excluded from the available pool on a given date.
+
+    Used by the dispatch UI to surface a call-in list when understaffed warnings fire.
+    Trainees are always excluded — their flow is managed by the training system.
+
+    Query params:
+        roles: One or more of driver, trainer, walker. Defaults to all three.
+               e.g. ?roles=driver&roles=trainer
+
+    Returns contact info (name, discord_id, phone_number) and exclusion reason
+    (time_off_request | recurring_off_day) per employee.
+
+    Always queryable — including after dispatch has run and warnings are gone.
+    """
+    return {
+        "date": dispatch_date,
+        "unavailable_staff": get_unavailable_staff(db, dispatch_date, roles=roles),
+    }
+
 
 @router.get("/{dispatch_date}", status_code=status.HTTP_200_OK)
 def get_daily_dispatch(
@@ -96,19 +124,11 @@ def trigger_dispatch(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    # warnings are a mix of two shapes: staffing dicts have a "type" key, ban-conflict dicts have UUIDs —
-    # serialize UUID fields to strings so JSON serialization doesn't fail
+    # All warnings are now normalized dicts with "type" and "message" string fields.
+    # Convert any residual UUID values to str for JSON safety.
     serialized_warnings = []
     for w in warnings:
-        if "type" in w:
-            # staffing warnings are already JSON-safe strings
-            serialized_warnings.append(w)
-        else:
-            # ban-conflict warnings contain UUID objects that must be cast to str
-            serialized_warnings.append({
-                "employee_id": str(w["employee_id"]),
-                "banned_by": [str(b) for b in w["banned_by"]]
-            })
+        serialized_warnings.append({k: str(v) if hasattr(v, "hex") else v for k, v in w.items()})
 
     return {
         "date": target_date,
@@ -401,7 +421,7 @@ def clear_daily_dispatch(
     """Clear all truck assignments for a specific date.
     Returns 403 if the user tries to delete a dispatch for a past date.
     """
-    if dispatch_date < date.today() and current_user.get("role") != "admin":
+    if dispatch_date < date.today() and "admin" not in current_user.get("cognito_groups", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot delete assignment records for past days."

@@ -12,6 +12,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck import Truck
+from app.models.notification import Notification
 from app.schemas.field_ops import (
     CheckInCreate, CheckInResponse,
     DepartureCreate, DepartureResponse,
@@ -59,7 +60,13 @@ def get_today_crew(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
-    """Return crew members on the same truck as employee_id for target_date (today if omitted)."""
+    """Return crew members on the same truck as employee_id for target_date (today if omitted).
+
+    Callers may only request their own crew. Dispatch/management/admin may request any employee's crew.
+    """
+    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=403, detail="You can only view your own crew assignment.")
+
     if target_date is None:
         target_date = date.today()
 
@@ -130,7 +137,41 @@ def get_check_ins(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
+    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=403, detail="Access denied.")
     return db.query(CheckIn).filter(CheckIn.employee_id == employee_id).order_by(CheckIn.date.desc()).all()
+
+
+@router.get("/check-ins/summary")
+def get_check_ins_summary(
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """Return all check-ins for a given date with driver names. Management/admin use."""
+    if target_date is None:
+        target_date = date.today()
+
+    rows = (
+        db.query(CheckIn)
+        .filter(CheckIn.date == target_date)
+        .order_by(CheckIn.checked_in_at.asc())
+        .all()
+    )
+
+    emp_ids = {r.employee_id for r in rows}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+
+    return [
+        {
+            "employee_id": str(row.employee_id),
+            "driver_name": emp_map[row.employee_id].name if row.employee_id in emp_map else "Unknown",
+            "checked_in_at": row.checked_in_at.isoformat(),
+            "date": row.date.isoformat(),
+        }
+        for row in rows
+        if row.employee_id in emp_map and emp_map[row.employee_id].role == "driver"
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +217,8 @@ def get_departures(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
+    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=403, detail="Access denied.")
     return db.query(Departure).filter(Departure.employee_id == employee_id).order_by(Departure.date.desc()).all()
 
 
@@ -204,9 +247,12 @@ def get_returns_summary(
         .all()
     )
 
+    emp_ids = {r.employee_id for r in rows}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+
     result = []
     for row in rows:
-        emp = db.query(Employee).filter(Employee.id == row.employee_id).first()
+        emp = emp_map.get(row.employee_id)
         if not emp or emp.role != "driver":
             continue
         duration_minutes = None
@@ -327,6 +373,8 @@ def get_ratings_by_driver(
     Used by WalkerRatingPanel on mount to pre-populate already-submitted ratings
     so a page refresh doesn't show walkers as unrated when they've already been rated.
     """
+    if caller.id != driver_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=403, detail="Access denied.")
     q = db.query(WalkerRating).filter(WalkerRating.driver_id == driver_id)
     if target_date:
         q = q.filter(WalkerRating.date == target_date)
@@ -385,6 +433,27 @@ def submit_inspection(
         notes=payload.notes,
     )
     db.add(row)
+    db.flush()  # get row.id before notifications
+
+    if has_failures:
+        failed_items = [k.replace("_", " ").title() for k, v in payload.items.items() if v is False]
+        truck = db.query(Truck).filter(Truck.id == truck_id).first() if truck_id else None
+        truck_label = truck.name if truck else "unassigned truck"
+        message = (
+            f"Pre-trip inspection FAILED — {caller.name} · {truck_label} · {payload.date}. "
+            f"Failed items: {', '.join(failed_items)}."
+        )
+        recipients = db.query(Employee).filter(
+            Employee.role.in_(["dispatch", "management", "admin"]),
+            Employee.is_active == True,
+        ).all()
+        for recipient in recipients:
+            db.add(Notification(
+                employee_id=recipient.id,
+                type="inspection_failed",
+                message=message,
+            ))
+
     db.commit()
     db.refresh(row)
     return row
@@ -397,6 +466,8 @@ def get_inspections(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Return inspection history for a driver (most recent first)."""
+    if caller.id != driver_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=403, detail="Access denied.")
     return (
         db.query(VehicleInspection)
         .filter(VehicleInspection.driver_id == driver_id)
@@ -422,10 +493,15 @@ def get_inspections_summary(
         .all()
     )
 
+    emp_ids   = {r.driver_id for r in rows}
+    truck_ids = {r.truck_id for r in rows if r.truck_id}
+    emp_map   = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids)).all()}
+
     result = []
     for row in rows:
-        emp = db.query(Employee).filter(Employee.id == row.driver_id).first()
-        truck = db.query(Truck).filter(Truck.id == row.truck_id).first() if row.truck_id else None
+        emp   = emp_map.get(row.driver_id)
+        truck = truck_map.get(row.truck_id) if row.truck_id else None
         failed = [k for k, v in row.items.items() if v is False]
         result.append(VehicleInspectionSummaryItem(
             inspection_id=row.id,
@@ -526,6 +602,8 @@ def get_fuel_logs(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Return fuel log history for a driver (most recent first)."""
+    if caller.id != driver_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=403, detail="Access denied.")
     return (
         db.query(FuelMileageLog)
         .filter(FuelMileageLog.driver_id == driver_id)
@@ -551,10 +629,15 @@ def get_fuel_logs_summary(
         .all()
     )
 
+    emp_ids   = {r.driver_id for r in rows}
+    truck_ids = {r.truck_id for r in rows if r.truck_id}
+    emp_map   = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids)).all()}
+
     result = []
     for row in rows:
-        emp = db.query(Employee).filter(Employee.id == row.driver_id).first()
-        truck = db.query(Truck).filter(Truck.id == row.truck_id).first() if row.truck_id else None
+        emp   = emp_map.get(row.driver_id)
+        truck = truck_map.get(row.truck_id) if row.truck_id else None
         distance = (row.odometer_end - row.odometer_start) if row.odometer_end is not None else None
         result.append(FuelMileageSummaryItem(
             log_id=row.id,
@@ -595,10 +678,13 @@ def get_no_shows(
         .all()
     )
 
+    emp_ids = {r.walker_id for r in rows} | {r.driver_id for r in rows}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+
     result = []
     for row in rows:
-        walker = db.query(Employee).filter(Employee.id == row.walker_id).first()
-        driver = db.query(Employee).filter(Employee.id == row.driver_id).first()
+        walker = emp_map.get(row.walker_id)
+        driver = emp_map.get(row.driver_id)
         result.append({
             "walker_id": str(row.walker_id),
             "walker_name": walker.name if walker else "Unknown",
@@ -633,12 +719,16 @@ def get_walker_stats(
         .all()
     )
 
+    # Bulk-fetch all referenced walkers up front
+    walker_ids = {r.walker_id for r in rows}
+    emp_map    = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(walker_ids)).all()}
+
     # Group by walker_id
     walker_data: dict = {}
     for row in rows:
         wid = str(row.walker_id)
         if wid not in walker_data:
-            walker = db.query(Employee).filter(Employee.id == row.walker_id).first()
+            walker = emp_map.get(row.walker_id)
             walker_data[wid] = {
                 "walker_id": wid,
                 "walker_name": walker.name if walker else "Unknown",
@@ -682,6 +772,268 @@ def get_walker_stats(
 
     result.sort(key=lambda x: (x["no_show_count"], -(x["avg_stars"] or 0)), reverse=True)
     return result
+
+
+@router.get("/inspections/history")
+def get_inspections_history(
+    days: int = Query(30, ge=1, le=365),
+    driver_id: Optional[UUID] = Query(None),
+    truck_id: Optional[UUID] = Query(None),
+    has_failures: Optional[bool] = Query(None),
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """Return full inspection records for the last N days.
+
+    Filterable by driver, truck, and pass/fail status.
+    Returns driver name, truck name, date, submitted_at, has_failures, and per-item results.
+    """
+    since = date.today() - timedelta(days=days - 1)
+
+    q = db.query(VehicleInspection).filter(VehicleInspection.date >= since)
+    if driver_id is not None:
+        q = q.filter(VehicleInspection.driver_id == driver_id)
+    if truck_id is not None:
+        q = q.filter(VehicleInspection.truck_id == truck_id)
+    if has_failures is not None:
+        q = q.filter(VehicleInspection.has_failures == has_failures)
+
+    rows = q.order_by(VehicleInspection.date.desc(), VehicleInspection.submitted_at.desc()).all()
+
+    emp_ids   = {r.driver_id for r in rows}
+    truck_ids = {r.truck_id for r in rows if r.truck_id}
+    emp_map   = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids)).all()}
+
+    return [
+        {
+            "inspection_id": str(row.id),
+            "driver_id": str(row.driver_id),
+            "driver_name": emp_map[row.driver_id].name if row.driver_id in emp_map else "Unknown",
+            "truck_id": str(row.truck_id) if row.truck_id else None,
+            "truck_name": truck_map[row.truck_id].name if row.truck_id and row.truck_id in truck_map else None,
+            "date": row.date.isoformat(),
+            "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
+            "has_failures": row.has_failures,
+            "failed_items": [k for k, v in row.items.items() if v is False],
+            "passed_items": [k for k, v in row.items.items() if v is True],
+            "notes": row.notes,
+        }
+        for row in rows
+    ]
+
+
+def _walker_grade(presence_rate, avg_stars):
+    """Compute letter grade from presence rate (0-100) and avg stars (0-5)."""
+    p = (presence_rate or 0) / 100
+    s = (avg_stars or 0) / 5.0
+    combined = p * 0.5 + s * 0.5
+    if combined >= 0.90: return "A"
+    if combined >= 0.75: return "B"
+    if combined >= 0.60: return "C"
+    if combined >= 0.45: return "D"
+    return "F"
+
+
+@router.get("/walker-leaderboard")
+def get_walker_leaderboard(
+    min_shifts: int = Query(1, ge=1, le=50, description="Minimum shifts before a grade is assigned"),
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """All-time performance summary for every active walker.
+
+    Returns presence rate, avg stars, total shifts, no-show count, and a
+    computed letter grade (A–F) for each walker. Walkers with fewer than
+    min_shifts total shifts receive grade=null and grade_eligible=false.
+
+    Grade formula (weighted):
+      presence_score  = presence_rate / 100              (weight 0.5)
+      star_score      = avg_stars / 5.0                  (weight 0.5, 0 if no ratings)
+      combined        = presence_score * 0.5 + star_score * 0.5
+      A ≥ 0.90, B ≥ 0.75, C ≥ 0.60, D ≥ 0.45, F < 0.45
+    """
+    walkers = (
+        db.query(Employee)
+        .filter(Employee.role == "walker", Employee.is_active == True)
+        .order_by(Employee.name)
+        .all()
+    )
+
+    walker_ids = [w.id for w in walkers]
+    rows = db.query(WalkerRating).filter(WalkerRating.walker_id.in_(walker_ids)).all()
+
+    # Aggregate per walker
+    agg: dict = {str(w.id): {
+        "walker_id": str(w.id),
+        "walker_name": w.name,
+        "total_shifts": 0, "present_shifts": 0, "no_show_count": 0,
+        "stars_total": 0, "rated_shifts": 0,
+    } for w in walkers}
+
+    for row in rows:
+        wid = str(row.walker_id)
+        if wid not in agg:
+            continue
+        e = agg[wid]
+        e["total_shifts"] += 1
+        if row.present:
+            e["present_shifts"] += 1
+            if row.stars is not None:
+                e["stars_total"] += row.stars
+                e["rated_shifts"] += 1
+        else:
+            e["no_show_count"] += 1
+
+    result = []
+    for e in agg.values():
+        avg_stars = round(e["stars_total"] / e["rated_shifts"], 2) if e["rated_shifts"] > 0 else None
+        presence_rate = round(e["present_shifts"] / e["total_shifts"] * 100, 1) if e["total_shifts"] > 0 else None
+        grade_eligible = e["total_shifts"] >= min_shifts
+        result.append({
+            **e,
+            "avg_stars": avg_stars,
+            "presence_rate": presence_rate,
+            "grade_eligible": grade_eligible,
+            "grade": _walker_grade(presence_rate, avg_stars) if grade_eligible else None,
+        })
+
+    result.sort(key=lambda x: (x["grade"] or "Z", -(x["avg_stars"] or 0)))
+    return result
+
+
+@router.get("/walker-profile/{walker_id}")
+def get_walker_profile(
+    walker_id: UUID,
+    start_date: Optional[date] = Query(None, description="Filter ratings from this date (inclusive)"),
+    end_date: Optional[date] = Query(None, description="Filter ratings up to this date (inclusive)"),
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """All-time stats + rating history for one walker, with driver names and comments.
+
+    All-time KPIs (total_shifts, grade, etc.) always reflect the full history.
+    The ratings list is filtered by start_date/end_date when provided.
+    """
+    walker = db.query(Employee).filter(Employee.id == walker_id).first()
+    if not walker:
+        raise HTTPException(status_code=404, detail="Walker not found.")
+
+    # Full history for KPI computation
+    all_rows = (
+        db.query(WalkerRating)
+        .filter(WalkerRating.walker_id == walker_id)
+        .order_by(WalkerRating.date.desc())
+        .all()
+    )
+
+    # Filtered rows for the ratings list
+    filtered_rows = all_rows
+    if start_date:
+        filtered_rows = [r for r in filtered_rows if r.date >= start_date]
+    if end_date:
+        filtered_rows = [r for r in filtered_rows if r.date <= end_date]
+
+    driver_ids = {r.driver_id for r in all_rows}
+    driver_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids)).all()}
+
+    total = len(all_rows)
+    present = sum(1 for r in all_rows if r.present)
+    no_shows = total - present
+    rated = [r for r in all_rows if r.present and r.stars is not None]
+    avg_stars = round(sum(r.stars for r in rated) / len(rated), 2) if rated else None
+    presence_rate = round(present / total * 100, 1) if total > 0 else None
+
+    ratings_out = []
+    for r in filtered_rows:
+        drv = driver_map.get(r.driver_id)
+        ratings_out.append({
+            "id": str(r.id),
+            "date": r.date.isoformat(),
+            "driver_id": str(r.driver_id),
+            "driver_name": drv.name if drv else "Unknown",
+            "present": r.present,
+            "stars": r.stars,
+            "comment": r.comment,
+            "rated_at": r.rated_at.isoformat() if r.rated_at else None,
+        })
+
+    return {
+        "walker_id": str(walker.id),
+        "walker_name": walker.name,
+        "total_shifts": total,
+        "present_shifts": present,
+        "no_show_count": no_shows,
+        "avg_stars": avg_stars,
+        "presence_rate": presence_rate,
+        "grade": _walker_grade(presence_rate, avg_stars) if total > 0 else None,
+        "ratings": ratings_out,
+    }
+
+
+@router.get("/walker-consistency/{walker_id}")
+def get_walker_consistency(
+    walker_id: UUID,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """Per-driver rating breakdown for a walker.
+
+    Returns each driver's avg stars for this walker, the walker's overall avg,
+    and a deviation score. Drivers deviating ≥1.0 star from the walker's mean
+    are flagged — this can signal driver bias rather than genuine walker quality variation.
+    """
+    walker = db.query(Employee).filter(Employee.id == walker_id).first()
+    if not walker:
+        raise HTTPException(status_code=404, detail="Walker not found.")
+
+    rows = (
+        db.query(WalkerRating)
+        .filter(WalkerRating.walker_id == walker_id, WalkerRating.present == True, WalkerRating.stars.isnot(None))
+        .all()
+    )
+
+    if not rows:
+        return {"walker_avg_stars": None, "drivers": [], "flag_threshold": 1.0}
+
+    # Group by driver
+    from collections import defaultdict
+    driver_buckets: dict = defaultdict(list)
+    for r in rows:
+        driver_buckets[str(r.driver_id)].append(r.stars)
+
+    driver_ids = list(driver_buckets.keys())
+    from uuid import UUID as _UUID
+    driver_map = {
+        str(e.id): e.name
+        for e in db.query(Employee).filter(Employee.id.in_([_UUID(d) for d in driver_ids])).all()
+    }
+
+    overall_stars = [r.stars for r in rows]
+    walker_avg = round(sum(overall_stars) / len(overall_stars), 2)
+
+    FLAG_THRESHOLD = 1.0
+    drivers_out = []
+    for did, stars_list in driver_buckets.items():
+        avg = round(sum(stars_list) / len(stars_list), 2)
+        deviation = round(avg - walker_avg, 2)
+        drivers_out.append({
+            "driver_id": did,
+            "driver_name": driver_map.get(did, "Unknown"),
+            "shift_count": len(stars_list),
+            "avg_stars": avg,
+            "deviation": deviation,
+            "flagged": abs(deviation) >= FLAG_THRESHOLD,
+        })
+
+    # Sort by most extreme deviation first
+    drivers_out.sort(key=lambda x: abs(x["deviation"]), reverse=True)
+
+    return {
+        "walker_avg_stars": walker_avg,
+        "drivers": drivers_out,
+        "flag_threshold": FLAG_THRESHOLD,
+    }
 
 
 @router.get("/inspection-failures/summary")

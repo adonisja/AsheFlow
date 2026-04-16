@@ -11,31 +11,35 @@ def perform_walker_reassignment(
         base_weights: dict,
         banned_truck_ids: list,
         db: Session
-) -> None:
+) -> UUID | None:
     """Remove a walker from a truck and reassign them elsewhere.
 
     Strips the walker from the given truck's crew list, adds that truck to the
     walker's ban list, then re-runs ``assign_walkers`` so the walker lands on a
     different truck.
 
-    Args:
-        walker: Employee ORM object for the walker being removed.
-        truck_id: UUID of the truck the walker is being evicted from.
-        assigned_crews: Dict mapping truck UUID to crew list; mutated in place.
-        base_weights: Dict mapping truck UUID to base weight, forwarded to reassignment.
-        banned_truck_ids: Current ban list for the walker; the evicting truck is appended.
-        db: Database session.
+    Returns:
+        The truck_id the walker was reassigned to, or None if they could not be placed.
     """
     from app.services.assign_walkers import assign_walkers
 
     # strip the walker from the truck's crew list before re-running assignment
     assigned_crews[truck_id] = [c for c in assigned_crews[truck_id] if c["id"] != walker.id]
 
+    # snapshot crew sizes before reassignment so we can detect where the walker landed
+    before = {tid: len(crew) for tid, crew in assigned_crews.items()}
+
     # add the evicting truck to the ban list so the walker can't be re-placed there
     updated_bans = banned_truck_ids + [truck_id]
 
     # reuse assign_walkers with a single-element list
-    assign_walkers([walker], assigned_crews, base_weights, updated_bans, db)
+    assign_walkers([walker], assigned_crews, base_weights, db, extra_banned_truck_ids=updated_bans)
+
+    # find which truck grew by 1 — that's where the walker landed
+    for tid, crew in assigned_crews.items():
+        if len(crew) > before.get(tid, 0):
+            return tid
+    return None
 
 def check_ban_override(
     candidate_id: UUID,
@@ -72,7 +76,7 @@ def check_ban_override(
 
     # can't override if neither a driver nor trainer is present to express a preference
     if not driver_id and not trainer_id:
-        return False
+        return False, None
 
     # build the OR filter dynamically in case one of the roles hasn't been filled yet
     crew_filter = [f for f in [
@@ -88,7 +92,7 @@ def check_ban_override(
             or_(*crew_filter)
         ).first()
     ):
-        return False
+        return False, None
 
     # condition 2: the same senior crew must NOT also fav the offending walker —
     # if they like both equally, the ban stands to avoid arbitrarily displacing the existing walker
@@ -99,9 +103,9 @@ def check_ban_override(
             or_(*crew_filter)
         ).first()
     ):
-        return False
+        return False, None
 
     # both conditions met — bump the offending walker to another truck before returning True
-    perform_walker_reassignment(offending_walker, truck_id, assigned_crews, base_weights, banned_truck_ids, db)
+    reassigned_to = perform_walker_reassignment(offending_walker, truck_id, assigned_crews, base_weights, banned_truck_ids, db)
 
-    return True
+    return True, reassigned_to

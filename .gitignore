@@ -91,6 +91,13 @@ Thumbs.db
 .DS_Store
 
 
+# Personal records and scratch files
+.claude/
+discussion.md
+dispatch.md
+Soul.md
+fix_walkers.py
+
 # AI models
 .claude/token.json
 *.pem

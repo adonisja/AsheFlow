@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_current_user
+from app.api.deps import RoleChecker, get_current_user, get_caller_employee
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord
 from app.models.employee import Employee
@@ -24,6 +24,7 @@ def submit_continuation_request(
     payload: ContinuationRequestCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_trainee),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Trainee submits a silent request to continue with the same trainer.
 
@@ -32,6 +33,14 @@ def submit_continuation_request(
     - No response is shown to the trainee beyond a 201 — the process is silent.
     - A notification is sent to the trainer so it surfaces on their dashboard.
     """
+    # Ownership — trainees can only submit for themselves; admins can submit for any trainee
+    caller_groups = current_user.get("cognito_groups", [])
+    if "admin" not in caller_groups and caller.id != payload.trainee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only submit continuation requests for yourself.",
+        )
+
     # Verify trainee exists
     trainee = db.query(Employee).filter(
         Employee.id == payload.trainee_id,
@@ -96,11 +105,19 @@ def get_pending_requests_for_trainer(
     trainer_id: UUID,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_trainer),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return all pending continuation requests addressed to this trainer.
 
     Used by the trainer dashboard to surface incoming requests.
+    Trainers can only read their own requests; admins can read any.
     """
+    caller_groups = current_user.get("cognito_groups", [])
+    if "admin" not in caller_groups and caller.id != trainer_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own continuation requests.",
+        )
     return db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.trainer_id == trainer_id,
         TrainerContinuationRequest.status == "pending",
@@ -112,12 +129,14 @@ def accept_continuation_request(
     request_id: UUID,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_trainer),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Trainer accepts a pending continuation request.
 
     Status moves to 'accepted'. On the trainee's next dispatch day,
     training_injection will honour this and pair them if the trainer is available.
     No notification is sent to the trainee — the process remains silent.
+    Only the trainer addressed by the request can accept it; admins may accept any.
     """
     req = db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.id == request_id,
@@ -125,6 +144,13 @@ def accept_continuation_request(
     ).first()
     if not req:
         raise HTTPException(status_code=404, detail="Pending request not found.")
+
+    caller_groups = current_user.get("cognito_groups", [])
+    if "admin" not in caller_groups and caller.id != req.trainer_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only accept requests addressed to you.",
+        )
 
     req.status = "accepted"
     req.resolved_at = datetime.now(timezone.utc)
@@ -139,6 +165,7 @@ def set_request_priority(
     payload: PriorityUpdate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_trainer),
+    caller_employee: Employee = Depends(get_caller_employee),
 ):
     """Trainer sets or clears their priority ranking for a specific accepted request.
 
@@ -160,16 +187,10 @@ def set_request_priority(
     if not req:
         raise HTTPException(status_code=404, detail="Active request not found.")
 
-    # Verify the caller IS the trainer on this request (privacy enforcement)
-    caller_employee = (
-        db.query(Employee)
-        .filter(Employee.discord_id == current_user.get("username", ""))
-        .first()
-    )
-    # Admins bypass the ownership check
-    caller_groups = current_user.get("groups", [])
+    # Admins bypass the ownership check; all others must own the request.
+    caller_groups = current_user.get("cognito_groups", [])
     if "admin" not in caller_groups:
-        if not caller_employee or caller_employee.id != req.trainer_id:
+        if caller_employee.id != req.trainer_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only set priority on your own requests.",
@@ -204,11 +225,13 @@ def reject_continuation_request(
     request_id: UUID,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_trainer),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Trainer rejects a pending continuation request.
 
     Status moves to 'nullified'. The trainee is paired normally on their next
     dispatch day. No notification is sent to the trainee.
+    Only the trainer addressed by the request can reject it; admins may reject any.
     """
     req = db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.id == request_id,
@@ -216,6 +239,13 @@ def reject_continuation_request(
     ).first()
     if not req:
         raise HTTPException(status_code=404, detail="Pending request not found.")
+
+    caller_groups = current_user.get("cognito_groups", [])
+    if "admin" not in caller_groups and caller.id != req.trainer_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only reject requests addressed to you.",
+        )
 
     req.status = "nullified"
     req.resolved_at = datetime.now(timezone.utc)

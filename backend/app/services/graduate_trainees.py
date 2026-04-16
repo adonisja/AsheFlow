@@ -1,46 +1,73 @@
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from app.models.employee import Employee
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.trainer_continuation_request import TrainerContinuationRequest
+from app.models.notification import Notification
+
 
 def graduate_eligible_trainees(db: Session, target_date):
-    """
-    Check all active trainees to see if they have completed 5 successful dispatch assignments.
-    If so, graduate them to walkers. Returns a list of notifications.
+    """Check all active trainees for 5+ completed dispatch assignments.
+
+    Graduates eligible trainees to walker, nullifies their open continuation
+    requests, and fires a Notification to every active management/admin/dispatch
+    employee so the event is visible in the app.
+
+    Returns a list of warning dicts for the dispatch run summary.
     """
     warnings = []
-    
-    # Query all current trainees
+
     trainees = db.query(Employee).filter(
         Employee.role == "trainee",
-        Employee.is_active == True
+        Employee.is_active == True,
     ).all()
-    
+
+    # Fetch notification recipients once — all active privileged staff.
+    recipients = db.query(Employee).filter(
+        Employee.role.in_(["management", "admin", "dispatch"]),
+        Employee.is_active == True,
+    ).all()
+
     for trainee in trainees:
-        # Count the number of past assignments they have where their role was anything.
-        # But specifically we are counting how many days they were dispatched as a trainee (or generally dispatched).
-        # We'll just count how many assignment records exist for them.
-        assignment_count = db.query(AssignmentMember).join(TruckAssignment).filter(
-            AssignmentMember.employee_id == trainee.id,
-            TruckAssignment.date < target_date
-        ).count()
-        
-        # 5 confirmed assignments beforehand means this new one is their 6th.
-        # "after 5th confirmed/successful assignments (or on their 6th active dispatch), 
-        # their role transitions to 'Walker'"
+        assignment_count = (
+            db.query(AssignmentMember)
+            .join(TruckAssignment)
+            .filter(
+                AssignmentMember.employee_id == trainee.id,
+                TruckAssignment.date < target_date,
+            )
+            .count()
+        )
+
         if assignment_count >= 5:
             trainee.role = "walker"
-            warnings.append({
-                "type": "graduation_notification",
-                "message": f"Trainee {trainee.name} has completed 5 successful assignments and has been automatically graduated to a Walker for this and future dispatches."
-            })
 
-            # Nullify any open continuation requests — a graduated walker no longer
-            # goes through training_injection so pending/accepted requests would
-            # otherwise sit open indefinitely.
+            message = (
+                f"{trainee.name} has completed {assignment_count} dispatch assignments "
+                f"and was automatically graduated from Trainee to Walker on {target_date}."
+            )
+
+            # Notify every management/admin/dispatch employee.
+            for recipient in recipients:
+                db.add(Notification(
+                    employee_id=recipient.id,
+                    type="trainee_graduated",
+                    message=message,
+                ))
+
+            # Also notify the trainee themselves.
+            db.add(Notification(
+                employee_id=trainee.id,
+                type="trainee_graduated",
+                message=(
+                    f"Congratulations! You have completed {assignment_count} dispatch assignments "
+                    f"and have been promoted to Walker effective {target_date}."
+                ),
+            ))
+
+            # Nullify open continuation requests — graduated walkers no longer go
+            # through training injection so these would otherwise sit open forever.
             open_requests = db.query(TrainerContinuationRequest).filter(
                 TrainerContinuationRequest.trainee_id == trainee.id,
                 TrainerContinuationRequest.status.in_(["pending", "accepted"]),
@@ -48,8 +75,16 @@ def graduate_eligible_trainees(db: Session, target_date):
             for req in open_requests:
                 req.status = "nullified"
                 req.resolved_at = datetime.now(timezone.utc)
-            
+
+            warnings.append({
+                "type": "graduation_notification",
+                "message": (
+                    f"Trainee {trainee.name} has completed {assignment_count} successful "
+                    f"assignments and has been automatically graduated to Walker."
+                ),
+            })
+
     if warnings:
         db.commit()
-        
+
     return warnings

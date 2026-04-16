@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { RefreshCw, X, Plus, Minus, RotateCcw } from 'lucide-react';
+import { RefreshCw, X, Plus, Minus, RotateCcw, BarChart2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -26,14 +26,125 @@ const typeDescription: Record<RequestType, string> = {
   full_rework: 'Replace your entire recurring schedule. Choose every day you want to work.',
 };
 
+// ---------------------------------------------------------------------------
+// Analytics panel — admin only
+// ---------------------------------------------------------------------------
+
+function ScheduleAnalytics({ allRequests }: { allRequests: any[] }) {
+  const total = allRequests.length;
+  const pending  = allRequests.filter(r => r.status === 'pending').length;
+  const approved = allRequests.filter(r => r.status === 'approved').length;
+  const rejected = allRequests.filter(r => r.status === 'rejected').length;
+  const approvalRate = (approved + rejected) > 0
+    ? Math.round((approved / (approved + rejected)) * 100)
+    : null;
+
+  const byType = (['add_day', 'drop_day', 'full_rework'] as RequestType[]).map(t => ({
+    type: t,
+    count: allRequests.filter(r => r.request_type === t).length,
+  }));
+
+  // Most requested days to drop (across all drop_day and full_rework requests)
+  const dayCounts: Record<string, number> = {};
+  allRequests.forEach(r => {
+    const days = r.request_type === 'drop_day'
+      ? (r.days_to_drop ?? [])
+      : r.request_type === 'full_rework'
+        ? DAYS_OF_WEEK.filter(d => !(r.proposed_schedule ?? []).includes(d))
+        : [];
+    days.forEach((d: string) => { dayCounts[d] = (dayCounts[d] ?? 0) + 1; });
+  });
+  const topOffDays = DAYS_OF_WEEK
+    .filter(d => dayCounts[d])
+    .sort((a, b) => (dayCounts[b] ?? 0) - (dayCounts[a] ?? 0))
+    .slice(0, 3);
+
+  const stats = [
+    { label: 'Total Requests', value: total, icon: BarChart2, color: 'text-primary' },
+    { label: 'Pending',        value: pending,  icon: Clock,         color: 'text-warning' },
+    { label: 'Approved',       value: approved, icon: CheckCircle2,  color: 'text-success' },
+    { label: 'Rejected',       value: rejected, icon: XCircle,       color: 'text-danger'  },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {stats.map(s => (
+          <div key={s.label} className="card-elevated flex items-center gap-3">
+            <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-primary/5 shrink-0">
+              <s.icon className={`w-4 h-4 ${s.color}`} />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">{s.label}</p>
+              <p className="text-lg font-bold text-foreground">{s.value}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Approval rate */}
+        <div className="card space-y-3">
+          <h3 className="text-sm font-semibold text-foreground">Approval Rate</h3>
+          {approvalRate !== null ? (
+            <>
+              <div className="w-full bg-accent rounded-full h-2">
+                <div
+                  className="bg-success h-2 rounded-full transition-all"
+                  style={{ width: `${approvalRate}%` }}
+                />
+              </div>
+              <p className="text-xs text-subtle">{approvalRate}% of reviewed requests approved</p>
+            </>
+          ) : (
+            <p className="text-xs text-subtle italic">No reviewed requests yet.</p>
+          )}
+        </div>
+
+        {/* Requests by type */}
+        <div className="card space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">By Request Type</h3>
+          {byType.map(({ type, count }) => (
+            <div key={type} className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{typeLabel[type]}</span>
+              <span className="font-semibold text-foreground">{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Most-requested days off */}
+      {topOffDays.length > 0 && (
+        <div className="card space-y-2">
+          <h3 className="text-sm font-semibold text-foreground">Most Requested Days Off</h3>
+          <div className="flex flex-wrap gap-2">
+            {topOffDays.map(d => (
+              <span key={d} className="px-3 py-1 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
+                {d} ({dayCounts[d]})
+              </span>
+            ))}
+          </div>
+          <p className="text-xs text-subtle">Days most commonly appearing in drop/rework requests.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
 const ScheduleChanges = () => {
   const { user, groups } = useAuth();
-  const isReviewer = groups.some(r => ['management', 'admin'].includes(r));
+  const isAdmin = groups.includes('admin');
 
   const [myId, setMyId] = useState<string>(user?.userId || user?.username || '');
   const [offDays, setOffDays] = useState<string[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [allRequests, setAllRequests] = useState<any[]>([]);
 
   // Form state
   const [mode, setMode] = useState<RequestType>('drop_day');
@@ -43,14 +154,15 @@ const ScheduleChanges = () => {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!myId) return;
-    loadOffDays();
-    loadMyRequests();
-  }, [myId]);
-
-  useEffect(() => {
-    if (isReviewer) loadPendingRequests();
-  }, [isReviewer]);
+    if (isAdmin) {
+      loadPendingRequests();
+      loadAllRequests();
+    }
+    if (!isAdmin && myId) {
+      loadOffDays();
+      loadMyRequests();
+    }
+  }, [myId, isAdmin]);
 
   const loadOffDays = async () => {
     try {
@@ -68,18 +180,24 @@ const ScheduleChanges = () => {
 
   const loadPendingRequests = async () => {
     try {
-      const res = await axiosClient.get('/schedule-change-requests/');
+      const res = await axiosClient.get('/schedule-change-requests/', { params: { status: 'pending' } });
       setPendingRequests(res.data);
+    } catch (err) { console.error(err); }
+  };
+
+  const loadAllRequests = async () => {
+    try {
+      const res = await axiosClient.get('/schedule-change-requests/');
+      setAllRequests(res.data);
     } catch (err) { console.error(err); }
   };
 
   const workingDays = DAYS_OF_WEEK.filter(d => !offDays.includes(d));
 
-  // Days selectable per mode
   const selectableDays = () => {
-    if (mode === 'add_day') return offDays; // can only add back currently-off days
-    if (mode === 'drop_day') return workingDays; // can only drop currently-working days
-    return DAYS_OF_WEEK; // full rework: pick from all
+    if (mode === 'add_day') return offDays;
+    if (mode === 'drop_day') return workingDays;
+    return DAYS_OF_WEEK;
   };
 
   const toggleDay = (day: string) => {
@@ -97,14 +215,8 @@ const ScheduleChanges = () => {
   const hasPending = requests.some(r => r.status === 'pending');
 
   const handleSubmit = async () => {
-    if (selectedDays.length === 0) {
-      setError('Select at least one day.');
-      return;
-    }
-    if (hasPending) {
-      setError('You already have a pending request. Cancel it before submitting a new one.');
-      return;
-    }
+    if (selectedDays.length === 0) { setError('Select at least one day.'); return; }
+    if (hasPending) { setError('You already have a pending request. Cancel it before submitting a new one.'); return; }
     setError('');
     setSubmitting(true);
     try {
@@ -140,18 +252,73 @@ const ScheduleChanges = () => {
     try {
       await axiosClient.patch(`/schedule-change-requests/${id}/${action}`);
       loadPendingRequests();
-      if (action === 'approve') loadOffDays();
+      if (isAdmin) loadAllRequests();
     } catch (err: any) {
       alert(err.response?.data?.detail || `Failed to ${action}.`);
     }
   };
 
   const modeIcon: Record<RequestType, React.ReactNode> = {
-    add_day: <Plus className="w-4 h-4" />,
-    drop_day: <Minus className="w-4 h-4" />,
+    add_day:     <Plus className="w-4 h-4" />,
+    drop_day:    <Minus className="w-4 h-4" />,
     full_rework: <RotateCcw className="w-4 h-4" />,
   };
 
+  // ---------------------------------------------------------------------------
+  // Admin view — analytics + pending queue only
+  // ---------------------------------------------------------------------------
+  if (isAdmin) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
+            <BarChart2 className="w-5 h-5 text-muted-foreground" />
+          </div>
+          <div>
+            <h1 className="page-title">Schedule Changes</h1>
+            <p className="text-subtle text-sm">Review pending requests and monitor schedule change trends.</p>
+          </div>
+        </div>
+
+        <ScheduleAnalytics allRequests={allRequests} />
+
+        <div className="card">
+          <h2 className="section-title mb-4">Pending Requests</h2>
+          {pendingRequests.length === 0 ? (
+            <p className="text-subtle text-sm text-center py-4">No pending schedule change requests.</p>
+          ) : (
+            <ul className="space-y-4">
+              {pendingRequests.map((req: any) => (
+                <li key={req.id} className="p-4 rounded-xl bg-accent/40 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{req.employee?.name}</p>
+                      <p className="text-xs text-subtle capitalize">{req.employee?.role} · {typeLabel[req.request_type as RequestType]}</p>
+                    </div>
+                    <span className={statusBadge(req.status)}>{req.status}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs text-subtle">
+                    {req.days_to_add?.length > 0 && <span>Add: {req.days_to_add.join(', ')}</span>}
+                    {req.days_to_drop?.length > 0 && <span>Drop: {req.days_to_drop.join(', ')}</span>}
+                    {req.proposed_schedule?.length > 0 && <span>New schedule: {req.proposed_schedule.join(', ')}</span>}
+                  </div>
+                  {req.reason && <p className="text-xs text-subtle italic">"{req.reason}"</p>}
+                  <div className="flex gap-2">
+                    <button onClick={() => handleReview(req.id, 'approve')} className="btn-primary text-xs">Approve</button>
+                    <button onClick={() => handleReview(req.id, 'reject')} className="btn-ghost text-xs text-danger hover:bg-danger/10">Reject</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Field staff view — personal form + own request history
+  // ---------------------------------------------------------------------------
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
       <div className="flex items-center gap-3">
@@ -184,90 +351,85 @@ const ScheduleChanges = () => {
         <p className="text-xs text-subtle mt-2">Strikethrough = current off day</p>
       </div>
 
-      {/* Submit form — only for non-reviewers or if no pending */}
-      {!isReviewer && (
-        <div className="card space-y-5">
-          <h2 className="section-title">New Request</h2>
+      {/* Submit form */}
+      <div className="card space-y-5">
+        <h2 className="section-title">New Request</h2>
 
-          {hasPending && (
-            <div className="p-3 rounded-xl bg-warning/10 border border-warning/20 text-sm text-warning">
-              You have a pending request. Cancel it below before submitting a new one.
-            </div>
-          )}
+        {hasPending && (
+          <div className="p-3 rounded-xl bg-warning/10 border border-warning/20 text-sm text-warning">
+            You have a pending request. Cancel it below before submitting a new one.
+          </div>
+        )}
 
-          {/* Mode selector */}
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Request Type</label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              {(['add_day', 'drop_day', 'full_rework'] as RequestType[]).map(m => (
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Request Type</label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            {(['add_day', 'drop_day', 'full_rework'] as RequestType[]).map(m => (
+              <button
+                key={m}
+                onClick={() => handleModeChange(m)}
+                className={`flex items-center gap-2 flex-1 px-4 py-3 rounded-xl text-sm font-medium border transition-colors ${
+                  mode === m
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
+                }`}
+              >
+                {modeIcon[m]}
+                {typeLabel[m]}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-subtle mt-2">{typeDescription[mode]}</p>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+            {mode === 'full_rework' ? 'Select your new working days' : `Select days to ${mode === 'add_day' ? 'add back' : 'drop'}`}
+          </label>
+          {selectableDays().length === 0 ? (
+            <p className="text-sm text-subtle italic">
+              {mode === 'add_day' ? 'No days are currently off — nothing to add back.' : 'All days are already off.'}
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {selectableDays().map(day => (
                 <button
-                  key={m}
-                  onClick={() => handleModeChange(m)}
-                  className={`flex items-center gap-2 flex-1 px-4 py-3 rounded-xl text-sm font-medium border transition-colors ${
-                    mode === m
+                  key={day}
+                  onClick={() => toggleDay(day)}
+                  className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
+                    selectedDays.includes(day)
                       ? 'bg-primary text-primary-foreground border-primary'
                       : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
                   }`}
                 >
-                  {modeIcon[m]}
-                  {typeLabel[m]}
+                  {day}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-subtle mt-2">{typeDescription[mode]}</p>
-          </div>
-
-          {/* Day selector */}
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-              {mode === 'full_rework' ? 'Select your new working days' : `Select days to ${mode === 'add_day' ? 'add back' : 'drop'}`}
-            </label>
-            {selectableDays().length === 0 ? (
-              <p className="text-sm text-subtle italic">
-                {mode === 'add_day' ? 'No days are currently off — nothing to add back.' : 'All days are already off.'}
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {selectableDays().map(day => (
-                  <button
-                    key={day}
-                    onClick={() => toggleDay(day)}
-                    className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
-                      selectedDays.includes(day)
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
-                    }`}
-                  >
-                    {day}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Reason */}
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Reason (optional)</label>
-            <input
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Explain your request..."
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-            />
-          </div>
-
-          {error && <p className="text-xs text-danger">{error}</p>}
-
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || hasPending || selectedDays.length === 0}
-            className="btn-primary disabled:opacity-50"
-          >
-            {submitting ? 'Submitting...' : 'Submit Request'}
-          </button>
+          )}
         </div>
-      )}
+
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Reason (optional)</label>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Explain your request..."
+            className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        {error && <p className="text-xs text-danger">{error}</p>}
+
+        <button
+          onClick={handleSubmit}
+          disabled={submitting || hasPending || selectedDays.length === 0}
+          className="btn-primary disabled:opacity-50"
+        >
+          {submitting ? 'Submitting...' : 'Submit Request'}
+        </button>
+      </div>
 
       {/* My request history */}
       <div className="card">
@@ -294,15 +456,9 @@ const ScheduleChanges = () => {
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs">
-                  {req.days_to_add?.length > 0 && (
-                    <span className="text-subtle">Add: {req.days_to_add.join(', ')}</span>
-                  )}
-                  {req.days_to_drop?.length > 0 && (
-                    <span className="text-subtle">Drop: {req.days_to_drop.join(', ')}</span>
-                  )}
-                  {req.proposed_schedule?.length > 0 && (
-                    <span className="text-subtle">New schedule: {req.proposed_schedule.join(', ')}</span>
-                  )}
+                  {req.days_to_add?.length > 0 && <span className="text-subtle">Add: {req.days_to_add.join(', ')}</span>}
+                  {req.days_to_drop?.length > 0 && <span className="text-subtle">Drop: {req.days_to_drop.join(', ')}</span>}
+                  {req.proposed_schedule?.length > 0 && <span className="text-subtle">New schedule: {req.proposed_schedule.join(', ')}</span>}
                 </div>
                 {req.reason && <p className="text-xs text-subtle">"{req.reason}"</p>}
                 <p className="text-xs text-subtle">{new Date(req.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
@@ -311,50 +467,6 @@ const ScheduleChanges = () => {
           </ul>
         )}
       </div>
-
-      {/* Reviewer panel — management/admin only */}
-      {isReviewer && (
-        <div className="card">
-          <h2 className="section-title mb-4">Pending Requests</h2>
-          {pendingRequests.length === 0 ? (
-            <p className="text-subtle text-sm text-center py-4">No pending schedule change requests.</p>
-          ) : (
-            <ul className="space-y-4">
-              {pendingRequests.map((req: any) => (
-                <li key={req.id} className="p-4 rounded-xl bg-accent/40 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">{req.employee?.name}</p>
-                      <p className="text-xs text-subtle capitalize">{req.employee?.role} · {typeLabel[req.request_type as RequestType]}</p>
-                    </div>
-                    <span className={statusBadge(req.status)}>{req.status}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-xs text-subtle">
-                    {req.days_to_add?.length > 0 && <span>Add: {req.days_to_add.join(', ')}</span>}
-                    {req.days_to_drop?.length > 0 && <span>Drop: {req.days_to_drop.join(', ')}</span>}
-                    {req.proposed_schedule?.length > 0 && <span>New schedule: {req.proposed_schedule.join(', ')}</span>}
-                  </div>
-                  {req.reason && <p className="text-xs text-subtle italic">"{req.reason}"</p>}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleReview(req.id, 'approve')}
-                      className="btn-primary text-xs"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => handleReview(req.id, 'reject')}
-                      className="btn-ghost text-xs text-danger hover:bg-danger/10"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
     </div>
   );
 };
