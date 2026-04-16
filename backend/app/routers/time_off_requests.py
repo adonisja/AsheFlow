@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_caller_employee
+from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.employee import Employee
 from app.models.time_off_request import TimeOffRequest
 from app.models.employee_off_day import EmployeeOffDay
@@ -19,10 +19,11 @@ allow_mgmt        = RoleChecker(["management", "admin", "dispatch"])
 
 @router.get("/", response_model=list[TimeOffRequestResponse])
 def get_all_time_off_requests(
+    pg: Pagination = Depends(),
     db: Session = Depends(get_db),
     _: dict = Depends(allow_mgmt),
 ):
-    return db.query(TimeOffRequest).all()
+    return pg.apply(db.query(TimeOffRequest)).all()
 
 @router.get("/{employee_id}", response_model=list[TimeOffRequestResponse])
 def get_time_off_requests(
@@ -40,8 +41,11 @@ def get_time_off_requests(
 def create_time_off_request(
     request: TimeOffRequestCreate,
     db: Session = Depends(get_db),
-    _: Employee = Depends(get_caller_employee),
+    caller: Employee = Depends(get_caller_employee),
 ):
+    mgmt_roles = {"management", "admin", "dispatch"}
+    if caller.role not in mgmt_roles and caller.id != request.employee_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only submit time-off requests for yourself.")
     day_of_week = request.date.strftime("%A")
     
     recurring_off_day = db.query(EmployeeOffDay).filter(

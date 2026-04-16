@@ -25,13 +25,10 @@ export default function TraineeDashboard() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        if (!user?.username && !(user as any)?.id) return;
-        const uId = user?.username || (user as any)?.id;
-        
-        // Let's resolve the user ID. We can try pulling `/employees/{uid}` but the history route handles the uuid.
-        // Easiest is to search employee by email / uid or assume user.username holds UUID. Let's just pass `user.username`.
-        
-        const res = await axiosClient.get(`/training/trainee/${uId}`);
+        const meRes = await axiosClient.get('/employees/me');
+        const traineeId = meRes.data.id;
+
+        const res = await axiosClient.get(`/training/trainee/${traineeId}`);
         const records = res.data;
         setTrainingRecords(records);
         
@@ -40,7 +37,7 @@ export default function TraineeDashboard() {
         const tRec = records.find((r: any) => r.record_date === todayStr);
         if (tRec && tRec.trainer_id) {
            const empRes = await axiosClient.get(`/employees/${tRec.trainer_id}`);
-           setTrainerName(`${empRes.data.first_name} ${empRes.data.last_name}`);
+           setTrainerName(empRes.data.name ?? '');
         }
       } catch (error) {
         console.error('Failed to fetch training records:', error);
@@ -48,7 +45,7 @@ export default function TraineeDashboard() {
       setIsLoading(false);
     };
     fetchHistory();
-  }, [user]);
+  }, []);
 
   if (isLoading) {
     return (

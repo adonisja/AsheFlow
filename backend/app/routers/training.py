@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_current_user
+from app.api.deps import RoleChecker, get_current_user, get_caller_employee_optional, get_caller_employee
 from app.models.training import TrainingRecord, TrainingTask
 from app.models.employee import Employee
-from app.schemas.training import TrainingRecordResponse, ManagerCommentCreate, TrainerCommentCreate, TrainingTaskResponse, TraineeReviewCreate, TraineeReassignRequest
+from app.schemas.training import TrainingRecordResponse, ManagerCommentCreate, TrainerCommentCreate, TrainingTaskResponse, TraineeReviewCreate, TraineeReassignRequest, TaskUpdate
 from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
@@ -25,30 +25,35 @@ router = APIRouter(
 @router.get("/daily/active", response_model=List[dict])
 def get_daily_active_trainings(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"]))
+    current_user: dict = Depends(RoleChecker(["management", "admin"]))
 ):
     """
     Managers/Admins view all today's active training records, including trainee and trainer explicitly.
     """
     today = date.today()
     records = db.query(TrainingRecord).filter(TrainingRecord.record_date == today).all()
-    
+
+    # Bulk-fetch all referenced employees
+    emp_ids = {r.trainee_id for r in records} | {r.trainer_id for r in records if r.trainer_id}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+
+    # Bulk-fetch all tasks for today's records in one query
+    record_ids = [r.id for r in records]
+    all_tasks  = db.query(TrainingTask).filter(TrainingTask.training_record_id.in_(record_ids)).all()
+    tasks_by_record: dict = {}
+    for t in all_tasks:
+        tasks_by_record.setdefault(t.training_record_id, []).append(t)
+
     result = []
     for record in records:
-        trainee = db.query(Employee).filter(Employee.id == record.trainee_id).first()
-        trainer = db.query(Employee).filter(Employee.id == record.trainer_id).first() if record.trainer_id else None
-        
-        tasks_count = db.query(TrainingTask).filter(TrainingTask.training_record_id == record.id).count()
-        completed_tasks_count = db.query(TrainingTask).filter(
-            TrainingTask.training_record_id == record.id, 
-            TrainingTask.is_completed == True
-        ).count()
-        
+        trainee = emp_map.get(record.trainee_id)
+        trainer = emp_map.get(record.trainer_id) if record.trainer_id else None
+        tasks   = tasks_by_record.get(record.id, [])
         result.append({
             "record": TrainingRecordResponse.model_validate(record).model_dump(),
-            "trainee": {"id": str(trainee.id), "name": f"{trainee.first_name} {trainee.last_name}"} if trainee else None,
-            "trainer": {"id": str(trainer.id), "name": f"{trainer.first_name} {trainer.last_name}"} if trainer else None,
-            "progress": {"total": tasks_count, "completed": completed_tasks_count}
+            "trainee": {"id": str(trainee.id), "name": trainee.name} if trainee else None,
+            "trainer": {"id": str(trainer.id), "name": trainer.name} if trainer else None,
+            "progress": {"total": len(tasks), "completed": sum(1 for t in tasks if t.is_completed)},
         })
     return result
 
@@ -69,7 +74,7 @@ def get_trainee_history(
         .all()
     )
     
-    caller_groups = current_user.get("groups", [])
+    caller_groups = current_user.get("cognito_groups", [])
     is_privileged = any(r in caller_groups for r in ["trainer", "management", "admin"])
 
     result = []
@@ -170,7 +175,8 @@ def submit_trainee_review(
     record_id: UUID,
     review_data: TraineeReviewCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(RoleChecker(["trainee", "admin"]))
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["trainee", "admin"]))
 ):
     """
     Trainee submits rating/comments on a specific shift.
@@ -179,7 +185,11 @@ def submit_trainee_review(
     record = db.query(TrainingRecord).filter(TrainingRecord.id == record_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
-        
+
+    # Ownership: trainees can only review their own record; admin bypass
+    if caller.role != "admin" and record.trainee_id != caller.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only review your own training records.")
+
     # Check lock (next day rule)
     if datetime.now(timezone.utc).date() > record.record_date + timedelta(days=1):
         raise HTTPException(status_code=400, detail="Review period has closed for this record.")
@@ -218,14 +228,21 @@ def get_escalated_trainees(
         .all()
     )
 
-    # Group by training_record_id, then resolve trainee per record.
+    # Bulk-fetch all referenced records and employees in one query each
     record_ids = list({t.training_record_id for t in escalated_tasks})
-    records = (
+    records    = (
         db.query(TrainingRecord)
         .filter(TrainingRecord.id.in_(record_ids))
         .all()
     )
-    records_by_id = {r.id: r for r in records}
+
+    emp_ids = {r.trainee_id for r in records} | {r.trainer_id for r in records if r.trainer_id}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+
+    # Group escalated tasks by record_id for O(1) lookup in the loop below
+    tasks_by_record: dict = {}
+    for t in escalated_tasks:
+        tasks_by_record.setdefault(t.training_record_id, []).append(t)
 
     # Deduplicate by trainee — only surface their most recent escalated record.
     latest_by_trainee: dict = {}
@@ -236,12 +253,9 @@ def get_escalated_trainees(
 
     result = []
     for trainee_id, record in latest_by_trainee.items():
-        trainee = db.query(Employee).filter(Employee.id == trainee_id).first()
-        trainer = db.query(Employee).filter(Employee.id == record.trainer_id).first() if record.trainer_id else None
-        escalated = [
-            t for t in escalated_tasks
-            if t.training_record_id == record.id
-        ]
+        trainee  = emp_map.get(trainee_id)
+        trainer  = emp_map.get(record.trainer_id) if record.trainer_id else None
+        escalated = tasks_by_record.get(record.id, [])
         result.append({
             "trainee": {"id": str(trainee.id), "name": trainee.name} if trainee else None,
             "trainer": {"id": str(trainer.id), "name": trainer.name} if trainer else None,
@@ -262,11 +276,138 @@ def get_escalated_trainees(
     return result
 
 
+@router.get("/trainer/today", response_model=dict)
+def get_trainer_today(
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["trainer", "admin"])),
+):
+    """Return the calling trainer's today record with trainee details, tasks,
+    manager_comments, and previous trainer_comments from the prior session.
+
+    Declared before /trainer/{trainer_id}/history so the literal segment 'today'
+    is matched first and not consumed as a UUID path parameter.
+    """
+    today = date.today()
+    record = (
+        db.query(TrainingRecord)
+        .filter(
+            TrainingRecord.trainer_id == caller.id,
+            TrainingRecord.record_date == today,
+        )
+        .first()
+    )
+
+    if not record:
+        return {"record": None, "trainee": None, "tasks": [], "previous_trainer_comments": None, "manager_comments": None}
+
+    trainee = db.query(Employee).filter(Employee.id == record.trainee_id).first()
+    tasks = db.query(TrainingTask).filter(TrainingTask.training_record_id == record.id).all()
+
+    # Find the previous session's trainer_comments (the most recent record before today)
+    previous_record = (
+        db.query(TrainingRecord)
+        .filter(
+            TrainingRecord.trainee_id == record.trainee_id,
+            TrainingRecord.record_date < today,
+            TrainingRecord.trainer_comments.isnot(None),
+        )
+        .order_by(desc(TrainingRecord.record_date))
+        .first()
+    )
+
+    return {
+        "record": TrainingRecordResponse.model_validate(record).model_dump(),
+        "trainee": {"id": str(trainee.id), "name": trainee.name} if trainee else None,
+        "tasks": [
+            {
+                "id": str(t.id),
+                "topic_title": t.topic_title,
+                "description": t.description,
+                "is_completed": t.is_completed,
+                "is_training_debt": t.is_training_debt,
+                "is_escalated": t.is_escalated,
+            }
+            for t in tasks
+        ],
+        "previous_trainer_comments": {
+            "comments": previous_record.trainer_comments,
+            "record_date": str(previous_record.record_date),
+            "day_number": previous_record.current_day_number,
+        } if previous_record else None,
+        "manager_comments": record.manager_comments,
+    }
+
+
+@router.get("/trainer/{trainer_id}/history", response_model=List[dict])
+def get_trainer_history(
+    trainer_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(RoleChecker(["trainer", "management", "admin"])),
+):
+    """Return all training records where this trainer was assigned.
+
+    Groups by trainee so the caller gets one entry per trainee with a list of
+    session records.  Each record includes tasks, trainer_comments, and
+    manager_comments so the trainer can review handoff notes.
+    """
+    records = (
+        db.query(TrainingRecord)
+        .filter(TrainingRecord.trainer_id == trainer_id)
+        .order_by(desc(TrainingRecord.record_date))
+        .all()
+    )
+
+    # Bulk-fetch employees and tasks
+    trainee_ids = list({r.trainee_id for r in records})
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee).filter(Employee.id.in_(trainee_ids)).all()
+    }
+
+    record_ids = [r.id for r in records]
+    all_tasks = db.query(TrainingTask).filter(TrainingTask.training_record_id.in_(record_ids)).all()
+    tasks_by_record: dict = {}
+    for t in all_tasks:
+        tasks_by_record.setdefault(t.training_record_id, []).append(t)
+
+    # Group by trainee
+    by_trainee: dict = {}
+    for record in records:
+        entry = by_trainee.setdefault(record.trainee_id, {
+            "trainee": None,
+            "sessions": [],
+        })
+        trainee = emp_map.get(record.trainee_id)
+        entry["trainee"] = {"id": str(trainee.id), "name": trainee.name} if trainee else None
+
+        tasks = tasks_by_record.get(record.id, [])
+        entry["sessions"].append({
+            "record": TrainingRecordResponse.model_validate(record).model_dump(),
+            "tasks": [
+                {
+                    "id": str(t.id),
+                    "topic_title": t.topic_title,
+                    "is_completed": t.is_completed,
+                    "is_training_debt": t.is_training_debt,
+                    "is_escalated": t.is_escalated,
+                }
+                for t in tasks
+            ],
+        })
+
+    result = list(by_trainee.values())
+    # Sort by most recently trained first
+    result.sort(key=lambda x: x["sessions"][0]["record"]["record_date"], reverse=True)
+    return result
+
+
 @router.patch("/trainee/reassign", response_model=dict)
 def reassign_trainee(
     payload: TraineeReassignRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(RoleChecker(["management", "dispatch", "admin"]))
+    _: dict = Depends(RoleChecker(["management", "dispatch", "admin"])),
+    actor: Employee = Depends(get_caller_employee_optional),
 ):
     """Reassign a trainee to a different trainer for a given date.
 
@@ -369,14 +510,9 @@ def reassign_trainee(
         warnings.append(warning_msg)
 
         # Notify the acting dispatcher/manager via the notification system
-        actor_employee = (
-            db.query(Employee)
-            .filter(Employee.discord_id == current_user.get("username", ""))
-            .first()
-        )
-        if actor_employee:
+        if actor:
             db.add(Notification(
-                employee_id=actor_employee.id,
+                employee_id=actor.id,
                 type="trainee_reassign_warning",
                 message=warning_msg,
             ))
@@ -458,17 +594,13 @@ def get_training_pipeline_summary(
     }
 
 
-from pydantic import BaseModel
-
-class TaskUpdate(BaseModel):
-    is_completed: bool
-
 @router.patch("/task/{task_id}", response_model=TrainingTaskResponse)
 def update_task(
     task_id: UUID,
     task_update: TaskUpdate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(RoleChecker(["trainer", "management", "admin"]))
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["trainer", "management", "admin"]))
 ):
     task = db.query(TrainingTask).filter(TrainingTask.id == task_id).first()
     if not task:
@@ -477,6 +609,10 @@ def update_task(
     record = db.query(TrainingRecord).filter(TrainingRecord.id == task.training_record_id).first()
     if record and record.is_locked:
         raise HTTPException(status_code=400, detail="Cannot edit a locked training record")
+
+    # Trainers can only update tasks on their own trainees; management/admin bypass
+    if caller.role == "trainer" and record and record.trainer_id != caller.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update tasks for your own trainees.")
         
     task.is_completed = task_update.is_completed
     db.commit()

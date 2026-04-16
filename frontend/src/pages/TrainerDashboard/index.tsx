@@ -1,156 +1,496 @@
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
-import { Users, Loader2 } from 'lucide-react';
+import {
+  Loader2, Users, ClipboardList, History, MessageSquare,
+  AlertTriangle, Star, CheckCircle2, XCircle, RefreshCw,
+  UserCheck, Calendar, ChevronDown, ChevronUp, Info,
+} from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
 
-function getLocalYMD() {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Tab = 'today' | 'history';
+
+interface TodayData {
+  record: any | null;
+  trainee: { id: string; name: string } | null;
+  tasks: any[];
+  previous_trainer_comments: { comments: string; record_date: string; day_number: number } | null;
+  manager_comments: string | null;
 }
 
-export default function TrainerDashboard() {
-  const { user } = useAuth();
-  const [traineeId, setTraineeId] = useState<string | null>(null);
-  const [traineeName, setTraineeName] = useState<string>('');
-  const [trainingRecords, setTrainingRecords] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+interface TraineeGroup {
+  trainee: { id: string; name: string } | null;
+  sessions: { record: any; tasks: any[] }[];
+}
 
-  useEffect(() => {
-    const fetchTrainee = async () => {
-      try {
-        if (!user) return;
-        const today = getLocalYMD();
-        
-        // Find if the trainer has a truck assignment today
-        const scheduleRes = await axiosClient.get(`/schedule/${user.username || (user as any).id}?start_date=${today}&end_date=${today}`);
-        const todaySchedule = scheduleRes.data[0];
-        
-        if (todaySchedule && todaySchedule.status === 'Assigned' && todaySchedule.crew) {
-          // Look for a trainee in the crew
-          const trainee = todaySchedule.crew.find((c: any) => c.role.toLowerCase() === 'trainee');
-          if (trainee) {
-            setTraineeId(trainee.id);
-            setTraineeName(trainee.name);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to fetch schedule for Trainer Dashboard:', error);
-      }
-      setIsLoading(false);
-    };
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-    fetchTrainee();
-  }, [user]);
+const getLocalYMD = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
-  useEffect(() => {
-    if (!traineeId) return;
+const starRow = (rating: number) => (
+  <span className="text-warning font-black text-sm">
+    {'★'.repeat(rating)}{'☆'.repeat(5 - rating)}
+  </span>
+);
 
-    const fetchHistory = async () => {
-      try {
-        const res = await axiosClient.get(`/training/trainee/${traineeId}`);
-        setTrainingRecords(res.data);
-      } catch (error) {
-        console.error('Failed to fetch training records:', error);
-      }
-    };
-    fetchHistory();
-  }, [traineeId]);
+const taskCompletionBadge = (tasks: any[]) => {
+  const total = tasks.length;
+  const done = tasks.filter(t => t.is_completed).length;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const color = pct === 100 ? 'text-success' : pct >= 60 ? 'text-warning' : 'text-danger';
+  return <span className={`text-xs font-bold ${color}`}>{done}/{total}</span>;
+};
 
-  if (isLoading) {
+// ---------------------------------------------------------------------------
+// Previous Trainer Handoff Note
+// ---------------------------------------------------------------------------
+
+function HandoffNote({ data }: { data: { comments: string; record_date: string; day_number: number } }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="card border-violet/30 bg-violet/5 space-y-3">
+      <button
+        className="flex items-center justify-between w-full text-left"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-4 h-4 text-violet shrink-0" />
+          <span className="text-sm font-semibold text-foreground">
+            Handoff Note — Day {data.day_number} ({new Date(data.record_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })})
+          </span>
+        </div>
+        {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+      </button>
+      {open && (
+        <p className="text-sm text-foreground whitespace-pre-line leading-relaxed pl-6 border-l-2 border-violet/30 ml-1">
+          {data.comments}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Today Tab
+// ---------------------------------------------------------------------------
+
+function TodayTab({
+  data,
+  trainerId,
+  onRefresh,
+}: {
+  data: TodayData;
+  trainerId: string;
+  onRefresh: () => void;
+}) {
+  const [trainerNote, setTrainerNote] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  if (!data.record || !data.trainee) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 opacity-50">
-        <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
-        <p className="text-sm font-medium">Checking today's assignments...</p>
+      <div className="card text-center py-20 flex flex-col items-center bg-accent/30 border-dashed">
+        <div className="w-16 h-16 rounded-full bg-background flex items-center justify-center mb-4">
+          <Users className="text-subtle w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-semibold mb-2">No Trainee Assigned Today</h2>
+        <p className="text-subtle max-w-sm mx-auto text-sm">
+          You don't have a trainee assigned to your truck today. Check back after dispatch runs.
+        </p>
       </div>
     );
   }
 
-  if (!traineeId) {
-    return (
-      <div className="space-y-4 animate-slide-up">
-         <h1 className="page-title">Trainer Dashboard</h1>
-         <div className="card text-center py-16 flex flex-col items-center justify-center">
-            <div className="w-16 h-16 rounded-full bg-accent/50 flex items-center justify-center mb-4">
-              <Users className="text-subtle w-8 h-8" />
-            </div>
-            <h2 className="text-xl font-semibold mb-2">No Trainee Assigned</h2>
-            <p className="text-subtle max-w-sm mx-auto">You do not have a trainee currently assigned to your truck for today's dispatch runs.</p>
-         </div>
-      </div>
-    );
-  }
+  const { record, trainee, tasks, previous_trainer_comments, manager_comments } = data;
 
-  const sortedRecords = [...trainingRecords].sort((a, b) => new Date(b.record_date).getTime() - new Date(a.record_date).getTime());
-  const todayRecord = sortedRecords.find(r => r.record_date === getLocalYMD());
-  const pastRecords = sortedRecords.filter(r => r.record_date !== getLocalYMD());
+  // Inject tasks into record shape for TaskChecklist
+  const recordWithTasks = { ...record, tasks };
+
+  const saveTrainerNote = async () => {
+    if (!trainerNote.trim()) return;
+    setIsSaving(true);
+    try {
+      await axiosClient.post(`/training/trainee/${trainee.id}/trainer-comments`, {
+        comments: trainerNote,
+      });
+      setSaved(true);
+      setTrainerNote('');
+      setTimeout(() => { setSaved(false); onRefresh(); }, 1200);
+    } catch (err) {
+      console.error('Failed to save trainer note:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
-    <div className="space-y-6 animate-slide-up">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="page-title">Training: {traineeName}</h1>
-          <p className="text-subtle mt-1 flex items-center gap-2">
-            <span className="inline-block w-2 flex-none rounded-full h-2 bg-success"></span>
-            Lifecycle Day {todayRecord?.current_day_number || '...'}
+    <div className="space-y-6">
+      {/* Trainee header card */}
+      <div className="card-elevated border-primary/20 flex items-center gap-4">
+        <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 shrink-0">
+          <UserCheck className="w-6 h-6 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-bold text-lg text-foreground">{trainee.name}</p>
+          <p className="text-sm text-muted-foreground">
+            Training Day {record.current_day_number}
+            {record.is_locked && (
+              <span className="ml-2 text-xs text-warning font-medium">(Record locked)</span>
+            )}
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-xs text-subtle uppercase tracking-wider">Today</p>
+          <p className="text-sm font-semibold text-foreground">
+            {new Date(getLocalYMD() + 'T00:00:00').toLocaleDateString('en-US', {
+              weekday: 'long', month: 'short', day: 'numeric',
+            })}
           </p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-           {todayRecord ? (
-             <TaskChecklist 
-               record={todayRecord} 
-               isReadOnly={todayRecord.is_locked} 
-             />
-           ) : (
-             <div className="card text-center text-subtle py-12">
-                <p className="text-lg font-semibold mb-2 text-foreground">Waiting for Dispatch</p>
-                <p className="text-sm px-2">Today's official training record hasn't been generated by the system yet. This usually occurs when the daily dispatch map is generated.</p>
-             </div>
-           )}
-           
-           <div className="card">
-              <h2 className="text-lg font-semibold mb-4">Historical Log</h2>
-              {pastRecords.length === 0 ? (
-                 <div className="text-center py-6 bg-accent border border-transparent border-dashed rounded-xl">
-                    <p className="text-subtle text-sm">No historical records found.<br/>This appears to be their first day.</p>
-                 </div>
-              ) : (
-                <div className="space-y-4">
-                  {pastRecords.map(record => (
-                    <div key={record.id} className="border border-border rounded-xl p-4 flex flex-col gap-3">
-                      <div className="flex justify-between items-center bg-accent/40 rounded-lg p-2.5">
-                         <span className="font-semibold text-foreground text-sm">Day {record.current_day_number} &middot; {new Date(record.record_date).toLocaleDateString()}</span>
-                         <span className="text-xs px-2 py-0.5 rounded-md bg-foreground/10 text-muted-foreground font-medium">Locked</span>
-                      </div>
-                      <div className="text-sm space-y-2.5 px-1 py-1">
-                        {record.tasks?.map((task: any) => (
-                           <div key={task.id} className="flex gap-2.5 items-start">
-                              {task.is_completed ? <span className="text-success text-base flex-shrink-0">&check;</span> : <span className="text-danger flex-shrink-0 font-bold">&times;</span>}
-                              <span className={task.is_completed ? "text-subtle strike text-balance leading-relaxed line-through" : "text-foreground font-medium leading-relaxed"}>{task.topic_title}</span>
-                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+        {/* Left col: handoff note + task checklist */}
+        <div className="lg:col-span-2 space-y-4">
+          {previous_trainer_comments && (
+            <HandoffNote data={previous_trainer_comments} />
+          )}
+
+          <TaskChecklist record={recordWithTasks} isReadOnly={record.is_locked} />
+
+          {/* Trainer's own note for this session */}
+          {!record.is_locked && (
+            <div className="card space-y-3">
+              <div className="flex items-center gap-2 border-b border-border pb-3">
+                <MessageSquare className="w-4 h-4 text-primary" />
+                <h3 className="font-semibold text-foreground">Your Handoff Note</h3>
+              </div>
+              <p className="text-xs text-subtle">
+                Leave notes for the next trainer who works with {trainee.name}. These are visible to other trainers and management.
+              </p>
+              {record.trainer_comments && (
+                <div className="bg-accent/50 p-3 rounded-xl text-sm text-foreground whitespace-pre-line border border-border">
+                  <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider block mb-1">Already on file</span>
+                  {record.trainer_comments}
                 </div>
               )}
-           </div>
+              <textarea
+                className="w-full bg-background border border-input rounded-xl p-3 text-sm focus:ring-1 focus:ring-primary focus:border-primary transition-colors min-h-[90px] resize-y"
+                placeholder={record.trainer_comments ? 'Append additional notes...' : 'Write notes for the next trainer...'}
+                value={trainerNote}
+                onChange={e => setTrainerNote(e.target.value)}
+                disabled={isSaving}
+              />
+              <button
+                onClick={saveTrainerNote}
+                disabled={!trainerNote.trim() || isSaving}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
+              >
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageSquare className="w-4 h-4" />}
+                {isSaving ? 'Saving...' : saved ? 'Saved!' : 'Save Note'}
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="space-y-6">
-           <ManagerComments 
-             record={todayRecord} 
-             traineeId={traineeId}
-           />
+        {/* Right col: management notes */}
+        <div>
+          <ManagerComments record={{ ...record, manager_comments }} traineeId={trainee.id} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// History Tab
+// ---------------------------------------------------------------------------
+
+function SessionCard({ session }: { session: { record: any; tasks: any[] } }) {
+  const [open, setOpen] = useState(false);
+  const { record, tasks } = session;
+  const debtTasks = tasks.filter(t => t.is_training_debt);
+  const hasEscalated = tasks.some(t => t.is_escalated && !t.is_completed);
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden">
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 bg-accent/40 hover:bg-accent/70 transition-colors text-left"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="flex items-center gap-3">
+          {hasEscalated && <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />}
+          <span className="font-semibold text-sm text-foreground">
+            Day {record.current_day_number} &middot;{' '}
+            {new Date(record.record_date + 'T00:00:00').toLocaleDateString('en-US', {
+              weekday: 'short', month: 'short', day: 'numeric',
+            })}
+          </span>
+          {debtTasks.length > 0 && (
+            <span className="text-xs text-danger font-medium bg-danger/10 px-1.5 py-0.5 rounded">
+              {debtTasks.length} debt
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          {taskCompletionBadge(tasks)}
+          {record.trainer_rating != null && starRow(record.trainer_rating)}
+          {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-4 py-4 space-y-4 bg-background">
+          {/* Tasks */}
+          <div className="space-y-2">
+            {tasks.map(task => (
+              <div key={task.id} className="flex items-start gap-2.5 text-sm">
+                {task.is_completed
+                  ? <CheckCircle2 className="w-4 h-4 text-success shrink-0 mt-0.5" />
+                  : <XCircle className={`w-4 h-4 shrink-0 mt-0.5 ${task.is_training_debt ? 'text-danger' : 'text-muted-foreground'}`} />}
+                <span className={task.is_completed ? 'text-subtle line-through' : task.is_training_debt ? 'text-danger font-medium' : 'text-foreground'}>
+                  {task.topic_title}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Trainer's own note */}
+          {record.trainer_comments && (
+            <div className="bg-violet/5 p-3 rounded-xl border border-violet/20 text-sm space-y-1">
+              <span className="text-xs text-violet font-bold uppercase tracking-wider block">Your Note</span>
+              <p className="text-foreground whitespace-pre-line">{record.trainer_comments}</p>
+            </div>
+          )}
+
+          {/* Trainee's review */}
+          {record.trainer_rating != null && (
+            <div className="bg-warning/5 p-3 rounded-xl border border-warning/20 text-sm space-y-1">
+              <div className="flex items-center gap-2">
+                <Star className="w-3.5 h-3.5 text-warning" />
+                <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Trainee Review</span>
+              </div>
+              <div>{starRow(record.trainer_rating)}</div>
+              {record.trainee_comments && (
+                <p className="text-foreground text-xs">{record.trainee_comments}</p>
+              )}
+            </div>
+          )}
+
+          {/* Manager note */}
+          {record.manager_comments && (
+            <div className="bg-info/5 p-3 rounded-xl border border-info/20 text-sm space-y-1">
+              <span className="text-xs text-info font-bold uppercase tracking-wider block">Manager Note</span>
+              <p className="text-foreground whitespace-pre-line">{record.manager_comments}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoryTab({ trainerId }: { trainerId: string }) {
+  const [groups, setGroups] = useState<TraineeGroup[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    axiosClient.get(`/training/trainer/${trainerId}/history`)
+      .then(res => setGroups(res.data))
+      .catch(console.error)
+      .finally(() => setIsLoading(false));
+  }, [trainerId]);
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="w-6 h-6 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (groups.length === 0) {
+    return (
+      <div className="card text-center py-16 flex flex-col items-center bg-accent/30 border-dashed">
+        <div className="w-14 h-14 rounded-full bg-background flex items-center justify-center mb-3">
+          <History className="w-7 h-7 text-subtle" />
+        </div>
+        <p className="font-semibold text-foreground">No training history yet</p>
+        <p className="text-subtle text-sm mt-1">Your completed training sessions will appear here.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 text-sm text-subtle">
+        <Info className="w-4 h-4 shrink-0" />
+        <span>{groups.length} trainee{groups.length !== 1 ? 's' : ''} trained across all time</span>
+      </div>
+
+      {groups.map(group => {
+        const id = group.trainee?.id ?? 'unknown';
+        const isOpen = expanded === id;
+        const sessions = group.sessions;
+        const totalDays = sessions.length;
+        const allTasks = sessions.flatMap(s => s.tasks);
+        const completionRate = allTasks.length > 0
+          ? Math.round((allTasks.filter(t => t.is_completed).length / allTasks.length) * 100)
+          : 0;
+        const avgRating = (() => {
+          const rated = sessions.filter(s => s.record.trainer_rating != null);
+          if (!rated.length) return null;
+          return (rated.reduce((sum, s) => sum + s.record.trainer_rating, 0) / rated.length).toFixed(1);
+        })();
+
+        return (
+          <div key={id} className="card-elevated border hover:border-primary/30 transition-colors">
+            {/* Trainee header */}
+            <button
+              className="w-full flex items-start justify-between gap-4 text-left"
+              onClick={() => setExpanded(isOpen ? null : id)}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                  <UserCheck className="w-4 h-4 text-primary" />
+                </div>
+                <div>
+                  <p className="font-semibold text-foreground">{group.trainee?.name ?? 'Unknown Trainee'}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {totalDays} session{totalDays !== 1 ? 's' : ''} &middot; {completionRate}% task completion
+                    {avgRating && <> &middot; avg {avgRating}★</>}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 mt-1">
+                <span className="text-xs text-muted-foreground hidden sm:block">
+                  Last: {new Date(sessions[0].record.record_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+                {isOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+              </div>
+            </button>
+
+            {/* Session list */}
+            {isOpen && (
+              <div className="mt-4 space-y-2 border-t border-border pt-4">
+                {sessions.map(session => (
+                  <SessionCard key={session.record.id} session={session} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Page
+// ---------------------------------------------------------------------------
+
+export default function TrainerDashboard() {
+  const { user } = useAuth();
+  const [tab, setTab] = useState<Tab>('today');
+  const [todayData, setTodayData] = useState<TodayData | null>(null);
+  const [trainerId, setTrainerId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchToday = async () => {
+    try {
+      const res = await axiosClient.get('/training/trainer/today');
+      setTodayData(res.data);
+    } catch (err) {
+      console.error('Failed to fetch today:', err);
+    }
+  };
+
+  const fetchCallerId = async () => {
+    try {
+      // Resolve our own employee ID from the /employees/me endpoint or profile
+      const res = await axiosClient.get('/employees/me');
+      setTrainerId(res.data.id);
+    } catch (err) {
+      console.error('Failed to fetch trainer ID:', err);
+    }
+  };
+
+  const load = async () => {
+    setIsLoading(true);
+    await Promise.all([fetchToday(), fetchCallerId()]);
+    setIsLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const tabs = [
+    { key: 'today' as Tab, label: "Today's Session", icon: ClipboardList },
+    { key: 'history' as Tab, label: 'My History',    icon: History },
+  ];
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 opacity-50">
+        <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
+        <p className="text-sm font-medium">Loading trainer dashboard...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-slide-up">
+      {/* Page header */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="page-title">Trainer Dashboard</h1>
+          <p className="text-subtle mt-1">
+            {todayData?.trainee
+              ? `Paired with ${todayData.trainee.name} today`
+              : 'No pairing today'}
+          </p>
+        </div>
+        <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
+          <RefreshCw className="w-4 h-4" /> Refresh
+        </button>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 bg-accent rounded-xl p-1 w-fit">
+        {tabs.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              tab === key
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Icon className="w-4 h-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {tab === 'today' && todayData && (
+        <TodayTab data={todayData} trainerId={trainerId ?? ''} onRefresh={fetchToday} />
+      )}
+
+      {tab === 'history' && trainerId && (
+        <HistoryTab trainerId={trainerId} />
+      )}
     </div>
   );
 }

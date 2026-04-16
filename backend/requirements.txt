@@ -7,3 +7,6 @@ pydantic-settings==2.2.1
 pyjwt==2.8.0
 cryptography==42.0.5
 alembic
+boto3
+pytest
+pytest-mock

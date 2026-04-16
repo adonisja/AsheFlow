@@ -4,14 +4,18 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import RoleChecker
 from app.models.truck_assignment import TruckAssignment
 from app.schemas.truck_assignment import TruckAssignmentCreate, TruckAssignmentUpdate, TruckAssignmentResponse
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
+allow_dispatch_mgmt = RoleChecker(["dispatch", "management", "admin"])
+allow_any_auth      = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+
 
 @router.post("/", response_model=TruckAssignmentResponse, status_code=status.HTTP_201_CREATED)
-def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(get_db)):
+def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(get_db), _: dict = Depends(allow_dispatch_mgmt)):
     """Create a new truck assignment record.
 
     Args:
@@ -29,7 +33,7 @@ def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(g
 
 
 @router.get("/", response_model=list[TruckAssignmentResponse])
-def get_assignments(db: Session = Depends(get_db)):
+def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Return all truck assignments.
 
     Args:
@@ -42,7 +46,7 @@ def get_assignments(db: Session = Depends(get_db)):
 
 
 @router.get("/{assignment_id}", response_model=TruckAssignmentResponse)
-def get_assignment(assignment_id: UUID, db: Session = Depends(get_db)):
+def get_assignment(assignment_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Fetch a single truck assignment by ID.
 
     Args:
@@ -62,7 +66,7 @@ def get_assignment(assignment_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.put("/{assignment_id}", response_model=TruckAssignmentResponse)
-def update_assignment(assignment_id: UUID, assignment: TruckAssignmentUpdate, db: Session = Depends(get_db)):
+def update_assignment(assignment_id: UUID, assignment: TruckAssignmentUpdate, db: Session = Depends(get_db), _: dict = Depends(allow_dispatch_mgmt)):
     """Update an existing truck assignment's fields.
 
     Args:

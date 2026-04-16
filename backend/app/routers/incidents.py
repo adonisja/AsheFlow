@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_current_user
+from app.api.deps import RoleChecker, get_current_user, Pagination, get_caller_employee, get_caller_employee_optional
 from app.models.incident import Incident
 from app.models.employee import Employee
 from app.models.truck import Truck
@@ -89,13 +89,15 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
 def submit_incident(
     payload: IncidentCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_field_staff),
+    reporter: Employee = Depends(get_caller_employee),
 ):
     """Submit a new incident report.
 
-    Validates category and severity. Severity cannot be below the category
-    default (e.g. an injury cannot be filed as info). Truck is auto-resolved
-    from today's dispatch assignment. Notifies all dispatch/management/admin.
+    reporter_id is resolved from the authenticated caller's employee record —
+    the client cannot supply or override it. Validates category and severity.
+    Severity cannot be below the category default (e.g. an injury cannot be
+    filed as info). Truck is auto-resolved from today's dispatch assignment.
+    Notifies all dispatch/management/admin.
     """
     if payload.category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category. Choose from: {', '.join(sorted(VALID_CATEGORIES))}")
@@ -112,11 +114,7 @@ def submit_incident(
             detail=f"Severity for '{payload.category}' cannot be lower than '{min_severity}'.",
         )
 
-    reporter = db.query(Employee).filter(Employee.id == payload.reporter_id).first()
-    if not reporter:
-        raise HTTPException(status_code=404, detail="Reporter not found.")
-
-    truck_id, assignment_id = _resolve_assignment(payload.reporter_id, payload.date, db)
+    truck_id, assignment_id = _resolve_assignment(reporter.id, payload.date, db)
 
     # Auto-resolve driver — for non-drivers, find the driver on the same truck
     driver_id: Optional[UUID] = None
@@ -126,7 +124,7 @@ def submit_incident(
         driver_id = reporter.id
 
     incident = Incident(
-        reporter_id=payload.reporter_id,
+        reporter_id=reporter.id,
         truck_id=truck_id,
         driver_id=driver_id,
         date=payload.date,
@@ -157,17 +155,21 @@ def submit_incident(
 
 @router.get("/my", response_model=List[IncidentResponse])
 def get_my_incidents(
-    reporter_id: UUID = Query(...),
+    pg: Pagination = Depends(),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_field_staff),
+    caller: Employee = Depends(get_caller_employee),
 ):
-    """Return all incidents submitted by the given reporter, newest first."""
-    return (
+    """Return all incidents submitted by the authenticated caller, newest first.
+
+    reporter_id is resolved from the JWT — callers cannot read another
+    employee's incident history by supplying a different UUID.
+    """
+    q = (
         db.query(Incident)
-        .filter(Incident.reporter_id == reporter_id)
+        .filter(Incident.reporter_id == caller.id)
         .order_by(Incident.created_at.desc())
-        .all()
     )
+    return pg.apply(q).all()
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +183,7 @@ def list_incidents(
     resolved: Optional[bool] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    pg: Pagination = Depends(),
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_management),
 ):
@@ -200,15 +203,21 @@ def list_incidents(
     if date_to:
         q = q.filter(Incident.date <= date_to)
 
-    incidents = q.order_by(Incident.created_at.desc()).all()
+    incidents = pg.apply(q.order_by(Incident.created_at.desc())).all()
 
-    # Hydrate reporter name and truck name
+    # Collect all referenced IDs then fetch in two bulk queries
+    emp_ids  = {i.reporter_id for i in incidents} | {i.driver_id for i in incidents if i.driver_id}
+    truck_ids = {i.truck_id for i in incidents if i.truck_id}
+
+    emp_map   = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids)).all()}
+
     result = []
     for inc in incidents:
-        reporter = db.query(Employee).filter(Employee.id == inc.reporter_id).first()
-        truck = db.query(Truck).filter(Truck.id == inc.truck_id).first() if inc.truck_id else None
-        driver = db.query(Employee).filter(Employee.id == inc.driver_id).first() if inc.driver_id else None
-        item = IncidentListItem(
+        reporter = emp_map.get(inc.reporter_id)
+        driver   = emp_map.get(inc.driver_id) if inc.driver_id else None
+        truck    = truck_map.get(inc.truck_id) if inc.truck_id else None
+        result.append(IncidentListItem(
             id=inc.id,
             reporter_id=inc.reporter_id,
             reporter_name=reporter.name if reporter else None,
@@ -223,8 +232,7 @@ def list_incidents(
             resolved=inc.resolved,
             resolved_at=inc.resolved_at,
             created_at=inc.created_at,
-        )
-        result.append(item)
+        ))
     return result
 
 
@@ -248,11 +256,16 @@ def get_unresolved_urgent(
         .all()
     )
 
+    emp_ids   = {i.reporter_id for i in incidents} | {i.driver_id for i in incidents if i.driver_id}
+    truck_ids = {i.truck_id for i in incidents if i.truck_id}
+    emp_map   = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids)).all()}
+
     result = []
     for inc in incidents:
-        reporter = db.query(Employee).filter(Employee.id == inc.reporter_id).first()
-        truck = db.query(Truck).filter(Truck.id == inc.truck_id).first() if inc.truck_id else None
-        driver = db.query(Employee).filter(Employee.id == inc.driver_id).first() if inc.driver_id else None
+        reporter = emp_map.get(inc.reporter_id)
+        driver   = emp_map.get(inc.driver_id) if inc.driver_id else None
+        truck    = truck_map.get(inc.truck_id) if inc.truck_id else None
         result.append(IncidentListItem(
             id=inc.id,
             reporter_id=inc.reporter_id,
@@ -280,7 +293,8 @@ def get_unresolved_urgent(
 def resolve_incident(
     incident_id: UUID,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_management),
+    _: dict = Depends(allow_management),
+    resolver: Employee = Depends(get_caller_employee_optional),
 ):
     """Mark an incident as resolved. Records who resolved it and when."""
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
@@ -288,10 +302,6 @@ def resolve_incident(
         raise HTTPException(status_code=404, detail="Incident not found.")
     if incident.resolved:
         raise HTTPException(status_code=400, detail="Incident is already resolved.")
-
-    resolver = db.query(Employee).filter(
-        Employee.discord_id == current_user.get("username", "")
-    ).first()
 
     incident.resolved = True
     incident.resolved_by = resolver.id if resolver else None

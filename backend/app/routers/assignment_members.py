@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.deps import RoleChecker
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.schemas.assignment_member import AssignmentMemberCreate, AssignmentMemberResponse
@@ -11,9 +12,16 @@ from app.services.check_ban import check_ban_relationship
 
 router = APIRouter(prefix="/assignment-members", tags=["assignment-members"])
 
+allow_dispatch_mgmt = RoleChecker(["dispatch", "management", "admin"])
+allow_any_auth      = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+
 
 @router.post("/", response_model=AssignmentMemberResponse, status_code=status.HTTP_201_CREATED)
-def create_assignment_member(assignment_member: AssignmentMemberCreate, db: Session = Depends(get_db)):
+def create_assignment_member(
+    assignment_member: AssignmentMemberCreate,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_dispatch_mgmt),
+):
     """Add an employee to an existing truck assignment after running constraint checks.
 
     Verifies that the assignment exists, the employee was not on the same truck
@@ -68,7 +76,7 @@ def create_assignment_member(assignment_member: AssignmentMemberCreate, db: Sess
 
 
 @router.get("/{assignment_id}", response_model=list[AssignmentMemberResponse])
-def get_assignment_members(assignment_id: UUID, db: Session = Depends(get_db)):
+def get_assignment_members(assignment_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
     """Return all members belonging to a specific truck assignment.
 
     Args:
@@ -84,7 +92,7 @@ def get_assignment_members(assignment_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.delete("/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_assignment_member(member_id: UUID, db: Session = Depends(get_db)):
+def remove_assignment_member(member_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_dispatch_mgmt)):
     """Remove an employee from a truck assignment.
 
     Args:

@@ -37,42 +37,47 @@ const FeedbackModal = () => {
     <>
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 bg-primary text-primary-foreground p-3 rounded-full shadow-lg hover:bg-primary/90 transition-all z-50 flex items-center justify-center"
+        className="fixed bottom-6 right-6 gradient-primary text-primary-foreground p-3.5 rounded-full shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40 hover:scale-105 transition-all z-50 flex items-center justify-center"
         aria-label="Provide Feedback"
       >
-        <MessageSquare size={24} />
+        <MessageSquare size={22} />
       </button>
 
       {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-background border border-border rounded-xl shadow-xl w-full max-w-md overflow-hidden relative">
-            <div className="flex justify-between items-center p-4 border-b border-border">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Bug size={20} className="text-primary" />
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-foreground/20 backdrop-blur-sm p-4">
+          <div className="bg-card border border-border/60 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative animate-slide-up">
+            <div className="flex justify-between items-center p-5 border-b border-border/50">
+              <h2 className="text-lg font-semibold flex items-center gap-2.5">
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+                  <Bug size={16} className="text-primary" />
+                </div>
                 Provide Feedback
               </h2>
               <button
                 onClick={() => setIsOpen(false)}
-                className="text-muted-foreground hover:text-foreground transition-colors"
+                className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-lg hover:bg-accent"
                 title="Close"
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             </div>
 
-            <div className="p-4">
+            <div className="p-5">
               {success ? (
-                <div className="text-center py-8 text-green-500 font-medium">
-                  Thank you for your feedback!
+                <div className="text-center py-8">
+                  <div className="w-12 h-12 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-3">
+                    <Bug size={20} className="text-success" />
+                  </div>
+                  <p className="text-success font-semibold">Thank you for your feedback!</p>
                 </div>
               ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium mb-1">Type</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">Type</label>
                     <select
                       value={type}
                       onChange={(e) => setType(e.target.value)}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="input-field"
                     >
                       <option value="bug">Bug Report</option>
                       <option value="feature_request">Feature Request</option>
@@ -81,13 +86,13 @@ const FeedbackModal = () => {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium mb-1">Message</label>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">Message</label>
                     <textarea
                       required
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
                       rows={4}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none"
+                      className="input-field resize-none"
                       placeholder="Please describe the issue or suggestion..."
                     />
                   </div>
@@ -96,14 +101,14 @@ const FeedbackModal = () => {
                     <button
                       type="button"
                       onClick={() => setIsOpen(false)}
-                      className="px-4 py-2 border border-input bg-background hover:bg-accent hover:text-accent-foreground text-sm rounded-md transition-colors"
+                      className="btn-secondary"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={isSubmitting || !message.trim()}
-                      className="px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 text-sm rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                      className="btn-primary disabled:opacity-50"
                     >
                       {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : 'Submit'}
                     </button>

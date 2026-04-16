@@ -12,6 +12,7 @@ def assign_walkers(
     assigned_crews: dict,
     base_weights: dict,
     db: Session,
+    extra_banned_truck_ids: list = None,
 ) -> list:
     """Assign walkers to trucks with guaranteed even distribution.
 
@@ -26,6 +27,10 @@ def assign_walkers(
         assigned_crews: Dict mapping truck_id to crew list; updated in place.
         base_weights: Dict mapping truck_id to its base selection weight.
         db: Database session.
+        extra_banned_truck_ids: Additional truck IDs to hard-ban for every
+            walker in this call. Used by perform_walker_reassignment to prevent
+            an evicted walker from being re-placed on the truck they were
+            evicted from.
 
     Returns:
         A list of warning dicts for walkers who could not avoid all bans.
@@ -79,7 +84,7 @@ def assign_walkers(
     for walker in remaining_walkers:
         # Resolve bans (with walker-vs-walker override logic).
         raw_bans = banned_trucks_by_walker.get(walker.id, [])
-        hard_banned: list = []
+        hard_banned: list = list(extra_banned_truck_ids or [])
 
         for truck_id, banner_id, is_walker_ban in raw_bans:
             if not is_walker_ban:
@@ -89,11 +94,19 @@ def assign_walkers(
             if not offending_walker:
                 hard_banned.append(truck_id)
                 continue
-            overridden = check_ban_override(
+            overridden, reassigned_to = check_ban_override(
                 walker.id, offending_walker, truck_id, assigned_crews, base_weights, hard_banned, db
             )
             if not overridden:
                 hard_banned.append(truck_id)
+            else:
+                warnings.append({
+                    "type": "ban_override_reassignment",
+                    "evicted_employee_id": offending_walker.id,
+                    "evicted_to_truck_id": reassigned_to,
+                    "in_favour_of_employee_id": walker.id,
+                    "from_truck_id": truck_id,
+                })
 
         # Recount after every placement.
         walker_counts = {
@@ -118,10 +131,7 @@ def assign_walkers(
                 db=db,
             )
         else:
-            # Every minimum truck is banned — fall back to any unbanned truck.
-            banned_by = [banner_id for _, banner_id, _ in raw_bans]
-            warnings.append({"employee_id": walker.id, "banned_by": banned_by})
-
+            # Every minimum-count truck is banned — fall back to any unbanned truck.
             fallback = [t for t in assigned_crews if t not in hard_banned]
             if fallback:
                 weights = calculate_weights(
@@ -143,5 +153,12 @@ def assign_walkers(
 
         selected_truck = random.choices(truck_ids, weights=truck_weights)[0]
         assigned_crews[selected_truck].append({"id": walker.id, "role": "walker"})
+
+        # Only warn if the walker actually landed on a truck with a banned person.
+        # This avoids false positives where the minimum-count trucks were all banned
+        # but the walker was successfully placed on a different, unbanned truck.
+        if selected_truck in hard_banned:
+            banned_by = [banner_id for _, banner_id, _ in raw_bans]
+            warnings.append({"employee_id": walker.id, "banned_by": banned_by})
 
     return warnings
