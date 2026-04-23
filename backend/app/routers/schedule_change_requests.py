@@ -12,6 +12,7 @@ from app.models.schedule_change_request import ScheduleChangeRequest
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.employee import Employee
 from app.models.notification import Notification
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/schedule-change-requests", tags=["schedule-change-requests"])
 
@@ -292,6 +293,15 @@ def approve_schedule_change_request(
         type="schedule_change_approved",
         message=f"Your request to {type_label} has been approved and your schedule has been updated.",
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="schedule_change.approved",
+        target_table="schedule_change_requests",
+        target_id=str(req.id),
+        before={"status": "pending", "request_type": req.request_type},
+        after={"status": "approved", "reviewed_by": str(reviewer.id)},
+    )
 
     db.commit()
     db.refresh(req)
@@ -326,6 +336,15 @@ def reject_schedule_change_request(
         type="schedule_change_rejected",
         message="Your schedule change request was reviewed and not approved.",
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="schedule_change.rejected",
+        target_table="schedule_change_requests",
+        target_id=str(req.id),
+        before={"status": "pending", "request_type": req.request_type},
+        after={"status": "rejected", "reviewed_by": str(reviewer.id)},
+    )
 
     db.commit()
     db.refresh(req)

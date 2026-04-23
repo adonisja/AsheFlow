@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Users, Truck, Plus, Pencil, CheckCircle2, XCircle,
-  RefreshCw, X, ChevronDown, Settings, Trash2,
+  Users, Truck, Plus, Pencil, CheckCircle2, XCircle, AlertTriangle,
+  RefreshCw, X, ChevronDown, Settings, Trash2, FileUp,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import { useAuth } from '../contexts/AuthContext';
+import BulkImportModal from '../components/BulkImportModal';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,6 +26,7 @@ type TruckRecord = {
   id: string;
   name: string;
   is_active: boolean;
+  discord_channel_id: number | null;
 };
 
 type Tab = 'people' | 'fleet' | 'system';
@@ -191,22 +194,31 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate }: EmployeeForm
 
 type TruckModalProps = {
   initial?: Partial<TruckRecord>;
-  onSave: (data: { name: string }) => Promise<void>;
+  onSave: (data: { name: string; discord_channel_id: number | null }) => Promise<void>;
   onClose: () => void;
   isCreate: boolean;
 };
 
 function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps) {
-  const [name, setName]     = useState(initial.name ?? '');
-  const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState('');
+  const [name, setName]           = useState(initial.name ?? '');
+  const [channelId, setChannelId] = useState(
+    initial.discord_channel_id ? String(initial.discord_channel_id) : ''
+  );
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState('');
+
+  const channelIdValid = channelId === '' || /^\d{17,20}$/.test(channelId.trim());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!channelIdValid) return;
     setSaving(true);
     setError('');
     try {
-      await onSave({ name });
+      await onSave({
+        name,
+        discord_channel_id: channelId.trim() ? Number(channelId.trim()) : null,
+      });
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? 'Something went wrong.');
     } finally {
@@ -227,6 +239,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
               {error}
             </div>
           )}
+
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Truck Name *</label>
             <input
@@ -234,12 +247,43 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
               value={name}
               onChange={e => setName(e.target.value)}
               className="input w-full"
-              placeholder="Truck 01"
+              placeholder="Atlas"
             />
           </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Discord Channel ID
+            </label>
+            <input
+              value={channelId}
+              onChange={e => setChannelId(e.target.value)}
+              className={`input w-full font-mono ${!channelIdValid ? 'border-danger/60 focus:ring-danger/30' : ''}`}
+              placeholder="e.g. TRUCK_CHANNEL_REDACTED"
+            />
+            {!channelIdValid && (
+              <p className="text-xs text-danger">Must be a valid Discord snowflake (17–20 digits).</p>
+            )}
+            {channelId && channelIdValid && (
+              <p className="text-xs text-success flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> Channel linked
+              </p>
+            )}
+            {!channelId && (
+              <p className="text-xs text-muted-foreground">
+                Right-click the channel in Discord → Copy Channel ID.
+                {!isCreate && ' Leave blank to unlink.'}
+              </p>
+            )}
+          </div>
+
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-ghost">Cancel</button>
-            <button type="submit" disabled={saving} className="btn-primary flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={saving || !channelIdValid}
+              className="btn-primary flex items-center gap-2"
+            >
               {saving && <div className="w-3.5 h-3.5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
               {isCreate ? 'Add Truck' : 'Save Changes'}
             </button>
@@ -257,10 +301,14 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
 const PEOPLE_PAGE_SIZE = 25;
 
 function PeopleTab() {
+  const { groups }                    = useAuth();
+  const canImport                     = groups.includes('management') || groups.includes('admin');
+
   const [employees, setEmployees]     = useState<Employee[]>([]);
   const [loading, setLoading]         = useState(true);
   const [loadError, setLoadError]     = useState<string | null>(null);
   const [showModal, setShowModal]     = useState(false);
+  const [showImport, setShowImport]   = useState(false);
   const [editTarget, setEditTarget]   = useState<Employee | null>(null);
   const [filter, setFilter]           = useState<string>('all');
   const [search, setSearch]           = useState('');
@@ -339,9 +387,17 @@ function PeopleTab() {
         <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
           <RefreshCw className="w-4 h-4" />
         </button>
+        {canImport && (
+          <button
+            onClick={() => setShowImport(true)}
+            className="btn-ghost flex items-center gap-2 text-sm ml-auto"
+          >
+            <FileUp className="w-4 h-4" /> Import
+          </button>
+        )}
         <button
           onClick={() => setShowModal(true)}
-          className="btn-primary flex items-center gap-2 ml-auto"
+          className={`btn-primary flex items-center gap-2 ${canImport ? '' : 'ml-auto'}`}
         >
           <Plus className="w-4 h-4" /> Invite Employee
         </button>
@@ -486,6 +542,12 @@ function PeopleTab() {
           onClose={() => setEditTarget(null)}
         />
       )}
+      {showImport && (
+        <BulkImportModal
+          onClose={() => setShowImport(false)}
+          onComplete={() => { setShowImport(false); load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -512,13 +574,13 @@ function FleetTab() {
 
   useEffect(() => { load(); }, []);
 
-  const handleCreate = async (data: { name: string }) => {
+  const handleCreate = async (data: { name: string; discord_channel_id: number | null }) => {
     const res = await axiosClient.post('/trucks/', data);
     setTrucks(prev => [...prev, res.data]);
     setShowModal(false);
   };
 
-  const handleEdit = async (data: { name: string }) => {
+  const handleEdit = async (data: { name: string; discord_channel_id: number | null }) => {
     if (!editTarget) return;
     const res = await axiosClient.put(`/trucks/${editTarget.id}`, data);
     setTrucks(prev => prev.map(t => t.id === editTarget.id ? res.data : t));
@@ -582,6 +644,12 @@ function FleetTab() {
                 <p className="text-sm font-semibold text-foreground">{truck.name}</p>
                 <p className={`text-xs font-medium mt-0.5 ${truck.is_active ? 'text-success' : 'text-muted-foreground'}`}>
                   {truck.is_active ? 'Active' : 'Inactive'}
+                </p>
+                <p className={`text-xs mt-1 flex items-center justify-center gap-1 ${truck.discord_channel_id ? 'text-success' : 'text-warning'}`}>
+                  {truck.discord_channel_id
+                    ? <><CheckCircle2 className="w-3 h-3" /> Discord linked</>
+                    : <><AlertTriangle className="w-3 h-3" /> No channel</>
+                  }
                 </p>
               </div>
               <div className="flex items-center gap-2 pt-1">

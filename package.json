@@ -1,0 +1,11 @@
+{
+  "name": "asheflow",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "cd frontend && npm install && npx vite",
+    "build": "cd frontend && npm install && npx tsc -b && npx vite build",
+    "preview": "cd frontend && npx vite preview"
+  }
+}

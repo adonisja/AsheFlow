@@ -1,28 +1,51 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/*
+  ============================================================
+  AsheFlow — Design system v3
+  Light: Frost White + Indigo
+  Dark : Deep Charcoal + Soft Gold
+  All tokens are HSL triplets (no `hsl()` wrapper) so they can
+  be consumed via hsl(var(--token) / <alpha>).
+  ============================================================
+*/
+
 @layer base {
   :root {
-    /* Rich modern palette — indigo/slate foundation */
-    --background: 220 20% 97%;
-    --foreground: 224 30% 12%;
+    /* Surfaces — Frost White */
+    --background: 220 25% 98%;
+    --foreground: 224 35% 10%;
+    --surface: 0 0% 100%;                 /* elevated panel */
+    --surface-muted: 220 20% 96%;         /* subtle fill */
     --card: 0 0% 100%;
-    --card-foreground: 224 30% 12%;
+    --card-foreground: 224 35% 10%;
+
+    /* Brand — Indigo */
     --primary: 243 75% 59%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 224 20% 30%;
-    --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --primary-light: 243 100% 97%;
+    --primary-glow: 252 85% 65%;
+
+    /* Accent — Soft Gold (used sparingly in light, lead role in dark) */
+    --gold: 41 78% 55%;
+    --gold-foreground: 35 95% 12%;
+
+    /* Neutrals */
+    --secondary: 220 18% 96%;
+    --secondary-foreground: 224 25% 25%;
+    --muted: 220 18% 96%;
+    --muted-foreground: 220 10% 46%;
     --accent: 243 100% 97%;
     --accent-foreground: 243 75% 50%;
-    --border: 220 13% 91%;
+    --border: 220 16% 90%;
+    --border-strong: 220 16% 82%;
     --ring: 243 75% 59%;
 
-    /* Semantic colors — vibrant and intentional */
+    /* Semantic — vibrant but tasteful */
     --success: 160 84% 39%;
     --success-foreground: 0 0% 100%;
     --warning: 35 92% 52%;
@@ -31,129 +54,285 @@
     --danger-foreground: 0 0% 100%;
     --info: 199 89% 48%;
     --info-foreground: 0 0% 100%;
-
-    /* Extended palette for gradients & decorative use */
-    --primary-light: 243 100% 97%;
-    --primary-glow: 252 85% 60%;
     --teal: 172 66% 50%;
     --teal-foreground: 0 0% 100%;
     --violet: 262 83% 58%;
     --violet-foreground: 0 0% 100%;
+
+    /* Glass — translucent panel tint */
+    --glass: 0 0% 100%;
+    --glass-border: 220 25% 88%;
+
+    /* Elevation shadows (applied via utility) */
+    --shadow-color: 224 40% 20%;
+
+    /* Easing — iOS-feeling spring approximation for non-FM CSS */
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  * {
-    @apply border-border;
+  .dark {
+    /* Surfaces — Deep Charcoal */
+    --background: 224 24% 6%;
+    --foreground: 210 25% 96%;
+    --surface: 224 22% 9%;
+    --surface-muted: 224 20% 12%;
+    --card: 224 22% 9%;
+    --card-foreground: 210 25% 96%;
+
+    /* Brand — Indigo (slightly brighter for contrast) */
+    --primary: 243 85% 70%;
+    --primary-foreground: 224 30% 8%;
+    --primary-light: 243 50% 18%;
+    --primary-glow: 252 90% 75%;
+
+    /* Accent — Soft Gold leads */
+    --gold: 41 85% 62%;
+    --gold-foreground: 224 30% 8%;
+
+    /* Neutrals */
+    --secondary: 224 18% 14%;
+    --secondary-foreground: 210 20% 90%;
+    --muted: 224 18% 14%;
+    --muted-foreground: 220 12% 65%;
+    --accent: 224 22% 16%;
+    --accent-foreground: 41 85% 62%;
+    --border: 224 18% 18%;
+    --border-strong: 224 18% 26%;
+    --ring: 41 85% 62%;
+
+    /* Semantic — calibrated for dark surfaces */
+    --success: 160 70% 50%;
+    --success-foreground: 224 30% 8%;
+    --warning: 38 95% 60%;
+    --warning-foreground: 224 30% 8%;
+    --danger: 0 75% 62%;
+    --danger-foreground: 0 0% 100%;
+    --info: 199 85% 60%;
+    --info-foreground: 224 30% 8%;
+    --teal: 172 70% 55%;
+    --teal-foreground: 224 30% 8%;
+    --violet: 262 80% 70%;
+    --violet-foreground: 224 30% 8%;
+
+    /* Glass — dark frosted panel */
+    --glass: 224 22% 12%;
+    --glass-border: 41 50% 50%;
+
+    --shadow-color: 0 0% 0%;
   }
+
+  * { @apply border-border; }
+
+  html { scroll-behavior: smooth; }
 
   body {
     @apply bg-background text-foreground antialiased;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    transition: background-color 300ms var(--ease-out-soft), color 300ms var(--ease-out-soft);
+  }
+
+  /* Display font for page titles */
+  .font-display {
+    font-family: 'Sora', 'Inter', system-ui, sans-serif;
+    letter-spacing: -0.025em;
+  }
+
+  /* Selection */
+  ::selection {
+    background: hsl(var(--primary) / 0.25);
+    color: hsl(var(--foreground));
   }
 
   /* Custom scrollbar */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    background: hsl(var(--border));
+    background: hsl(var(--border-strong));
     border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.3);
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); background-clip: padding-box; }
+
+  /* Focus rings — consistent halo */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.6);
+    border-radius: 0.5rem;
+    transition: box-shadow 150ms var(--ease-out-soft);
   }
 }
 
 @layer components {
+  /* ---------- Surface system ---------- */
   .card {
-    @apply bg-card rounded-2xl border border-border/60 p-6 shadow-sm;
+    @apply bg-card rounded-2xl border border-border/70 p-6;
+    box-shadow:
+      0 1px 2px hsl(var(--shadow-color) / 0.04),
+      0 1px 3px hsl(var(--shadow-color) / 0.06);
   }
-
   .card-elevated {
-    @apply card shadow-md hover:shadow-lg transition-all duration-300 hover:-translate-y-0.5;
+    @apply card transition-all duration-300;
+    transition-timing-function: var(--ease-out-soft);
+  }
+  .card-elevated:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 10px 15px -3px hsl(var(--shadow-color) / 0.08),
+      0 4px 6px -4px hsl(var(--shadow-color) / 0.06);
   }
 
+  /* Glassmorphism — translucent panel with frosted blur */
+  .glass {
+    background: hsl(var(--glass) / 0.65);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border: 1px solid hsl(var(--glass-border) / 0.4);
+    box-shadow:
+      0 1px 0 hsl(var(--glass) / 0.6) inset,
+      0 8px 24px -8px hsl(var(--shadow-color) / 0.18);
+  }
+  .glass-strong {
+    background: hsl(var(--glass) / 0.85);
+    backdrop-filter: saturate(180%) blur(28px);
+    -webkit-backdrop-filter: saturate(180%) blur(28px);
+    border: 1px solid hsl(var(--glass-border) / 0.5);
+    box-shadow:
+      0 1px 0 hsl(var(--glass) / 0.7) inset,
+      0 20px 48px -12px hsl(var(--shadow-color) / 0.25);
+  }
+
+  /* ---------- Buttons ---------- */
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-primary text-primary-foreground font-medium text-sm
-           hover:bg-primary/90 active:scale-[0.98] transition-all duration-200
-           shadow-sm shadow-primary/25;
+           transition-all duration-200;
+    transition-timing-function: var(--ease-spring);
+    box-shadow: 0 1px 2px hsl(var(--primary) / 0.3), 0 4px 12px -2px hsl(var(--primary) / 0.25);
   }
+  .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
+  .btn-primary:active { transform: translateY(0) scale(0.98); }
 
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-secondary text-secondary-foreground font-medium text-sm border border-border
-           hover:bg-accent hover:text-accent-foreground active:scale-[0.98] transition-all duration-200;
+           transition-all duration-200;
+    transition-timing-function: var(--ease-spring);
   }
+  .btn-secondary:hover { @apply bg-accent text-accent-foreground; transform: translateY(-1px); }
+  .btn-secondary:active { transform: translateY(0) scale(0.98); }
 
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
-           bg-danger text-danger-foreground font-medium text-sm
-           hover:bg-danger/90 active:scale-[0.98] transition-all duration-200
-           shadow-sm shadow-danger/25;
+           bg-danger text-danger-foreground font-medium text-sm transition-all duration-200;
+    transition-timing-function: var(--ease-spring);
+    box-shadow: 0 4px 12px -2px hsl(var(--danger) / 0.3);
   }
+  .btn-danger:hover { filter: brightness(1.05); transform: translateY(-1px); }
+  .btn-danger:active { transform: translateY(0) scale(0.98); }
 
   .btn-success {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
-           bg-success text-success-foreground font-medium text-sm
-           hover:bg-success/90 active:scale-[0.98] transition-all duration-200
-           shadow-sm shadow-success/25;
+           bg-success text-success-foreground font-medium text-sm transition-all duration-200;
+    transition-timing-function: var(--ease-spring);
+    box-shadow: 0 4px 12px -2px hsl(var(--success) / 0.3);
   }
+  .btn-success:hover { filter: brightness(1.05); transform: translateY(-1px); }
+  .btn-success:active { transform: translateY(0) scale(0.98); }
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl
-           text-muted-foreground font-medium text-sm
-           hover:bg-accent hover:text-accent-foreground transition-all duration-200;
+           text-muted-foreground font-medium text-sm transition-all duration-200;
+    transition-timing-function: var(--ease-spring);
   }
+  .btn-ghost:hover { @apply bg-accent text-accent-foreground; }
+  .btn-ghost:active { transform: scale(0.97); }
 
+  /* ---------- Inputs ---------- */
   .input-field {
     @apply w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm
            text-foreground placeholder:text-muted-foreground
-           focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary
+           focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
            transition-all duration-200;
   }
 
-  .badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold;
-  }
+  /* ---------- Badges ---------- */
+  .badge { @apply inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold; }
+  .badge-success { @apply badge bg-success/10 text-success; }
+  .badge-warning { @apply badge bg-warning/10 text-warning; }
+  .badge-danger  { @apply badge bg-danger/10 text-danger; }
+  .badge-info    { @apply badge bg-info/10 text-info; }
+  .badge-gold    { @apply badge; background: hsl(var(--gold) / 0.12); color: hsl(var(--gold)); }
 
-  .badge-success {
-    @apply badge bg-success/10 text-success;
-  }
+  /* ---------- Typography ---------- */
+  .section-title { @apply text-lg font-semibold text-foreground tracking-tight; }
+  .page-title    { @apply font-display text-3xl font-bold text-foreground tracking-tight; }
+  .text-subtle   { @apply text-sm text-muted-foreground; }
 
-  .badge-warning {
-    @apply badge bg-warning/10 text-warning;
-  }
-
-  .badge-danger {
-    @apply badge bg-danger/10 text-danger;
-  }
-
-  .badge-info {
-    @apply badge bg-info/10 text-info;
-  }
-
-  .section-title {
-    @apply text-lg font-semibold text-foreground tracking-tight;
-  }
-
-  .page-title {
-    @apply text-2xl font-bold text-foreground tracking-tight;
-  }
-
-  .text-subtle {
-    @apply text-sm text-muted-foreground;
-  }
-
-  /* Gradient utilities */
+  /* ---------- Gradients ---------- */
   .gradient-primary {
     background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
   }
-
   .gradient-card {
     background: linear-gradient(135deg, hsl(var(--primary-light)), hsl(var(--accent)));
   }
+  .gradient-gold {
+    background: linear-gradient(135deg, hsl(var(--gold)), hsl(var(--primary-glow)));
+  }
+  .gradient-text-brand {
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--violet)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .dark .gradient-text-brand {
+    background: linear-gradient(135deg, hsl(var(--gold)), hsl(var(--primary-glow)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ---------- Skeleton (shimmer) ---------- */
+  .skeleton {
+    @apply rounded-lg bg-muted relative overflow-hidden;
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg,
+      transparent,
+      hsl(var(--foreground) / 0.06),
+      transparent);
+    animation: shimmer 1.6s var(--ease-out-soft) infinite;
+  }
+
+  /* ---------- Kbd ---------- */
+  .kbd {
+    @apply inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5
+           rounded-md border border-border bg-surface-muted text-[10px] font-semibold
+           text-muted-foreground font-mono;
+  }
+}
+
+@layer utilities {
+  .bg-surface { background-color: hsl(var(--surface)); }
+  .bg-surface-muted { background-color: hsl(var(--surface-muted)); }
+  .text-gold { color: hsl(var(--gold)); }
+  .bg-gold { background-color: hsl(var(--gold)); }
+  .border-gold { border-color: hsl(var(--gold)); }
+
+  /* Press effect — for hover-scale style micro-interactions */
+  .press {
+    transition: transform 200ms var(--ease-spring);
+  }
+  .press:active { transform: scale(0.97); }
+}
+
+/* ============= Keyframes ============= */
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
 
 interface Warning {
   type?: string;
@@ -39,10 +39,14 @@ export default function DispatchDashboard() {
   // Pool of employees actually available for the selected date (excludes off-days, wrong roles)
   const [availablePool, setAvailablePool] = useState<Record<string, any>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailableStaff, setUnavailableStaff] = useState<UnavailableStaff[]>([]);
   const [showCallInList, setShowCallInList] = useState(false);
   const [addingStaffId, setAddingStaffId] = useState<string | null>(null);
+  // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
+  const [confirmations, setConfirmations] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetchTrucksAndEmployees();
@@ -52,7 +56,46 @@ export default function DispatchDashboard() {
     fetchDispatchData();
     fetchAvailablePool();
     fetchUnavailableStaff();
+    fetchConfirmations();
   }, [selectedDate]);
+
+  const fetchConfirmations = async () => {
+    try {
+      const res = await axiosClient.get(`/dispatch/${selectedDate}/confirmations`);
+      setConfirmations(res.data.confirmations || {});
+    } catch {
+      // No confirmations yet — not an error worth surfacing
+    }
+  };
+
+  const handlePublishToDiscord = async () => {
+    if (!dispatchData) return;
+    if (!window.confirm(`Publish the ${selectedDate} dispatch to Discord? This will DM all assigned employees.`)) return;
+    setIsPublishing(true);
+    setError(null);
+    try {
+      await axiosClient.post(`/dispatch/${selectedDate}/publish`);
+      await fetchConfirmations();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to publish to Discord.');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleFinalize = async () => {
+    if (!dispatchData) return;
+    if (!window.confirm(`Post final crew assignments to Discord? This will post confirmed crews to each truck channel and the master list to #drivers-chat.`)) return;
+    setIsFinalizing(true);
+    setError(null);
+    try {
+      await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to post final assignments to Discord.');
+    } finally {
+      setIsFinalizing(false);
+    }
+  };
 
   const fetchUnavailableStaff = async () => {
     try {
@@ -290,14 +333,15 @@ export default function DispatchDashboard() {
 
   return (
     <div className="space-y-6 animate-slide-up">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col gap-4">
+        {/* Row 1 — title + refresh */}
         <div className="flex items-center gap-3">
           <div>
             <h1 className="page-title">Dispatch Center</h1>
             <p className="text-subtle mt-1">Manage and assign daily routes</p>
           </div>
           <button
-            onClick={() => { fetchDispatchData(); fetchAvailablePool(); fetchUnavailableStaff(); }}
+            onClick={() => { fetchDispatchData(); fetchAvailablePool(); fetchUnavailableStaff(); fetchConfirmations(); }}
             disabled={isLoading}
             className="btn-ghost text-muted-foreground hover:text-foreground disabled:opacity-40"
             title="Refresh dispatch data"
@@ -305,9 +349,10 @@ export default function DispatchDashboard() {
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
         </div>
-        
+
+        {/* Row 2 — inputs + admin clear */}
         <div className="flex flex-wrap items-center gap-3">
-          <input 
+          <input
             type="number"
             placeholder="Total Trucks"
             value={totalTrucks}
@@ -320,7 +365,7 @@ export default function DispatchDashboard() {
             className="w-32 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary outline-none"
             min="1"
           />
-          <input 
+          <input
             type="number"
             placeholder="Total Employees"
             value={totalEmployees}
@@ -333,14 +378,14 @@ export default function DispatchDashboard() {
             className="w-36 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary outline-none"
             min="1"
           />
-          <input 
-            type="date" 
+          <input
+            type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
             className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
           />
           {isAdmin && (
-            <button 
+            <button
               onClick={handleClearDispatch}
               disabled={isLoading || !dispatchData}
               className="bg-danger text-danger-foreground hover:bg-danger/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
@@ -350,17 +395,47 @@ export default function DispatchDashboard() {
               Clear Dispatch
             </button>
           )}
-          <button 
+        </div>
+
+        {/* Row 3 — workflow actions */}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
             onClick={handleRunDispatch}
             disabled={isLoading}
             className="btn-primary flex items-center gap-2"
           >
             {isLoading ? (
-               <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
             ) : (
-               <Play className="w-4 h-4" />
+              <Play className="w-4 h-4" />
             )}
             Run Dispatch
+          </button>
+          <button
+            onClick={handlePublishToDiscord}
+            disabled={isPublishing || isLoading || !dispatchData}
+            className="bg-success text-white hover:bg-success/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            title="DM each crew member their assignment and open the confirmation window"
+          >
+            {isPublishing ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
+            Publish Initial Confirmations to Discord
+          </button>
+          <button
+            onClick={handleFinalize}
+            disabled={isFinalizing || isLoading || !dispatchData || Object.keys(confirmations).length === 0}
+            className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Post confirmed crew lists to each truck channel and #drivers-chat"
+          >
+            {isFinalizing ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4" />
+            )}
+            Post Final Crews
           </button>
         </div>
       </div>
@@ -547,7 +622,7 @@ export default function DispatchDashboard() {
                                  <div className="h-px bg-border/60 flex-1"></div>
                                </div>
                              )}
-                             <div 
+                             <div
                                draggable
                                onDragStart={(e) => handleDragStart(e, member.employee_id, truckId)}
                                className="flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm"
@@ -559,13 +634,22 @@ export default function DispatchDashboard() {
                                    <p className="text-[10px] text-subtle uppercase tracking-wider">{employees[member.employee_id]?.role || member.role}</p>
                                  </div>
                                </div>
-                               <button 
-                                 onClick={() => handleRemoveFromTruck(member.employee_id)}
-                                 className="text-muted-foreground hover:text-danger p-1 opacity-40 hover:opacity-100 transition-opacity"
-                                 title="Remove from assignment"
-                               >
-                                 <Trash2 className="w-4 h-4" />
-                               </button>
+                               <div className="flex items-center gap-1">
+                                 {(() => {
+                                   const conf = confirmations[member.employee_id];
+                                   if (!conf) return null;
+                                   if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" title="Confirmed" />;
+                                   if (conf === 'declined')  return <XCircle className="w-4 h-4 text-danger" title="Declined" />;
+                                   return <Clock className="w-4 h-4 text-warning" title="Pending confirmation" />;
+                                 })()}
+                                 <button
+                                   onClick={() => handleRemoveFromTruck(member.employee_id)}
+                                   className="text-muted-foreground hover:text-danger p-1 opacity-40 hover:opacity-100 transition-opacity"
+                                   title="Remove from assignment"
+                                 >
+                                   <Trash2 className="w-4 h-4" />
+                                 </button>
+                               </div>
                              </div>
                            </React.Fragment>
                          );
