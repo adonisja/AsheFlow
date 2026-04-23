@@ -97,9 +97,17 @@ discussion.md
 dispatch.md
 Soul.md
 fix_walkers.py
+bot/.env
+backend/.env
 
-# AI models
+# Celery runtime state
+celerybeat-schedule
+celerybeat.pid
+
+# Auth tokens and credentials (never commit these)
 .claude/token.json
+backend/token.json
+token.json
 *.pem
 *.key
 cognito_keys.json

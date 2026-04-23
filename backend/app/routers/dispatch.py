@@ -1,6 +1,8 @@
+import os
 from datetime import date
 from typing import List, Optional
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from uuid import UUID
 from sqlalchemy.orm import Session
@@ -11,9 +13,12 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck import Truck
+from app.models.dispatch_confirmation import DispatchConfirmation
 from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate, DispatchConfig
 from app.services.run_dispatch import run_dispatch
 from app.services.available_pool import get_unavailable_staff
+from app.core.redis import set_confirmation, get_all_confirmations, seed_pending
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
@@ -80,7 +85,8 @@ def get_daily_dispatch(
                 "assignment_id": str(am.id),
                 "employee_id": str(emp.id),
                 "name": emp.name,
-                "role": am.role
+                "role": am.role,
+                "discord_id": emp.discord_id,
             })
             
         assigned_crews[str(assignment.truck_id)] = crew_list
@@ -410,6 +416,174 @@ def swap_assignment(
             "date": assignment_in.date.isoformat()
         }
     }
+
+
+@router.post("/{dispatch_date}/publish", status_code=status.HTTP_200_OK)
+async def publish_dispatch(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+):
+    """Publish the day's dispatch to Discord.
+
+    Seeds all assigned employees as 'pending' in Redis, then fires an
+    internal webhook to the bot so it posts embeds and sends DMs.
+    """
+    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    if not assignments:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No dispatch found for {dispatch_date}. Run dispatch first.",
+        )
+
+    # Collect all employee IDs across all trucks
+    all_employee_ids: list[str] = []
+    for assignment in assignments:
+        members = db.query(AssignmentMember).filter(
+            AssignmentMember.assignment_id == assignment.id
+        ).all()
+        all_employee_ids.extend(str(m.employee_id) for m in members)
+
+    # Seed every employee as "pending" in Redis (idempotent)
+    await seed_pending(str(dispatch_date), all_employee_ids)
+
+    # Persist pending records to DB (idempotent — skip existing rows)
+    existing_ids = {
+        str(r.employee_id)
+        for r in db.query(DispatchConfirmation.employee_id)
+            .filter(DispatchConfirmation.date == dispatch_date)
+            .all()
+    }
+    for eid in all_employee_ids:
+        if eid not in existing_ids:
+            db.add(DispatchConfirmation(
+                employee_id=UUID(eid),
+                date=dispatch_date,
+                status="pending",
+                source="discord_bot",
+            ))
+    db.commit()
+
+    # Notify the bot via internal webhook
+    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+    secret = os.environ.get("INTERNAL_SECRET", "")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{bot_url}/internal/publish",
+                json={"date": str(dispatch_date)},
+                headers={"X-Internal-Secret": secret},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status not in (200, 202):
+                    body = await resp.text()
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Bot webhook returned {resp.status}: {body}",
+                    )
+    except aiohttp.ClientError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach the Discord bot: {e}",
+        )
+
+    return {"status": "published", "date": str(dispatch_date), "employees_notified": len(all_employee_ids)}
+
+
+@router.post("/{dispatch_date}/confirmations", status_code=status.HTTP_200_OK)
+async def record_confirmation(
+    dispatch_date: date,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Record an employee's confirmation response.
+
+    Called by the Discord bot when an employee taps Confirm or Decline.
+    Accepts any authenticated caller (the bot uses a service account JWT).
+
+    Body: { "employee_id": "<uuid>", "status": "confirmed" | "declined" }
+    Writes to Redis (fast reads) and persists to DB (audit trail).
+    """
+    employee_id = payload.get("employee_id")
+    conf_status = payload.get("status")
+
+    if not employee_id or conf_status not in ("confirmed", "declined"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Body must contain employee_id and status ('confirmed' | 'declined').",
+        )
+
+    # Write to Redis for fast dashboard reads
+    await set_confirmation(str(dispatch_date), str(employee_id), conf_status)
+
+    # Upsert into DB for persistent audit trail
+    now = datetime.now(timezone.utc)
+    row = db.query(DispatchConfirmation).filter(
+        DispatchConfirmation.employee_id == UUID(str(employee_id)),
+        DispatchConfirmation.date == dispatch_date,
+    ).first()
+    if row:
+        row.status = conf_status
+        row.confirmed_at = now
+    else:
+        db.add(DispatchConfirmation(
+            employee_id=UUID(str(employee_id)),
+            date=dispatch_date,
+            status=conf_status,
+            confirmed_at=now,
+            source="discord_bot",
+        ))
+    db.commit()
+
+    return {"date": str(dispatch_date), "employee_id": employee_id, "status": conf_status}
+
+
+@router.get("/{dispatch_date}/confirmations", status_code=status.HTTP_200_OK)
+async def get_confirmations(
+    dispatch_date: date,
+    current_user: dict = Depends(allow_dispatch_mgmt),
+):
+    """Return all confirmation statuses for a dispatch date.
+
+    Returns a dict of { employee_id: "pending" | "confirmed" | "declined" }.
+    Empty dict if publish has not been triggered yet.
+    """
+    confirmations = await get_all_confirmations(str(dispatch_date))
+    return {"date": str(dispatch_date), "confirmations": confirmations}
+
+
+@router.get("/confirmations/history", status_code=status.HTTP_200_OK)
+def get_confirmation_history(
+    start_date: date = Query(..., description="Start of date range (inclusive)"),
+    end_date:   date = Query(..., description="End of date range (inclusive)"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+):
+    """Return confirmation records for a date range for analytics.
+
+    Response: list of { employee_id, date, status, confirmed_at, source, created_at }
+    """
+    rows = (
+        db.query(DispatchConfirmation)
+        .filter(
+            DispatchConfirmation.date >= start_date,
+            DispatchConfirmation.date <= end_date,
+        )
+        .order_by(DispatchConfirmation.date, DispatchConfirmation.employee_id)
+        .all()
+    )
+    return [
+        {
+            "employee_id":  str(r.employee_id),
+            "date":         str(r.date),
+            "status":       r.status,
+            "confirmed_at": r.confirmed_at.isoformat() if r.confirmed_at else None,
+            "source":       r.source,
+            "created_at":   r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
 
 
 @router.delete("/{dispatch_date}", status_code=status.HTTP_204_NO_CONTENT)

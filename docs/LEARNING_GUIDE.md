@@ -1,3 +1,362 @@
+## 2026-04-22 Bot DMs: Trainer-Trainee Pairing Callout and Simulation Reset
+
+This section was written after addressing the trainer-trainee notification gap and the reset_on_graduation flag (ADR-047).
+
+---
+
+### The pairing gap in dispatch DMs
+
+The dispatch bot DMs each employee a crew roster when assignments are published. But the roster is just a list — no explicit callout of who is paired with whom for training purposes. A trainer scanning a 10-person crew roster had to infer their trainee; a trainee had no idea who to approach when they arrived at the truck.
+
+The fix is role-specific pairing blocks appended to the DM description:
+
+- **Trainee DM** shows `🎓 Your trainer today:` with the trainer names. If no trainer is on the truck, it shows a warning so the trainee knows to contact dispatch.
+- **Trainer DM** shows `📋 Your trainee(s) today:` with each trainee's name and their current training phase (fetched live from `GET /training/trainee/{id}`).
+
+The phase lookup is non-blocking — if the API call fails, the phase shows as `?` and the DM still sends. The cost is one extra HTTP round-trip per trainer at publish time, acceptable for a typical crew size of 1–3 trainers.
+
+### Why not send the pairing callout post-confirmation?
+
+The alternative is to wait until a trainee confirms, then DM their trainer with the phase info. This avoids wasting API calls on employees who decline, and ensures the trainer only gets the callout for trainees who are actually showing up.
+
+The tradeoff: you need bot-side state to correlate the confirmation event back to the trainer. The current design fires at publish time — simpler, slightly wasteful, but never blocks or loses a notification. Revisit if volume grows.
+
+### reset_on_graduation: cycling simulation accounts without polluting the walker roster
+
+The graduation service unconditionally promotes any trainee with 5+ dispatches to walker. For a simulation account used in integration testing (Timmy Trainee), this is wrong — promotion removes them from the training system permanently.
+
+`reset_on_graduation = True` on an `Employee` tells `graduate_trainees.py` to delete all training records for that trainee instead of promoting them. The next dispatch injection sees no open record and reinjects Phase 1 — the full training cycle restarts cleanly.
+
+**Why hard-delete records instead of a soft-reset field?** `training_injection.py` reads `last_record.current_day_number` to determine next phase. A stale record with `current_day_number = 4` would cause Phase 4 to reinject instead of Phase 1. Hard-deleting is simpler and correct for simulation use.
+
+---
+
+## 2026-04-22 Training System: Phase-Based Gating, Debt Attribution, and Trainer Accountability
+
+This section was written after the training system phase-based redesign (ADR-046).
+
+---
+
+### Why calendar-day gating was wrong for this operation
+
+The original training system incremented `day_number` linearly — Day 1 on Monday, Day 2 on Tuesday. This produced false debt whenever a trainer covered early. If Phase 1 was completed by noon and a trainer previewed Phase 2 topics that afternoon, the system would flag those Phase 2 topics as "debt" on Day 2.
+
+The fix: **phases are curriculum units, not calendar dates.** A phase advances when all mandatory tasks are complete, regardless of the date. The `training_injection.py` service checks `last_record.phase_closed` — not `last_record.record_date + 1`.
+
+This also means missed days are free. If a DA calls out, training simply pauses. No debt, no penalty. The clock only runs on days the DA is physically dispatched.
+
+### Debt attribution: one mark per incident, context only downstream
+
+The instinct when a debt chain persists across multiple trainers is to mark every trainer who failed to close their phase. This is wrong — it penalizes trainers for someone else's failure.
+
+The correct model: one mark goes to the trainer who originated the chain (failed with no inherited debt). Everything downstream is context, not punishment. The `debt_chain_context` field on `TrainerMark` documents the impact; the `debt_originated` flag identifies the root cause. Subsequent trainers who fail to close because of inherited debt receive no mark.
+
+This preserves trainer accountability without creating a perverse incentive: under the wrong model, inheriting debt would always result in a mark regardless of effort.
+
+### Topic-level coverage logging enables handoff tracing
+
+The original design assumed the `trainer_id` on a `TrainingRecord` covered all topics on that record. When a trainer leaves mid-shift and a second trainer picks up, this assumption breaks. You lose the handoff point entirely.
+
+`TrainerCoverage` writes one row per topic per trainer at completion time. The handoff is visible in the log as a timestamp boundary — topics covered before 11 AM by Trainer A, topics covered after 2 PM by Trainer B. End-of-day attribution for mark purposes follows whoever was active last.
+
+### Phase 4 is observation, not instruction
+
+Phase 4 tasks are not seeded statically in `training_curriculums`. They are generated at dispatch time in `training_injection.py` by mirroring all mandatory Phase 1–3 items as `record_type = "demonstration"` tasks. This means the Phase 4 checklist automatically reflects any changes to the Phase 1–3 curriculum — no manual sync required.
+
+On submission, `score_phase4()` computes pass/fail (90% threshold, all mandatory items must individually pass). On fail, `generate_remediation_record()` creates a Phase 5 record containing only the failed topics — targeted remediation, not a full restart.
+
+---
+
+## 2026-04-18 Bulk Operations: Parse Client-Side, Validate Before Sending, Report Per-Row
+
+This section was written after building the bulk employee import flow.
+
+---
+
+### Parse files in the browser, not on the server
+
+A common instinct is to send the raw file to the server and parse it there. This adds multipart upload handling, a file parsing dependency in the backend, and a new failure mode (file too large, wrong encoding). None of that buys you anything.
+
+The browser can parse CSV and Excel perfectly well before a single byte is sent to the API:
+- `papaparse` — streaming CSV parser, handles encoding edge cases and quoted commas correctly
+- `xlsx` (SheetJS) — reads `.xlsx`, `.xls`, and Google Sheets exports, converts to plain JS objects
+
+The backend receives a clean JSON array. It never sees the file.
+
+### Normalize column names before validation, not after
+
+HR spreadsheets use inconsistent headers: "Phone Number", "phone", "mobile", "cell". Rejecting anything that isn't an exact match forces HR to reformat their data before importing. Instead, build a normalization map upfront:
+
+```ts
+const ALIASES: Record<string, keyof ImportRow> = {
+  phone:        'phone_number',
+  mobile:       'phone_number',
+  discord:      'discord_id',
+  full_name:    'name',
+  position:     'role',
+  // ...
+};
+```
+
+Normalize first, validate second. The user never sees column mapping errors — only data errors.
+
+### Validate before the network call, not after
+
+Showing validation errors in a preview table before the user clicks Import is strictly better than surfacing them from the API response. The user can fix mistakes in the browser without a round trip. The API still validates (defense in depth), but it should rarely see bad data from the UI.
+
+### Individual row failures should never abort the batch
+
+If row 34 has a Cognito error, rows 35–70 should still be processed. A batch that fails atomically on one bad row forces HR to fix that row, re-upload, and risk re-processing rows that already succeeded.
+
+The endpoint processes each row independently, accumulates results, and always returns 200 with a per-row outcome array. HR gets a clear report of what happened and can re-import only the failed rows.
+
+### Always give the user a paper trail for batch operations
+
+After a 70-employee import, HR needs to know exactly which accounts were created, which were skipped (already existed), and which failed. The results table is enough for review — but "Export results" as a CSV gives them a file they can attach to an onboarding ticket or share with a manager.
+
+---
+
+## 2026-04-18 Account Lifecycle States and Scheduled Cleanup with Celery Beat
+
+This section was written after implementing email verification, pending account states, and automated invite expiry.
+
+---
+
+### Don't trust what you haven't verified
+
+The original flow stamped `email_verified: true` on the Cognito user at creation time. This pre-trusts the email before anyone has proven they can receive mail at that address. If the admin typo'd the email, the account was permanently broken with no clean recovery path.
+
+The fix: remove `email_verified: true` from `AdminCreateUser`. Let Cognito do what it was built for — send a temp password, require verification on first login. Only when the person successfully logs in do we know the email was real.
+
+### Use explicit state over implicit boolean inference
+
+`is_active = False` means two different things: "hasn't verified yet" and "was active, got deactivated." Code that checks `is_active == False` can't tell which. A Celery cleanup job that deletes `is_active = False` employees older than 7 days would silently delete deactivated employees.
+
+The fix: an explicit `account_status` enum — `pending_verification`, `active`, `deactivated`. Now the cleanup query is unambiguous:
+
+```python
+db.query(Employee).filter(
+    Employee.account_status == "pending_verification",
+    Employee.invited_at < cutoff,
+)
+```
+
+`is_active` stays as a fast boolean for dispatch eligibility checks, but it's derived from `account_status`, not the source of truth.
+
+### The activation moment is a first-class event
+
+"When does an account become active?" should be a deliberate decision, not something that happens as a side effect of a query. In this system, the activation moment is the first time `get_caller_employee` stamps `cognito_sub` — that's the proof that a real person logged in with a verified email. Putting the state transition there means it's atomic with the login, not a separate job that might miss it.
+
+### Celery Beat: the clock and the worker are separate concerns
+
+Beat is just a scheduler — it fires a task message onto the Redis queue at 03:00 UTC. The worker picks it up and executes it. Neither knows about the other's implementation. This separation matters when you scale: if you need two workers for throughput, Beat still fires once. Beat itself is stateless.
+
+For a single-container deployment, `celery worker --beat` runs both in one process. The comment in `docker-compose.yml` explains when to split them.
+
+### Best-effort side effects belong in background threads
+
+The Discord invite webhook fires from a daemon thread in `_send_discord_invite()`. If the bot is down, the thread fails silently after 5 seconds. The login response still completes — the account is still activated. Side effects that don't affect correctness should never block the main path.
+
+---
+
+## 2026-04-18 Time-Gating Business Logic with Config-Driven Windows
+
+This section was written after adding departure-based gating to walker rating submissions.
+
+---
+
+### The pattern: gate on a real-world event, not just calendar time
+
+A naive approach to "only accept ratings today" would check `payload.date == date.today()`. This doesn't prove anything happened — a driver who never left the yard could still submit ratings for the correct calendar date.
+
+The stronger gate checks for a real-world event: did this driver actually depart? Query the `Departure` table for `(employee_id, date)`. If the row doesn't exist or `departed_at` is NULL, the event didn't happen. Reject the request regardless of what date is on the payload.
+
+```python
+departure = db.query(Departure).filter(
+    Departure.employee_id == payload.driver_id,
+    Departure.date == payload.date,
+).first()
+if not departure or departure.departed_at is None:
+    raise HTTPException(status_code=400, detail="...")
+```
+
+### Layering a window on top of the event gate
+
+Once you've confirmed the event happened, you can add a staleness window. The key is to anchor the window to the event timestamp, not to midnight or some other arbitrary reference:
+
+```python
+window_close = departure.departed_at + timedelta(hours=settings.rating_window_hours)
+if datetime.now(timezone.utc) > window_close:
+    raise HTTPException(status_code=400, detail="...")
+```
+
+This is more accurate than a fixed cutoff time because different drivers depart at different times.
+
+### Why the window belongs in config, not in code
+
+A 6-hour hardcoded constant looks reasonable today. But shift patterns change — a new service area might have a 10-hour window. Encoding the value in `pydantic_settings` with a safe default means:
+
+- Development: default kicks in, no `.env` entry required
+- Production: set `RATING_WINDOW_HOURS=8` in the environment, no deployment needed
+- The default is visible in code review as an explicit value, not a magic number
+
+### Gate ordering matters
+
+In `submit_rating`, the gates run in this order:
+1. Ownership (caller must be the driver)
+2. Departure exists and `departed_at` is set ← event gate
+3. Window is still open ← staleness gate
+4. Payload validation (stars range)
+5. Same-truck check
+6. Duplicate check
+
+Event and staleness gates come early because they're database reads that can short-circuit before more expensive checks. Ownership comes first because it's a security boundary — no query needed beyond the session.
+
+---
+
+## 2026-04-18 Audit Trails: Write Alongside the State Change, Not After It
+
+This section was written after adding `write_audit()` to seven approval endpoints.
+
+---
+
+### The wrong mental model: audit as a separate step
+
+A common mistake is to think of logging as something that happens *after* the action succeeds — a side effect, a fire-and-forget call, something that runs in a background task. This is wrong for audit trails. If the state change commits and the audit write fails, you have a gap in the audit trail with no way to reconstruct it.
+
+### The right model: same transaction
+
+```python
+# BAD — two separate commits, audit can succeed without state or vice versa
+db.commit()                     # state change lands
+write_audit(...)                # might fail
+db.commit()                     # audit row lands (or doesn't)
+
+# GOOD — one commit, both land or neither does
+write_audit(db, ...)            # appends to session, does NOT commit
+db.commit()                     # state change + audit row are atomic
+```
+
+`write_audit()` in this codebase takes the session as its first argument and calls `db.add()` but not `db.commit()`. The caller always commits. This is the contract — never commit inside the helper.
+
+### Snapshot only what changed
+
+`before_snapshot` and `after_snapshot` are not full row dumps — they are the fields that actually changed:
+
+```python
+write_audit(
+    db,
+    action_type="pto.approved",
+    target_table="time_off_requests",
+    target_id=str(db_request.id),
+    before={"status": "pending"},
+    after={"status": "approved"},
+)
+```
+
+Full row dumps make diffs unreadable and bloat the JSONB column. Capture the minimum that lets a reviewer reconstruct what happened.
+
+### `action_type` naming: dot-namespaced verbs
+
+`pto.approved`, `schedule_change.rejected`, `incident.resolved` — not `APPROVE_PTO` or `update_status`. The dot namespace lets you filter by prefix (`action_type LIKE 'pto%'`) to pull all PTO-related entries without needing to enumerate every variant.
+
+### Capturing `actor_id` requires not discarding the dependency
+
+Several endpoints had `_: dict = Depends(allow_mgmt)` — the current user dict was discarded because it wasn't needed at the time. Adding audit logging requires the actor's ID. Change `_` to `current_user` and pass `current_user.get("id")` to `write_audit`. This is always a safe change — you are not adding a new dependency, just using the one that was already there.
+
+---
+
+## 2026-04-18 React Rules of Hooks: What Breaks and Why
+
+This section was written after fixing a TDZ `ReferenceError` in `Preferences.tsx`.
+
+---
+
+### The rule
+
+React hooks must be called at the top level of a component — never inside conditions, loops, or after a conditional return. They must also be called in the same order on every render.
+
+### The `const` TDZ mistake
+
+```tsx
+// WRONG — useEffect is declared before the const function it calls
+useEffect(() => {
+  loadPreferences(myId);   // ReferenceError at runtime
+}, [myId]);
+
+if (isAdmin) return <PreferenceAnalytics />;  // also wrong — hook appears before this
+
+const loadPreferences = async (id: string) => { ... };  // defined here
+```
+
+JavaScript `const` bindings are not hoisted. The function exists in memory from the start of the closure but cannot be accessed until the interpreter reaches its declaration — this window is the Temporal Dead Zone (TDZ). Calling it before the declaration line throws `ReferenceError: Cannot access 'loadPreferences' before initialization`.
+
+### The early return mistake
+
+A conditional return (`if (isAdmin) return ...`) before a hook call is a Rules of Hooks violation even if it seems logically safe. React tracks hooks by call order — if an early return skips a hook on some renders, the order changes and React throws.
+
+### The fix: all hooks first, early returns last
+
+```tsx
+// CORRECT — all hooks at top, early return after
+const loadPreferences = async (id: string) => { ... };
+const loadChangeRequests = async (id: string) => { ... };
+
+useEffect(() => {
+  loadPreferences(myId);    // defined above, no TDZ
+}, [myId]);
+
+if (isAdmin) return <PreferenceAnalytics />;  // after all hooks — safe
+```
+
+`const` helper functions defined in the component body before the hooks that call them are not hooks themselves — they don't need to be at the very top. The rule is about hooks (`useEffect`, `useState`, etc.), not regular functions.
+
+---
+
+## 2026-04-18 Frontend Role Guards: The Navbar Is Not the Auth Layer
+
+This section was written after the navbar overflow fix revealed management tabs had been silently removed.
+
+---
+
+### The problem with removing links from the navbar
+
+When the navbar became overcrowded for admins, the fix was to remove management tool links (Assets, Trainees, Compliance, Walkers). This correctly fixed the overflow — but it also silently removed those links for management users who depended on them.
+
+The root cause: navbar link visibility was controlled by a single `isAdminOrMgmt` boolean. Removing the block removed it for both roles at once.
+
+### Separate role checks, even when they look the same now
+
+```tsx
+// WRONG — one block hides the links for both roles
+{isAdminOrMgmt && (
+  <NavLink to="/assets">Assets</NavLink>
+  ...
+)}
+
+// RIGHT — separate blocks so each role can be adjusted independently
+{isMgmt && (
+  <NavLink to="/assets">Assets</NavLink>
+  ...
+)}
+{isAdmin && (
+  <NavLink to="/admin">Admin</NavLink>
+)}
+```
+
+If two roles need the same links today but might diverge tomorrow, separate the blocks now. Merging them saves two lines of JSX but costs you the ability to adjust them independently later.
+
+### The navbar is not the only place to check
+
+Removing a navbar link does not remove access to the route — `ProtectedRoute` in `App.tsx` is the actual guard. A management user who knows the URL can still reach `/assets` even if the navbar link is gone. Always verify that:
+1. The route has the correct `allowedRoles` in `App.tsx`
+2. The navbar shows the correct links for each role
+3. The command palette actions are visible to the correct roles
+
+These three are independent and all must be kept in sync.
+
+---
+
 ## 2026-04-11 How to Think About Role Scope When Building Multi-Role Systems
 
 This section was written after a full audit of every tool, route, endpoint, and nav link in the application revealed systematic role scope mistakes. Every mistake here was made by the developer first, then corrected. Use this as a checklist before you ship any feature that touches roles.
@@ -1255,6 +1614,76 @@ One retry distinguishes rotation (new kid appears after re-fetch) from forgery (
 
 ---
 
+## 2026-04-16 Bot Architecture: One Process, Multiple Cogs
+
+### Build one bot with a Cog structure, not multiple bots
+
+Discord's operational model is one bot per server. Multiple bots mean multiple identities, multiple permission sets, and employees needing to know which bot handles which command. The correct pattern is one bot process with feature areas split into Cogs — self-contained modules each responsible for one domain.
+
+```
+bot/
+├── main.py              # bot init, loads cogs, webhook server
+├── cogs/
+│   ├── dispatch.py      # Phase 1 — publish, DMs, confirmations
+│   ├── schedule.py      # Phase 2 — /schedule command
+│   └── eta.py           # Phase 2 — ETA posting
+└── services/
+    └── api_client.py    # shared HTTP client, used by all cogs
+```
+
+**Rule:** Start with the Cog structure from day one, even if you only have one Cog. Adding a second feature to a flat `bot.py` requires a refactor. Adding a second Cog to a Cog-structured bot requires adding one file.
+
+### Use Redis for ephemeral operational state, not PostgreSQL
+
+Confirmation state (pending/confirmed/declined per employee per day) has three properties that make Redis the right choice over PostgreSQL:
+
+1. **It's ephemeral** — today's confirmations are irrelevant tomorrow
+2. **It doesn't need to be joined** — no SQL queries reference it
+3. **It needs automatic expiry** — a 48-hour TTL handles cleanup without a scheduled job
+
+```python
+# Key pattern: dispatch:confirmations:{YYYY-MM-DD}
+# Value: hash of { employee_id: "pending" | "confirmed" | "declined" }
+await r.hset(key, employee_id, status)
+await r.expire(key, 48 * 60 * 60)
+```
+
+**Rule:** Before adding a new DB table, ask: is this data relational? Does it need to be queried with joins or aggregated in reports? If the answers are no, and the data has a natural expiry, Redis is the right store.
+
+### Secure internal service-to-service calls with a shared secret
+
+The backend calls the bot's internal webhook to trigger publishes. This is an internal Docker network call — but it should still be authenticated so the endpoint can't be triggered by anything that reaches port 8001.
+
+The minimal pattern: both services read `INTERNAL_SECRET` from the environment. The caller adds it as a header; the receiver rejects requests without it.
+
+```python
+# Sender (backend)
+headers={"X-Internal-Secret": os.environ.get("INTERNAL_SECRET", "")}
+
+# Receiver (bot)
+secret = request.headers.get("X-Internal-Secret", "")
+if secret != os.environ.get("INTERNAL_SECRET", ""):
+    return web.Response(status=401)
+```
+
+**Rule:** Internal service calls on a private network are not inherently safe — a misconfigured proxy or compromised container could reach them. Always add a shared secret. The cost is two env var reads; the protection is significant.
+
+### `timeout=None` on Discord button views for operational reliability
+
+By default, `discord.ui.View` times out after 180 seconds and buttons stop responding. For operational buttons (confirm/decline an assignment) this is unacceptable — an employee might not see their DM for 10 minutes.
+
+```python
+class ConfirmationView(discord.ui.View):
+    def __init__(self, ...):
+        super().__init__(timeout=None)  # persists across bot restarts
+```
+
+Disable buttons after the first response so the employee can't change their answer. The view state is ephemeral — on bot restart, old views become non-functional, but the confirmation is already recorded in Redis.
+
+**Rule:** Any Discord button that records a one-time operational response should use `timeout=None` and disable all buttons after the first interaction.
+
+---
+
 ## 2026-04-16 Duplicate Entry Points Signal a Missing Consolidation Decision
 
 ### When two routes show the same content to the same role, one of them is wrong
@@ -1358,3 +1787,76 @@ database_url: str  # required; set in .env
 ```
 
 The credential belongs in `.env` (gitignored), not in `config.py` (tracked). A loud `ValidationError` at startup is always preferable to silently connecting to the wrong database.
+
+---
+
+## Testing: Add New Tables to DISPATCH_TABLES When Services Need Them
+
+`conftest.py` uses a targeted `MetaData` (not `Base.metadata.create_all`) so SQLite doesn't try to compile PostgreSQL-specific columns. Every time a service is updated to query a new table, that table must be added to `DISPATCH_TABLES`:
+
+```python
+from app.models.time_off_request import TimeOffRequest
+
+DISPATCH_TABLES = [
+    ...
+    TimeOffRequest.__table__,  # required when available_pool.py queries time_off_requests
+]
+```
+
+Failing to do this causes `OperationalError: no such table: <name>` across the entire test suite. The error message is clear — the fix is always "import the model and add its `__table__` to the list."
+
+---
+
+## Testing: Use autouse=True for File-Wide Side Effect Patches
+
+When every test in a file needs the same mock (e.g., patching a bot webhook call), use `autouse=True` on the fixture instead of patching per-test:
+
+```python
+@pytest.fixture(autouse=True)
+def _no_dm(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.graduate_trainees._send_graduation_dm",
+        lambda *args, **kwargs: None,
+    )
+```
+
+This prevents: (1) tests that forget the patch from making real HTTP calls, (2) test failures in CI where the bot isn't running, (3) accidental Discord noise during local runs. The `autouse=True` approach is preferable to per-test `@patch` when the side effect is always unwanted in the file.
+
+---
+
+## Testing: Use Get-or-Create for Unique-Constrained Rows
+
+When multiple test helper calls might produce the same `(truck_id, date)` pair — and a `UNIQUE constraint` exists on that pair — the second INSERT fails. Use get-or-create:
+
+```python
+def make_past_assignment(db, truck, days_ago):
+    target = date.today() - timedelta(days=days_ago)
+    existing = db.query(TruckAssignment).filter_by(truck_id=truck.id, date=target).first()
+    if existing:
+        return existing
+    ta = TruckAssignment(id=uuid.uuid4(), truck_id=truck.id, date=target)
+    db.add(ta)
+    db.commit()
+    db.refresh(ta)
+    return ta
+```
+
+This mirrors real-world semantics (multiple employees can ride the same truck on the same day) and keeps test helpers composable.
+
+---
+
+## Testing: Parameterize Time Delta Assertions With Helper Arguments
+
+Analytics that compute median or percentile over time deltas need exact, predictable values. Instead of inserting raw timestamps and doing mental math:
+
+```python
+def make_confirmation(db, employee, status="confirmed", response_minutes=10):
+    now = datetime.utcnow()
+    c = DispatchConfirmation(
+        ...
+        created_at=now - timedelta(minutes=response_minutes),
+        confirmed_at=now if status == "confirmed" else None,
+    )
+```
+
+Then assertions read as: "median of [5, 10, 15] minutes is 10" — directly matching the `response_minutes` values passed in. No timestamp arithmetic needed in the test body.

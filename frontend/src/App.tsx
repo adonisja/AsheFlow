@@ -5,21 +5,27 @@ import Layout from './components/layout/Layout';
 import Preferences from './pages/Preferences';
 import Schedule from './pages/Schedule';
 import DispatchDashboard from './pages/DispatchDashboard';
+import DispatchHome from './pages/DispatchHome';
 import TrainerDashboard from './pages/TrainerDashboard';
 import TraineeManagement from './pages/TraineeManagement';
 import TraineeDashboard from './pages/TraineeDashboard';
 import FieldOps from './pages/FieldOps';
 import Incidents from './pages/Incidents';
 import AdminDashboard from './pages/AdminDashboard';
+import FeedbackAdmin from './pages/FeedbackAdmin';
 import ScheduleChanges from './pages/ScheduleChanges';
 import Assets from './pages/Assets';
 import VehicleCompliance from './pages/VehicleCompliance';
 import WalkerPerformance from './pages/WalkerPerformance';
+import TrainerMarks from './pages/TrainerMarks';
+import Phase4Observation from './pages/Phase4Observation';
+import TrainingCurriculum from './pages/TrainingCurriculum';
+import OperationsAnalytics from './pages/OperationsAnalytics';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
 import WorkerView from './components/dashboard/WorkerView';
-import { Users, Truck, Calendar } from 'lucide-react';
+import { Users, Calendar } from 'lucide-react';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -58,7 +64,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 function RoleRedirect() {
   const { groups } = useAuth();
   if (groups.includes('admin'))       return <Navigate to="/admin" replace />;
-  if (groups.includes('dispatch'))    return <Navigate to="/dispatch" replace />;
+  if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
   if (groups.includes('trainee'))     return <Navigate to="/my-training" replace />;
@@ -123,10 +129,9 @@ function Dashboard() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {[
           { label: 'Role', value: groups.join(', ') || 'Pending', icon: Users, color: 'text-primary' },
-          { label: 'Status', value: 'Active', icon: Truck, color: 'text-success' },
           { label: 'Today', value: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }), icon: Calendar, color: 'text-info' },
         ].map(stat => (
           <div key={stat.label} className="card-elevated flex items-center gap-4">
@@ -162,6 +167,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <RoleRedirect />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/dispatch-home"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'dispatch']}>
+                  <DispatchHome />
                 </ProtectedRoute>
               }
             />
@@ -256,6 +269,46 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin']}>
                   <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/trainer-marks"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <TrainerMarks />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/training-curriculum"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <TrainingCurriculum />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/phase4-observation"
+              element={
+                <ProtectedRoute allowedRoles={['trainer', 'admin']}>
+                  <Phase4Observation />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/feedback"
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <FeedbackAdmin />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/operations-analytics"
+              element={
+                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
+                  <OperationsAnalytics />
                 </ProtectedRoute>
               }
             />

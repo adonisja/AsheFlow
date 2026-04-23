@@ -4,7 +4,7 @@ from app.database import engine
 from app import models
 from app.models.base import Base
 from app.core.config import settings
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, dispatch, schedule, time_off_requests, feedback, training, notifications, field_ops, continuation_requests, assignment_change_requests, incidents, schedule_change_requests
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, dispatch, schedule, time_off_requests, feedback, training, notifications, field_ops, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit
 
 # Alembic is now managing the database schema.
 # We no longer need Base.metadata.create_all(bind=engine)
@@ -42,6 +42,7 @@ api_v1_router.include_router(continuation_requests.router)
 api_v1_router.include_router(assignment_change_requests.router)
 api_v1_router.include_router(incidents.router)
 api_v1_router.include_router(schedule_change_requests.router)
+api_v1_router.include_router(audit.router)
 # Mount the v1 router to the main app
 app.include_router(api_v1_router)
 
