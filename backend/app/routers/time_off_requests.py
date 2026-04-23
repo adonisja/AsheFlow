@@ -11,6 +11,7 @@ from app.models.time_off_request import TimeOffRequest
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.notification import Notification
 from app.schemas.time_off_request import TimeOffRequestCreate, TimeOffRequestResponse
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/time-off-requests", tags=["time-off-requests"])
 
@@ -102,7 +103,7 @@ def delete_time_off_request(
 def approve_time_off_request(
     request_id: UUID,
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_mgmt),
+    current_user: dict = Depends(allow_mgmt),
 ):
     db_request = db.query(TimeOffRequest).filter(TimeOffRequest.id == request_id).first()
     if not db_request:
@@ -114,6 +115,15 @@ def approve_time_off_request(
         type="pto_approved",
         message=f"Your PTO request for {db_request.date} has been approved."
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="pto.approved",
+        target_table="time_off_requests",
+        target_id=str(db_request.id),
+        before={"status": "pending"},
+        after={"status": "approved"},
+    )
     db.commit()
     db.refresh(db_request)
     return db_request
@@ -122,7 +132,7 @@ def approve_time_off_request(
 def reject_time_off_request(
     request_id: UUID,
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_mgmt),
+    current_user: dict = Depends(allow_mgmt),
 ):
     db_request = db.query(TimeOffRequest).filter(TimeOffRequest.id == request_id).first()
     if not db_request:
@@ -134,6 +144,15 @@ def reject_time_off_request(
         type="pto_rejected",
         message=f"Your PTO request for {db_request.date} was not approved."
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="pto.rejected",
+        target_table="time_off_requests",
+        target_id=str(db_request.id),
+        before={"status": "pending"},
+        after={"status": "rejected"},
+    )
     db.commit()
     db.refresh(db_request)
     return db_request

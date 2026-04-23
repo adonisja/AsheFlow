@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.deps import RoleChecker, get_current_user, Pagination, get_caller_employee, get_caller_employee_optional
+from app.services.audit import write_audit
 from app.models.incident import Incident
 from app.models.employee import Employee
 from app.models.truck import Truck
@@ -293,7 +294,7 @@ def get_unresolved_urgent(
 def resolve_incident(
     incident_id: UUID,
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_management),
+    current_user: dict = Depends(allow_management),
     resolver: Employee = Depends(get_caller_employee_optional),
 ):
     """Mark an incident as resolved. Records who resolved it and when."""
@@ -313,6 +314,15 @@ def resolve_incident(
         type="incident_resolved",
         message=f"Your {incident.category.replace('_', ' ')} incident report from {incident.date.strftime('%a, %b %d')} has been reviewed and marked resolved.",
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="incident.resolved",
+        target_table="incidents",
+        target_id=str(incident.id),
+        before={"resolved": False},
+        after={"resolved": True, "resolved_by": str(resolver.id) if resolver else None},
+    )
 
     db.commit()
     db.refresh(incident)

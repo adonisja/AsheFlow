@@ -13,6 +13,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.schemas.assignment_change_request import AssignmentChangeRequestCreate, AssignmentChangeRequestResponse
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/assignment-change-requests", tags=["assignment-change-requests"])
 
@@ -198,6 +199,15 @@ def approve_change_request(
         type="assignment_change_approved",
         message=f"Your truck reassignment request for {req.requested_date.strftime('%A, %b %d')} has been approved. Dispatch will update your assignment shortly.",
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="assignment_change.approved",
+        target_table="assignment_change_requests",
+        target_id=str(req.id),
+        before={"status": "pending"},
+        after={"status": "approved", "reviewed_by": str(reviewer.id) if reviewer else None},
+    )
 
     db.commit()
     db.refresh(req)
@@ -236,6 +246,15 @@ def reject_change_request(
         type="assignment_change_rejected",
         message=f"Your truck reassignment request for {req.requested_date.strftime('%A, %b %d')} was not approved.",
     ))
+    write_audit(
+        db,
+        actor_id=current_user.get("id"),
+        action_type="assignment_change.rejected",
+        target_table="assignment_change_requests",
+        target_id=str(req.id),
+        before={"status": "pending"},
+        after={"status": "rejected", "reviewed_by": str(reviewer.id) if reviewer else None},
+    )
 
     db.commit()
     db.refresh(req)
