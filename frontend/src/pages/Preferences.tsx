@@ -7,7 +7,7 @@ import {
   type EmployeeRelationship
 } from '../api/preferences';
 import NotificationBanner from '../components/NotificationBanner';
-import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, ChevronDown, ChevronUp } from 'lucide-react';
+import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users } from 'lucide-react';
 
 const selectStyles = {
   control: (base: any, state: any) => ({
@@ -46,8 +46,6 @@ function PreferenceAnalytics() {
   const [emps, setEmps]   = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [matrixTab, setMatrixTab] = useState<'fav' | 'ban'>('fav');
-  const [expandedFav, setExpandedFav] = useState<string | null>(null);
-  const [expandedBan, setExpandedBan] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.allSettled([
@@ -114,9 +112,6 @@ function PreferenceAnalytics() {
     return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 10);
   }, [bans]);
 
-  // Who favours / bans a given target
-  const favouredBy = (id: string) => favs.filter(r => r.target_employee_id === id);
-  const bannedBy   = (id: string) => bans.filter(r => r.target_employee_id === id);
   const isMutualBan = (id: string) => mutualBans.some(p => p.a === id || p.b === id);
 
   const empLabel = (id: string) => {
@@ -234,31 +229,13 @@ function PreferenceAnalytics() {
             <p className="text-sm text-subtle text-center py-6">No favs recorded.</p>
           ) : (
             <div className="space-y-1">
-              {favCounts.map(([id, count], i) => {
-                const isOpen = expandedFav === id;
-                const favBy = favouredBy(id);
-                return (
-                  <div key={id} className="rounded-xl border border-border overflow-hidden">
-                    <button
-                      onClick={() => setExpandedFav(isOpen ? null : id)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/30 transition-colors text-left"
-                    >
-                      <span className="text-xs text-subtle w-5 text-right shrink-0">#{i + 1}</span>
-                      <span className="flex-1 text-sm font-medium text-foreground truncate">{empLabel(id)}</span>
-                      <span className="text-sm font-bold text-success shrink-0">{count} ★</span>
-                      {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
-                    </button>
-                    {isOpen && (
-                      <div className="px-4 pb-3 pt-1 border-t border-border bg-accent/10 space-y-1">
-                        <p className="text-xs text-subtle uppercase tracking-wider mb-2">Favoured by</p>
-                        {favBy.map(r => (
-                          <p key={r.id} className="text-xs text-foreground">{empLabel(r.employee_id)}</p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {favCounts.map(([id, count], i) => (
+                <div key={id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-border">
+                  <span className="text-xs text-subtle w-5 text-right shrink-0">#{i + 1}</span>
+                  <span className="flex-1 text-sm font-medium text-foreground truncate">{empLabel(id)}</span>
+                  <span className="text-sm font-bold text-success shrink-0">{count} ★</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -274,29 +251,13 @@ function PreferenceAnalytics() {
           ) : (
             <div className="space-y-1">
               {banCounts.map(([id, count], i) => {
-                const isOpen = expandedBan === id;
-                const banBy = bannedBy(id);
                 const mutual = isMutualBan(id);
                 return (
-                  <div key={id} className={`rounded-xl border overflow-hidden ${mutual ? 'border-danger/40' : 'border-border'}`}>
-                    <button
-                      onClick={() => setExpandedBan(isOpen ? null : id)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/30 transition-colors text-left"
-                    >
-                      <span className="text-xs text-subtle w-5 text-right shrink-0">#{i + 1}</span>
-                      <span className="flex-1 text-sm font-medium text-foreground truncate">{empLabel(id)}</span>
-                      {mutual && <span className="text-xs font-bold text-danger bg-danger/10 px-1.5 py-0.5 rounded shrink-0">mutual</span>}
-                      <span className="text-sm font-bold text-danger shrink-0">{count} ✕</span>
-                      {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
-                    </button>
-                    {isOpen && (
-                      <div className="px-4 pb-3 pt-1 border-t border-border bg-accent/10 space-y-1">
-                        <p className="text-xs text-subtle uppercase tracking-wider mb-2">Banned by</p>
-                        {banBy.map(r => (
-                          <p key={r.id} className="text-xs text-foreground">{empLabel(r.employee_id)}</p>
-                        ))}
-                      </div>
-                    )}
+                  <div key={id} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border ${mutual ? 'border-danger/40' : 'border-border'}`}>
+                    <span className="text-xs text-subtle w-5 text-right shrink-0">#{i + 1}</span>
+                    <span className="flex-1 text-sm font-medium text-foreground truncate">{empLabel(id)}</span>
+                    {mutual && <span className="text-xs font-bold text-danger bg-danger/10 px-1.5 py-0.5 rounded shrink-0">mutual</span>}
+                    <span className="text-sm font-bold text-danger shrink-0">{count} ✕</span>
                   </div>
                 );
               })}
@@ -370,17 +331,6 @@ const Preferences = () => {
       .catch(console.error);
   }, [isAdmin, user]);
 
-  useEffect(() => {
-    if (myId) {
-      loadPreferences(myId);
-      loadChangeRequests(myId);
-    } else {
-      setRelationships([]);
-    }
-  }, [myId]);
-
-  if (isAdmin) return <PreferenceAnalytics />;
-
   const loadPreferences = async (id: string) => {
     try {
       const rels = await getRelationships(id);
@@ -394,6 +344,17 @@ const Preferences = () => {
       setChangeRequests(res.data);
     } catch (err) { console.error(err); }
   };
+
+  useEffect(() => {
+    if (myId) {
+      loadPreferences(myId);
+      loadChangeRequests(myId);
+    } else {
+      setRelationships([]);
+    }
+  }, [myId]);
+
+  if (isAdmin) return <PreferenceAnalytics />;
 
   const today = new Date().toISOString().split('T')[0];
 

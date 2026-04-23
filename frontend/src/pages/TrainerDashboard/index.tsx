@@ -4,7 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   Loader2, Users, ClipboardList, History, MessageSquare,
   AlertTriangle, Star, CheckCircle2, XCircle, RefreshCw,
-  UserCheck, Calendar, ChevronDown, ChevronUp, Info,
+  UserCheck, Calendar, ChevronDown, ChevronUp, Info, BarChart2,
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
@@ -13,7 +13,7 @@ import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
 // Types
 // ---------------------------------------------------------------------------
 
-type Tab = 'today' | 'history';
+type Tab = 'today' | 'history' | 'performance';
 
 interface TodayData {
   record: any | null;
@@ -400,6 +400,113 @@ function HistoryTab({ trainerId }: { trainerId: string }) {
 // Main Page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// My Performance Tab
+// ---------------------------------------------------------------------------
+function MyPerformanceTab() {
+  const [summary, setSummary] = useState<any>(null);
+  const [marks, setMarks]     = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      axiosClient.get('/trainer-marks/mine/summary'),
+      axiosClient.get('/trainer-marks/mine'),
+    ])
+      .then(([sRes, mRes]) => {
+        setSummary(sRes.data);
+        setMarks(mRes.data);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-16 opacity-50">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Summary cards */}
+      {summary && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className={`card-elevated text-center ${summary.underperforming ? 'border-danger/40' : ''}`}>
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Total Marks</p>
+            <p className={`text-3xl font-bold ${summary.total_marks > 0 ? 'text-warning' : 'text-success'}`}>
+              {summary.total_marks}
+            </p>
+          </div>
+          <div className="card-elevated text-center">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Trainees Affected</p>
+            <p className="text-3xl font-bold text-foreground">{summary.distinct_trainees_with_marks}</p>
+          </div>
+          <div className={`card-elevated text-center ${summary.underperforming ? 'border-danger/60 bg-danger/5' : ''}`}>
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Status</p>
+            <p className={`text-sm font-bold mt-1 ${summary.underperforming ? 'text-danger' : 'text-success'}`}>
+              {summary.underperforming ? 'Under Review' : 'Good Standing'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {summary?.underperforming && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-danger/10 border border-danger/30">
+          <AlertTriangle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+          <p className="text-sm text-danger">
+            You have marks filed across {summary.distinct_trainees_with_marks} or more trainees. Management has been flagged for review. Speak with your supervisor if you have questions.
+          </p>
+        </div>
+      )}
+
+      {marks.length === 0 ? (
+        <div className="card text-center py-10">
+          <CheckCircle2 className="w-10 h-10 text-success mx-auto mb-3 opacity-60" />
+          <p className="text-sm font-medium text-foreground">No marks on record</p>
+          <p className="text-xs text-subtle mt-1">Marks are filed by management when performance concerns are noted.</p>
+        </div>
+      ) : (
+        <div className="card">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Mark History</p>
+          <div className="space-y-2">
+            {marks.map((m: any) => {
+              const isOpen = expanded === m.id;
+              return (
+                <div key={m.id} className="rounded-xl border border-border overflow-hidden">
+                  <button
+                    className="w-full flex items-start gap-3 px-3 py-3 hover:bg-accent/40 transition-colors text-left"
+                    onClick={() => setExpanded(isOpen ? null : m.id)}
+                  >
+                    <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">{m.reason}</p>
+                      <p className="text-xs text-subtle mt-0.5">
+                        Trainee: {m.trainee?.name ?? '—'}
+                        {m.phase && ` · Phase ${m.phase}`}
+                        {m.record_date && ` · ${m.record_date}`}
+                      </p>
+                    </div>
+                    {isOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+                  </button>
+                  {isOpen && m.debt_chain_context && (
+                    <div className="px-3 pb-3 pt-1 border-t border-border/50">
+                      <p className="text-xs text-subtle italic">{m.debt_chain_context}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TrainerDashboard() {
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>('today');
@@ -435,8 +542,9 @@ export default function TrainerDashboard() {
   useEffect(() => { load(); }, []);
 
   const tabs = [
-    { key: 'today' as Tab, label: "Today's Session", icon: ClipboardList },
-    { key: 'history' as Tab, label: 'My History',    icon: History },
+    { key: 'today' as Tab,       label: "Today's Session", icon: ClipboardList },
+    { key: 'history' as Tab,     label: 'My History',      icon: History },
+    { key: 'performance' as Tab, label: 'My Performance',  icon: BarChart2 },
   ];
 
   if (isLoading) {
@@ -490,6 +598,10 @@ export default function TrainerDashboard() {
 
       {tab === 'history' && trainerId && (
         <HistoryTab trainerId={trainerId} />
+      )}
+
+      {tab === 'performance' && (
+        <MyPerformanceTab />
       )}
     </div>
   );

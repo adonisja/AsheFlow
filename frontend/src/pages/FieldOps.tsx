@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2 } from 'lucide-react';
+import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 
@@ -1108,12 +1108,347 @@ function AdminFieldOpsView() {
 }
 
 // ---------------------------------------------------------------------------
+// Anchor Point Panel
+// ---------------------------------------------------------------------------
+function AnchorPointPanel({ employeeId }: { employeeId: string }) {
+  const today = todayStr();
+  const [trucks, setTrucks]         = useState<any[]>([]);
+  const [myTruckId, setMyTruckId]   = useState('');
+  const [existing, setExisting]     = useState<any>(null);
+  const [location, setLocation]     = useState('');
+  const [eta, setEta]               = useState('');
+  const [notes, setNotes]           = useState('');
+  const [loading, setLoading]       = useState(false);
+  const [success, setSuccess]       = useState(false);
+  const [error, setError]           = useState('');
+
+  useEffect(() => {
+    // Load today's crew to find which truck this driver is on
+    axiosClient.get(`/field-ops/crew/${employeeId}`)
+      .then(res => {
+        const crew = res.data;
+        if (crew.truck_id) setMyTruckId(crew.truck_id);
+      })
+      .catch(() => {});
+
+    // Check if already submitted today
+    axiosClient.get('/anchor-points/driver/today')
+      .then(res => {
+        if (res.data) {
+          setExisting(res.data);
+          setLocation(res.data.location);
+          setEta(res.data.eta || '');
+          setNotes(res.data.notes || '');
+        }
+      })
+      .catch(() => {});
+  }, [employeeId]);
+
+  const handleSubmit = async () => {
+    if (!myTruckId || !location.trim()) return;
+    setLoading(true);
+    setError('');
+    try {
+      await axiosClient.post('/anchor-points/', {
+        truck_id: myTruckId,
+        date: today,
+        location: location.trim(),
+        eta: eta.trim() || null,
+        notes: notes.trim() || null,
+      });
+      setSuccess(true);
+      // Refresh existing
+      const res = await axiosClient.get('/anchor-points/driver/today');
+      setExisting(res.data);
+    } catch (e: any) {
+      setError(e.response?.data?.detail || 'Failed to submit anchor point.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isConfirmed = existing?.confirmed_at != null;
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
+          <MapPin className="w-4 h-4 text-info" />
+        </div>
+        <h2 className="section-title">EOD Anchor Point</h2>
+      </div>
+
+      {isConfirmed ? (
+        <div className="p-4 rounded-xl bg-success/10 border border-success/30 space-y-1">
+          <p className="text-sm font-semibold text-success">Anchor point confirmed by dispatch.</p>
+          <p className="text-sm text-foreground">📍 {existing.location}</p>
+          {existing.eta && <p className="text-xs text-subtle">ETA: {existing.eta}</p>}
+        </div>
+      ) : existing ? (
+        <div className="space-y-3">
+          <div className="p-3 rounded-xl bg-accent/50 border border-border text-sm">
+            <p className="text-xs text-subtle mb-1">Submitted — awaiting dispatch confirmation.</p>
+            <p className="font-medium text-foreground">📍 {existing.location}</p>
+            {existing.eta && <p className="text-xs text-subtle">ETA: {existing.eta}</p>}
+          </div>
+          <p className="text-xs text-subtle">You can update your submission until dispatch confirms it.</p>
+          <div className="space-y-2">
+            <input type="text" value={location} onChange={e => setLocation(e.target.value)}
+              placeholder="Anchor point address or landmark"
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <input type="text" value={eta} onChange={e => setEta(e.target.value)}
+              placeholder="ETA (e.g. 4:30 PM)"
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Notes (optional — lot B, facing gate, etc.)"
+              rows={2}
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
+          </div>
+          {error && <p className="text-xs text-danger">{error}</p>}
+          <button onClick={handleSubmit} disabled={loading || !location.trim() || !myTruckId}
+            className="btn-primary text-sm w-full disabled:opacity-50">
+            {loading ? 'Updating…' : 'Update Anchor Point'}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-subtle">
+            Submit your end-of-day anchor point. This will be posted to your truck channel and notifies dispatch.
+          </p>
+          {!myTruckId && (
+            <p className="text-xs text-warning">No truck assignment found for today. Check in first.</p>
+          )}
+          <div className="space-y-2">
+            <input type="text" value={location} onChange={e => setLocation(e.target.value)}
+              placeholder="Anchor point address or landmark *"
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <input type="text" value={eta} onChange={e => setEta(e.target.value)}
+              placeholder="ETA (e.g. 4:30 PM)"
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Notes (optional — lot B, facing gate, etc.)"
+              rows={2}
+              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
+          </div>
+          {error && <p className="text-xs text-danger">{error}</p>}
+          {success && <p className="text-xs text-success">Anchor point posted to truck channel.</p>}
+          <button onClick={handleSubmit} disabled={loading || !location.trim() || !myTruckId}
+            className="btn-primary text-sm w-full disabled:opacity-50">
+            {loading ? 'Submitting…' : 'Submit Anchor Point'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
+// ---------------------------------------------------------------------------
+// Walker Self-Performance Panel
+// ---------------------------------------------------------------------------
+function StarRow({ value }: { value: number | null }) {
+  if (value === null) return <span className="text-xs text-subtle">No ratings yet</span>;
+  const full = Math.floor(value);
+  const frac = value - full;
+  return (
+    <span className="flex items-center gap-0.5">
+      {[1,2,3,4,5].map(i => (
+        <Star key={i} className={`w-4 h-4 ${i <= full ? 'text-warning fill-warning' : i === full + 1 && frac >= 0.5 ? 'text-warning fill-warning/50' : 'text-muted-foreground'}`} />
+      ))}
+      <span className="ml-1 text-xs font-semibold text-foreground">{value.toFixed(1)}</span>
+    </span>
+  );
+}
+
+const GRADE_COLOR: Record<string, string> = {
+  A: 'text-success', B: 'text-info', C: 'text-warning', D: 'text-orange-500', F: 'text-danger',
+};
+
+function WalkerSelfPerformancePanel({ employeeId }: { employeeId: string }) {
+  const [profile, setProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    axiosClient.get(`/field-ops/walker-profile/${employeeId}`)
+      .then(r => setProfile(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [employeeId]);
+
+  return (
+    <div className="card">
+      <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+        <BarChart2 className="w-5 h-5 text-primary" />
+        <h2 className="text-base font-semibold text-foreground">My Performance</h2>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-8">
+          <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : !profile || profile.total_shifts === 0 ? (
+        <p className="text-sm text-subtle text-center py-6">No shift data recorded yet.</p>
+      ) : (
+        <div className="space-y-4">
+          {/* KPI row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Grade', value: profile.grade ?? '—', extra: profile.grade ? <span className={`text-2xl font-bold ${GRADE_COLOR[profile.grade] ?? 'text-foreground'}`}>{profile.grade}</span> : null },
+              { label: 'Presence', value: profile.presence_rate !== null ? `${profile.presence_rate}%` : '—', danger: (profile.presence_rate ?? 100) < 80 },
+              { label: 'Shifts', value: profile.total_shifts },
+              { label: 'No-shows', value: profile.no_show_count, danger: profile.no_show_count >= 3 },
+            ].map(({ label, value, extra, danger }) => (
+              <div key={label} className="rounded-xl border border-border p-3 text-center">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
+                {extra ?? <p className={`text-2xl font-bold ${danger ? 'text-danger' : 'text-foreground'}`}>{value}</p>}
+              </div>
+            ))}
+          </div>
+
+          {/* Avg rating */}
+          <div className="flex items-center justify-between py-2 border-t border-border">
+            <span className="text-sm text-muted-foreground">Avg Driver Rating</span>
+            <StarRow value={profile.avg_stars} />
+          </div>
+
+          {/* Recent ratings */}
+          {profile.ratings?.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Recent Shift Reviews</p>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {profile.ratings.slice(0, 10).map((r: any, i: number) => (
+                  <div key={i} className="flex items-start gap-3 p-2.5 rounded-xl border border-border bg-surface-muted/40">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-subtle">{r.date}</span>
+                        <span className="text-xs text-muted-foreground">· {r.driver_name ?? 'Driver'}</span>
+                        {r.present ? (
+                          <span className="text-xs text-success font-medium">Present</span>
+                        ) : (
+                          <span className="text-xs text-danger font-medium">No-show</span>
+                        )}
+                      </div>
+                      {r.comment && <p className="text-xs text-foreground mt-1 italic">"{r.comment}"</p>}
+                    </div>
+                    {r.stars !== null && (
+                      <span className="text-xs font-bold text-warning shrink-0">{r.stars}★</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Driver Inspection History Panel
+// ---------------------------------------------------------------------------
+function DriverInspectionHistoryPanel({ employeeId }: { employeeId: string }) {
+  const [records, setRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    axiosClient.get(`/field-ops/inspection/${employeeId}`)
+      .then(r => setRecords(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [employeeId]);
+
+  const passCount  = records.filter(r => !r.has_failures).length;
+  const failCount  = records.filter(r => r.has_failures).length;
+
+  return (
+    <div className="card">
+      <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+        <TrendingUp className="w-5 h-5 text-info" />
+        <h2 className="text-base font-semibold text-foreground">My Inspection History</h2>
+        {records.length > 0 && (
+          <span className="ml-auto text-xs text-subtle">{records.length} inspections</span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-8">
+          <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : records.length === 0 ? (
+        <p className="text-sm text-subtle text-center py-6">No inspections submitted yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {/* Summary */}
+          <div className="grid grid-cols-3 gap-3 mb-2">
+            {[
+              { label: 'Total', value: records.length },
+              { label: 'Passed', value: passCount, color: 'text-success' },
+              { label: 'Failed', value: failCount, color: failCount > 0 ? 'text-danger' : 'text-foreground' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="rounded-xl border border-border p-3 text-center">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
+                <p className={`text-xl font-bold ${color ?? 'text-foreground'}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Record list */}
+          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+            {records.map((r: any) => {
+              const isOpen = expanded === r.id;
+              const failed = r.items ? Object.entries(r.items as Record<string, boolean>).filter(([, v]) => !v).map(([k]) => k) : [];
+              return (
+                <div key={r.id} className="rounded-xl border border-border overflow-hidden">
+                  <button
+                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/40 transition-colors text-left"
+                    onClick={() => setExpanded(isOpen ? null : r.id)}
+                  >
+                    {r.has_failures ? (
+                      <XCircle className="w-4 h-4 text-danger shrink-0" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                    )}
+                    <span className="text-sm font-medium text-foreground flex-1">{r.date}</span>
+                    {r.has_failures && (
+                      <span className="text-xs text-danger font-medium">{failed.length} failure{failed.length !== 1 ? 's' : ''}</span>
+                    )}
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${r.has_failures ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'}`}>
+                      {r.has_failures ? 'Failed' : 'Passed'}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="px-3 pb-3 border-t border-border/50 pt-2 space-y-1.5">
+                      {failed.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {failed.map(k => (
+                            <span key={k} className="text-xs bg-danger/10 text-danger px-2 py-0.5 rounded-full">{ITEM_LABELS[k] ?? k}</span>
+                          ))}
+                        </div>
+                      )}
+                      {r.notes && <p className="text-xs text-subtle italic">{r.notes}</p>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 export default function FieldOps() {
   const { groups, user } = useAuth();
   const isAdmin  = groups.includes('admin');
   const isDriver = groups.includes('driver');
+  const isWalker = groups.includes('walker');
 
   const [employeeId, setEmployeeId] = useState('');
 
@@ -1146,7 +1481,10 @@ export default function FieldOps() {
       {isDriver && <FuelMileagePanel employeeId={employeeId} />}
       <DeparturePanel employeeId={employeeId} />
       {isDriver && <ReturnPanel employeeId={employeeId} />}
+      {isDriver && <AnchorPointPanel employeeId={employeeId} />}
       {isDriver && <WalkerRatingPanel employeeId={employeeId} />}
+      {isDriver && <DriverInspectionHistoryPanel employeeId={employeeId} />}
+      {isWalker && <WalkerSelfPerformancePanel employeeId={employeeId} />}
     </div>
   );
 }

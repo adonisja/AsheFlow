@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     # than silently connecting to a hardcoded dev credential in production.
     database_url: str
 
+    # Redis — used for dispatch confirmation state
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Shared secret for internal bot → backend webhook calls
+    internal_secret: str = "change-me-in-production"
+
     # Comma-separated list of allowed CORS origins.
     # Dev default covers common Vite/CRA ports; override in production.
     cors_origins: str = (
