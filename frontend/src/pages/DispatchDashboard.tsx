@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
@@ -47,12 +47,43 @@ export default function DispatchDashboard() {
   const [addingStaffId, setAddingStaffId] = useState<string | null>(null);
   // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
   const [confirmations, setConfirmations] = useState<Record<string, string>>({});
+  const [isPollingConfirmations, setIsPollingConfirmations] = useState(false);
+  const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    fetchTrucksAndEmployees();
+  const stopConfirmationPolling = () => {
+    if (confirmationPollRef.current !== null) {
+      clearInterval(confirmationPollRef.current);
+      confirmationPollRef.current = null;
+    }
+    setIsPollingConfirmations(false);
+  };
+
+  // Start polling every 15s — stops automatically when all responses are in
+  const startConfirmationPolling = useCallback((date: string) => {
+    stopConfirmationPolling();
+    setIsPollingConfirmations(true);
+    confirmationPollRef.current = setInterval(async () => {
+      try {
+        const res = await axiosClient.get(`/dispatch/${date}/confirmations`);
+        const data: Record<string, string> = res.data.confirmations || {};
+        setConfirmations(data);
+        const values = Object.values(data);
+        if (values.length > 0 && values.every(s => s !== 'pending')) {
+          stopConfirmationPolling();
+        }
+      } catch {
+        // silently retry next tick
+      }
+    }, 15000);
   }, []);
 
   useEffect(() => {
+    fetchTrucksAndEmployees();
+    return () => stopConfirmationPolling();
+  }, []);
+
+  useEffect(() => {
+    stopConfirmationPolling();
     fetchDispatchData();
     fetchAvailablePool();
     fetchUnavailableStaff();
@@ -76,6 +107,8 @@ export default function DispatchDashboard() {
     try {
       await axiosClient.post(`/dispatch/${selectedDate}/publish`);
       await fetchConfirmations();
+      // Begin polling so the dashboard reflects bot-reported confirms/declines in real time
+      startConfirmationPolling(selectedDate);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to publish to Discord.');
     } finally {
@@ -88,6 +121,8 @@ export default function DispatchDashboard() {
     if (!window.confirm(`Post final crew assignments to Discord? This will post confirmed crews to each truck channel and the master list to #drivers-chat.`)) return;
     setIsFinalizing(true);
     setError(null);
+    // Confirmation window is closed — stop polling
+    stopConfirmationPolling();
     try {
       await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
     } catch (err: any) {
@@ -437,6 +472,13 @@ export default function DispatchDashboard() {
             )}
             Post Final Crews
           </button>
+          {/* Live polling indicator — visible while waiting for crew responses */}
+          {isPollingConfirmations && Object.values(confirmations).some(s => s === 'pending') && (
+            <span className="flex items-center gap-1.5 text-xs text-warning font-medium">
+              <div className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+              Awaiting responses&hellip;
+            </span>
+          )}
         </div>
       </div>
 
