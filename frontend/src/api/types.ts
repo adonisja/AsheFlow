@@ -155,10 +155,16 @@ export interface NoShowRow {
 }
 
 export interface AnchorPoint {
-  confirmed_at?: string | null;
-  location?: string | null;
-  eta?: string | null;
-  notes?: string | null;
+  id: string;
+  truck_id: string;
+  driver_id: string;
+  date: string;
+  location: string;
+  eta: string | null;
+  notes: string | null;
+  submitted_at: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
 }
 
 // ---------------------------------------------------------------------------
