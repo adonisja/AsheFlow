@@ -21,6 +21,7 @@ import TrainerMarks from './pages/TrainerMarks';
 import Phase4Observation from './pages/Phase4Observation';
 import TrainingCurriculum from './pages/TrainingCurriculum';
 import OperationsAnalytics from './pages/OperationsAnalytics';
+import AnchorPoints from './pages/AnchorPoints';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
@@ -309,6 +310,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
                   <OperationsAnalytics />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/anchor-points"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
+                  <AnchorPoints />
                 </ProtectedRoute>
               }
             />
