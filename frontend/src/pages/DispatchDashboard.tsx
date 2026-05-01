@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
-import { UnavailableStaff, DispatchResult } from '../api/types';
+import type { UnavailableStaff, DispatchResult } from '../api/types';
 
 export default function DispatchDashboard() {
   const { groups } = useAuth();
@@ -659,9 +659,9 @@ export default function DispatchDashboard() {
                                  {(() => {
                                    const conf = confirmations[member.employee_id];
                                    if (!conf) return null;
-                                   if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" title="Confirmed" />;
-                                   if (conf === 'declined')  return <XCircle className="w-4 h-4 text-danger" title="Declined" />;
-                                   return <Clock className="w-4 h-4 text-warning" title="Pending confirmation" />;
+                                   if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" aria-label="Confirmed" />;
+                                   if (conf === 'declined')  return <XCircle className="w-4 h-4 text-danger" aria-label="Declined" />;
+                                   return <Clock className="w-4 h-4 text-warning" aria-label="Pending confirmation" />;
                                  })()}
                                  <button
                                    onClick={() => handleRemoveFromTruck(member.employee_id)}
