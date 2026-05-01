@@ -14,7 +14,7 @@ import { MiniCalendar } from '../components/MiniCalendar';
 import NotificationBanner from '../components/NotificationBanner';
 import ErrorBanner from '../components/ui/ErrorBanner';
 
-import { CrewMember } from '../api/types';
+import type { CrewMember } from '../api/types';
 
 interface ScheduleDay {
   date: string;

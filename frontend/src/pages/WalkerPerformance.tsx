@@ -6,7 +6,7 @@ import {
   Info, ChevronLeft,
 } from 'lucide-react';
 import ErrorBanner from '../components/ui/ErrorBanner';
-import {
+import type {
   WalkerSummary, WalkerProfile, WalkerConsistency,
   WalkerRatingDetail as RatingEntry,
 } from '../api/types';
