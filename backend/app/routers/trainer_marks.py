@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from fastapi import HTTPException, status
-from app.api.deps import RoleChecker, get_db, get_caller_employee
+from app.api.deps import RoleChecker, get_caller_employee
+from app.database import get_db
 from app.models.employee import Employee
 from app.models.trainer_mark import TrainerMark
 from app.models.training import TrainingRecord

@@ -66,11 +66,11 @@ const NotificationBanner: React.FC<Props> = ({ employeeId }) => {
     axiosClient
       .get<Notification[]>(`/notifications/${employeeId}`)
       .then((res) => setNotifications(res.data.filter((n) => !n.is_read)))
-      .catch(console.error);
+      .catch(() => {});
   }, [employeeId]);
 
   const dismiss = async (id: string) => {
-    await axiosClient.patch(`/notifications/${id}/read`).catch(console.error);
+    await axiosClient.patch(`/notifications/${id}/read`).catch(() => {});
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   };
 
@@ -82,7 +82,7 @@ const NotificationBanner: React.FC<Props> = ({ employeeId }) => {
     const toRemove    = new Set([...nonDispatch, ...responded].map((n) => n.id));
 
     if (nonDispatch.length > 0) {
-      await axiosClient.patch(`/notifications/employee/${employeeId}/read-all`).catch(console.error);
+      await axiosClient.patch(`/notifications/employee/${employeeId}/read-all`).catch(() => {});
     }
     setNotifications((prev) => prev.filter((n) => !toRemove.has(n.id)));
   };

@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_caller_employee
+from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
+from app.core.config import settings
 from app.models.field_ops import CheckIn, Departure, WalkerRating, VehicleInspection, FuelMileageLog, INSPECTION_ITEMS
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
@@ -64,8 +65,7 @@ def get_today_crew(
 
     Callers may only request their own crew. Dispatch/management/admin may request any employee's crew.
     """
-    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
-        raise HTTPException(status_code=403, detail="You can only view your own crew assignment.")
+    assert_owns_or_privileged(caller, employee_id, "crew assignment")
 
     if target_date is None:
         target_date = date.today()
@@ -113,9 +113,11 @@ def check_in(
     _: dict = Depends(allow_driver),
     caller: Employee = Depends(get_caller_employee),
 ):
-    # Fix #2: caller can only check in themselves
     if payload.employee_id != caller.id:
         raise HTTPException(status_code=403, detail="You can only check in yourself.")
+
+    if payload.date != date.today():
+        raise HTTPException(status_code=400, detail="Check-in date must be today.")
 
     existing = db.query(CheckIn).filter(
         CheckIn.employee_id == payload.employee_id,
@@ -137,8 +139,7 @@ def get_check_ins(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
-    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
-        raise HTTPException(status_code=403, detail="Access denied.")
+    assert_owns_or_privileged(caller, employee_id)
     return db.query(CheckIn).filter(CheckIn.employee_id == employee_id).order_by(CheckIn.date.desc()).all()
 
 
@@ -217,8 +218,7 @@ def get_departures(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
-    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
-        raise HTTPException(status_code=403, detail="Access denied.")
+    assert_owns_or_privileged(caller, employee_id)
     return db.query(Departure).filter(Departure.employee_id == employee_id).order_by(Departure.date.desc()).all()
 
 
@@ -319,10 +319,35 @@ def submit_rating(
     if payload.driver_id != caller.id:
         raise HTTPException(status_code=403, detail="You can only submit ratings as yourself.")
 
+    # Gate 1 — departure must exist and driver must have departed
+    departure = db.query(Departure).filter(
+        Departure.employee_id == payload.driver_id,
+        Departure.date == payload.date,
+    ).first()
+    if not departure or departure.departed_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Ratings can only be submitted after the driver has departed for the day.",
+        )
+
+    # Gate 2 — rating window must still be open
+    now = datetime.now(timezone.utc)
+    window_close = departure.departed_at + timedelta(hours=settings.rating_window_hours)
+    if now > window_close:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The rating window has closed. Ratings must be submitted within {settings.rating_window_hours} hours of departure.",
+        )
+
     if payload.present and (payload.stars is None or not (1 <= payload.stars <= 5)):
         raise HTTPException(status_code=400, detail="Stars must be between 1 and 5 for present walkers.")
     if not payload.present and payload.stars is not None:
         raise HTTPException(status_code=400, detail="Stars should not be provided for a no-show.")
+
+    # Ensure the target walker actually exists before creating a rating record
+    walker = db.query(Employee).filter(Employee.id == payload.walker_id).first()
+    if not walker:
+        raise HTTPException(status_code=404, detail="Walker not found.")
 
     # Fix #6: walker must be on the same truck as the driver today
     _, driver_assignment_id = _resolve_truck_for_employee(payload.driver_id, payload.date, db)
@@ -358,6 +383,9 @@ def get_ratings_for_walker(
     db: Session = Depends(get_db),
     caller: Employee = Depends(allow_management),
 ):
+    walker = db.query(Employee).filter(Employee.id == walker_id).first()
+    if not walker:
+        raise HTTPException(status_code=404, detail="Employee not found.")
     return db.query(WalkerRating).filter(WalkerRating.walker_id == walker_id).order_by(WalkerRating.date.desc()).all()
 
 
@@ -373,8 +401,10 @@ def get_ratings_by_driver(
     Used by WalkerRatingPanel on mount to pre-populate already-submitted ratings
     so a page refresh doesn't show walkers as unrated when they've already been rated.
     """
-    if caller.id != driver_id and caller.role not in ("dispatch", "management", "admin"):
-        raise HTTPException(status_code=403, detail="Access denied.")
+    assert_owns_or_privileged(caller, driver_id)
+    driver = db.query(Employee).filter(Employee.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Employee not found.")
     q = db.query(WalkerRating).filter(WalkerRating.driver_id == driver_id)
     if target_date:
         q = q.filter(WalkerRating.date == target_date)
@@ -466,8 +496,7 @@ def get_inspections(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Return inspection history for a driver (most recent first)."""
-    if caller.id != driver_id and caller.role not in ("dispatch", "management", "admin"):
-        raise HTTPException(status_code=403, detail="Access denied.")
+    assert_owns_or_privileged(caller, driver_id)
     return (
         db.query(VehicleInspection)
         .filter(VehicleInspection.driver_id == driver_id)
@@ -602,8 +631,7 @@ def get_fuel_logs(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Return fuel log history for a driver (most recent first)."""
-    if caller.id != driver_id and caller.role not in ("dispatch", "management", "admin"):
-        raise HTTPException(status_code=403, detail="Access denied.")
+    assert_owns_or_privileged(caller, driver_id)
     return (
         db.query(FuelMileageLog)
         .filter(FuelMileageLog.driver_id == driver_id)
@@ -908,13 +936,15 @@ def get_walker_profile(
     start_date: Optional[date] = Query(None, description="Filter ratings from this date (inclusive)"),
     end_date: Optional[date] = Query(None, description="Filter ratings up to this date (inclusive)"),
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_management),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """All-time stats + rating history for one walker, with driver names and comments.
 
+    Walkers may fetch their own profile; management/admin may fetch any.
     All-time KPIs (total_shifts, grade, etc.) always reflect the full history.
     The ratings list is filtered by start_date/end_date when provided.
     """
+    assert_owns_or_privileged(caller, walker_id, "performance profile")
     walker = db.query(Employee).filter(Employee.id == walker_id).first()
     if not walker:
         raise HTTPException(status_code=404, detail="Walker not found.")

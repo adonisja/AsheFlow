@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
+import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   Truck, ClipboardCheck, Calendar, Check, X, AlertTriangle,
 } from 'lucide-react';
-
-const API = 'http://localhost:8000/api/v1';
 
 export default function DispatchView() {
   const { groups } = useAuth();
@@ -18,57 +16,57 @@ export default function DispatchView() {
   const [fleetStatus, setFleetStatus] = useState<any[]>([]);
 
   useEffect(() => {
-    axios.get(`${API}/time-off-requests/`).then(res =>
+    axiosClient.get(`/time-off-requests/`).then(res =>
       setPendingRequests(res.data.filter((r: any) => r.status === 'pending'))
-    ).catch(console.error);
+    ).catch(() => {});
 
-    axios.get(`${API}/employee-off-days/`).then(res =>
+    axiosClient.get(`/employee-off-days/`).then(res =>
       setPendingOffDays(res.data.filter((r: any) => r.status === 'pending'))
-    ).catch(console.error);
+    ).catch(() => {});
 
-    axios.get(`${API}/assignment-change-requests/pending`).then(res =>
+    axiosClient.get(`/assignment-change-requests/pending`).then(res =>
       setPendingChangeRequests(res.data)
-    ).catch(console.error);
+    ).catch(() => {});
 
-    axios.get(`${API}/incidents/unresolved-urgent`).then(res =>
+    axiosClient.get(`/incidents/unresolved-urgent`).then(res =>
       setUrgentIncidents(res.data)
-    ).catch(console.error);
+    ).catch(() => {});
 
-    axios.get(`${API}/field-ops/returns/summary`).then(res =>
+    axiosClient.get(`/field-ops/returns/summary`).then(res =>
       setFleetStatus(res.data)
-    ).catch(console.error);
+    ).catch(() => {});
   }, []);
 
   const handleApprove = (type: 'request' | 'offDay', id: string) => {
     const url = type === 'request'
-      ? `${API}/time-off-requests/${id}/approve`
-      : `${API}/employee-off-days/${id}/approve`;
-    axios.patch(url).then(() => {
+      ? `/time-off-requests/${id}/approve`
+      : `/employee-off-days/${id}/approve`;
+    axiosClient.patch(url).then(() => {
       if (type === 'request') setPendingRequests(p => p.filter(r => r.id !== id));
       else setPendingOffDays(p => p.filter(r => r.id !== id));
-    }).catch(console.error);
+    }).catch(() => {});
   };
 
   const handleReject = (type: 'request' | 'offDay', id: string) => {
     const url = type === 'request'
-      ? `${API}/time-off-requests/${id}/reject`
-      : `${API}/employee-off-days/${id}/reject`;
-    axios.patch(url).then(() => {
+      ? `/time-off-requests/${id}/reject`
+      : `/employee-off-days/${id}/reject`;
+    axiosClient.patch(url).then(() => {
       if (type === 'request') setPendingRequests(p => p.filter(r => r.id !== id));
       else setPendingOffDays(p => p.filter(r => r.id !== id));
-    }).catch(console.error);
+    }).catch(() => {});
   };
 
   const handleApproveChange = (id: string) => {
-    axios.patch(`${API}/assignment-change-requests/${id}/approve`).then(() =>
+    axiosClient.patch(`/assignment-change-requests/${id}/approve`).then(() =>
       setPendingChangeRequests(p => p.filter(r => r.id !== id))
-    ).catch(console.error);
+    ).catch(() => {});
   };
 
   const handleRejectChange = (id: string) => {
-    axios.patch(`${API}/assignment-change-requests/${id}/reject`).then(() =>
+    axiosClient.patch(`/assignment-change-requests/${id}/reject`).then(() =>
       setPendingChangeRequests(p => p.filter(r => r.id !== id))
-    ).catch(console.error);
+    ).catch(() => {});
   };
 
   const quickLinks = [

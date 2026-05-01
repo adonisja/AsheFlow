@@ -13,6 +13,10 @@ from app.models.training import TrainingRecord, TrainingTask
 from app.models.employee import Employee
 from app.schemas.training import TrainingRecordResponse, ManagerCommentCreate, TrainerCommentCreate, TrainingTaskResponse, TraineeReviewCreate, TraineeReassignRequest, TaskUpdate
 from app.models.notification import Notification
+from app.models.trainer_coverage import TrainerCoverage
+from app.services.check_phase_gate import check_phase_gate
+from app.services.record_trainer_mark import record_exemplary_note
+from app.services.score_phase4 import score_phase4, apply_phase4_result
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,33 @@ router = APIRouter(
     tags=["training"],
     responses={404: {"description": "Not found"}},
 )
+
+@router.get("/curriculum", response_model=List[dict])
+def get_curriculum(
+    db: Session = Depends(get_db),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """Return the full training curriculum ordered by phase then topic.
+    Management/admin only — used by the curriculum admin page.
+    """
+    from app.models.training import TrainingCurriculum
+    items = db.query(TrainingCurriculum).order_by(
+        TrainingCurriculum.day_number,
+        TrainingCurriculum.topic_title,
+    ).all()
+    return [
+        {
+            "id": str(i.id),
+            "day_number": i.day_number,
+            "topic_title": i.topic_title,
+            "description": i.description,
+            "category": i.category,
+            "is_mandatory": i.is_mandatory,
+            "record_type": i.record_type,
+        }
+        for i in items
+    ]
+
 
 @router.get("/daily/active", response_model=List[dict])
 def get_daily_active_trainings(
@@ -94,13 +125,15 @@ def add_trainer_comment(
     trainee_id: UUID,
     comment_data: TrainerCommentCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(RoleChecker(["trainer", "admin"]))
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["trainer", "admin"]))
 ):
     """Trainer leaves a comment on the trainee's most recent training record.
 
     Viewable by trainer, management, and admin only — trainee cannot see this.
     Appends to any existing comment rather than overwriting.
     Blocked if the record is locked.
+    Trainers may only comment on trainees assigned to them; admin is unrestricted.
     """
     record = (
         db.query(TrainingRecord)
@@ -113,6 +146,12 @@ def add_trainer_comment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No training history found for this trainee.",
+        )
+
+    if caller.role == "trainer" and record.trainer_id != caller.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only comment on trainees assigned to you.",
         )
 
     if record.is_locked:
@@ -350,7 +389,17 @@ def get_trainer_history(
     Groups by trainee so the caller gets one entry per trainee with a list of
     session records.  Each record includes tasks, trainer_comments, and
     manager_comments so the trainer can review handoff notes.
+
+    Authorization: trainers may only view their own history. Management and admin
+    may view any trainer's history.
     """
+    caller_groups = set(current_user.get("cognito_groups", []))
+    privileged = {"management", "admin"}
+    if not (caller_groups & privileged) and str(current_user.get("id", "")) != str(trainer_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own training history.",
+        )
     records = (
         db.query(TrainingRecord)
         .filter(TrainingRecord.trainer_id == trainer_id)
@@ -602,19 +651,196 @@ def update_task(
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["trainer", "management", "admin"]))
 ):
+    """Mark a training task complete or incomplete.
+
+    Enforces the phase gate (ADR-046): if this task belongs to a phase whose
+    previous phase is not yet closed, the completion is blocked and the caller
+    is told which topics are still open.
+
+    On completion of a coverage task, writes a TrainerCoverage row to record
+    exactly which trainer covered which topic (supports mid-shift handoff tracing).
+
+    After every completion, checks whether all mandatory coverage tasks on the
+    record are now done — if so, closes the phase and checks for exemplary
+    trainer flag (inherited debt cleared + phase closed in same session).
+    """
     task = db.query(TrainingTask).filter(TrainingTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
     record = db.query(TrainingRecord).filter(TrainingRecord.id == task.training_record_id).first()
-    if record and record.is_locked:
+    if not record:
+        raise HTTPException(status_code=404, detail="Training record not found")
+
+    if record.is_locked:
         raise HTTPException(status_code=400, detail="Cannot edit a locked training record")
 
     # Trainers can only update tasks on their own trainees; management/admin bypass
-    if caller.role == "trainer" and record and record.trainer_id != caller.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update tasks for your own trainees.")
-        
+    if caller.role == "trainer" and record.trainer_id != caller.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update tasks for your own trainees.",
+        )
+
+    # --- Phase gate: only enforce when marking complete (not incomplete) ---
+    if task_update.is_completed and not task.is_completed:
+        # Check previous phase is closed before allowing this phase's tasks to complete.
+        # Only applies to Phase 2+ records; Phase 1 has no prior phase to check.
+        if record.current_day_number > 1:
+            prev_record = (
+                db.query(TrainingRecord)
+                .filter(
+                    TrainingRecord.trainee_id == record.trainee_id,
+                    TrainingRecord.record_date < record.record_date,
+                )
+                .order_by(TrainingRecord.record_date.desc())
+                .first()
+            )
+            if prev_record and not prev_record.phase_closed:
+                gate_open, blocking = check_phase_gate(db, str(prev_record.id))
+                if not gate_open:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "message": f"Phase {prev_record.current_day_number} is not yet closed. "
+                                       "Complete all mandatory topics from the previous phase first.",
+                            "blocking_topics": blocking,
+                        },
+                    )
+
+        # Write TrainerCoverage row for topic-level handoff tracing
+        db.add(TrainerCoverage(
+            training_record_id=record.id,
+            trainer_id=caller.id,
+            topic_title=task.topic_title,
+        ))
+
     task.is_completed = task_update.is_completed
+    if task_update.is_completed:
+        task.completed_at = datetime.now(timezone.utc)
+    db.flush()
+
+    # --- Check if all mandatory coverage tasks on this record are now complete ---
+    if task_update.is_completed and task.record_type == "coverage":
+        gate_open, _ = check_phase_gate(db, str(record.id))
+        if gate_open and not record.phase_closed:
+            record.phase_closed = True
+            record.phase_closed_at = datetime.now(timezone.utc)
+            db.flush()
+
+            # Exemplary trainer check: inherited debt was present AND phase is now closed
+            had_debt = db.query(TrainingTask).filter(
+                TrainingTask.training_record_id == record.id,
+                TrainingTask.is_training_debt == True,
+            ).first() is not None
+            if had_debt:
+                record_exemplary_note(db, str(record.id))
+
     db.commit()
     db.refresh(task)
     return task
+
+
+@router.post("/record/{record_id}/submit", response_model=dict)
+def submit_training_record(
+    record_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["trainer", "management", "admin"])),
+):
+    """Trainer submits a completed training record before midnight.
+
+    Sets submitted_at. If Phase 4, also computes the score, sets passed/score,
+    and generates a remediation record on fail.
+
+    Blocks if the record is already locked or already submitted.
+    """
+    record = db.query(TrainingRecord).filter(TrainingRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Training record not found")
+
+    if record.is_locked:
+        raise HTTPException(status_code=400, detail="This record is locked. Contact management to reopen it.")
+
+    if record.submitted_at:
+        raise HTTPException(status_code=400, detail="This record has already been submitted.")
+
+    if caller.role == "trainer" and record.trainer_id != caller.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only submit your own records.")
+
+    record.submitted_at = datetime.now(timezone.utc)
+
+    result = {"record_id": str(record_id), "submitted_at": record.submitted_at.isoformat()}
+
+    if record.current_day_number == 4:
+        # Phase 4: score the observation checklist
+        score_result = score_phase4(db, str(record_id))
+        apply_phase4_result(db, record, score_result)
+        result.update({
+            "phase": 4,
+            "score": score_result["score"],
+            "passed": score_result["passed"],
+            "failed_mandatory_topics": score_result["failed_mandatory_topics"],
+        })
+    else:
+        result["phase"] = record.current_day_number
+
+    db.commit()
+    return result
+
+
+@router.post("/record/{record_id}/phase4-observation", response_model=dict)
+def submit_phase4_observation(
+    record_id: UUID,
+    payload: dict,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["trainer", "management", "admin"])),
+):
+    """Save observation notes and individual task results for Phase 4.
+
+    Accepts:
+        observation_notes: str (optional free-form commentary)
+        task_results: list of {task_id: str, passed: bool}
+
+    Does NOT submit the record — call POST /record/{id}/submit after this.
+    Allows the trainer to review the computed score before finalising.
+    """
+    record = db.query(TrainingRecord).filter(TrainingRecord.id == record_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Training record not found")
+    if record.current_day_number != 4:
+        raise HTTPException(status_code=400, detail="This endpoint is only for Phase 4 records.")
+    if record.is_locked:
+        raise HTTPException(status_code=400, detail="Record is locked.")
+
+    if caller.role == "trainer" and record.trainer_id != caller.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own Phase 4 records.")
+
+    observation_notes = payload.get("observation_notes")
+    task_results: list[dict] = payload.get("task_results", [])
+
+    if observation_notes is not None:
+        record.observation_notes = observation_notes
+
+    for result in task_results:
+        task = db.query(TrainingTask).filter(TrainingTask.id == result["task_id"]).first()
+        if task and task.training_record_id == record.id and task.record_type == "demonstration":
+            task.is_completed = result.get("passed", False)
+            if task.is_completed:
+                task.completed_at = datetime.now(timezone.utc)
+
+    db.flush()
+
+    # Return live score preview so trainer sees standing before final submit
+    score_result = score_phase4(db, str(record_id))
+    db.commit()
+
+    return {
+        "record_id": str(record_id),
+        "score_preview": score_result["score"],
+        "would_pass": score_result["passed"],
+        "failed_mandatory_topics": score_result["failed_mandatory_topics"],
+        "total_mandatory": score_result["total_mandatory"],
+        "passed_mandatory": score_result["passed_mandatory"],
+    }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
+import { getLocalYMD } from '../../utils/date';
 import {
   Loader2, Users, ClipboardList, History, MessageSquare,
   AlertTriangle, Star, CheckCircle2, XCircle, RefreshCw,
@@ -8,6 +9,7 @@ import {
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
+import ErrorBanner from '../../components/ui/ErrorBanner';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,10 +34,6 @@ interface TraineeGroup {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const getLocalYMD = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
 
 const starRow = (rating: number) => (
   <span className="text-warning font-black text-sm">
@@ -304,11 +302,12 @@ function HistoryTab({ trainerId }: { trainerId: string }) {
   const [groups, setGroups] = useState<TraineeGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     axiosClient.get(`/training/trainer/${trainerId}/history`)
       .then(res => setGroups(res.data))
-      .catch(console.error)
+      .catch(() => setError('Failed to load training history.'))
       .finally(() => setIsLoading(false));
   }, [trainerId]);
 
@@ -319,6 +318,8 @@ function HistoryTab({ trainerId }: { trainerId: string }) {
       </div>
     );
   }
+
+  if (error) return <ErrorBanner message={error} />;
 
   if (groups.length === 0) {
     return (
@@ -513,28 +514,29 @@ export default function TrainerDashboard() {
   const [todayData, setTodayData] = useState<TodayData | null>(null);
   const [trainerId, setTrainerId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchToday = async () => {
     try {
       const res = await axiosClient.get('/training/trainer/today');
       setTodayData(res.data);
-    } catch (err) {
-      console.error('Failed to fetch today:', err);
+    } catch {
+      setError('Failed to load today\'s training session.');
     }
   };
 
   const fetchCallerId = async () => {
     try {
-      // Resolve our own employee ID from the /employees/me endpoint or profile
       const res = await axiosClient.get('/employees/me');
       setTrainerId(res.data.id);
-    } catch (err) {
-      console.error('Failed to fetch trainer ID:', err);
+    } catch {
+      setError('Failed to identify trainer account.');
     }
   };
 
   const load = async () => {
     setIsLoading(true);
+    setError(null);
     await Promise.all([fetchToday(), fetchCallerId()]);
     setIsLoading(false);
   };
@@ -572,6 +574,8 @@ export default function TrainerDashboard() {
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
       </div>
+
+      <ErrorBanner message={error} />
 
       {/* Tab bar */}
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 w-fit">

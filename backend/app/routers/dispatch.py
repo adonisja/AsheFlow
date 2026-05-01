@@ -8,12 +8,13 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import get_current_user, RoleChecker
+from app.api.deps import get_current_user, get_caller_employee, RoleChecker
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.dispatch_confirmation import DispatchConfirmation
+from app.models.notification import Notification
 from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate, DispatchConfig
 from app.services.run_dispatch import run_dispatch
 from app.services.available_pool import get_unavailable_staff
@@ -129,6 +130,30 @@ def trigger_dispatch(
         assigned_crews, warnings = run_dispatch(db, target_date, total_employees, total_trucks)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Persist ban override events as system notifications so analytics can query them.
+    # These are dispatch-internal — employee_id is set to a dispatch/admin recipient so
+    # they don't surface in field staff notification feeds.
+    override_recipients = db.query(Employee).filter(
+        Employee.role.in_(["dispatch", "admin"]),
+        Employee.is_active == True,
+    ).limit(1).all()  # just need one row to satisfy the FK; analytics filters by type
+
+    for w in warnings:
+        if w.get("type") == "ban_override_reassignment" and override_recipients:
+            evicted_id  = w.get("evicted_employee_id")
+            favoured_id = w.get("in_favour_of_employee_id")
+            from_truck  = w.get("from_truck_id")
+            db.add(Notification(
+                employee_id=override_recipients[0].id,
+                type="ban_override_reassignment",
+                message=(
+                    f"Ban override on {target_date}: walker {evicted_id} evicted from truck "
+                    f"{from_truck} in favour of {favoured_id}."
+                ),
+            ))
+    if any(w.get("type") == "ban_override_reassignment" for w in warnings):
+        db.commit()
 
     # All warnings are now normalized dicts with "type" and "message" string fields.
     # Convert any residual UUID values to str for JSON safety.
@@ -267,7 +292,8 @@ def manual_assignment(
     new_member = AssignmentMember(
         assignment_id=truck_assignment.id,
         employee_id=assignment_in.employee_id,
-        role=assignment_in.role
+        role=assignment_in.role,
+        is_manual=True,   # explicitly placed by dispatch after the algorithm ran
     )
     db.add(new_member)
     db.commit()
@@ -436,32 +462,85 @@ async def publish_dispatch(
             detail=f"No dispatch found for {dispatch_date}. Run dispatch first.",
         )
 
-    # Collect all employee IDs across all trucks
+    # Build a full picture of truck → members with roles and truck names
+    # so we can apply the same information-split as the bot DMs.
+    truck_map = {
+        str(t.id): t
+        for t in db.query(Truck).all()
+    }
+
+    # Collect all assignments with role + truck context
+    crew_by_assignment: list[tuple[AssignmentMember, Employee, Truck]] = []
     all_employee_ids: list[str] = []
+
     for assignment in assignments:
-        members = db.query(AssignmentMember).filter(
-            AssignmentMember.assignment_id == assignment.id
-        ).all()
-        all_employee_ids.extend(str(m.employee_id) for m in members)
+        truck = truck_map.get(str(assignment.truck_id))
+        rows = (
+            db.query(AssignmentMember, Employee)
+            .join(Employee, AssignmentMember.employee_id == Employee.id)
+            .filter(AssignmentMember.assignment_id == assignment.id)
+            .all()
+        )
+        for am, emp in rows:
+            crew_by_assignment.append((am, emp, truck))
+            all_employee_ids.append(str(emp.id))
 
     # Seed every employee as "pending" in Redis (idempotent)
     await seed_pending(str(dispatch_date), all_employee_ids)
 
-    # Persist pending records to DB (idempotent — skip existing rows)
-    existing_ids = {
+    # Persist pending confirmation records to DB (idempotent — skip existing rows)
+    existing_conf_ids = {
         str(r.employee_id)
         for r in db.query(DispatchConfirmation.employee_id)
             .filter(DispatchConfirmation.date == dispatch_date)
             .all()
     }
     for eid in all_employee_ids:
-        if eid not in existing_ids:
+        if eid not in existing_conf_ids:
             db.add(DispatchConfirmation(
                 employee_id=UUID(eid),
                 date=dispatch_date,
                 status="pending",
                 source="discord_bot",
             ))
+
+    # Seed in-app dispatch_assignment notifications (idempotent — skip if already exists)
+    existing_notif_ids = {
+        str(r.employee_id)
+        for r in db.query(Notification.employee_id)
+            .filter(
+                Notification.type == "dispatch_assignment",
+                Notification.dispatch_date == dispatch_date,
+            )
+            .all()
+    }
+
+    for am, emp, truck in crew_by_assignment:
+        if str(emp.id) in existing_notif_ids:
+            continue
+
+        role = am.role
+        if role == "driver":
+            # Drivers see their truck name — same as bot Phase 1
+            message = (
+                f"You have been assigned to **{truck.name if truck else 'a truck'}** "
+                f"for {dispatch_date}. Please confirm or decline your assignment. "
+                f"Driver deadline: 08:20 AM."
+            )
+        else:
+            # All other roles: attendance-only, no truck details
+            message = (
+                f"You have a shift assignment for {dispatch_date}. "
+                f"Please confirm your attendance. Deadline: 09:00 AM."
+            )
+
+        db.add(Notification(
+            employee_id=emp.id,
+            type="dispatch_assignment",
+            message=message,
+            dispatch_date=dispatch_date,
+        ))
+
     db.commit()
 
     # Notify the bot via internal webhook
@@ -494,16 +573,21 @@ async def publish_dispatch(
 async def record_confirmation(
     dispatch_date: date,
     payload: dict,
-    current_user: dict = Depends(get_current_user),
+    caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
 ):
     """Record an employee's confirmation response.
 
-    Called by the Discord bot when an employee taps Confirm or Decline.
-    Accepts any authenticated caller (the bot uses a service account JWT).
+    Called by the in-app buttons or Discord bot when an employee confirms/declines.
 
     Body: { "employee_id": "<uuid>", "status": "confirmed" | "declined" }
-    Writes to Redis (fast reads) and persists to DB (audit trail).
+
+    Authorization:
+    - Field staff (driver/walker/trainer/trainee) may only confirm their own assignment.
+    - Dispatch, management, and admin may confirm on behalf of any employee.
+
+    Write order: DB first (authoritative audit trail), then Redis (read cache).
+    Redis failure is non-fatal — the dashboard will fall back to the DB state.
     """
     employee_id = payload.get("employee_id")
     conf_status = payload.get("status")
@@ -514,10 +598,19 @@ async def record_confirmation(
             detail="Body must contain employee_id and status ('confirmed' | 'declined').",
         )
 
-    # Write to Redis for fast dashboard reads
-    await set_confirmation(str(dispatch_date), str(employee_id), conf_status)
+    # Field staff may only act on their own assignment.
+    privileged = {"dispatch", "management", "admin"}
+    if caller.role not in privileged and str(caller.id) != str(employee_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only confirm or decline your own assignment.",
+        )
 
-    # Upsert into DB for persistent audit trail
+    # Determine source: bot service account is role "dispatch" or "admin";
+    # field staff confirming in-app gets labelled "app".
+    source = "app" if caller.role not in privileged else "dispatch_override"
+
+    # 1. Write to DB first — this is the authoritative audit trail.
     now = datetime.now(timezone.utc)
     row = db.query(DispatchConfirmation).filter(
         DispatchConfirmation.employee_id == UUID(str(employee_id)),
@@ -526,15 +619,22 @@ async def record_confirmation(
     if row:
         row.status = conf_status
         row.confirmed_at = now
+        row.source = source
     else:
         db.add(DispatchConfirmation(
             employee_id=UUID(str(employee_id)),
             date=dispatch_date,
             status=conf_status,
             confirmed_at=now,
-            source="discord_bot",
+            source=source,
         ))
     db.commit()
+
+    # 2. Update Redis cache — non-fatal if Redis is unavailable.
+    try:
+        await set_confirmation(str(dispatch_date), str(employee_id), conf_status)
+    except Exception:
+        pass  # DB is authoritative; Redis is a read-cache only
 
     return {"date": str(dispatch_date), "employee_id": employee_id, "status": conf_status}
 
@@ -584,6 +684,52 @@ def get_confirmation_history(
         }
         for r in rows
     ]
+
+
+@router.post("/{dispatch_date}/finalize", status_code=status.HTTP_200_OK)
+async def finalize_dispatch(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+):
+    """Finalize the day's dispatch — post confirmed crews to Discord truck channels.
+
+    Called manually by dispatch at ~09:10 AM after the confirmation window closes.
+    Forwards the event to the bot, which:
+      - Posts finalized crew embeds to each truck's Discord channel
+      - Sets per-day channel permissions (confirmed crew + privileged roles only)
+      - Posts the master driver list to #drivers-chat
+    """
+    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    if not assignments:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No dispatch found for {dispatch_date}.",
+        )
+
+    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+    secret = os.environ.get("INTERNAL_SECRET", "")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{bot_url}/internal/finalize",
+                json={"date": str(dispatch_date)},
+                headers={"X-Internal-Secret": secret},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status not in (200, 202):
+                    body = await resp.text()
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"Bot webhook returned {resp.status}: {body}",
+                    )
+    except aiohttp.ClientError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach the Discord bot: {e}",
+        )
+
+    return {"status": "finalized", "date": str(dispatch_date)}
 
 
 @router.delete("/{dispatch_date}", status_code=status.HTTP_204_NO_CONTENT)

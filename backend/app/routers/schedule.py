@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker
+from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.time_off_request import TimeOffRequest
 from app.models.truck_assignment import TruckAssignment
@@ -15,8 +15,7 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
-allow_any_auth = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
-allow_mgmt     = RoleChecker(["dispatch", "management", "admin"])
+allow_mgmt = RoleChecker(["dispatch", "management", "admin"])
 
 @router.get("/{employee_id}")
 def get_employee_schedule(
@@ -24,8 +23,14 @@ def get_employee_schedule(
     start_date: date,
     end_date: date,
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_any_auth),
+    caller: Employee = Depends(get_caller_employee),
 ):
+    """Return schedule data for an employee over a date range.
+
+    Field staff (driver/walker/trainer/trainee) may only query their own schedule.
+    Dispatch, management, and admin may query any employee.
+    """
+    assert_owns_or_privileged(caller, employee_id, "schedule")
     # Determine all dates to process
     delta = end_date - start_date
     if delta.days < 0:
