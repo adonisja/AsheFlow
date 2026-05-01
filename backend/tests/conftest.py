@@ -37,6 +37,7 @@ from app.models.employee_off_day import EmployeeOffDay
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
 from app.models.notification import Notification
+from app.models.time_off_request import TimeOffRequest
 
 # Collect only the Table objects for models we actually need in tests.
 # Any model imported above registers its Table in Base.metadata.
@@ -57,6 +58,7 @@ DISPATCH_TABLES = [
     TrainingRecord.__table__,
     TrainingTask.__table__,
     Notification.__table__,
+    TimeOffRequest.__table__,
 ]
 
 

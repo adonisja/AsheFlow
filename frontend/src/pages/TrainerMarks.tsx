@@ -4,6 +4,7 @@ import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import ErrorBanner from '../components/ui/ErrorBanner';
 
 interface TrainerSummary {
   trainer: { id: string; name: string } | null;
@@ -35,12 +36,14 @@ export default function TrainerMarks() {
   const [selectedTrainerId, setSelectedTrainerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedMark, setExpandedMark] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const loadSummary = () => {
     setLoading(true);
+    setError(null);
     axiosClient.get('/trainer-marks/summary')
       .then(r => setSummaries(r.data))
-      .catch(console.error)
+      .catch(() => setError('Failed to load trainer marks summary.'))
       .finally(() => setLoading(false));
   };
 
@@ -50,7 +53,7 @@ export default function TrainerMarks() {
       : '/trainer-marks/';
     axiosClient.get(url)
       .then(r => setMarks(r.data))
-      .catch(console.error);
+      .catch(() => setError('Failed to load trainer marks.'));
   };
 
   useEffect(() => { loadSummary(); loadMarks(null); }, []);
@@ -82,6 +85,8 @@ export default function TrainerMarks() {
           </button>
         }
       />
+
+      <ErrorBanner message={error} />
 
       {/* Underperforming alert banner */}
       {underperforming.length > 0 && (

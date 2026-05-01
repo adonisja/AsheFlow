@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from uuid import UUID
 
 VALID_ROLES = ("driver", "walker", "trainer", "trainee", "dispatch", "management", "admin")
@@ -33,8 +33,27 @@ class EmployeeResponse(BaseModel):
     role: str
     is_active: bool
     phone_number: Optional[str] = None
+    account_status: str = "active"
 
     model_config = {"from_attributes": True}
+
+
+class BulkImportRow(BaseModel):
+    """One row from a bulk import payload — same fields as EmployeeCreate."""
+    name: str
+    email: str
+    discord_id: str
+    role: RoleStr
+    phone_number: Optional[str] = None
+
+
+class BulkImportResult(BaseModel):
+    """Per-row result returned from POST /employees/bulk."""
+    row: int
+    status: Literal["created", "skipped", "failed"]
+    name: str
+    email: str
+    reason: Optional[str] = None
 
 
 class EmployeePublicResponse(BaseModel):

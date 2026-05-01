@@ -15,3 +15,6 @@ from app.models.schedule_change_request import ScheduleChangeRequest
 from app.models.incident import Incident
 from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.audit_log import AuditLog
+from app.models.trainer_coverage import TrainerCoverage
+from app.models.trainer_mark import TrainerMark
+from app.models.anchor_point import AnchorPoint

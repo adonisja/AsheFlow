@@ -49,61 +49,12 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         "cognito_groups": payload.get("cognito:groups", [])
     }
 
-def get_caller_employee(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Resolve the Employee DB record for the authenticated caller.
+def _resolve_employee_from_cognito(current_user: dict, db: Session):
+    """Shared lookup chain: cognito_sub → discord_id → email → UUID fallback.
 
-    Matches on discord_id == current_user['username'] (Cognito username).
-    Raises 403 if no employee record exists for the caller — prevents ghost
-    users from submitting field-ops records on behalf of real employees.
-    """
-    from app.models.employee import Employee  # local import to avoid circular
-    from uuid import UUID as _UUID
-    username = current_user.get("username", "")
-    sub      = current_user.get("id", "")
-    email    = current_user.get("email", "")
-
-    # Fast path — already linked via cognito_sub
-    employee = None
-    if sub:
-        employee = db.query(Employee).filter(Employee.cognito_sub == sub).first()
-
-    # First-login linking: try discord_id, then email, then legacy UUID match
-    if not employee:
-        if username:
-            employee = db.query(Employee).filter(Employee.discord_id == username).first()
-        if not employee and email:
-            employee = db.query(Employee).filter(Employee.email == email).first()
-        if not employee and sub:
-            try:
-                employee = db.query(Employee).filter(Employee.id == _UUID(sub)).first()
-            except (ValueError, AttributeError):
-                pass
-
-        # Stamp cognito_sub permanently so future logins use the fast path
-        if employee and sub and not employee.cognito_sub:
-            employee.cognito_sub = sub
-            db.commit()
-
-    if not employee:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No employee record found for your account. Contact your manager.",
-        )
-    return employee
-
-
-def get_caller_employee_optional(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Same lookup chain as ``get_caller_employee`` but returns ``None`` instead of
-    raising 403 when no employee record is found.
-
-    Use this for audit/attribution fields (e.g. resolved_by) where the caller
-    not being in the DB should not block the operation.
+    Returns the Employee if found, else None.  Also stamps cognito_sub on first
+    login so future calls take the fast path.  Does NOT commit activation logic
+    (that's handled by the non-optional caller that knows the account lifecycle).
     """
     from app.models.employee import Employee
     from uuid import UUID as _UUID
@@ -127,9 +78,82 @@ def get_caller_employee_optional(
             except (ValueError, AttributeError):
                 pass
 
-        if employee and sub and not employee.cognito_sub:
-            employee.cognito_sub = sub
+    return employee, sub
+
+
+def get_caller_employee(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Resolve the Employee DB record for the authenticated caller.
+
+    Matches on discord_id == current_user['username'] (Cognito username).
+    Raises 403 if no employee record exists for the caller — prevents ghost
+    users from submitting field-ops records on behalf of real employees.
+    """
+    employee, sub = _resolve_employee_from_cognito(current_user, db)
+
+    if employee and sub and not employee.cognito_sub:
+        employee.cognito_sub = sub
+        # Stamp cognito_sub permanently so future logins use the fast path.
+        # Also activate the account on first successful login.
+        if employee.account_status == "pending_verification":
+            employee.account_status = "active"
+            employee.is_active = True
             db.commit()
+            # Fire Discord server invite in the background — best effort
+            _send_discord_invite(employee.discord_id, employee.name)
+        else:
+            db.commit()
+
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No employee record found for your account. Contact your manager.",
+        )
+    return employee
+
+
+def _send_discord_invite(discord_id: str, name: str) -> None:
+    """Fire a POST to the bot's /internal/invite endpoint — best effort, non-blocking."""
+    import threading
+    import requests
+    import os
+
+    def _fire():
+        try:
+            bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+            secret  = os.environ.get("INTERNAL_SECRET") or ""
+            requests.post(
+                f"{bot_url}/internal/invite",
+                json={"discord_id": discord_id, "name": name},
+                headers={"X-Internal-Secret": secret},
+                timeout=5,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Discord invite webhook failed for %s (%s): %s", name, discord_id, e
+            )
+
+    threading.Thread(target=_fire, daemon=True).start()
+
+
+def get_caller_employee_optional(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Same lookup chain as ``get_caller_employee`` but returns ``None`` instead of
+    raising 403 when no employee record is found.
+
+    Use this for audit/attribution fields (e.g. resolved_by) where the caller
+    not being in the DB should not block the operation.
+    """
+    employee, sub = _resolve_employee_from_cognito(current_user, db)
+
+    if employee and sub and not employee.cognito_sub:
+        employee.cognito_sub = sub
+        db.commit()
 
     return employee  # may be None — caller decides what to do
 
@@ -179,3 +203,25 @@ class RoleChecker:
         
         # Return the user so the endpoint can still access their info
         return user
+
+
+_PRIVILEGED_ROLES = frozenset({"dispatch", "management", "admin"})
+
+
+def assert_owns_or_privileged(caller, target_id: str, resource: str = "resource") -> None:
+    """Raise 403 unless caller owns the resource or has a privileged role.
+
+    Usage::
+
+        assert_owns_or_privileged(caller, employee_id)
+
+    Args:
+        caller:      Employee ORM object returned by ``get_caller_employee``.
+        target_id:   String UUID of the resource owner.
+        resource:    Human-readable noun for the error message.
+    """
+    if str(caller.id) != str(target_id) and caller.role not in _PRIVILEGED_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to access this {resource}.",
+        )

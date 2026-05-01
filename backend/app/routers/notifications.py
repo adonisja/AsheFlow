@@ -63,12 +63,19 @@ def mark_all_read(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
-    """Mark all notifications for an employee as read."""
+    """Mark all non-dispatch notifications as read.
+
+    dispatch_assignment notifications are intentionally excluded — they require
+    an explicit Confirm or Decline response and cannot be bulk-dismissed.
+    They are marked read automatically by the individual /read endpoint once
+    the employee has responded via the app or the Discord bot.
+    """
     if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     db.query(Notification).filter(
         Notification.employee_id == employee_id,
-        Notification.is_read == False
+        Notification.is_read == False,
+        Notification.type != "dispatch_assignment",
     ).update({"is_read": True})
     db.commit()
     return {"ok": True}

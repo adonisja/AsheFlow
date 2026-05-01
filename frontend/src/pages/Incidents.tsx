@@ -31,15 +31,8 @@ const CATEGORY_DEFAULT_SEVERITY: Record<string, string> = {
 
 const SEVERITY_RANK: Record<string, number> = { info: 0, warning: 1, critical: 2 };
 
-const todayStr = () => new Date().toISOString().split('T')[0];
-
-const fileToDataUrl = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
+import { getLocalYMD as todayStr } from '../utils/date';
+import { fileToDataUrl } from '../utils/file';
 
 // ---------------------------------------------------------------------------
 // Severity UI helpers
@@ -317,7 +310,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
     if (!employeeId) return;
     axiosClient.get('/incidents/my')
       .then(res => setIncidents(res.data))
-      .catch(console.error);
+      .catch(() => {});
   }, [employeeId, refreshKey]);
 
   if (incidents.length === 0) return (
@@ -389,7 +382,7 @@ function ManagementView() {
     if (filterResolved !== '') params.resolved = filterResolved === 'true';
     axiosClient.get('/incidents/', { params })
       .then(res => setIncidents(res.data))
-      .catch(console.error);
+      .catch(() => {});
   };
 
   useEffect(() => { load(); }, [filterSeverity, filterCategory, filterResolved]);
@@ -512,7 +505,7 @@ export default function Incidents() {
   useEffect(() => {
     axiosClient.get('/employees/me')
       .then(res => { setEmployeeId(res.data.id); setReporterName(res.data.name || ''); })
-      .catch(console.error);
+      .catch(() => {});
   }, []);
 
   const tabs = [

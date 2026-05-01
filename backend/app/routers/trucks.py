@@ -1,5 +1,7 @@
+import os
 from uuid import UUID
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -101,26 +103,39 @@ def update_truck(truck_id: UUID, truck: TruckUpdate, db: Session = Depends(get_d
 
 
 @router.put("/{truck_id}/deactivate", response_model=TruckResponse)
-def deactivate_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
-    """Set a truck's active status to False.
+async def deactivate_truck(truck_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_write)):
+    """Deactivate a truck.
 
-    Args:
-        truck_id: UUID of the truck to deactivate.
-        db: Database session.
-
-    Returns:
-        The updated Truck record with ``is_active`` set to False.
-
-    Raises:
-        HTTPException(404): If no truck with the given ID exists.
+    Clears discord_channel_id from the DB record and notifies the bot to strip
+    all crew-level permission overwrites from that channel, returning it to the
+    baseline (privileged roles only, @everyone denied). The Discord channel
+    itself is NOT deleted — history is preserved.
     """
     db_truck = db.query(Truck).filter(Truck.id == truck_id).first()
     if not db_truck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
 
+    channel_id = db_truck.discord_channel_id
     db_truck.is_active = False
+    db_truck.discord_channel_id = None
     db.commit()
     db.refresh(db_truck)
+
+    # Tell the bot to strip crew overwrites from the channel (best-effort)
+    if channel_id:
+        bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+        secret  = os.environ.get("INTERNAL_SECRET", "")
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{bot_url}/internal/lockdown-channel",
+                    json={"channel_id": channel_id},
+                    headers={"X-Internal-Secret": secret},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+        except Exception:
+            pass  # Non-fatal — channel perms can be cleaned up via /setup-channels
+
     return db_truck
 
 
