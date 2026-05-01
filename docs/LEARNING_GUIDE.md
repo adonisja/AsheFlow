@@ -1915,3 +1915,55 @@ Before removing an inline interface in favor of a shared type from `api/types.ts
 - `WalkerSummary.grade` was `string | null` but is a computed enum; the correct type is `'A' | 'B' | 'C' | 'D' | 'F' | null`.
 
 Accepting an overly-wide shared type silently removes compile-time checks that were present in the (more accurate) local definition. Check the SQL query or Pydantic schema, not just the existing TypeScript, before trusting `types.ts`.
+
+---
+
+## Frontend: Always Use `import type` for Interface/Type-Only Imports
+
+The project's `tsconfig.json` enables `verbatimModuleSyntax`. Under this flag, any import that only brings in types (interfaces, type aliases) **must** use `import type { ... }` — the regular `import { ... }` form is a build error.
+
+```typescript
+// WRONG — build fails with verbatimModuleSyntax
+import { CrewMember } from '../api/types';
+
+// CORRECT
+import type { CrewMember } from '../api/types';
+```
+
+The Vite dev server (esbuild) is lenient and lets regular imports through at runtime, so the error only surfaces during `npm run build` (`tsc -b` is strict). This means the dev server can appear green while the production build is broken.
+
+**Rule:** Any import from `api/types.ts` (or any file that only exports interfaces/types) must use `import type`. When adding a new import from a types file, always use `import type` from the start.
+
+---
+
+## Frontend: `title` Is Not a Valid Prop on Lucide Icons
+
+Lucide's `LucideProps` type does not include `title`. Passing it causes a TypeScript error at build time:
+
+```
+Type '{ className: string; title: string; }' is not assignable to type
+'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+Property 'title' does not exist on type ...
+```
+
+Use `aria-label` instead — it is valid on SVG elements and serves the same accessibility purpose:
+
+```tsx
+// WRONG
+<CheckCircle2 className="w-4 h-4 text-success" title="Confirmed" />
+
+// CORRECT
+<CheckCircle2 className="w-4 h-4 text-success" aria-label="Confirmed" />
+```
+
+---
+
+## Frontend: Production Build (`npm run build`) Is the Source of Truth
+
+The Vite dev server uses esbuild, which skips some TypeScript checks. `npm run build` runs `tsc -b` first and is stricter. A page can work perfectly in dev and fail to build in production for reasons the dev server never surfaces:
+
+- `verbatimModuleSyntax` enforcement (`import type` requirement)
+- Invalid props on third-party components (`title` on Lucide icons)
+- Strict generic inference that esbuild approximates
+
+**Always run `npm run build` after any refactor that touches imports or type definitions** — don't rely on the dev server being error-free as a signal that the build is clean.

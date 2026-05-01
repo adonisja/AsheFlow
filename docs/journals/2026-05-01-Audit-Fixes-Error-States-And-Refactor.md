@@ -130,3 +130,27 @@ After delegating the ownership check to `assert_owns_or_privileged`, `HTTPExcept
 - **`DriverConsistency` rename**: `WalkerPerformance.tsx` had `useState<DriverConsistency | null>` after inline type removal. The shared type is `WalkerConsistency`. Fixed by updating the state declaration.
 - **Null safety after type correction**: After correcting `WalkerConsistency.DriverConsistencyRow.avg_stars` and `.deviation` to nullable, several `.toFixed()` calls became unsafe. Fixed with `?? 0` and optional chaining (`?.toFixed(1) ?? '—'`).
 - **`aiohttp` missing**: Running `python -c "import app.routers.dispatch"` failed with `ModuleNotFoundError: No module named 'aiohttp'`. Pre-existing missing dev dependency — unrelated to this session's changes. Our direct targets (deps.py, field_ops.py, schedule.py, schemas) all imported cleanly.
+
+---
+
+## Post-Session: Production Build Errors (discovered during AnchorPoint UI work)
+
+After the refactor was committed, running `npm run build` (first production build since the refactor) surfaced two categories of errors that the Vite dev server had been silently hiding:
+
+### `verbatimModuleSyntax` — `import type` required
+
+The tsconfig enables `verbatimModuleSyntax`. Under this flag, imports that only bring in interfaces/types must use `import type { ... }`. The dev server (esbuild) doesn't enforce this; `tsc -b` during the production build does. Affected files:
+
+- `Schedule.tsx` — `import { CrewMember }`
+- `DispatchHome.tsx` — `import { CrewMember, UnavailableStaff }`
+- `DispatchDashboard.tsx` — `import { UnavailableStaff, DispatchResult }`
+- `AnchorPoints.tsx` — `import { AnchorPoint }`
+- `WalkerPerformance.tsx` — `import { WalkerSummary, WalkerProfile, WalkerConsistency, WalkerRatingDetail }`
+
+All fixed by changing to `import type { ... }`.
+
+### `title` prop invalid on Lucide icons
+
+`LucideProps` does not include `title`. The correct accessibility attribute is `aria-label`. Fixed in `DispatchDashboard.tsx` (3 icons) and `TraineeManagement/index.tsx` (1 icon).
+
+**Root cause**: the dev server was used exclusively during the refactor session; `npm run build` was never run to validate. Going forward, run `npm run build` after any refactor touching imports or types.
