@@ -245,12 +245,22 @@ const Navbar = () => {
                   <MapPin className="w-4 h-4" /> Field Ops
                 </NavLink>
               )}
+              {groups.includes('driver') && (
+                <NavLink to="/anchor-points" className={navLinkClass}>
+                  <MapPin className="w-4 h-4" /> Anchor Point
+                </NavLink>
+              )}
               <NavLink to="/incidents" className={navLinkClass}>
                 <AlertTriangle className="w-4 h-4" /> Incidents
               </NavLink>
               {(groups.includes('dispatch') || isAdmin) && (
                 <NavLink to="/dispatch" className={navLinkClass}>
                   <ClipboardCheck className="w-4 h-4" /> Assignments
+                </NavLink>
+              )}
+              {(groups.includes('dispatch') || isAdmin) && (
+                <NavLink to="/anchor-points" className={navLinkClass}>
+                  <MapPin className="w-4 h-4" /> Anchor Points
                 </NavLink>
               )}
               {/* Management tools: mgmt sees all four; admin only sees Assets */}
@@ -404,12 +414,22 @@ const Navbar = () => {
                 <MapPin className="w-5 h-5" /> Field Ops
               </NavLink>
             )}
+            {groups.includes('driver') && (
+              <NavLink to="/anchor-points" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
+                <MapPin className="w-5 h-5" /> Anchor Point
+              </NavLink>
+            )}
             <NavLink to="/incidents" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
               <AlertTriangle className="w-5 h-5" /> Incidents
             </NavLink>
             {(groups.includes('dispatch') || isAdmin) && (
               <NavLink to="/dispatch" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
                 <ClipboardCheck className="w-5 h-5" /> Assignments
+              </NavLink>
+            )}
+            {(groups.includes('dispatch') || isAdmin) && (
+              <NavLink to="/anchor-points" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
+                <MapPin className="w-5 h-5" /> Anchor Points
               </NavLink>
             )}
             {isMgmt && (
