@@ -10,7 +10,7 @@ import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import { CrewMember, UnavailableStaff } from '../api/types';
+import type { CrewMember, UnavailableStaff } from '../api/types';
 import { getLocalYMD } from '../utils/date';
 
 interface ScheduleChangeRequest {
