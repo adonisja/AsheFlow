@@ -532,7 +532,7 @@ export default function TraineeManagement() {
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           {isEscalated && (
-                            <AlertTriangle className="w-3.5 h-3.5 text-warning" title="Has escalated tasks" />
+                            <AlertTriangle className="w-3.5 h-3.5 text-warning" aria-label="Has escalated tasks" />
                           )}
                           <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
                         </div>

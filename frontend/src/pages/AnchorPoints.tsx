@@ -5,7 +5,7 @@ import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
 import SectionHeader from '../components/ui/SectionHeader';
 import ErrorBanner from '../components/ui/ErrorBanner';
-import { AnchorPoint } from '../api/types';
+import type { AnchorPoint } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
