@@ -8,6 +8,7 @@ import {
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import MotionCard from '../components/ui/MotionCard';
+import ErrorBanner from '../components/ui/ErrorBanner';
 import { SkeletonCard } from '../components/ui/Skeleton';
 
 type Employee = {
@@ -30,15 +31,21 @@ export default function AdminDashboard() {
   const [incidents, setIncidents] = useState<any[]>([]);
   const [trainingToday, setTrainingToday] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAll = () => {
     setLoading(true);
+    setError(null);
     Promise.allSettled([
       axiosClient.get('/employees/?include_inactive=true&limit=500').then(r => setEmployees(r.data)),
       axiosClient.get('/trucks/?include_inactive=true').then(r => setTrucks(r.data)),
       axiosClient.get('/incidents/?resolved=false').then(r => setIncidents(r.data)),
       axiosClient.get('/training/daily/active').then(r => setTrainingToday(r.data)),
-    ]).finally(() => setLoading(false));
+    ]).then(results => {
+      if (results.some(r => r.status === 'rejected')) {
+        setError('Some dashboard data failed to load. Refresh to retry.');
+      }
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => { fetchAll(); }, []);
@@ -56,7 +63,7 @@ export default function AdminDashboard() {
   const handleResolveIncident = (id: string) => {
     axiosClient.patch(`/incidents/${id}/resolve`).then(() => {
       setIncidents(prev => prev.filter(i => i.id !== id));
-    }).catch(console.error);
+    }).catch(() => setError('Failed to resolve incident.'));
   };
 
   if (loading) {
@@ -86,6 +93,8 @@ export default function AdminDashboard() {
           </button>
         }
       />
+
+      <ErrorBanner message={error} />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

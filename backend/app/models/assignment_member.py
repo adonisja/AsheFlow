@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, ForeignKey, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -32,3 +32,6 @@ class AssignmentMember(Base):
     assignment_id = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="CASCADE"), nullable=False, index=True)
     employee_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),          nullable=False, index=True)
     role          = Column(String(50),         nullable=False)
+    # True when a dispatch coordinator placed this member manually after the algorithm ran.
+    # False (default) = algorithm-placed. Used for fill-rate analytics.
+    is_manual     = Column(Boolean,            nullable=False, default=False)

@@ -10,29 +10,8 @@ import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
-
-interface ConfirmationMap {
-  [employeeId: string]: 'confirmed' | 'declined' | 'pending';
-}
-
-interface CrewMember {
-  employee_id: string;
-  name: string;
-  role: string;
-}
-
-interface DispatchData {
-  date: string;
-  assigned_crews: Record<string, CrewMember[]>;
-  warnings: { type?: string; message?: string }[];
-}
-
-interface UnavailableStaff {
-  id: string;
-  name: string;
-  role: string;
-  reason: 'time_off_request' | 'recurring_off_day';
-}
+import { CrewMember, UnavailableStaff } from '../api/types';
+import { getLocalYMD } from '../utils/date';
 
 interface ScheduleChangeRequest {
   id: string;
@@ -44,10 +23,20 @@ interface ScheduleChangeRequest {
   created_at: string;
 }
 
+interface ConfirmationMap {
+  [employeeId: string]: 'confirmed' | 'declined' | 'pending';
+}
+
+interface DispatchData {
+  date: string;
+  assigned_crews: Record<string, CrewMember[]>;
+  warnings: { type?: string; message?: string }[];
+}
+
 export default function DispatchHome() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const today = new Date().toISOString().split('T')[0];
+  const today = getLocalYMD();
 
   const [dispatch, setDispatch] = useState<DispatchData | null>(null);
   const [confirmations, setConfirmations] = useState<ConfirmationMap>({});

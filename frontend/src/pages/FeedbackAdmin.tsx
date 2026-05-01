@@ -4,6 +4,7 @@ import { MessageSquare, Bug, Lightbulb, RefreshCw, CheckCircle2 } from 'lucide-r
 import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import ErrorBanner from '../components/ui/ErrorBanner';
 
 type FeedbackType = 'bug' | 'feature_request' | 'general';
 type FeedbackStatus = 'new' | 'in_progress' | 'resolved';
@@ -47,12 +48,14 @@ export default function FeedbackAdmin() {
   const [feedback, setFeedback] = useState<Feedback[]>([]);
   const [filter, setFilter] = useState<FeedbackStatus | 'all'>('all');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchFeedback = () => {
     setLoading(true);
+    setError(null);
     axiosClient.get('/feedback/?limit=200')
       .then(r => setFeedback(r.data))
-      .catch(console.error)
+      .catch(() => setError('Failed to load feedback. Please refresh.'))
       .finally(() => setLoading(false));
   };
 
@@ -61,7 +64,7 @@ export default function FeedbackAdmin() {
   const updateStatus = (id: string, newStatus: FeedbackStatus) => {
     axiosClient.patch(`/feedback/${id}/status`, { status: newStatus })
       .then(r => setFeedback(prev => prev.map(f => f.id === id ? r.data : f)))
-      .catch(console.error);
+      .catch(() => setError('Failed to update feedback status.'));
   };
 
   const visible = filter === 'all' ? feedback : feedback.filter(f => f.status === filter);
@@ -96,6 +99,8 @@ export default function FeedbackAdmin() {
           </button>
         }
       />
+
+      <ErrorBanner message={error} />
 
       {/* Filter + counts */}
       <div className="flex items-center gap-2 flex-wrap">

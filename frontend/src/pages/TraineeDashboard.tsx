@@ -3,14 +3,7 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { ClipboardCheck, Loader2 } from 'lucide-react';
 import TaskChecklist from '../components/TrainerDashboard/TaskChecklist';
-
-function getLocalYMD() {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
+import { getLocalYMD } from '../utils/date';
 
 export default function TraineeDashboard() {
   const { user } = useAuth();

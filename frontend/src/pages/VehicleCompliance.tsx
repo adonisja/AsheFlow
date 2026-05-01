@@ -4,6 +4,7 @@ import {
   ShieldAlert, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronUp,
   Truck, Users, BarChart2, Filter,
 } from 'lucide-react';
+import ErrorBanner from '../components/ui/ErrorBanner';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -355,6 +356,7 @@ export default function VehicleCompliance() {
   const [drivers, setDrivers]       = useState<{ id: string; name: string }[]>([]);
   const [trucks, setTrucks]         = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState<string | null>(null);
 
   // Filter state — managed here, passed down to InspectionHistory
   const [filterDriver, setFilterDriver] = useState('');
@@ -363,6 +365,7 @@ export default function VehicleCompliance() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     Promise.allSettled([
       axiosClient.get(`/field-ops/inspections/history?days=${days}`)
         .then(r => setInspections(r.data)),
@@ -383,7 +386,11 @@ export default function VehicleCompliance() {
             .sort((a: any, b: any) => a.name.localeCompare(b.name));
           setTrucks(ts);
         }),
-    ]).finally(() => setLoading(false));
+    ]).then(results => {
+      if (results.some(r => r.status === 'rejected')) {
+        setError('Some compliance data failed to load. Please refresh.');
+      }
+    }).finally(() => setLoading(false));
   }, [days]);
 
   // KPI derivations
@@ -444,6 +451,8 @@ export default function VehicleCompliance() {
           </div>
         </div>
       </div>
+
+      <ErrorBanner message={error} />
 
       {loading ? (
         <div className="flex h-60 items-center justify-center">

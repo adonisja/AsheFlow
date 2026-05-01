@@ -2,24 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const todayStr = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-
-/** Read a File as a base64 data-URI string */
-const fileToDataUrl = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+import { getLocalYMD as todayStr } from '../utils/date';
+import { fileToDataUrl } from '../utils/file';
 
 // Human-readable labels for inspection items
 const ITEM_LABELS: Record<string, string> = {
@@ -65,7 +49,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
         setSubmitted(true);
         setSubmittedData({ has_failures: todayRecord.has_failures, items: todayRecord.items, notes: todayRecord.notes });
       }
-    }).catch(console.error);
+    }).catch(() => {});
   }, [employeeId]);
 
   const setResult = (item: string, pass: boolean) => {
@@ -197,7 +181,7 @@ function CheckInPanel({ employeeId }: { employeeId: string }) {
           }
         }
       })
-      .catch(console.error);
+      .catch(() => {});
   }, [employeeId]);
 
   const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -293,7 +277,7 @@ function DeparturePanel({ employeeId }: { employeeId: string }) {
           if (todayRecord.itinerary_photo_url) setPreviewUrl(todayRecord.itinerary_photo_url);
         }
       })
-      .catch(console.error);
+      .catch(() => {});
   }, [employeeId]);
 
   const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -389,7 +373,7 @@ function ReturnPanel({ employeeId }: { employeeId: string }) {
           }
         }
       })
-      .catch(console.error);
+      .catch(() => {});
   }, [employeeId]);
 
   const handleReturn = async () => {
@@ -502,7 +486,7 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
         const todayRecord = res.data.find((r: any) => r.date === today);
         if (todayRecord) setLog(todayRecord);
       })
-      .catch(console.error);
+      .catch(() => {});
   }, [employeeId]);
 
   // When the driver flips units, convert displayed input values automatically
@@ -722,7 +706,7 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
         }
         setEntries(pre);
       })
-      .catch(console.error)
+      .catch(() => {})
       .finally(() => setCrewLoading(false));
   }, [employeeId]);
 
@@ -1457,7 +1441,7 @@ export default function FieldOps() {
     if (isAdmin || !user) return;
     axiosClient.get('/employees/me')
       .then(res => setEmployeeId(res.data.id))
-      .catch(console.error);
+      .catch(() => {});
   }, [user, isAdmin]);
 
   if (isAdmin) {

@@ -15,6 +15,7 @@ class FeedbackResponse(FeedbackBase):
     id: UUID
     status: str
     created_at: datetime
+    sender_name: Optional[str] = None
 
     class Config:
         from_attributes = True

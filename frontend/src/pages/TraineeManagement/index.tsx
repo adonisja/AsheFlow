@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
+import { getLocalYMD } from '../../utils/date';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,15 +27,6 @@ interface EscalatedRecord {
   record: any;
   escalated_tasks: { id: string; topic_title: string; description: string; debt_age: number }[];
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const getLocalYMD = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
 
 const progressColor = (completed: number, total: number) => {
   if (total === 0) return 'bg-accent';
@@ -229,7 +221,7 @@ function HistoryView({
     setLoading(true);
     axiosClient.get(`/training/trainee/${traineeId}`)
       .then(res => setRecords(res.data))
-      .catch(console.error)
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [traineeId]);
 

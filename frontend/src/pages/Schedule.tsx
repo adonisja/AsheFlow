@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { getSchedule, createOffDay } from '../api/preferences';
 import { createTimeOffRequest } from '../api/timeOffRequests';
+import { fmtDate } from '../utils/date';
 import {
   CalendarDays, Clock, Users, CheckCircle2, XCircle, ClipboardCheck,
   ChevronLeft, ChevronRight, AlertTriangle, BarChart2, Calendar,
@@ -11,12 +12,9 @@ import {
 } from 'lucide-react';
 import { MiniCalendar } from '../components/MiniCalendar';
 import NotificationBanner from '../components/NotificationBanner';
+import ErrorBanner from '../components/ui/ErrorBanner';
 
-export interface CrewMember {
-  id: string;
-  name: string;
-  role: string;
-}
+import { CrewMember } from '../api/types';
 
 interface ScheduleDay {
   date: string;
@@ -58,9 +56,6 @@ const daysSince = (isoStr: string) => {
   return Math.floor(diff / 86_400_000);
 };
 
-const fmtDate = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
 // ---------------------------------------------------------------------------
 // Management / Admin view
 // ---------------------------------------------------------------------------
@@ -91,6 +86,7 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
   const [offDayPending, setOffDayPending] = useState<any[]>([]);
   const [reworkPending, setReworkPending] = useState<any[]>([]);
   const [employees, setEmployees]         = useState<any[]>([]);
+  const [error, setError]                 = useState<string | null>(null);
 
   // 4-week availability heatmap
   const [heatmapData, setHeatmapData]   = useState<Record<string, { driver: number; trainer: number; walker: number }>>({});
@@ -104,7 +100,7 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
   const [allReworks, setAllReworks] = useState<any[]>([]);
 
   useEffect(() => {
-    axiosClient.get('/employees/').then(r => setEmployees(r.data)).catch(console.error);
+    axiosClient.get('/employees/').then(r => setEmployees(r.data)).catch(() => {});
 
     Promise.allSettled([
       axiosClient.get('/time-off-requests/')
@@ -114,7 +110,11 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
       axiosClient.get('/schedule-change-requests/')
         .then(r => setReworkPending(r.data)),
       ...(isAdmin ? [axiosClient.get('/schedule-change-requests/').then(r => setAllReworks(r.data))] : []),
-    ]);
+    ]).then(results => {
+      if (results.some(r => r.status === 'rejected')) {
+        setError('Some schedule data failed to load. Please refresh.');
+      }
+    });
 
     // Build 4-week availability heatmap
     const today = new Date();
@@ -240,6 +240,8 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
           </p>
         </div>
       </div>
+
+      <ErrorBanner message={error} />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -522,7 +524,6 @@ const Schedule = () => {
   const [myId, setMyId]           = useState<string>('');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scheduleData, setScheduleData]     = useState<ScheduleDay[]>([]);
-  const [availableData, setAvailableData]   = useState<{ driver: any[]; trainer: any[]; walker: any[] } | null>(null);
   const [currentMonth, setCurrentMonth]     = useState<Date>(new Date());
   const [selectedDate, setSelectedDate]     = useState<string>('');
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
@@ -565,7 +566,7 @@ const Schedule = () => {
     if (isPrivileged || !myId) return;
     axiosClient.get(`/time-off-requests/${myId}`)
       .then(res => setPendingRequests(res.data.filter((r: any) => r.status === 'pending')))
-      .catch(console.error);
+      .catch(() => {});
   }, [isPrivileged, myId]);
 
   // Early return for privileged roles — all hooks are above this line

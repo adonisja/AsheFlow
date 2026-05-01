@@ -1,5 +1,7 @@
 import boto3
 import logging
+from datetime import datetime, timezone
+from typing import List
 from uuid import UUID
 from botocore.exceptions import ClientError
 
@@ -10,7 +12,7 @@ from app.api.deps import RoleChecker, Pagination, get_caller_employee
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
-from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse
+from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -49,7 +51,9 @@ def create_employee(
     if db.query(Employee).filter(Employee.discord_id == employee.discord_id).first():
         raise HTTPException(status_code=400, detail="An employee with this Discord ID already exists.")
 
-    # Create the Cognito user — this sends the invite email automatically
+    # Create the Cognito user and send the invite email.
+    # email_verified is intentionally NOT set to true here — the employee must
+    # verify their email on first login. is_active stays False until they do.
     cognito = _cognito_client()
     cognito_sub = None
     try:
@@ -57,9 +61,8 @@ def create_employee(
             UserPoolId=settings.aws_cognito_user_pool_id,
             Username=employee.email,
             UserAttributes=[
-                {"Name": "email",          "Value": employee.email},
-                {"Name": "email_verified", "Value": "true"},
-                {"Name": "name",           "Value": employee.name},
+                {"Name": "email", "Value": employee.email},
+                {"Name": "name",  "Value": employee.name},
             ],
             DesiredDeliveryMediums=["EMAIL"],
         )
@@ -83,12 +86,127 @@ def create_employee(
         logger.error("Cognito AdminCreateUser failed: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to create Cognito account: {e.response['Error']['Message']}")
 
-    # Persist the employee record with the cognito_sub already stamped
-    db_employee = Employee(**employee.model_dump(), cognito_sub=cognito_sub)
+    # Persist with pending status — account activates on first successful login
+    db_employee = Employee(
+        **employee.model_dump(),
+        cognito_sub=cognito_sub,
+        is_active=False,
+        account_status="pending_verification",
+        invited_at=datetime.now(timezone.utc),
+    )
     db.add(db_employee)
     db.commit()
     db.refresh(db_employee)
     return db_employee
+
+
+@router.post("/bulk", response_model=List[BulkImportResult], status_code=status.HTTP_200_OK)
+def bulk_import_employees(
+    rows: List[BulkImportRow],
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Import multiple employees in one request.
+
+    Each row is processed independently through the same logic as POST /employees/:
+    - Duplicate email or discord_id check → skipped
+    - AdminCreateUser in Cognito (sends invite email) → created
+    - Any Cognito or unexpected error → failed
+
+    Returns a per-row result list. A mix of created/skipped/failed in one
+    request is normal — the entire batch is never aborted due to a single failure.
+    Rows are capped at 200 per request to prevent runaway Cognito API usage.
+    """
+    if len(rows) > 200:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 200 rows per import. Split your file into smaller batches.",
+        )
+
+    cognito = _cognito_client()
+    results: List[BulkImportResult] = []
+
+    for i, row in enumerate(rows, start=1):
+        # Duplicate checks
+        if db.query(Employee).filter(Employee.email == row.email).first():
+            results.append(BulkImportResult(
+                row=i, status="skipped", name=row.name, email=row.email,
+                reason="Email already exists.",
+            ))
+            continue
+
+        if db.query(Employee).filter(Employee.discord_id == row.discord_id).first():
+            results.append(BulkImportResult(
+                row=i, status="skipped", name=row.name, email=row.email,
+                reason="Discord ID already exists.",
+            ))
+            continue
+
+        # Cognito invite
+        cognito_sub = None
+        try:
+            response = cognito.admin_create_user(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=row.email,
+                UserAttributes=[
+                    {"Name": "email", "Value": row.email},
+                    {"Name": "name",  "Value": row.name},
+                ],
+                DesiredDeliveryMediums=["EMAIL"],
+            )
+            cognito_sub = next(
+                (a["Value"] for a in response["User"]["Attributes"] if a["Name"] == "sub"),
+                None,
+            )
+            group = ROLE_TO_COGNITO_GROUP.get(row.role)
+            if group:
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=row.email,
+                    GroupName=group,
+                )
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            reason = (
+                "Cognito account already exists."
+                if code == "UsernameExistsException"
+                else f"Cognito error: {e.response['Error']['Message']}"
+            )
+            results.append(BulkImportResult(
+                row=i, status="failed", name=row.name, email=row.email, reason=reason,
+            ))
+            continue
+        except Exception as e:
+            results.append(BulkImportResult(
+                row=i, status="failed", name=row.name, email=row.email,
+                reason=f"Unexpected error: {str(e)}",
+            ))
+            continue
+
+        # Persist
+        db_employee = Employee(
+            **row.model_dump(),
+            cognito_sub=cognito_sub,
+            is_active=False,
+            account_status="pending_verification",
+            invited_at=datetime.now(timezone.utc),
+        )
+        db.add(db_employee)
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            results.append(BulkImportResult(
+                row=i, status="failed", name=row.name, email=row.email,
+                reason=f"Database error: {str(e)}",
+            ))
+            continue
+
+        results.append(BulkImportResult(
+            row=i, status="created", name=row.name, email=row.email,
+        ))
+
+    return results
 
 
 PRIVILEGED_ROLES = {"management", "admin", "dispatch"}
@@ -165,8 +283,10 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: d
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
     updates = employee.model_dump(exclude_unset=True)
-    new_role = updates.get("role")
-    old_role = db_employee.role
+    new_role  = updates.get("role")
+    new_email = updates.get("email")
+    old_role  = db_employee.role
+    old_email = db_employee.email
 
     for key, value in updates.items():
         setattr(db_employee, key, value)
@@ -174,12 +294,59 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: d
     db.commit()
     db.refresh(db_employee)
 
-    # Sync Cognito group when role changes and the employee has a Cognito account
-    if new_role and new_role != old_role and db_employee.email:
+    cognito = _cognito_client()
+
+    # Wrong-email recovery — only valid while the account is still pending.
+    # Delete the old Cognito user and recreate with the corrected email so a
+    # fresh invite is sent. Active accounts must use the Cognito console.
+    if new_email and new_email != old_email and db_employee.account_status == "pending_verification":
+        try:
+            if old_email:
+                cognito.admin_delete_user(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=old_email,
+                )
+        except ClientError as e:
+            logger.warning("Could not delete old Cognito user %s: %s", old_email, e)
+
+        try:
+            response = cognito.admin_create_user(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=new_email,
+                UserAttributes=[
+                    {"Name": "email", "Value": new_email},
+                    {"Name": "name",  "Value": db_employee.name},
+                ],
+                DesiredDeliveryMediums=["EMAIL"],
+            )
+            new_sub = next(
+                (a["Value"] for a in response["User"]["Attributes"] if a["Name"] == "sub"),
+                None,
+            )
+            db_employee.cognito_sub = new_sub
+            db_employee.invited_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(db_employee)
+
+            group = ROLE_TO_COGNITO_GROUP.get(db_employee.role)
+            if group:
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=new_email,
+                    GroupName=group,
+                )
+        except ClientError as e:
+            logger.error("Cognito re-invite for corrected email %s failed: %s", new_email, e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Email updated in DB but Cognito re-invite failed: {e.response['Error']['Message']}",
+            )
+
+    # Sync Cognito group when role changes on an active account
+    elif new_role and new_role != old_role and db_employee.email and db_employee.account_status != "pending_verification":
         cognito_username = db_employee.email
         old_group = ROLE_TO_COGNITO_GROUP.get(old_role)
         new_group = ROLE_TO_COGNITO_GROUP.get(new_role)
-        cognito = _cognito_client()
         try:
             if old_group:
                 cognito.admin_remove_user_from_group(
@@ -194,8 +361,6 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: d
                     GroupName=new_group,
                 )
         except ClientError as e:
-            # DB is already committed — log the Cognito failure but don't roll back.
-            # Management can retry; the DB record is the source of truth.
             logger.error(
                 "Cognito group sync failed for employee %s (old=%s new=%s): %s",
                 db_employee.id, old_group, new_group, e,

@@ -9,9 +9,6 @@ class EmployeeOffDayCreate(BaseModel):
 class EmployeeOffDayUpdate(BaseModel):
     day_of_week: str
 
-class EmployeeOffDayUpdate(BaseModel):
-    day_of_week: str
-
 
 class EmployeeOffDayResponse(BaseModel):
     id: UUID

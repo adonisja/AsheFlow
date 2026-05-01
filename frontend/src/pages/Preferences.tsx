@@ -7,6 +7,7 @@ import {
   type EmployeeRelationship
 } from '../api/preferences';
 import NotificationBanner from '../components/NotificationBanner';
+import ErrorBanner from '../components/ui/ErrorBanner';
 import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users } from 'lucide-react';
 
 const selectStyles = {
@@ -309,6 +310,7 @@ const Preferences = () => {
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
   const [targetFavId, setTargetFavId] = useState('');
   const [targetBanId, setTargetBanId] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Truck reassignment — today-only, walker/trainer only
   const [changeRequests, setChangeRequests] = useState<any[]>([]);
@@ -328,21 +330,21 @@ const Preferences = () => {
           if (self) setMyId(self.id);
         }
       })
-      .catch(console.error);
+      .catch(() => setLoadError('Failed to load employee data.'));
   }, [isAdmin, user]);
 
   const loadPreferences = async (id: string) => {
     try {
       const rels = await getRelationships(id);
       setRelationships(rels);
-    } catch (err) { console.error(err); }
+    } catch { setLoadError('Failed to load preferences.'); }
   };
 
   const loadChangeRequests = async (id: string) => {
     try {
       const res = await axiosClient.get(`/assignment-change-requests/employee/${id}`);
       setChangeRequests(res.data);
-    } catch (err) { console.error(err); }
+    } catch { setLoadError('Failed to load change requests.'); }
   };
 
   useEffect(() => {
@@ -430,6 +432,8 @@ const Preferences = () => {
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Preferences</h1>
+
+      <ErrorBanner message={loadError} />
 
       {myId && <NotificationBanner employeeId={myId} />}
 

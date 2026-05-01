@@ -4,6 +4,7 @@ import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import ErrorBanner from '../components/ui/ErrorBanner';
 
 interface CurriculumItem {
   id: string;
@@ -44,12 +45,14 @@ export default function TrainingCurriculum() {
   const [items, setItems] = useState<CurriculumItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
+    setError(null);
     axiosClient.get('/training/curriculum')
       .then(r => setItems(r.data))
-      .catch(console.error)
+      .catch(() => setError('Failed to load training curriculum.'))
       .finally(() => setLoading(false));
   };
 
@@ -86,6 +89,8 @@ export default function TrainingCurriculum() {
           </button>
         }
       />
+
+      <ErrorBanner message={error} />
 
       {/* Phases 1–3 */}
       {[1, 2, 3].map(phase => {

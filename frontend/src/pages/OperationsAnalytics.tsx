@@ -2,24 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart2, Users, AlertTriangle, Clock, TrendingUp, RefreshCw } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function isoWeekStart(offset = 0): string {
-  const d = new Date();
-  d.setDate(d.getDate() - d.getDay() + 1 + offset * 7); // Monday
-  return d.toISOString().split('T')[0];
-}
-
-function nWeeksAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n * 7);
-  return d.toISOString().split('T')[0];
-}
-
-function today(): string { return new Date().toISOString().split('T')[0]; }
+import { today, nWeeksAgo } from '../utils/date';
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -64,16 +47,18 @@ function Bar({ value, max, color }: { value: number; max: number; color: string 
 function FillRatePanel() {
   const [data, setData]       = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
   const [weeks, setWeeks]     = useState(8);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const start = nWeeksAgo(weeks);
       const end   = today();
       const res   = await axiosClient.get('/analytics/dispatch-fill-rate', { params: { start_date: start, end_date: end } });
       setData(res.data);
-    } catch { /* silent */ } finally { setLoading(false); }
+    } catch { setError('Failed to load dispatch fill rate data.'); } finally { setLoading(false); }
   }, [weeks]);
 
   useEffect(() => { load(); }, [load]);
@@ -92,7 +77,7 @@ function FillRatePanel() {
           </button>
         ))}
       </div>
-      {loading ? <Spinner /> : !data || data.by_date.length === 0 ? <Empty text="No dispatch data in range." /> : (
+      {error ? <Empty text={error} /> : loading ? <Spinner /> : !data || data.by_date.length === 0 ? <Empty text="No dispatch data in range." /> : (
         <>
           <div className="grid grid-cols-3 gap-3 mb-6">
             <StatCard label="Total Slots" value={data.summary.total_slots} />
@@ -129,11 +114,12 @@ function FillRatePanel() {
 function TrainerLoadPanel() {
   const [data, setData]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
 
   useEffect(() => {
     axiosClient.get('/analytics/trainer-load')
       .then(r => setData(r.data))
-      .catch(() => {})
+      .catch(() => setError('Failed to load trainer load data.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -142,7 +128,7 @@ function TrainerLoadPanel() {
   return (
     <div className="card">
       <SectionHeader icon={Users} title="Trainer Load" subtitle="active trainees per trainer" iconColor="text-info" />
-      {loading ? <Spinner /> : data.length === 0 ? <Empty text="No active training records." /> : (
+      {error ? <Empty text={error} /> : loading ? <Spinner /> : data.length === 0 ? <Empty text="No active training records." /> : (
         <div className="space-y-3">
           {data.map((t: any) => (
             <div key={t.trainer_id} className="p-3 rounded-xl border border-border">
@@ -174,14 +160,16 @@ function TrainerLoadPanel() {
 function BanOverridePanel() {
   const [data, setData]       = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
   const [weeks, setWeeks]     = useState(8);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const res = await axiosClient.get('/analytics/ban-override-freq', { params: { weeks } });
       setData(res.data);
-    } catch { /* silent */ } finally { setLoading(false); }
+    } catch { setError('Failed to load ban override data.'); } finally { setLoading(false); }
   }, [weeks]);
 
   useEffect(() => { load(); }, [load]);
@@ -200,7 +188,7 @@ function BanOverridePanel() {
           </button>
         ))}
       </div>
-      {loading ? <Spinner /> : !data ? <Empty text="No override data." /> : (
+      {error ? <Empty text={error} /> : loading ? <Spinner /> : !data ? <Empty text="No override data." /> : (
         <>
           <div className="grid grid-cols-2 gap-3 mb-5">
             <StatCard label="Total Overrides" value={data.total_overrides}
@@ -230,16 +218,18 @@ function BanOverridePanel() {
 function ConfirmationTimesPanel() {
   const [data, setData]       = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
   const [weeks, setWeeks]     = useState(4);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const start = nWeeksAgo(weeks);
       const end   = today();
       const res   = await axiosClient.get('/analytics/confirmation-times', { params: { start_date: start, end_date: end } });
       setData(res.data);
-    } catch { /* silent */ } finally { setLoading(false); }
+    } catch { setError('Failed to load confirmation time data.'); } finally { setLoading(false); }
   }, [weeks]);
 
   useEffect(() => { load(); }, [load]);
@@ -256,7 +246,7 @@ function ConfirmationTimesPanel() {
           </button>
         ))}
       </div>
-      {loading ? <Spinner /> : !data || data.overall.total_responses === 0 ? <Empty text="No confirmed responses in range." /> : (
+      {error ? <Empty text={error} /> : loading ? <Spinner /> : !data || data.overall.total_responses === 0 ? <Empty text="No confirmed responses in range." /> : (
         <>
           <div className="grid grid-cols-3 gap-3 mb-5">
             <StatCard label="Responses" value={data.overall.total_responses} />
