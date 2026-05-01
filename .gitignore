@@ -99,6 +99,7 @@ Soul.md
 fix_walkers.py
 bot/.env
 backend/.env
+interview_prep.md
 
 # Celery runtime state
 celerybeat-schedule

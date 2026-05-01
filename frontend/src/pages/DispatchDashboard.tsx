@@ -2,28 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
-
-interface Warning {
-  type?: string;
-  message?: string;
-  employee_id?: string;
-  banned_by?: string[];
-}
-
-interface UnavailableStaff {
-  id: string;
-  name: string;
-  role: string;
-  discord_id: string;
-  phone_number: string | null;
-  reason: 'time_off_request' | 'recurring_off_day';
-}
-
-interface DispatchResult {
-  date: string;
-  assigned_crews: Record<string, any[]>;
-  warnings: Warning[];
-}
+import { UnavailableStaff, DispatchResult } from '../api/types';
 
 export default function DispatchDashboard() {
   const { groups } = useAuth();

@@ -13,8 +13,26 @@ class Settings(BaseSettings):
     # Redis — used for dispatch confirmation state
     redis_url: str = "redis://localhost:6379/0"
 
-    # Shared secret for internal bot → backend webhook calls
+    # Shared secret for internal bot → backend webhook calls.
+    # Must be overridden via environment variable before deployment.
     internal_secret: str = "change-me-in-production"
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        import os
+        if os.environ.get("APP_ENV", "development") == "production" and self.internal_secret == "change-me-in-production":
+            raise RuntimeError(
+                "INTERNAL_SECRET must be set to a strong random value in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+
+    # Hours after the driver's departure that walker ratings are accepted.
+    # Submissions outside this window are rejected. Default is 6 hours.
+    rating_window_hours: int = 6
+
+    # Days after invite before an unverified (pending_verification) employee
+    # record is automatically deleted by the Celery cleanup job.
+    invite_expiry_days: int = 7
 
     # Comma-separated list of allowed CORS origins.
     # Dev default covers common Vite/CRA ports; override in production.

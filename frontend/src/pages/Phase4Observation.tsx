@@ -4,6 +4,7 @@ import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import ErrorBanner from '../components/ui/ErrorBanner';
 
 interface Task {
   id: string;
@@ -42,6 +43,7 @@ export default function Phase4Observation() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ score: number; passed: boolean; failed: string[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     axiosClient.get('/training/trainer/today')
@@ -64,7 +66,7 @@ export default function Phase4Observation() {
             }
           });
       })
-      .catch(console.error)
+      .catch(() => setError('Failed to load observation session.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -75,6 +77,7 @@ export default function Phase4Observation() {
   const saveObservation = async () => {
     if (!record) return;
     setSaving(true);
+    setError(null);
     try {
       const task_results = tasks.map(t => ({ task_id: t.id, passed: t.is_completed }));
       const res = await axiosClient.post(`/training/record/${record.id}/phase4-observation`, {
@@ -82,8 +85,8 @@ export default function Phase4Observation() {
         task_results,
       });
       setScorePreview(res.data);
-    } catch (e) {
-      console.error(e);
+    } catch {
+      setError('Failed to save observation. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -92,6 +95,7 @@ export default function Phase4Observation() {
   const submitRecord = async () => {
     if (!record) return;
     setSubmitting(true);
+    setError(null);
     try {
       const res = await axiosClient.post(`/training/record/${record.id}/submit`);
       setSubmitResult({
@@ -100,8 +104,8 @@ export default function Phase4Observation() {
         failed: res.data.failed_mandatory_topics ?? [],
       });
       setSubmitted(true);
-    } catch (e: any) {
-      console.error(e);
+    } catch {
+      setError('Failed to submit observation record. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -179,6 +183,8 @@ export default function Phase4Observation() {
         title={`Observing ${trainee?.name ?? 'Trainee'}`}
         description="Mark each topic as observed correctly during the field session. All mandatory items must pass (90% threshold). Add notes below."
       />
+
+      <ErrorBanner message={error} />
 
       {/* Score preview */}
       {scorePreview && (

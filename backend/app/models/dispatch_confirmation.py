@@ -28,7 +28,7 @@ class DispatchConfirmation(Base):
     __table_args__ = (
         UniqueConstraint("employee_id", "date", name="uq_dispatch_confirmation_employee_date"),
         CheckConstraint("status IN ('pending', 'confirmed', 'declined')", name="ck_dispatch_confirmations_status"),
-        CheckConstraint("source IN ('discord_bot', 'manual')", name="ck_dispatch_confirmations_source"),
+        CheckConstraint("source IN ('discord_bot', 'manual', 'app', 'dispatch_override')", name="ck_dispatch_confirmations_source"),
     )
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

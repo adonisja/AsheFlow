@@ -5,50 +5,11 @@ import {
   AlertTriangle, BarChart2, ArrowUpDown, Download, Calendar, AlertCircle,
   Info, ChevronLeft,
 } from 'lucide-react';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface WalkerSummary {
-  walker_id: string;
-  walker_name: string;
-  total_shifts: number;
-  present_shifts: number;
-  no_show_count: number;
-  avg_stars: number | null;
-  presence_rate: number | null;
-  grade: 'A' | 'B' | 'C' | 'D' | 'F' | null;
-  grade_eligible: boolean;
-}
-
-interface RatingEntry {
-  id: string;
-  date: string;
-  driver_id: string;
-  driver_name: string;
-  present: boolean;
-  stars: number | null;
-  comment: string | null;
-  rated_at: string | null;
-}
-
-interface WalkerProfile extends WalkerSummary {
-  ratings: RatingEntry[];
-}
-
-interface DriverConsistency {
-  walker_avg_stars: number | null;
-  flag_threshold: number;
-  drivers: {
-    driver_id: string;
-    driver_name: string;
-    shift_count: number;
-    avg_stars: number;
-    deviation: number;
-    flagged: boolean;
-  }[];
-}
+import ErrorBanner from '../components/ui/ErrorBanner';
+import {
+  WalkerSummary, WalkerProfile, WalkerConsistency,
+  WalkerRatingDetail as RatingEntry,
+} from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Grade helpers
@@ -122,20 +83,28 @@ function exportToCSV(walkers: WalkerSummary[], minShifts: number) {
 // ---------------------------------------------------------------------------
 
 function DriverConsistencySection({ walkerId }: { walkerId: string }) {
-  const [data, setData] = useState<DriverConsistency | null>(null);
+  const [data, setData] = useState<WalkerConsistency | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     axiosClient.get(`/field-ops/walker-consistency/${walkerId}`)
       .then(r => setData(r.data))
-      .catch(console.error)
+      .catch(() => setError('Failed to load driver consistency data.'))
       .finally(() => setLoading(false));
   }, [walkerId]);
 
   if (loading) return (
     <div className="px-6 py-4 border-t border-border flex items-center justify-center">
       <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  if (error) return (
+    <div className="px-6 py-4 border-t border-border">
+      <ErrorBanner message={error} />
     </div>
   );
 
@@ -166,8 +135,8 @@ function DriverConsistencySection({ walkerId }: { walkerId: string }) {
 
       <div className="space-y-2">
         {data.drivers.map(d => {
-          const barWidth = Math.min(100, (d.avg_stars / 5) * 100);
-          const deviationColor = d.deviation > 0 ? 'text-success' : 'text-danger';
+          const barWidth = Math.min(100, ((d.avg_stars ?? 0) / 5) * 100);
+          const deviationColor = (d.deviation ?? 0) > 0 ? 'text-success' : 'text-danger';
           return (
             <div key={d.driver_id} className={`rounded-lg border p-2.5 ${d.flagged ? 'border-warning/40 bg-warning/5' : 'border-border bg-background'}`}>
               <div className="flex items-center justify-between mb-1.5">
@@ -177,9 +146,9 @@ function DriverConsistencySection({ walkerId }: { walkerId: string }) {
                   <span className="text-xs text-subtle">{d.shift_count} shift{d.shift_count !== 1 ? 's' : ''}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-foreground">{d.avg_stars.toFixed(1)} ★</span>
+                  <span className="text-sm font-bold text-foreground">{d.avg_stars?.toFixed(1) ?? '—'} ★</span>
                   <span className={`text-xs font-semibold ${deviationColor}`}>
-                    {d.deviation > 0 ? '+' : ''}{d.deviation.toFixed(1)}
+                    {(d.deviation ?? 0) > 0 ? '+' : ''}{d.deviation?.toFixed(1) ?? '—'}
                   </span>
                 </div>
               </div>
@@ -204,18 +173,20 @@ function DriverConsistencySection({ walkerId }: { walkerId: string }) {
 function WalkerProfilePanel({ walkerId, onClose }: { walkerId: string; onClose: () => void }) {
   const [profile, setProfile] = useState<WalkerProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
   const fetchProfile = useCallback(() => {
     setLoading(true);
+    setProfileError(null);
     const params = new URLSearchParams();
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
     const qs = params.toString() ? `?${params.toString()}` : '';
     axiosClient.get(`/field-ops/walker-profile/${walkerId}${qs}`)
       .then(r => setProfile(r.data))
-      .catch(console.error)
+      .catch(() => setProfileError('Failed to load walker profile.'))
       .finally(() => setLoading(false));
   }, [walkerId, startDate, endDate]);
 
@@ -303,6 +274,10 @@ function WalkerProfilePanel({ walkerId, onClose }: { walkerId: string; onClose: 
           <div className="flex-1 flex items-center justify-center">
             <div className="w-7 h-7 border-2 border-primary border-t-transparent rounded-full animate-spin" />
           </div>
+        ) : profileError ? (
+          <div className="flex-1 flex items-center justify-center p-6">
+            <ErrorBanner message={profileError} />
+          </div>
         ) : profile ? (
           <div className="flex-1 overflow-y-auto">
             {/* KPI strip — always all-time */}
@@ -377,7 +352,7 @@ function WalkerProfilePanel({ walkerId, onClose }: { walkerId: string; onClose: 
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center text-subtle text-sm">
-            Failed to load profile.
+            No profile data available.
           </div>
         )}
       </div>
@@ -405,6 +380,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 export default function WalkerPerformance() {
   const [walkers, setWalkers]   = useState<WalkerSummary[]>([]);
   const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState<string | null>(null);
   const [search, setSearch]     = useState('');
   const [filterGrade, setFilterGrade] = useState('');
   const [sortKey, setSortKey]   = useState<SortKey>('grade');
@@ -416,9 +392,10 @@ export default function WalkerPerformance() {
 
   const fetchLeaderboard = useCallback((threshold: number) => {
     setLoading(true);
+    setError(null);
     axiosClient.get(`/field-ops/walker-leaderboard?min_shifts=${threshold}`)
       .then(r => setWalkers(r.data))
-      .catch(console.error)
+      .catch(() => setError('Failed to load walker leaderboard. Please refresh.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -534,6 +511,8 @@ export default function WalkerPerformance() {
           )}
         </div>
       </div>
+
+      <ErrorBanner message={error} />
 
       {loading ? (
         <div className="flex h-60 items-center justify-center">

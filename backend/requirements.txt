@@ -10,5 +10,7 @@ alembic
 boto3
 redis[asyncio]==5.0.1
 aiohttp==3.9.3
+celery[redis]==5.3.6
+requests==2.31.0
 pytest
 pytest-mock

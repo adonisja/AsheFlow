@@ -1860,3 +1860,58 @@ def make_confirmation(db, employee, status="confirmed", response_minutes=10):
 ```
 
 Then assertions read as: "median of [5, 10, 15] minutes is 10" — directly matching the `response_minutes` values passed in. No timestamp arithmetic needed in the test body.
+
+---
+
+## Backend: Use `assert_owns_or_privileged` for All Ownership Checks
+
+The pattern "caller must own the resource or hold a privileged role" is very common. Do not inline it:
+
+```python
+# BAD — repeated 9 times with minor wording variations
+privileged = {"dispatch", "management", "admin"}
+if caller.id != employee_id and caller.role not in privileged:
+    raise HTTPException(status_code=403, detail="You can only view your own schedule.")
+```
+
+Instead, call the helper from `app.api.deps`:
+
+```python
+from app.api.deps import assert_owns_or_privileged
+
+assert_owns_or_privileged(caller, employee_id, "schedule")
+```
+
+The privileged role set (`_PRIVILEGED_ROLES`) lives only in `deps.py`. Adding a new role is a one-line change there, not a grep-and-replace across every router. The `resource` argument is the human-readable noun used in the 403 message.
+
+---
+
+## Backend: Extract Shared Lookup Logic Into a Private Helper
+
+When two dependency functions share identical multi-step logic (the cognito_sub → discord_id → email → UUID employee lookup chain), extract it into a private `_function_name` in the same module. The two callers then handle only their own post-lookup behavior.
+
+This prevents the two copies from silently diverging when a new lookup step is added (e.g., adding an `email` fallback to one but forgetting the other).
+
+---
+
+## Frontend: Centralize Date and File Utilities
+
+Inline helpers like `getLocalYMD()`, `fileToDataUrl()`, `isoWeekStart()` accumulate duplicates fast. When a third file needs the same helper, extract it to `frontend/src/utils/date.ts` or `frontend/src/utils/file.ts` rather than copying again.
+
+Key utilities:
+- `getLocalYMD()` → local YYYY-MM-DD for today (not UTC — avoids off-by-one near midnight)
+- `fmtDate(d: Date)` → format any Date as YYYY-MM-DD
+- `fileToDataUrl(file)` → FileReader Promise wrapper
+
+Always import from these modules in new pages. Never use `new Date().toISOString().split('T')[0]` — it returns UTC time, which is wrong for users west of UTC.
+
+---
+
+## Frontend: Verify Nullability Before Accepting Shared Types
+
+Before removing an inline interface in favor of a shared type from `api/types.ts`, verify that the shared definition accurately reflects the API shape — especially nullability. Two inaccuracies found during the consolidation pass:
+
+- `WalkerSummary.presence_rate` was typed as `number` in `types.ts` but the API returns `null` when an employee has no route days. The correct type is `number | null`.
+- `WalkerSummary.grade` was `string | null` but is a computed enum; the correct type is `'A' | 'B' | 'C' | 'D' | 'F' | null`.
+
+Accepting an overly-wide shared type silently removes compile-time checks that were present in the (more accurate) local definition. Check the SQL query or Pydantic schema, not just the existing TypeScript, before trusting `types.ts`.

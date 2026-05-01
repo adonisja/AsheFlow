@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean
+from sqlalchemy import Column, String, Boolean, BigInteger
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -11,9 +11,12 @@ class Truck(Base):
         id: Primary key UUID.
         name: Unique human-readable truck name.
         is_active: Whether the truck is currently in service and eligible for dispatch.
+        discord_channel_id: Snowflake ID of the truck's Discord channel. Used by the
+            bot to post finalized crew assignments and manage per-day channel access.
     """
     __tablename__ = "trucks"
 
-    id        = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name      = Column(String(100),        nullable=False, unique=True, index=True)
-    is_active = Column(Boolean,            nullable=False, default=True, index=True)
+    id                 = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name               = Column(String(100),        nullable=False, unique=True, index=True)
+    is_active          = Column(Boolean,            nullable=False, default=True, index=True)
+    discord_channel_id = Column(BigInteger,         nullable=True)

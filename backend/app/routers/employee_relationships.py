@@ -15,8 +15,7 @@ from app.schemas.employee_relationship import EmployeeRelationshipResponse, Empl
 router = APIRouter(prefix="/employee-relationships", tags=["employee-relationships"])
 
 allow_field_staff = RoleChecker(["driver", "walker", "trainer"])
-allow_mgmt        = RoleChecker(["management", "admin", "dispatch"])
-allow_any_auth    = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+allow_admin       = RoleChecker(["admin"])
 
 @router.post("/", response_model=EmployeeRelationshipResponse, status_code=status.HTTP_201_CREATED)
 def create_employee_relationship(
@@ -110,14 +109,11 @@ def create_employee_relationship(
     return db_relationship
 
 @router.get("/", response_model=list[EmployeeRelationshipResponse])
-def get_all_employee_relationships(db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
-    """Return all employee relationship records.
+def get_all_employee_relationships(db: Session = Depends(get_db), _: dict = Depends(allow_admin)):
+    """Return all employee relationship records. Admin only — used for aggregate analytics.
 
-    Args:
-        db: Database session.
-
-    Returns:
-        List of all EmployeeRelationship records.
+    Dispatch and management must never access individual-level fav/ban data directly.
+    The dispatch service reads relationships internally via service functions, not this endpoint.
     """
     return db.query(EmployeeRelationship).all()
 
@@ -130,10 +126,12 @@ def get_employee_relationships(
 ):
     """Return all relationships where the given employee is the source.
 
-    Field staff can only read their own relationships. Management/admin/dispatch can read any.
+    Each employee can only read their own list. Admin may read any employee's list
+    (supports the emulation/view-as feature). Management and dispatch cannot view
+    individual fav/ban lists — dispatch reads relationship data internally via service
+    functions during assignment computation, not through this endpoint.
     """
-    mgmt_roles = {"management", "admin", "dispatch"}
-    if caller.role not in mgmt_roles and caller.id != employee_id:
+    if caller.role != "admin" and caller.id != employee_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own relationships.",
@@ -141,7 +139,7 @@ def get_employee_relationships(
     return db.query(EmployeeRelationship).filter(EmployeeRelationship.employee_id == employee_id).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
-def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
+def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_admin)):
     """Delete all relationships where the given employee is the source.
 
     Args:
@@ -175,8 +173,7 @@ def delete_employee_relationships(
     if not relationship:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
 
-    mgmt_roles = {"management", "admin"}
-    if caller.role not in mgmt_roles and caller.id != relationship.employee_id:
+    if caller.role != "admin" and caller.id != relationship.employee_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only delete your own relationships.",
