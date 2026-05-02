@@ -34,25 +34,33 @@ function StatusBadge({ confirmed }: { confirmed: boolean }) {
 // ETA time slider — 15-minute increments from 12:00 PM to 11:45 PM
 // ---------------------------------------------------------------------------
 
-// Build slots: 12:00 PM … 11:45 PM (48 slots). Drivers are EOD so AM times
-// aren't useful. Slot 0 = 12:00 PM.
+// Full 24-hour coverage in 15-minute steps: 12:00 AM … 11:45 PM (96 slots).
 const ETA_SLOTS: string[] = (() => {
   const slots: string[] = [];
-  for (let h = 12; h < 24; h++) {
+  for (let h = 0; h < 24; h++) {
     for (let m = 0; m < 60; m += 15) {
-      const hour12 = h > 12 ? h - 12 : h;
-      const ampm = 'PM';
+      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      const ampm = h < 12 ? 'AM' : 'PM';
       slots.push(`${hour12}:${String(m).padStart(2, '0')} ${ampm}`);
     }
   }
   return slots;
 })();
 
-const DEFAULT_ETA_INDEX = 8; // 2:00 PM
+// Round current local time up to the next 15-min boundary and return that slot index.
+function defaultEtaIndex(): number {
+  const now = new Date();
+  const totalMinutes = now.getHours() * 60 + now.getMinutes();
+  // Round up to next 15-min mark
+  const nextMark = Math.ceil(totalMinutes / 15) * 15;
+  // Cap at last slot if past 11:45 PM
+  const slotIndex = Math.min(Math.floor(nextMark / 15), ETA_SLOTS.length - 1);
+  return slotIndex;
+}
 
 function etaToIndex(eta: string): number {
   const idx = ETA_SLOTS.indexOf(eta);
-  return idx >= 0 ? idx : DEFAULT_ETA_INDEX;
+  return idx >= 0 ? idx : defaultEtaIndex();
 }
 
 function EtaSlider({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -61,7 +69,7 @@ function EtaSlider({ value, onChange }: { value: string; onChange: (v: string) =
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">{ETA_SLOTS[0]}</span>
-        <span className="text-base font-bold text-foreground tabular-nums">{value || ETA_SLOTS[DEFAULT_ETA_INDEX]}</span>
+        <span className="text-base font-bold text-foreground tabular-nums">{value || ETA_SLOTS[defaultEtaIndex()]}</span>
         <span className="text-xs text-muted-foreground">{ETA_SLOTS[ETA_SLOTS.length - 1]}</span>
       </div>
       <input
@@ -93,7 +101,7 @@ function DriverView() {
   const [success, setSuccess]       = useState(false);
 
   const [location, setLocation] = useState('');
-  const [eta, setEta]           = useState(ETA_SLOTS[DEFAULT_ETA_INDEX]);
+  const [eta, setEta]           = useState(() => ETA_SLOTS[defaultEtaIndex()]);
   const [notes, setNotes]       = useState('');
   const [etaEnabled, setEtaEnabled] = useState(false);
 
