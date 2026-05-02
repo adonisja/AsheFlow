@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send } from 'lucide-react';
+import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send, History } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
@@ -31,47 +31,114 @@ function StatusBadge({ confirmed }: { confirmed: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// ETA time slider — 15-minute increments from 12:00 PM to 11:45 PM
+// ---------------------------------------------------------------------------
+
+// Build slots: 12:00 PM … 11:45 PM (48 slots). Drivers are EOD so AM times
+// aren't useful. Slot 0 = 12:00 PM.
+const ETA_SLOTS: string[] = (() => {
+  const slots: string[] = [];
+  for (let h = 12; h < 24; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      const hour12 = h > 12 ? h - 12 : h;
+      const ampm = 'PM';
+      slots.push(`${hour12}:${String(m).padStart(2, '0')} ${ampm}`);
+    }
+  }
+  return slots;
+})();
+
+const DEFAULT_ETA_INDEX = 8; // 2:00 PM
+
+function etaToIndex(eta: string): number {
+  const idx = ETA_SLOTS.indexOf(eta);
+  return idx >= 0 ? idx : DEFAULT_ETA_INDEX;
+}
+
+function EtaSlider({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const index = etaToIndex(value);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">{ETA_SLOTS[0]}</span>
+        <span className="text-base font-bold text-foreground tabular-nums">{value || ETA_SLOTS[DEFAULT_ETA_INDEX]}</span>
+        <span className="text-xs text-muted-foreground">{ETA_SLOTS[ETA_SLOTS.length - 1]}</span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={ETA_SLOTS.length - 1}
+        step={1}
+        value={index}
+        onChange={e => onChange(ETA_SLOTS[Number(e.target.value)])}
+        className="w-full accent-primary cursor-pointer"
+      />
+      <p className="text-xs text-muted-foreground text-center">Slide to set ETA · 15-minute steps</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Driver view — submit / update my anchor point for today
 // ---------------------------------------------------------------------------
 
-interface TruckOption { id: string; name: string }
-
 function DriverView() {
-  const [trucks, setTrucks] = useState<TruckOption[]>([]);
-  const [existing, setExisting] = useState<AnchorPoint | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [truckId, setTruckId]       = useState<string | null>(null);
+  const [truckName, setTruckName]   = useState<string | null>(null);
+  const [history, setHistory]       = useState<AnchorPoint[]>([]);
+  const [existing, setExisting]     = useState<AnchorPoint | null>(null);
+  const [loading, setLoading]       = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const [success, setSuccess]       = useState(false);
 
-  const [truckId, setTruckId] = useState('');
   const [location, setLocation] = useState('');
-  const [eta, setEta] = useState('');
-  const [notes, setNotes] = useState('');
+  const [eta, setEta]           = useState(ETA_SLOTS[DEFAULT_ETA_INDEX]);
+  const [notes, setNotes]       = useState('');
+  const [etaEnabled, setEtaEnabled] = useState(false);
 
   const today = getLocalYMD();
 
   useEffect(() => {
     setLoading(true);
-    Promise.allSettled([
-      axiosClient.get('/anchor-points/driver/today'),
-      axiosClient.get<{ id: string; name: string; is_active: boolean }[]>('/trucks'),
-    ]).then(([apRes, trucksRes]) => {
-      if (apRes.status === 'fulfilled' && apRes.value.data) {
-        const ap: AnchorPoint = apRes.value.data;
-        setExisting(ap);
-        setTruckId(ap.truck_id);
-        setLocation(ap.location);
-        setEta(ap.eta ?? '');
-        setNotes(ap.notes ?? '');
-      }
-      if (trucksRes.status === 'fulfilled') {
-        setTrucks(trucksRes.value.data.filter(t => t.is_active));
-      }
-      if (apRes.status === 'rejected' && trucksRes.status === 'rejected') {
-        setError('Failed to load anchor point data.');
-      }
-    }).finally(() => setLoading(false));
+
+    // Step 1: get today's truck assignment
+    axiosClient.get('/employees/me')
+      .then(meRes => {
+        const employeeId: string = meRes.data.id;
+        return axiosClient.get(`/field-ops/crew/${employeeId}`);
+      })
+      .then(crewRes => {
+        const tid: string | null = crewRes.data.truck_id ?? null;
+        const tname: string | null = crewRes.data.truck_name ?? null;
+        setTruckId(tid);
+        setTruckName(tname);
+
+        // Step 2: load existing AP + truck history in parallel
+        return Promise.allSettled([
+          axiosClient.get('/anchor-points/driver/today'),
+          tid ? axiosClient.get<AnchorPoint[]>(`/anchor-points/truck/${tid}`, { params: { limit: 5 } }) : Promise.resolve({ data: [] }),
+        ]);
+      })
+      .then(([apRes, histRes]) => {
+        if (apRes.status === 'fulfilled' && apRes.value.data) {
+          const ap: AnchorPoint = apRes.value.data;
+          setExisting(ap);
+          setLocation(ap.location);
+          if (ap.eta) {
+            setEta(ap.eta);
+            setEtaEnabled(true);
+          }
+          setNotes(ap.notes ?? '');
+        }
+        if (histRes.status === 'fulfilled') {
+          // Exclude today's record from history suggestions
+          const past = (histRes.value.data as AnchorPoint[]).filter(r => r.date !== today);
+          setHistory(past.slice(0, 5));
+        }
+      })
+      .catch(() => setError('Could not load your truck assignment for today. Make sure you have been dispatched.'))
+      .finally(() => setLoading(false));
   }, [today]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -85,7 +152,7 @@ function DriverView() {
         truck_id: truckId,
         date: today,
         location: location.trim(),
-        eta: eta.trim() || null,
+        eta: etaEnabled ? eta : null,
         notes: notes.trim() || null,
       });
       setExisting(res.data);
@@ -105,13 +172,35 @@ function DriverView() {
     );
   }
 
+  // Not dispatched today
+  if (!truckId) {
+    return (
+      <div className="max-w-lg">
+        <ErrorBanner message={error} />
+        {!error && (
+          <div className="card text-center py-12">
+            <Truck className="w-8 h-8 text-muted-foreground mx-auto mb-3 opacity-40" />
+            <p className="text-sm font-medium text-foreground">No truck assignment found for today.</p>
+            <p className="text-xs text-muted-foreground mt-1">Anchor points can only be submitted once you have been dispatched.</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const isConfirmed = !!existing?.confirmed_at;
 
   return (
     <div className="max-w-lg space-y-6">
       <ErrorBanner message={error} />
 
-      {/* Status card — shown after a record exists */}
+      {/* Truck badge */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/8 border border-primary/20 w-fit">
+        <Truck className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold text-primary">{truckName ?? 'Your Truck'}</span>
+      </div>
+
+      {/* Today's submission status card */}
       {existing && (
         <div className="card-elevated space-y-3">
           <div className="flex items-center justify-between">
@@ -122,7 +211,7 @@ function DriverView() {
             <p><span className="font-medium text-foreground">Location:</span> {existing.location}</p>
             {existing.eta && <p><span className="font-medium text-foreground">ETA:</span> {existing.eta}</p>}
             {existing.notes && <p><span className="font-medium text-foreground">Notes:</span> {existing.notes}</p>}
-            <p className="text-xs">Submitted at {formatTime(existing.submitted_at)}</p>
+            <p className="text-xs">Submitted {formatTime(existing.submitted_at)}</p>
           </div>
           {isConfirmed && (
             <p className="text-xs text-success font-medium">
@@ -132,9 +221,9 @@ function DriverView() {
         </div>
       )}
 
-      {/* Form — hidden after dispatch confirms */}
+      {/* Form — hidden once dispatch confirms */}
       {!isConfirmed && (
-        <form onSubmit={handleSubmit} className="card-elevated space-y-4">
+        <form onSubmit={handleSubmit} className="card-elevated space-y-5">
           <p className="text-sm font-semibold text-foreground">
             {existing ? 'Update Anchor Point' : 'Submit Anchor Point'}
           </p>
@@ -142,31 +231,37 @@ function DriverView() {
           {success && !submitting && (
             <div className="flex items-center gap-2 text-sm text-success font-medium">
               <CheckCircle2 className="w-4 h-4" />
-              {existing ? 'Updated successfully.' : 'Submitted — dispatch has been notified.'}
+              {existing ? 'Updated — dispatch notified.' : 'Submitted — dispatch has been notified.'}
             </div>
           )}
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Truck
-            </label>
-            <select
-              value={truckId}
-              onChange={e => setTruckId(e.target.value)}
-              required
-              disabled={!!existing}
-              className="input w-full disabled:opacity-50"
-            >
-              <option value="">Select truck…</option>
-              {trucks.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-            {existing && (
-              <p className="text-xs text-muted-foreground">Truck cannot be changed after initial submission.</p>
-            )}
-          </div>
+          {/* Recent locations quick-fill */}
+          {history.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <History className="w-3.5 h-3.5" /> Recent Locations
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {history.map(h => (
+                  <button
+                    key={h.id}
+                    type="button"
+                    onClick={() => setLocation(h.location)}
+                    className={`text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
+                      location === h.location
+                        ? 'border-primary bg-primary/8 text-primary font-medium'
+                        : 'border-border bg-surface text-foreground hover:border-primary/50 hover:bg-accent/40'
+                    }`}
+                  >
+                    <span className="block truncate">{h.location}</span>
+                    <span className="text-xs text-muted-foreground">{h.date}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
+          {/* Location input */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               Parking Location <span className="text-danger">*</span>
@@ -181,19 +276,31 @@ function DriverView() {
             />
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              ETA at Location
-            </label>
-            <input
-              type="text"
-              value={eta}
-              onChange={e => setEta(e.target.value)}
-              placeholder="e.g. 4:30 PM"
-              className="input w-full"
-            />
+          {/* ETA slider */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                ETA at Location
+              </label>
+              <button
+                type="button"
+                onClick={() => setEtaEnabled(v => !v)}
+                className={`text-xs px-2 py-0.5 rounded-full font-medium transition-colors ${
+                  etaEnabled
+                    ? 'bg-primary/15 text-primary'
+                    : 'bg-accent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {etaEnabled ? 'On' : 'Skip'}
+              </button>
+            </div>
+            {etaEnabled && <EtaSlider value={eta} onChange={setEta} />}
+            {!etaEnabled && (
+              <p className="text-xs text-muted-foreground">Toggle on to set an estimated arrival time.</p>
+            )}
           </div>
 
+          {/* Notes */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               Notes (optional)
@@ -202,14 +309,14 @@ function DriverView() {
               value={notes}
               onChange={e => setNotes(e.target.value)}
               placeholder="Any additional context for dispatch…"
-              rows={3}
+              rows={2}
               className="input w-full resize-none"
             />
           </div>
 
           <button
             type="submit"
-            disabled={submitting || !truckId || !location.trim()}
+            disabled={submitting || !location.trim()}
             className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {submitting ? (
