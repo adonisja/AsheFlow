@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
+import { getLocalYMD } from '../utils/date';
 import {
   Shield, Users, Truck, AlertTriangle, ClipboardCheck,
-  BarChart2, RefreshCw, CheckCircle2, ArrowRight,
+  BarChart2, RefreshCw, CheckCircle2, ArrowRight, Zap,
 } from 'lucide-react';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
@@ -59,6 +60,37 @@ export default function AdminDashboard() {
   const roleRows = ROLE_ORDER
     .filter(r => roleGroups[r])
     .map(r => ({ role: r, count: roleGroups[r] }));
+
+  // ---------------------------------------------------------------------------
+  // Confirm-all tool (temporary dev aid)
+  // ---------------------------------------------------------------------------
+  const [confirmAllState, setConfirmAllState] = useState<
+    'idle' | 'loading' | 'done' | 'error'
+  >('idle');
+  const [confirmAllCount, setConfirmAllCount] = useState<number | null>(null);
+
+  const handleConfirmAll = async () => {
+    setConfirmAllState('loading');
+    const today = getLocalYMD();
+    try {
+      const res = await axiosClient.get<Record<string, string>>(
+        `/dispatch/${today}/confirmations`
+      );
+      const pending = Object.entries(res.data).filter(([, s]) => s === 'pending');
+      setConfirmAllCount(pending.length);
+      await Promise.all(
+        pending.map(([employee_id]) =>
+          axiosClient.post(`/dispatch/${today}/confirmations`, {
+            employee_id,
+            status: 'confirmed',
+          })
+        )
+      );
+      setConfirmAllState('done');
+    } catch {
+      setConfirmAllState('error');
+    }
+  };
 
   const handleResolveIncident = (id: string) => {
     axiosClient.patch(`/incidents/${id}/resolve`).then(() => {
@@ -127,6 +159,39 @@ export default function AdminDashboard() {
           tone="teal"
           delay={0.21}
         />
+      </div>
+
+      {/* Confirm-all (temporary) */}
+      <div className="flex items-center gap-4 px-4 py-3 rounded-2xl border border-warning/40 bg-warning/5">
+        <Zap className="w-5 h-5 text-warning shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground">Confirm All Pending (Dev Tool)</p>
+          <p className="text-xs text-muted-foreground">
+            Marks every pending dispatch confirmation for today as confirmed on behalf of each employee.
+          </p>
+          {confirmAllState === 'done' && (
+            <p className="text-xs text-success font-medium mt-0.5">
+              {confirmAllCount === 0
+                ? 'No pending confirmations found.'
+                : `Confirmed ${confirmAllCount} employee${confirmAllCount === 1 ? '' : 's'}.`}
+            </p>
+          )}
+          {confirmAllState === 'error' && (
+            <p className="text-xs text-danger font-medium mt-0.5">Failed — check console or retry.</p>
+          )}
+        </div>
+        <button
+          onClick={handleConfirmAll}
+          disabled={confirmAllState === 'loading'}
+          className="btn-ghost border border-warning/50 text-warning hover:bg-warning/10 flex items-center gap-2 shrink-0 disabled:opacity-50 text-sm"
+        >
+          {confirmAllState === 'loading' ? (
+            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4" />
+          )}
+          {confirmAllState === 'loading' ? 'Working…' : 'Confirm All'}
+        </button>
       </div>
 
       {/* Mid row — 3 cards */}
