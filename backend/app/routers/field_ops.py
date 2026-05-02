@@ -82,7 +82,10 @@ def get_today_crew(
     )
 
     if not member_row:
-        return {"crew": []}
+        return {"truck_id": None, "truck_name": None, "crew": []}
+
+    ta = db.query(TruckAssignment).filter(TruckAssignment.id == member_row.assignment_id).first()
+    truck = db.query(Truck).filter(Truck.id == ta.truck_id).first() if ta else None
 
     # Get all members of that same assignment
     crew_rows = (
@@ -99,7 +102,11 @@ def get_today_crew(
         {"id": str(emp.id), "name": emp.name, "role": am.role}
         for am, emp in crew_rows
     ]
-    return {"crew": crew}
+    return {
+        "truck_id": str(ta.truck_id) if ta else None,
+        "truck_name": truck.name if truck else None,
+        "crew": crew,
+    }
 
 
 # ---------------------------------------------------------------------------
