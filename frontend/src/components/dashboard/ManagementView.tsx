@@ -2,7 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
 import {
-  AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2, LayoutDashboard, RefreshCw,
+  AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2,
+  LayoutDashboard, RefreshCw, Package, MapPin, LogIn,
 } from 'lucide-react';
 
 export default function ManagementView() {
@@ -14,11 +15,15 @@ export default function ManagementView() {
   const [trainingPipeline, setTrainingPipeline] = useState<any>(null);
   const [inspectionFailures, setInspectionFailures] = useState<any>(null);
   const [todayInspections, setTodayInspections]     = useState<any[]>([]);
-  const [fleetStatus, setFleetStatus] = useState<any[]>([]);
+  const [truckStatuses, setTruckStatuses] = useState<{ truck_id: string; status: string }[]>([]);
+  const [checkInSummary, setCheckInSummary]   = useState<any>(null);
+  const [handoffSummary, setHandoffSummary]   = useState<any>(null);
+  const [pendingRTS, setPendingRTS]           = useState<any[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
+    const today = new Date().toISOString().slice(0, 10);
     await Promise.allSettled([
       axiosClient.get('/incidents/summary?days=7').then(r => setIncidentSummary(r.data)),
       axiosClient.get('/field-ops/walker-stats').then(r => setWalkerStats(r.data)),
@@ -26,15 +31,19 @@ export default function ManagementView() {
       axiosClient.get('/training/pipeline-summary').then(r => setTrainingPipeline(r.data)),
       axiosClient.get('/field-ops/inspection-failures/summary?days=7').then(r => setInspectionFailures(r.data)),
       axiosClient.get('/field-ops/inspections/summary').then(r => setTodayInspections(r.data)),
-      axiosClient.get('/field-ops/returns/summary').then(r => setFleetStatus(r.data)),
+      axiosClient.get(`/dispatch/${today}`).then(r => setTruckStatuses(r.data.truck_assignments ?? [])).catch(() => {}),
+      axiosClient.get('/shift-ops/check-ins/summary').then(r => setCheckInSummary(r.data)).catch(() => {}),
+      axiosClient.get('/shift-ops/station-handoffs/summary').then(r => setHandoffSummary(r.data)).catch(() => {}),
+      axiosClient.get('/shift-ops/rts-reports/pending').then(r => setPendingRTS(r.data)).catch(() => {}),
     ]);
     setIsRefreshing(false);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  const returnedCount = fleetStatus.filter(d => d.status === 'returned').length;
-  const outCount = fleetStatus.length - returnedCount;
+  const plannedCount   = truckStatuses.filter(t => t.status === 'planned').length;
+  const activeCount    = truckStatuses.filter(t => t.status === 'active').length;
+  const completedCount = truckStatuses.filter(t => t.status === 'completed').length;
 
   return (
     <div className="space-y-6 animate-slide-up">
@@ -78,10 +87,12 @@ export default function ManagementView() {
           },
           {
             label: 'Fleet Today',
-            value: `${returnedCount}/${fleetStatus.length}`,
-            sub: `${outCount} still out`,
+            value: truckStatuses.length === 0 ? '—' : `${activeCount + completedCount}/${truckStatuses.length}`,
+            sub: truckStatuses.length === 0
+              ? 'dispatch not run yet'
+              : `${activeCount} out · ${completedCount} returned · ${plannedCount} pending`,
             icon: Truck,
-            color: outCount > 0 ? 'text-warning' : 'text-success',
+            color: activeCount > 0 ? 'text-warning' : completedCount > 0 ? 'text-success' : 'text-muted-foreground',
           },
           {
             label: 'Escalated Trainees',
@@ -231,7 +242,7 @@ export default function ManagementView() {
       <div className="card border-border/60">
         <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
           <ShieldAlert className="w-5 h-5 text-warning" />
-          <h2 className="text-base font-semibold text-foreground">Pre-Trip Inspections — Today</h2>
+          <h2 className="text-base font-semibold text-foreground">Vehicle Inspections — Today</h2>
           {todayInspections.length > 0 && (
             <span className="ml-auto text-xs text-subtle">
               {todayInspections.filter((i: any) => i.has_failures).length} failed ·{' '}
@@ -249,6 +260,7 @@ export default function ManagementView() {
                 <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
                   <th className="pb-2 pr-4">Driver</th>
                   <th className="pb-2 pr-4">Truck</th>
+                  <th className="pb-2 pr-4">Type</th>
                   <th className="pb-2 pr-4">Submitted</th>
                   <th className="pb-2 pr-4">Result</th>
                   <th className="pb-2">Failed Items</th>
@@ -259,6 +271,15 @@ export default function ManagementView() {
                   <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
                     <td className="py-2 pr-4 font-medium text-foreground whitespace-nowrap">{insp.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{insp.truck_name ?? '—'}</td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        insp.inspection_type === 'eod'
+                          ? 'bg-info/10 text-info'
+                          : 'bg-primary/10 text-primary'
+                      }`}>
+                        {insp.inspection_type === 'eod' ? 'EOD' : 'Pre-Trip'}
+                      </span>
+                    </td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap text-xs">
                       {insp.submitted_at
                         ? new Date(insp.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -288,6 +309,93 @@ export default function ManagementView() {
             </table>
           </div>
         )}
+      </div>
+
+      {/* Shift ops summary — check-ins, handoffs, RTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Driver check-ins */}
+        <div className="card border-border/60">
+          <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+            <LogIn className="w-5 h-5 text-info" />
+            <h2 className="text-base font-semibold text-foreground">Driver Check-Ins Today</h2>
+          </div>
+          {!checkInSummary ? (
+            <p className="text-sm text-subtle text-center py-6">No check-in data yet.</p>
+          ) : checkInSummary.length === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No check-ins submitted today.</p>
+          ) : (
+            <div className="space-y-2 max-h-[200px] overflow-y-auto">
+              {checkInSummary.map((ci: any) => (
+                <div key={ci.driver_id} className="flex items-center justify-between gap-2 p-2 rounded-lg hover:bg-accent/30 transition-colors">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{ci.driver_name}</p>
+                    <p className="text-xs text-subtle">Check-in #{ci.latest_check_in} · {ci.routes_remaining} routes left</p>
+                  </div>
+                  {ci.help_requested && (
+                    <span className="text-xs font-semibold text-danger shrink-0">Help</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <a href="/field-ops" className="block text-center text-xs text-primary hover:underline pt-3">Field Ops →</a>
+        </div>
+
+        {/* RTS pending queue */}
+        <div className="card border-border/60">
+          <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+            <Package className="w-5 h-5 text-warning" />
+            <h2 className="text-base font-semibold text-foreground">RTS Return Requests</h2>
+            {pendingRTS.length > 0 && (
+              <span className="ml-auto inline-flex items-center justify-center w-5 h-5 rounded-full bg-warning text-warning-foreground text-xs font-bold">
+                {pendingRTS.length}
+              </span>
+            )}
+          </div>
+          {pendingRTS.length === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No pending RTS requests.</p>
+          ) : (
+            <div className="space-y-2 max-h-[200px] overflow-y-auto">
+              {pendingRTS.map((r: any) => (
+                <div key={r.driver_id} className="p-2 rounded-lg border border-warning/20 bg-warning/5">
+                  <p className="text-sm font-medium text-foreground">{r.driver_name}</p>
+                  <p className="text-xs text-subtle">
+                    {r.crew_confirmed} crew confirmed · {r.total_rts} RTS packages
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+          <a href="/dispatch" className="block text-center text-xs text-primary hover:underline pt-3">Manage in Dispatch →</a>
+        </div>
+
+        {/* Station handoffs */}
+        <div className="card border-border/60">
+          <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+            <MapPin className="w-5 h-5 text-success" />
+            <h2 className="text-base font-semibold text-foreground">Station Handoffs Today</h2>
+            {handoffSummary?.drivers?.length > 0 && (
+              <span className="ml-auto text-xs text-subtle">
+                {handoffSummary.total_totes_returned}T · {handoffSummary.total_rts_returned} RTS
+              </span>
+            )}
+          </div>
+          {!handoffSummary || handoffSummary.drivers?.length === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No handoffs completed today.</p>
+          ) : (
+            <div className="space-y-2 max-h-[200px] overflow-y-auto">
+              {handoffSummary.drivers.map((h: any) => (
+                <div key={h.driver_id} className="flex items-center justify-between gap-2 p-2 rounded-lg hover:bg-accent/30 transition-colors">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{h.driver_name}</p>
+                    <p className="text-xs text-subtle">{h.totes_returned} totes · {h.rts_count} RTS</p>
+                  </div>
+                  <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Inspection failure patterns */}

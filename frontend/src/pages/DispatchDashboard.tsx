@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import type { UnavailableStaff, DispatchResult } from '../api/types';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 
 export default function DispatchDashboard() {
   const { groups } = useAuth();
@@ -27,13 +28,21 @@ export default function DispatchDashboard() {
   // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
   const [confirmations, setConfirmations] = useState<Record<string, string>>({});
   const [isPollingConfirmations, setIsPollingConfirmations] = useState(false);
+  const [confirmationsStale, setConfirmationsStale] = useState(false);
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollFailureCount = useRef(0);
+
+  type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
+  const [dialog, setDialog] = useState<DialogConfig | null>(null);
+  const openDialog = (cfg: DialogConfig) => setDialog(cfg);
+  const closeDialog = () => setDialog(null);
 
   const stopConfirmationPolling = () => {
     if (confirmationPollRef.current !== null) {
       clearInterval(confirmationPollRef.current);
       confirmationPollRef.current = null;
     }
+    pollFailureCount.current = 0;
     setIsPollingConfirmations(false);
   };
 
@@ -41,17 +50,23 @@ export default function DispatchDashboard() {
   const startConfirmationPolling = useCallback((date: string) => {
     stopConfirmationPolling();
     setIsPollingConfirmations(true);
+    setConfirmationsStale(false);
     confirmationPollRef.current = setInterval(async () => {
       try {
         const res = await axiosClient.get(`/dispatch/${date}/confirmations`);
         const data: Record<string, string> = res.data.confirmations || {};
+        pollFailureCount.current = 0;
+        setConfirmationsStale(false);
         setConfirmations(data);
         const values = Object.values(data);
         if (values.length > 0 && values.every(s => s !== 'pending')) {
           stopConfirmationPolling();
         }
       } catch {
-        // silently retry next tick
+        pollFailureCount.current += 1;
+        if (pollFailureCount.current >= 3) {
+          setConfirmationsStale(true);
+        }
       }
     }, 15000);
   }, []);
@@ -63,6 +78,7 @@ export default function DispatchDashboard() {
 
   useEffect(() => {
     stopConfirmationPolling();
+    setConfirmationsStale(false);
     fetchDispatchData();
     fetchAvailablePool();
     fetchUnavailableStaff();
@@ -78,37 +94,51 @@ export default function DispatchDashboard() {
     }
   };
 
-  const handlePublishToDiscord = async () => {
+  const handlePublishToDiscord = () => {
     if (!dispatchData) return;
-    if (!window.confirm(`Publish the ${selectedDate} dispatch to Discord? This will DM all assigned employees.`)) return;
-    setIsPublishing(true);
-    setError(null);
-    try {
-      await axiosClient.post(`/dispatch/${selectedDate}/publish`);
-      await fetchConfirmations();
-      // Begin polling so the dashboard reflects bot-reported confirms/declines in real time
-      startConfirmationPolling(selectedDate);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to publish to Discord.');
-    } finally {
-      setIsPublishing(false);
-    }
+    openDialog({
+      title: 'Publish to Discord',
+      message: `Send DMs to all assigned employees for ${selectedDate}? This opens the confirmation window.`,
+      confirmLabel: 'Publish',
+      variant: 'default',
+      onConfirm: async () => {
+        closeDialog();
+        setIsPublishing(true);
+        setError(null);
+        try {
+          await axiosClient.post(`/dispatch/${selectedDate}/publish`);
+          await fetchConfirmations();
+          startConfirmationPolling(selectedDate);
+        } catch (err: any) {
+          setError(err.response?.data?.detail || 'Failed to publish to Discord.');
+        } finally {
+          setIsPublishing(false);
+        }
+      },
+    });
   };
 
-  const handleFinalize = async () => {
+  const handleFinalize = () => {
     if (!dispatchData) return;
-    if (!window.confirm(`Post final crew assignments to Discord? This will post confirmed crews to each truck channel and the master list to #drivers-chat.`)) return;
-    setIsFinalizing(true);
-    setError(null);
-    // Confirmation window is closed — stop polling
-    stopConfirmationPolling();
-    try {
-      await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to post final assignments to Discord.');
-    } finally {
-      setIsFinalizing(false);
-    }
+    openDialog({
+      title: 'Post Final Crews',
+      message: `Post confirmed crews to each truck channel and the master list to #drivers-chat for ${selectedDate}?`,
+      confirmLabel: 'Post Final Crews',
+      variant: 'default',
+      onConfirm: async () => {
+        closeDialog();
+        setIsFinalizing(true);
+        setError(null);
+        stopConfirmationPolling();
+        try {
+          await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
+        } catch (err: any) {
+          setError(err.response?.data?.detail || 'Failed to post final assignments to Discord.');
+        } finally {
+          setIsFinalizing(false);
+        }
+      },
+    });
   };
 
   const fetchUnavailableStaff = async () => {
@@ -277,37 +307,50 @@ export default function DispatchDashboard() {
     }
   };
 
-  const handleRemoveFromTruck = async (employeeId: string) => {
-    if (!confirm('Remove this employee from the assignment?')) return;
-    setIsLoading(true);
-    try {
-      await axiosClient.delete(`/dispatch/assign/${selectedDate}/${employeeId}`);
-      await fetchDispatchData();
-    } catch (err: any) {
-      console.error(err);
-      setError(err.response?.data?.detail || 'Failed to remove employee.');
-    } finally {
-      setIsLoading(false);
-    }
+  const handleRemoveFromTruck = (employeeId: string) => {
+    const empName = employees[employeeId]?.name || 'this employee';
+    openDialog({
+      title: 'Remove from Assignment',
+      message: `Remove ${empName} from today's truck assignment?`,
+      confirmLabel: 'Remove',
+      variant: 'danger',
+      onConfirm: async () => {
+        closeDialog();
+        setIsLoading(true);
+        try {
+          await axiosClient.delete(`/dispatch/assign/${selectedDate}/${employeeId}`);
+          await fetchDispatchData();
+        } catch (err: any) {
+          console.error(err);
+          setError(err.response?.data?.detail || 'Failed to remove employee.');
+        } finally {
+          setIsLoading(false);
+        }
+      },
+    });
   };
 
-  const handleClearDispatch = async () => {
-    if (!confirm(`Are you sure you want to permanently delete the dispatch assignment for ${selectedDate}?`)) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      await axiosClient.delete(`/dispatch/${selectedDate}`);
-      setDispatchData(null);
-      await fetchDispatchData();
-    } catch (err: any) {
-      if (err.response?.data?.detail) {
-        setError(err.response.data.detail);
-      } else {
-        setError('Failed to clear dispatch.');
-      }
-    } finally {
-      setIsLoading(false);
-    }
+  const handleClearDispatch = () => {
+    openDialog({
+      title: 'Clear Dispatch',
+      message: `Permanently delete the entire dispatch assignment for ${selectedDate}? This cannot be undone.`,
+      confirmLabel: 'Clear Dispatch',
+      variant: 'danger',
+      onConfirm: async () => {
+        closeDialog();
+        setIsLoading(true);
+        setError(null);
+        try {
+          await axiosClient.delete(`/dispatch/${selectedDate}`);
+          setDispatchData(null);
+          await fetchDispatchData();
+        } catch (err: any) {
+          setError(err.response?.data?.detail || 'Failed to clear dispatch.');
+        } finally {
+          setIsLoading(false);
+        }
+      },
+    });
   };
 
   const sortCrewMembers = (a: any, b: any) => {
@@ -465,6 +508,21 @@ export default function DispatchDashboard() {
         <div className="rounded-lg border border-danger/50 bg-danger/10 p-4 flex gap-3 text-danger">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <p className="text-sm font-medium">{error}</p>
+        </div>
+      )}
+
+      {confirmationsStale && (
+        <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 flex items-center gap-3 text-warning">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <p className="text-sm font-medium">
+            Confirmation data may be stale — the server hasn't responded to the last 3 polls. Check your connection or refresh manually.
+          </p>
+          <button
+            onClick={() => { setConfirmationsStale(false); fetchConfirmations(); }}
+            className="ml-auto text-xs font-semibold underline underline-offset-2 hover:opacity-80 transition-opacity whitespace-nowrap"
+          >
+            Retry now
+          </button>
         </div>
       )}
 
@@ -692,6 +750,18 @@ export default function DispatchDashboard() {
           )}
         </div>
       </div>
+
+      {dialog && (
+        <ConfirmDialog
+          open
+          title={dialog.title}
+          message={dialog.message}
+          confirmLabel={dialog.confirmLabel}
+          variant={dialog.variant}
+          onConfirm={dialog.onConfirm}
+          onCancel={closeDialog}
+        />
+      )}
     </div>
   );
 }

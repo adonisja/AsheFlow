@@ -18,7 +18,7 @@ from app.services.audit import write_audit
 router = APIRouter(prefix="/assignment-change-requests", tags=["assignment-change-requests"])
 
 allow_submitter  = RoleChecker(["walker", "trainer"])
-allow_viewer     = RoleChecker(["walker", "trainer", "admin"])   # history read — admin for audit
+allow_viewer     = RoleChecker(["driver", "walker", "trainer", "dispatch", "management", "admin"])
 allow_dispatcher = RoleChecker(["dispatch", "admin"])
 
 

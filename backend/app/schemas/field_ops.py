@@ -105,6 +105,7 @@ class FuelMileageSummaryItem(BaseModel):
 class VehicleInspectionCreate(BaseModel):
     driver_id: UUID
     date: date
+    inspection_type: str = "pre_trip"  # "pre_trip" | "eod"
     # item_name → True (pass) / False (fail); StrictBool rejects int/string coercion
     items: Dict[str, StrictBool]
     notes: Optional[str] = Field(None, max_length=500)
@@ -115,6 +116,7 @@ class VehicleInspectionResponse(BaseModel):
     driver_id: UUID
     truck_id: Optional[UUID] = None
     date: date
+    inspection_type: str
     items: Dict[str, bool]
     has_failures: bool
     notes: Optional[str] = None
@@ -127,6 +129,42 @@ class VehicleInspectionSummaryItem(BaseModel):
     driver_name: str
     truck_name: Optional[str]
     date: date
+    inspection_type: str
     has_failures: bool
     submitted_at: datetime
     failed_items: List[str]
+
+
+class StationArrivalCreate(BaseModel):
+    employee_id: UUID
+    date: date
+    arrival_type: str  # "loading" | "return"
+
+
+class StationArrivalResponse(BaseModel):
+    id: UUID
+    driver_id: UUID
+    date: date
+    arrival_type: str
+    arrived_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DockAssignmentCreate(BaseModel):
+    driver_id: UUID
+    date: date
+    dock_zone: str = Field(..., min_length=1, max_length=50)
+
+
+class DockAssignmentPatch(BaseModel):
+    dock_zone: str = Field(..., min_length=1, max_length=50)
+
+
+class DockAssignmentResponse(BaseModel):
+    id: UUID
+    driver_id: UUID
+    date: date
+    dock_zone: str
+    assigned_by: Optional[UUID] = None
+    assigned_at: datetime
+    model_config = ConfigDict(from_attributes=True)

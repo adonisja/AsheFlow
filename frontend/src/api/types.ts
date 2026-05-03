@@ -159,10 +159,14 @@ export interface AnchorPoint {
   truck_id: string;
   driver_id: string;
   date: string;
+  sequence: number;
+  is_initial: boolean;
+  status: 'preliminary' | 'arrived' | 'relocated';
   location: string;
   eta: string | null;
   notes: string | null;
   submitted_at: string;
+  arrived_at: string | null;
   confirmed_by: string | null;
   confirmed_at: string | null;
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -1096,62 +1096,39 @@ function AdminFieldOpsView() {
 // ---------------------------------------------------------------------------
 function AnchorPointPanel({ employeeId }: { employeeId: string }) {
   const today = todayStr();
-  const [trucks, setTrucks]         = useState<any[]>([]);
-  const [myTruckId, setMyTruckId]   = useState('');
-  const [existing, setExisting]     = useState<any>(null);
-  const [location, setLocation]     = useState('');
-  const [eta, setEta]               = useState('');
-  const [notes, setNotes]           = useState('');
-  const [loading, setLoading]       = useState(false);
-  const [success, setSuccess]       = useState(false);
-  const [error, setError]           = useState('');
+  const [myTruckId, setMyTruckId] = useState('');
+  const [aps, setAps]             = useState<any[]>([]);
+  const [arriving, setArriving]   = useState(false);
+  const [error, setError]         = useState('');
+
+  const loadAPs = useCallback(() => {
+    axiosClient.get('/anchor-points/driver/today')
+      .then(res => setAps(Array.isArray(res.data) ? res.data : []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
-    // Load today's crew to find which truck this driver is on
     axiosClient.get(`/field-ops/crew/${employeeId}`)
-      .then(res => {
-        const crew = res.data;
-        if (crew.truck_id) setMyTruckId(crew.truck_id);
-      })
+      .then(res => { if (res.data.truck_id) setMyTruckId(res.data.truck_id); })
       .catch(() => {});
+    loadAPs();
+  }, [employeeId, loadAPs]);
 
-    // Check if already submitted today
-    axiosClient.get('/anchor-points/driver/today')
-      .then(res => {
-        if (res.data) {
-          setExisting(res.data);
-          setLocation(res.data.location);
-          setEta(res.data.eta || '');
-          setNotes(res.data.notes || '');
-        }
-      })
-      .catch(() => {});
-  }, [employeeId]);
+  const activeAP = aps.find((ap: any) => ap.status === 'preliminary' || ap.status === 'arrived') ?? null;
 
-  const handleSubmit = async () => {
-    if (!myTruckId || !location.trim()) return;
-    setLoading(true);
+  const handleArrive = async () => {
+    if (!activeAP) return;
+    setArriving(true);
     setError('');
     try {
-      await axiosClient.post('/anchor-points/', {
-        truck_id: myTruckId,
-        date: today,
-        location: location.trim(),
-        eta: eta.trim() || null,
-        notes: notes.trim() || null,
-      });
-      setSuccess(true);
-      // Refresh existing
-      const res = await axiosClient.get('/anchor-points/driver/today');
-      setExisting(res.data);
+      await axiosClient.patch(`/anchor-points/${activeAP.id}/arrive`, {});
+      loadAPs();
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to submit anchor point.');
+      setError(e.response?.data?.detail || 'Failed to confirm arrival.');
     } finally {
-      setLoading(false);
+      setArriving(false);
     }
   };
-
-  const isConfirmed = existing?.confirmed_at != null;
 
   return (
     <div className="card space-y-4">
@@ -1159,67 +1136,61 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
         <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
           <MapPin className="w-4 h-4 text-info" />
         </div>
-        <h2 className="section-title">EOD Anchor Point</h2>
+        <h2 className="section-title">Anchor Point</h2>
       </div>
 
-      {isConfirmed ? (
-        <div className="p-4 rounded-xl bg-success/10 border border-success/30 space-y-1">
-          <p className="text-sm font-semibold text-success">Anchor point confirmed by dispatch.</p>
-          <p className="text-sm text-foreground">📍 {existing.location}</p>
-          {existing.eta && <p className="text-xs text-subtle">ETA: {existing.eta}</p>}
-        </div>
-      ) : existing ? (
-        <div className="space-y-3">
-          <div className="p-3 rounded-xl bg-accent/50 border border-border text-sm">
-            <p className="text-xs text-subtle mb-1">Submitted — awaiting dispatch confirmation.</p>
-            <p className="font-medium text-foreground">📍 {existing.location}</p>
-            {existing.eta && <p className="text-xs text-subtle">ETA: {existing.eta}</p>}
-          </div>
-          <p className="text-xs text-subtle">You can update your submission until dispatch confirms it.</p>
-          <div className="space-y-2">
-            <input type="text" value={location} onChange={e => setLocation(e.target.value)}
-              placeholder="Anchor point address or landmark"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            <input type="text" value={eta} onChange={e => setEta(e.target.value)}
-              placeholder="ETA (e.g. 4:30 PM)"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            <textarea value={notes} onChange={e => setNotes(e.target.value)}
-              placeholder="Notes (optional — lot B, facing gate, etc.)"
-              rows={2}
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
-          </div>
-          {error && <p className="text-xs text-danger">{error}</p>}
-          <button onClick={handleSubmit} disabled={loading || !location.trim() || !myTruckId}
-            className="btn-primary text-sm w-full disabled:opacity-50">
-            {loading ? 'Updating…' : 'Update Anchor Point'}
-          </button>
+      {aps.length === 0 ? (
+        <div className="space-y-2">
+          <p className="text-sm text-subtle">No anchor point set for today.</p>
+          {!myTruckId && (
+            <p className="text-xs text-warning">No truck assignment found — check in first.</p>
+          )}
+          <a href="/anchor-points" className="btn-primary text-sm w-full flex items-center justify-center gap-2">
+            <MapPin className="w-4 h-4" /> Set Anchor Point
+          </a>
         </div>
       ) : (
         <div className="space-y-3">
-          <p className="text-sm text-subtle">
-            Submit your end-of-day anchor point. This will be posted to your truck channel and notifies dispatch.
-          </p>
-          {!myTruckId && (
-            <p className="text-xs text-warning">No truck assignment found for today. Check in first.</p>
+          {/* Active AP summary */}
+          {activeAP && (
+            <div className={`p-3 rounded-xl border text-sm space-y-1 ${
+              activeAP.status === 'arrived'
+                ? 'bg-success/8 border-success/25'
+                : 'bg-warning/8 border-warning/25'
+            }`}>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-semibold ${activeAP.status === 'arrived' ? 'text-success' : 'text-warning'}`}>
+                  {activeAP.status === 'arrived' ? '✅ Arrived' : '🕐 Preliminary'}
+                </span>
+                {activeAP.confirmed_at && (
+                  <span className="text-xs text-success">· Dispatch acknowledged</span>
+                )}
+              </div>
+              <p className="font-medium text-foreground">📍 {activeAP.location}</p>
+              {activeAP.eta && <p className="text-xs text-subtle">ETA: {activeAP.eta}</p>}
+            </div>
           )}
-          <div className="space-y-2">
-            <input type="text" value={location} onChange={e => setLocation(e.target.value)}
-              placeholder="Anchor point address or landmark *"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            <input type="text" value={eta} onChange={e => setEta(e.target.value)}
-              placeholder="ETA (e.g. 4:30 PM)"
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
-            <textarea value={notes} onChange={e => setNotes(e.target.value)}
-              placeholder="Notes (optional — lot B, facing gate, etc.)"
-              rows={2}
-              className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none" />
-          </div>
-          {error && <p className="text-xs text-danger">{error}</p>}
-          {success && <p className="text-xs text-success">Anchor point posted to truck channel.</p>}
-          <button onClick={handleSubmit} disabled={loading || !location.trim() || !myTruckId}
-            className="btn-primary text-sm w-full disabled:opacity-50">
-            {loading ? 'Submitting…' : 'Submit Anchor Point'}
-          </button>
+
+          {/* One-tap arrive */}
+          {activeAP?.status === 'preliminary' && (
+            <div className="space-y-1">
+              {error && <p className="text-xs text-danger">{error}</p>}
+              <button
+                onClick={handleArrive} disabled={arriving}
+                className="btn-primary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {arriving
+                  ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                  : <CheckCircle2 className="w-4 h-4" />
+                }
+                {arriving ? 'Confirming…' : 'Arrived at Location'}
+              </button>
+            </div>
+          )}
+
+          <a href="/anchor-points" className="block text-center text-xs text-primary hover:underline">
+            {activeAP?.status === 'arrived' ? 'Set new anchor point →' : 'Update or manage anchor points →'}
+          </a>
         </div>
       )}
     </div>
@@ -1430,21 +1401,21 @@ function DriverInspectionHistoryPanel({ employeeId }: { employeeId: string }) {
 // ---------------------------------------------------------------------------
 export default function FieldOps() {
   const { groups, user } = useAuth();
-  const isAdmin  = groups.includes('admin');
+  const isOversight = groups.some(r => ['admin', 'management', 'dispatch'].includes(r));
   const isDriver = groups.includes('driver');
   const isWalker = groups.includes('walker');
 
   const [employeeId, setEmployeeId] = useState('');
 
-  // Resolve the logged-in user's employee DB record (only needed for driver view)
+  // Resolve the logged-in user's employee DB record (only needed for field staff view)
   useEffect(() => {
-    if (isAdmin || !user) return;
+    if (isOversight || !user) return;
     axiosClient.get('/employees/me')
       .then(res => setEmployeeId(res.data.id))
       .catch(() => {});
-  }, [user, isAdmin]);
+  }, [user, isOversight]);
 
-  if (isAdmin) {
+  if (isOversight) {
     return <AdminFieldOpsView />;
   }
 
@@ -1460,10 +1431,10 @@ export default function FieldOps() {
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
-      <CheckInPanel employeeId={employeeId} />
+      {isDriver && <CheckInPanel employeeId={employeeId} />}
       {isDriver && <InspectionPanel employeeId={employeeId} />}
       {isDriver && <FuelMileagePanel employeeId={employeeId} />}
-      <DeparturePanel employeeId={employeeId} />
+      {isDriver && <DeparturePanel employeeId={employeeId} />}
       {isDriver && <ReturnPanel employeeId={employeeId} />}
       {isDriver && <AnchorPointPanel employeeId={employeeId} />}
       {isDriver && <WalkerRatingPanel employeeId={employeeId} />}

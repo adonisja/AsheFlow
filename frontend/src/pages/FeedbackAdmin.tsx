@@ -5,6 +5,8 @@ import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { useConfirm } from '../hooks/useConfirm';
 
 type FeedbackType = 'bug' | 'feature_request' | 'general';
 type FeedbackStatus = 'new' | 'in_progress' | 'resolved';
@@ -45,6 +47,7 @@ const FILTERS: { label: string; value: FeedbackStatus | 'all' }[] = [
 ];
 
 export default function FeedbackAdmin() {
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
   const [feedback, setFeedback] = useState<Feedback[]>([]);
   const [filter, setFilter] = useState<FeedbackStatus | 'all'>('all');
   const [loading, setLoading] = useState(true);
@@ -61,7 +64,15 @@ export default function FeedbackAdmin() {
 
   useEffect(() => { fetchFeedback(); }, []);
 
-  const updateStatus = (id: string, newStatus: FeedbackStatus) => {
+  const updateStatus = async (id: string, newStatus: FeedbackStatus) => {
+    const labels: Record<FeedbackStatus, string> = { new: 'New', in_progress: 'In Progress', resolved: 'Resolved' };
+    const ok = await confirm({
+      title: 'Update Feedback Status',
+      message: `Mark this feedback as "${labels[newStatus]}"?`,
+      confirmLabel: 'Update',
+      variant: newStatus === 'resolved' ? 'default' : 'warning',
+    });
+    if (!ok) return;
     axiosClient.patch(`/feedback/${id}/status`, { status: newStatus })
       .then(r => setFeedback(prev => prev.map(f => f.id === id ? r.data : f)))
       .catch(() => setError('Failed to update feedback status.'));
@@ -89,6 +100,7 @@ export default function FeedbackAdmin() {
 
   return (
     <div className="space-y-8">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <SectionHeader
         eyebrow="Admin"
         title="Feedback Inbox"

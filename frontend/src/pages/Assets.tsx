@@ -6,6 +6,8 @@ import {
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { useConfirm } from '../hooks/useConfirm';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -303,6 +305,7 @@ const PEOPLE_PAGE_SIZE = 25;
 function PeopleTab() {
   const { groups }                    = useAuth();
   const canImport                     = groups.includes('management') || groups.includes('admin');
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
 
   const [employees, setEmployees]     = useState<Employee[]>([]);
   const [loading, setLoading]         = useState(true);
@@ -344,8 +347,13 @@ function PeopleTab() {
 
   const handleToggleActive = async (emp: Employee) => {
     const action = emp.is_active ? 'deactivate' : 'reactivate';
-    const label  = emp.is_active ? 'deactivate' : 'reactivate';
-    if (!window.confirm(`${label.charAt(0).toUpperCase() + label.slice(1)} ${emp.name}?`)) return;
+    const ok = await confirm({
+      title: `${action.charAt(0).toUpperCase() + action.slice(1)} Employee`,
+      message: `${action.charAt(0).toUpperCase() + action.slice(1)} ${emp.name}? ${emp.is_active ? 'They will lose system access.' : 'They will regain system access.'}`,
+      confirmLabel: action.charAt(0).toUpperCase() + action.slice(1),
+      variant: emp.is_active ? 'danger' : 'default',
+    });
+    if (!ok) return;
     const res = await axiosClient.put(`/employees/${emp.id}/${action}`);
     setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
   };
@@ -364,6 +372,7 @@ function PeopleTab() {
 
   return (
     <div className="space-y-5">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <input
@@ -557,6 +566,7 @@ function PeopleTab() {
 // ---------------------------------------------------------------------------
 
 function FleetTab() {
+  const { confirmState: fleetConfirmState, confirm: fleetConfirm, cancelConfirm: fleetCancelConfirm } = useConfirm();
   const [trucks, setTrucks]           = useState<TruckRecord[]>([]);
   const [loading, setLoading]         = useState(true);
   const [loadError, setLoadError]     = useState<string | null>(null);
@@ -588,7 +598,13 @@ function FleetTab() {
   };
 
   const handleDeactivate = async (truck: TruckRecord) => {
-    if (!window.confirm(`Deactivate ${truck.name}?`)) return;
+    const ok = await fleetConfirm({
+      title: 'Deactivate Truck',
+      message: `Deactivate ${truck.name}? It will be removed from future dispatch until reactivated.`,
+      confirmLabel: 'Deactivate',
+      variant: 'danger',
+    });
+    if (!ok) return;
     const res = await axiosClient.put(`/trucks/${truck.id}/deactivate`);
     setTrucks(prev => prev.map(t => t.id === truck.id ? res.data : t));
   };
@@ -600,6 +616,7 @@ function FleetTab() {
 
   return (
     <div className="space-y-5">
+      <ConfirmDialog {...fleetConfirmState} onCancel={fleetCancelConfirm} />
       {/* Toolbar */}
       <div className="flex items-center gap-3">
         <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
@@ -705,13 +722,20 @@ function FleetTab() {
 // ---------------------------------------------------------------------------
 
 function SystemTab() {
+  const { confirmState: sysConfirmState, confirm: sysConfirm, cancelConfirm: sysCancelConfirm } = useConfirm();
   const [days, setDays]         = useState(30);
   const [pruning, setPruning]   = useState(false);
   const [result, setResult]     = useState<{ deleted: number; cutoff: string } | null>(null);
   const [error, setError]       = useState('');
 
   const handlePrune = async () => {
-    if (!window.confirm(`Delete all read notifications older than ${days} days? This cannot be undone.`)) return;
+    const ok = await sysConfirm({
+      title: 'Prune Notifications',
+      message: `Delete all read notifications older than ${days} days? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setPruning(true);
     setResult(null);
     setError('');
@@ -727,6 +751,7 @@ function SystemTab() {
 
   return (
     <div className="space-y-6 max-w-lg">
+      <ConfirmDialog {...sysConfirmState} onCancel={sysCancelConfirm} />
       <div className="card space-y-4">
         <div className="flex items-center gap-2 border-b border-border pb-3">
           <Trash2 className="w-4 h-4 text-danger" />

@@ -13,6 +13,8 @@ import {
 import { MiniCalendar } from '../components/MiniCalendar';
 import NotificationBanner from '../components/NotificationBanner';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { useConfirm } from '../hooks/useConfirm';
 
 import type { CrewMember } from '../api/types';
 
@@ -81,6 +83,8 @@ function AgeBadge({ createdAt }: { createdAt: string }) {
 }
 
 function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
+
   // Pending queues
   const [ptoPending, setPtoPending]       = useState<any[]>([]);
   const [offDayPending, setOffDayPending] = useState<any[]>([]);
@@ -107,7 +111,7 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
         .then(r => setPtoPending(r.data.filter((x: any) => x.status === 'pending'))),
       axiosClient.get('/employee-off-days/')
         .then(r => setOffDayPending(r.data.filter((x: any) => x.status === 'pending'))),
-      axiosClient.get('/schedule-change-requests/')
+      axiosClient.get('/schedule-change-requests/?status=pending')
         .then(r => setReworkPending(r.data)),
       ...(isAdmin ? [axiosClient.get('/schedule-change-requests/').then(r => setAllReworks(r.data))] : []),
     ]).then(results => {
@@ -152,26 +156,38 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
   const empRole = (id: string) => employees.find(x => x.id === id)?.role ?? '';
 
   // Approve / reject handlers
-  const approvePTO = (id: string) =>
-    axiosClient.patch(`/time-off-requests/${id}/approve`).then(() =>
-      setPtoPending(p => p.filter(x => x.id !== id)));
-  const rejectPTO = (id: string) =>
-    axiosClient.patch(`/time-off-requests/${id}/reject`).then(() =>
-      setPtoPending(p => p.filter(x => x.id !== id)));
+  const approvePTO = async (id: string) => {
+    const ok = await confirm({ title: 'Approve PTO', message: 'Approve this time-off request?', confirmLabel: 'Approve', variant: 'default' });
+    if (!ok) return;
+    axiosClient.patch(`/time-off-requests/${id}/approve`).then(() => setPtoPending(p => p.filter(x => x.id !== id)));
+  };
+  const rejectPTO = async (id: string) => {
+    const ok = await confirm({ title: 'Reject PTO', message: 'Reject this time-off request? The employee will be notified.', confirmLabel: 'Reject', variant: 'danger' });
+    if (!ok) return;
+    axiosClient.patch(`/time-off-requests/${id}/reject`).then(() => setPtoPending(p => p.filter(x => x.id !== id)));
+  };
 
-  const approveOffDay = (id: string) =>
-    axiosClient.patch(`/employee-off-days/${id}/approve`).then(() =>
-      setOffDayPending(p => p.filter(x => x.id !== id)));
-  const rejectOffDay = (id: string) =>
-    axiosClient.patch(`/employee-off-days/${id}/reject`).then(() =>
-      setOffDayPending(p => p.filter(x => x.id !== id)));
+  const approveOffDay = async (id: string) => {
+    const ok = await confirm({ title: 'Approve Off Day', message: 'Approve this off-day request?', confirmLabel: 'Approve', variant: 'default' });
+    if (!ok) return;
+    axiosClient.patch(`/employee-off-days/${id}/approve`).then(() => setOffDayPending(p => p.filter(x => x.id !== id)));
+  };
+  const rejectOffDay = async (id: string) => {
+    const ok = await confirm({ title: 'Reject Off Day', message: 'Reject this off-day request? The employee will be notified.', confirmLabel: 'Reject', variant: 'danger' });
+    if (!ok) return;
+    axiosClient.patch(`/employee-off-days/${id}/reject`).then(() => setOffDayPending(p => p.filter(x => x.id !== id)));
+  };
 
-  const approveRework = (id: string) =>
-    axiosClient.patch(`/schedule-change-requests/${id}/approve`).then(() =>
-      setReworkPending(p => p.filter(x => x.id !== id)));
-  const rejectRework = (id: string) =>
-    axiosClient.patch(`/schedule-change-requests/${id}/reject`).then(() =>
-      setReworkPending(p => p.filter(x => x.id !== id)));
+  const approveRework = async (id: string) => {
+    const ok = await confirm({ title: 'Approve Schedule Change', message: 'Approve this permanent schedule change request?', confirmLabel: 'Approve', variant: 'default' });
+    if (!ok) return;
+    axiosClient.patch(`/schedule-change-requests/${id}/approve`).then(() => setReworkPending(p => p.filter(x => x.id !== id)));
+  };
+  const rejectRework = async (id: string) => {
+    const ok = await confirm({ title: 'Reject Schedule Change', message: 'Reject this schedule change request?', confirmLabel: 'Reject', variant: 'danger' });
+    if (!ok) return;
+    axiosClient.patch(`/schedule-change-requests/${id}/reject`).then(() => setReworkPending(p => p.filter(x => x.id !== id)));
+  };
 
   // Unified queue
   const unified = useMemo(() => {
@@ -228,6 +244,7 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <div className="space-y-8 animate-slide-up">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl gradient-primary shadow-sm shadow-primary/30">
@@ -520,6 +537,7 @@ const Schedule = () => {
   const isPrivileged = isAdmin || isManagement;
 
   // All hooks must be declared before any early return
+  const { confirmState: workerConfirmState, confirm: workerConfirm, cancelConfirm: workerCancelConfirm } = useConfirm();
   const [employees, setEmployees] = useState<any[]>([]);
   const [myId, setMyId]           = useState<string>('');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -605,6 +623,13 @@ const Schedule = () => {
   };
 
   const handleCancelPTO = async (dateStr: string) => {
+    const ok = await workerConfirm({
+      title: 'Cancel PTO Request',
+      message: 'Are you sure you want to cancel this PTO request?',
+      confirmLabel: 'Yes, Cancel It',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       const normalize = (d: string) => d.split('T')[0];
       const req = pendingRequests.find(r => normalize(r.date) === normalize(dateStr));
@@ -619,6 +644,7 @@ const Schedule = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-slide-up">
+      <ConfirmDialog {...workerConfirmState} onCancel={workerCancelConfirm} />
       <h1 className="page-title">My Schedule</h1>
 
       {loadError && (
