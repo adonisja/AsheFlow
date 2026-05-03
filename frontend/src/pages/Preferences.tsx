@@ -8,6 +8,8 @@ import {
 } from '../api/preferences';
 import NotificationBanner from '../components/NotificationBanner';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { useConfirm } from '../hooks/useConfirm';
 import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users } from 'lucide-react';
 
 const selectStyles = {
@@ -34,6 +36,8 @@ const selectStyles = {
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   }),
+  singleValue: () => ({ display: 'none' }),
+  placeholder: (base: any) => ({ ...base }),
 };
 
 // ---------------------------------------------------------------------------
@@ -305,6 +309,8 @@ const Preferences = () => {
   const canFavBan = groups.some(r => ['driver', 'walker', 'trainer'].includes(r));
   const canReassign = groups.some(r => ['walker', 'trainer'].includes(r));
 
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
+
   const [myId, setMyId] = useState<string>(user?.userId || user?.username || '');
   const [employees, setEmployees] = useState<any[]>([]);
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
@@ -377,6 +383,13 @@ const Preferences = () => {
   };
 
   const handleCancelChangeRequest = async (id: string) => {
+    const ok = await confirm({
+      title: 'Cancel Reassignment Request',
+      message: 'Are you sure you want to cancel this request? This cannot be undone.',
+      confirmLabel: 'Yes, Cancel It',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       await axiosClient.delete(`/assignment-change-requests/${id}`);
       loadChangeRequests(myId);
@@ -387,7 +400,18 @@ const Preferences = () => {
 
   const handleAddFav = async () => { if (!myId || !targetFavId) return; await createRelationship(myId, targetFavId, 'fav'); loadPreferences(myId); setTargetFavId(''); };
   const handleAddBan = async () => { if (!myId || !targetBanId) return; await createRelationship(myId, targetBanId, 'ban'); loadPreferences(myId); setTargetBanId(''); };
-  const handleDeleteRelationship = async (id: string) => { await deleteRelationship(id); loadPreferences(myId); };
+  const handleDeleteRelationship = async (item: any) => {
+    const name = getEmpName(item.target_employee_id);
+    const ok = await confirm({
+      title: 'Remove Preference',
+      message: `Remove ${name} from your list?`,
+      confirmLabel: 'Remove',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    await deleteRelationship(item.id);
+    loadPreferences(myId);
+  };
 
   const getEmpName = (id: string) => {
     const emp = employees.find(e => e.id === id);
@@ -395,17 +419,12 @@ const Preferences = () => {
   };
 
   const EXEMPT_ROLES = ['management', 'admin', 'dispatch', 'trainee'];
-  const employeeOptions = employees
-    .filter(emp => !EXEMPT_ROLES.includes(emp.role))
-    .map(emp => ({ value: emp.id, label: `${emp.first_name || emp.name} (${emp.role})` }));
 
-  const getGroupedOptions = (excludeId?: string, isSelector?: boolean) => {
+  const getGroupedOptions = (excludeId?: string) => {
+    const currentRole = employees.find(e => e.id === excludeId)?.role;
     let valid = excludeId ? employees.filter(e => e.id !== excludeId) : employees;
     valid = valid.filter(e => !EXEMPT_ROLES.includes(e.role));
-    if (isSelector) {
-      const current = employees.find(e => e.id === excludeId);
-      if (current?.role === 'driver') valid = valid.filter(e => e.role !== 'driver');
-    }
+    if (currentRole === 'driver') valid = valid.filter(e => e.role !== 'driver');
     const roles = Array.from(new Set(valid.map(e => e.role))).sort();
     return roles.map(role => ({
       label: role.charAt(0).toUpperCase() + role.slice(1) + 's',
@@ -431,6 +450,7 @@ const Preferences = () => {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <h1 className="page-title">Preferences</h1>
 
       <ErrorBanner message={loadError} />
@@ -500,19 +520,25 @@ const Preferences = () => {
             <Section icon={Heart} title="Favorites" iconColor="text-success">
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
-                  <Select
-                    options={getGroupedOptions(myId, true)}
-                    value={employeeOptions.find(o => o.value === targetFavId) || null}
-                    onChange={(s) => setTargetFavId(s?.value || '')}
-                    placeholder="Search and select to add..."
-                    isClearable
-                    isSearchable
-                    styles={selectStyles}
-                  />
+                  {(() => {
+                    const favOpts = getGroupedOptions(myId);
+                    const favValue = favOpts.flatMap(g => g.options).find(o => o.value === targetFavId) || null;
+                    return (
+                      <Select
+                        options={favOpts}
+                        value={favValue}
+                        onChange={(s) => setTargetFavId(s?.value || '')}
+                        placeholder="Search and select to add..."
+                        isClearable
+                        isSearchable
+                        styles={selectStyles}
+                      />
+                    );
+                  })()}
                 </div>
                 <button onClick={handleAddFav} className="btn-primary text-xs">Add</button>
               </div>
-              <ItemList items={favs} getLabel={(f) => getEmpName(f.target_employee_id)} onDelete={(f) => handleDeleteRelationship(f.id)} emptyText="No favorites yet." />
+              <ItemList items={favs} getLabel={(f) => getEmpName(f.target_employee_id)} onDelete={handleDeleteRelationship} emptyText="No favorites yet." />
             </Section>
           )}
 
@@ -521,19 +547,25 @@ const Preferences = () => {
             <Section icon={ShieldOff} title="Blocked" iconColor="text-danger">
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
-                  <Select
-                    options={getGroupedOptions(myId)}
-                    value={employeeOptions.find(o => o.value === targetBanId) || null}
-                    onChange={(s) => setTargetBanId(s?.value || '')}
-                    placeholder="Search and select to block..."
-                    isClearable
-                    isSearchable
-                    styles={selectStyles}
-                  />
+                  {(() => {
+                    const banOpts = getGroupedOptions(myId);
+                    const banValue = banOpts.flatMap(g => g.options).find(o => o.value === targetBanId) || null;
+                    return (
+                      <Select
+                        options={banOpts}
+                        value={banValue}
+                        onChange={(s) => setTargetBanId(s?.value || '')}
+                        placeholder="Search and select to block..."
+                        isClearable
+                        isSearchable
+                        styles={selectStyles}
+                      />
+                    );
+                  })()}
                 </div>
                 <button onClick={handleAddBan} className="btn-primary text-xs">Add</button>
               </div>
-              <ItemList items={bans} getLabel={(b) => getEmpName(b.target_employee_id)} onDelete={(b) => handleDeleteRelationship(b.id)} emptyText="No blocks yet." />
+              <ItemList items={bans} getLabel={(b) => getEmpName(b.target_employee_id)} onDelete={handleDeleteRelationship} emptyText="No blocks yet." />
             </Section>
           )}
 

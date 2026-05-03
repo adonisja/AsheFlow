@@ -1,49 +1,47 @@
 """Anchor point model.
 
-An anchor point (AP) is the location where a truck parks at end-of-day.
-Each truck has a configured default AP. After completing their route, the driver
-posts the actual AP and their ETA — this feeds into the next morning's dispatch
-planning and is confirmable by dispatch.
+A driver sets an AP (parking/staging location) before leaving the station.
+Multiple APs can exist per truck per day — a preliminary before departure,
+an arrival confirmation on reaching the spot, and relocations if the driver
+moves to a different area mid-day.
 
-One record per truck per date (the driver's EOD submission).
-Dispatch confirmation is stored on the same row (confirmed_by, confirmed_at).
+Status lifecycle:
+    preliminary  — submitted before or just after departure, ETA included
+    arrived      — driver tapped "Arrived" at the location
+    relocated    — superseded by a later AP for the same day
+
+is_initial=True marks the first AP of the day (preliminary). Only this record
+feeds next-day driver suggestions via GET /anchor-points/truck/{id}.
 """
 
 import uuid
-from sqlalchemy import Column, String, Date, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, String, Date, DateTime, ForeignKey, Text, Boolean, Integer, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from app.models.base import Base
 
+AP_STATUSES = ["preliminary", "arrived", "relocated"]
+
 
 class AnchorPoint(Base):
-    """EOD anchor point submission by driver, confirmable by dispatch.
-
-    Attributes:
-        id:             Primary key UUID.
-        truck_id:       FK to trucks — which truck this AP belongs to.
-        driver_id:      FK to employees — the driver who submitted.
-        date:           The dispatch date this AP is for.
-        location:       Free-text location description (e.g. "143-17 Guy Brewer Blvd").
-        eta:            Driver's estimated time of arrival at the AP (HH:MM, free text).
-        notes:          Optional additional context (e.g. "parked in lot B").
-        submitted_at:   Timestamp of driver submission.
-        confirmed_by:   FK to employees — dispatch/admin who confirmed the AP (nullable).
-        confirmed_at:   Timestamp of dispatch confirmation (nullable until confirmed).
-    """
     __tablename__ = "anchor_points"
-    __table_args__ = (
-        UniqueConstraint("truck_id", "date", name="uq_anchor_points_truck_date"),
-    )
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    truck_id     = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"),    nullable=False, index=True)
-    driver_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    truck_id     = Column(UUID(as_uuid=True), ForeignKey("trucks.id",     ondelete="CASCADE"),    nullable=False, index=True)
+    driver_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id",  ondelete="CASCADE"),    nullable=False, index=True)
     date         = Column(Date,               nullable=False, index=True)
+    sequence     = Column(Integer,            nullable=False, default=1)   # 1 = first AP of the day
+    is_initial   = Column(Boolean,            nullable=False, default=False)  # True only for sequence=1
+    status       = Column(String(20),         nullable=False, default="preliminary")
     location     = Column(String(255),        nullable=False)
-    eta          = Column(String(20),         nullable=True)   # e.g. "4:30 PM"
+    eta          = Column(String(20),         nullable=True)
     notes        = Column(Text,               nullable=True)
     submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    arrived_at   = Column(DateTime(timezone=True), nullable=True)
     confirmed_by = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN ('preliminary','arrived','relocated')", name="ck_anchor_points_status"),
+    )

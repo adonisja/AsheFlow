@@ -10,8 +10,8 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination with a 
 
 **Core capabilities:**
 - **Intelligent Dispatch** — weighted algorithm that resolves driver preferences (favorites/bans), recurring off-days, PTO requests, trainer-trainee pairing, and crew balance constraints to generate daily truck assignments
-- **Two-Phase Discord Flow** — crew members receive individual DM confirmations after dispatch; a second "Post Final Crews" action publishes finalized assignments to Discord channels
-- **Dispatch Confirmation System** — `DispatchConfirmation` table tracks each crew member's response (confirmed/declined/pending) with timestamps for response-time analytics
+- **Two-Phase Discord Flow** — crew members receive individual DM confirmations after dispatch (with explicit trainer↔trainee pairing info); a second "Post Final Crews" action publishes finalized assignments to Discord channels with authoritative pairings
+- **Dispatch Confirmation System** — `DispatchConfirmation` table tracks each crew member's response (confirmed/declined/pending) with timestamps for response-time analytics; trainer declines trigger automatic trainee reassignment with dispatch notifications
 - **Field Operations** — driver shift lifecycle: check-in, pre-trip inspection, departure, walker attendance + rating, fuel/mileage log, end-of-day return
 - **Training Pipeline** — phase-based trainee onboarding with curriculum injection, training debt escalation, trainer continuation requests, trainer marks, and automated graduation with Discord DM notification
 - **Incident Reporting** — structured mid-shift reports with severity tags, auto-notification to management, and resolution tracking
@@ -42,7 +42,7 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination with a 
 - **Framework:** FastAPI
 - **Database:** PostgreSQL (Docker container)
 - **ORM:** SQLAlchemy 2.0
-- **Migrations:** Alembic (36 migrations)
+- **Migrations:** Alembic (37 migrations)
 - **Auth:** AWS Cognito (JWT verification via JWKS with key-rotation retry, `RoleChecker` dependency injection)
 - **Task Queue:** Celery + Redis (EOD reminders, dispatch alerts, training deadline checks, invite expiry cleanup)
 - **Tests:** pytest — 97 tests across 4 service modules (run_dispatch, available_pool, graduate_trainees, analytics); SQLite in-memory with targeted schema fixtures
@@ -68,14 +68,16 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination with a 
 
 ```
 AsheFlow/
+├── .env.example                 # Required variables template — copy to .env before starting
 ├── backend/
-│   ├── alembic/versions/        # 36 database migrations
+│   ├── alembic/versions/        # 37 database migrations
 │   ├── app/
 │   │   ├── api/deps.py          # RoleChecker, get_current_user, get_caller_employee
 │   │   ├── models/              # SQLAlchemy models (20+ tables)
 │   │   ├── routers/             # 20 API routers under /api/v1/
 │   │   ├── schemas/             # Pydantic request/response schemas
 │   │   ├── services/            # Dispatch algorithm, graduation, analytics, audit
+│   │   │   └── constants.py     # Role constants — single source of truth for all role strings
 │   │   └── tasks/               # Celery periodic tasks
 │   ├── scripts/                 # Seed and utility scripts
 │   ├── tests/
@@ -96,12 +98,12 @@ AsheFlow/
 │       ├── api/                 # axiosClient (JWT interceptor)
 │       ├── components/
 │       │   ├── auth/            # Login
-│       │   ├── layout/          # Navbar, Layout
-│       │   └── ui/              # MotionCard, StatCard, SectionHeader, Skeleton, ThemeToggle
+│       │   ├── layout/          # Navbar (two-tier: TitleBar + NavStrip), Layout
+│       │   └── ui/              # MotionCard, StatCard, SectionHeader, Skeleton, ThemeToggle, ConfirmDialog
 │       ├── contexts/            # AuthContext, ThemeContext
 │       └── pages/               # 20+ route pages
 ├── docs/
-│   ├── decisions/               # ADRs (ADR-001 through ADR-050)
+│   ├── decisions/               # ADRs (ADR-001 through ADR-059)
 │   ├── journals/                # Per-session development logs
 │   ├── LEARNING_GUIDE.md        # Accumulated design lessons
 │   ├── ANALYTICS_ACCESS_AUDIT.md
@@ -127,10 +129,13 @@ AsheFlow/
    ```
 
 2. **Set environment variables**
-   - `backend/.env` — see `backend/.env.example`
+   - Copy `.env.example` → `.env` at the project root and fill in all required values
+   - `backend/.env` — database URL, Cognito config, Celery settings
    - `frontend/.env` — see `frontend/.env.template`
    - `bot/.env` — Discord bot token, Cognito service account credentials, internal secret
    - All need `AWS_COGNITO_USER_POOL_ID`, `AWS_COGNITO_CLIENT_ID`, and `AWS_REGION`
+   - Generate `SECRET_KEY` and `INTERNAL_SECRET` with: `python -c "import secrets; print(secrets.token_hex(32))"`
+   - **Note:** the stack will refuse to start if `POSTGRES_PASSWORD`, `SECRET_KEY`, or `INTERNAL_SECRET` are unset
 
 3. **Start the stack**
    ```bash
@@ -213,10 +218,13 @@ All endpoints live under `/api/v1/`. Authentication is required on every endpoin
 - [x] **Phase 5** — Role architecture audit, dashboard split per role, 6 reporting endpoints, schedule change requests, tool scope enforcement
 - [x] **Phase 6** — Analytics pages, security audit (ownership checks, schema validation, JWKS rotation, credential hygiene), dispatch unit tests, feedback admin UI, bug fixes
 - [x] **Phase 7** — Discord bot (DM confirmations, two-phase dispatch flow, crew channel posting), training system phase-based redesign, trainer marks, persistent dispatch confirmations, audit log, Celery task infrastructure, analytics access audit + role-scoped fixes, test suite expansion (97 tests)
+- [x] **Phase 8** — Dispatch hardening: trainer-decline auto-reassignment with dispatch notifications, trainer/trainee pairing notifications (in-app + bot DMs), bumped-trainee data loss fix, UUID crash guard, confirmation polling staleness indicator, ConfirmDialog wiring across all destructive dispatch actions, two-tier responsive navbar, truck name resolution in Today's Dispatch card, role constants centralisation, structured logging across publish/curriculum/reassign flows, docker-compose secret hardening + `.env.example`
 
 ---
 
 ## What's Left
 
-- **TruckAssignment lifecycle** — hook the existing `status` field (`planned → active → completed`) into departure and return events so the management dashboard can show real-time fleet status (Fleet Today KPI semantic bug tracked separately)
+- **TruckAssignment lifecycle** — hook the existing `status` field (`planned → active → completed`) into departure and return events so the management dashboard can show real-time fleet status
 - **Anchor points** — staging area management tied to truck lifecycle (model and router exist; UI not yet wired)
+- **Notification center UI** — in-app bell notifications are stored and served but the frontend has no dedicated notification panel; currently surfaced only inline on dashboards
+- **E2E tests** — pytest suite covers backend services; no browser-level tests exist for the React frontend

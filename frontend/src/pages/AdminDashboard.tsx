@@ -37,11 +37,17 @@ export default function AdminDashboard() {
   const fetchAll = () => {
     setLoading(true);
     setError(null);
+    const today = getLocalYMD();
     Promise.allSettled([
       axiosClient.get('/employees/?include_inactive=true&limit=500').then(r => setEmployees(r.data)),
       axiosClient.get('/trucks/?include_inactive=true').then(r => setTrucks(r.data)),
       axiosClient.get('/incidents/?resolved=false').then(r => setIncidents(r.data)),
       axiosClient.get('/training/daily/active').then(r => setTrainingToday(r.data)),
+      axiosClient.get(`/dispatch/${today}/confirmations`).then(r => {
+        const count = Object.values(r.data.confirmations ?? {}).filter(s => s === 'pending').length;
+        setPendingConfirmCount(count);
+        setConfirmDate(today);
+      }).catch(() => {}),
     ]).then(results => {
       if (results.some(r => r.status === 'rejected')) {
         setError('Some dashboard data failed to load. Refresh to retry.');
@@ -68,25 +74,27 @@ export default function AdminDashboard() {
     'idle' | 'loading' | 'done' | 'error'
   >('idle');
   const [confirmAllCount, setConfirmAllCount] = useState<number | null>(null);
+  const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
+  const [confirmDate, setConfirmDate] = useState<string>(getLocalYMD());
 
   const handleConfirmAll = async () => {
     setConfirmAllState('loading');
-    const today = getLocalYMD();
     try {
-      const res = await axiosClient.get<Record<string, string>>(
-        `/dispatch/${today}/confirmations`
+      const res = await axiosClient.get<{ date: string; confirmations: Record<string, string> }>(
+        `/dispatch/${confirmDate}/confirmations`
       );
-      const pending = Object.entries(res.data).filter(([, s]) => s === 'pending');
+      const pending = Object.entries(res.data.confirmations ?? {}).filter(([, s]) => s === 'pending');
       setConfirmAllCount(pending.length);
       await Promise.all(
         pending.map(([employee_id]) =>
-          axiosClient.post(`/dispatch/${today}/confirmations`, {
+          axiosClient.post(`/dispatch/${confirmDate}/confirmations`, {
             employee_id,
             status: 'confirmed',
           })
         )
       );
       setConfirmAllState('done');
+      setPendingConfirmCount(0);
     } catch {
       setConfirmAllState('error');
     }
@@ -161,13 +169,14 @@ export default function AdminDashboard() {
         />
       </div>
 
-      {/* Confirm-all (temporary) */}
+      {/* Operations Tool — only shown when pending confirmations exist */}
+      {(pendingConfirmCount > 0 || confirmAllState === 'loading' || confirmAllState === 'done' || confirmAllState === 'error') && (
       <div className="flex items-center gap-4 px-4 py-3 rounded-2xl border border-warning/40 bg-warning/5">
         <Zap className="w-5 h-5 text-warning shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">Confirm All Pending (Dev Tool)</p>
+          <p className="text-sm font-semibold text-foreground">Operations Tool — Confirm All Pending</p>
           <p className="text-xs text-muted-foreground">
-            Marks every pending dispatch confirmation for today as confirmed on behalf of each employee.
+            Marks every pending dispatch confirmation for <span className="font-medium text-foreground">{confirmDate}</span> as confirmed on behalf of each employee.
           </p>
           {confirmAllState === 'done' && (
             <p className="text-xs text-success font-medium mt-0.5">
@@ -193,6 +202,7 @@ export default function AdminDashboard() {
           {confirmAllState === 'loading' ? 'Working…' : 'Confirm All'}
         </button>
       </div>
+      )}
 
       {/* Mid row — 3 cards */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

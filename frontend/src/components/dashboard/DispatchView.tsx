@@ -2,80 +2,121 @@ import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
 import {
-  Truck, ClipboardCheck, Calendar, Check, X, AlertTriangle,
+  Truck, ClipboardCheck, Calendar, Check, X, AlertTriangle, Package,
 } from 'lucide-react';
+import { getLocalYMD } from '../../utils/date';
+import ConfirmDialog from '../ui/ConfirmDialog';
+import { useConfirm } from '../../hooks/useConfirm';
 
 export default function DispatchView() {
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
   const { groups } = useAuth();
   const isAdmin = groups.includes('admin');
+  const today = getLocalYMD();
 
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
-  const [pendingOffDays, setPendingOffDays] = useState<any[]>([]);
+  const [pendingRequests, setPendingRequests]         = useState<any[]>([]);
+  const [pendingOffDays, setPendingOffDays]           = useState<any[]>([]);
   const [pendingChangeRequests, setPendingChangeRequests] = useState<any[]>([]);
-  const [urgentIncidents, setUrgentIncidents] = useState<any[]>([]);
-  const [fleetStatus, setFleetStatus] = useState<any[]>([]);
+  const [urgentIncidents, setUrgentIncidents]         = useState<any[]>([]);
+  const [fleetAssignments, setFleetAssignments]       = useState<any[]>([]);
+  const [pendingRTS, setPendingRTS]                   = useState<any[]>([]);
 
   useEffect(() => {
-    axiosClient.get(`/time-off-requests/`).then(res =>
+    axiosClient.get('/time-off-requests/').then(res =>
       setPendingRequests(res.data.filter((r: any) => r.status === 'pending'))
     ).catch(() => {});
 
-    axiosClient.get(`/employee-off-days/`).then(res =>
+    axiosClient.get('/employee-off-days/').then(res =>
       setPendingOffDays(res.data.filter((r: any) => r.status === 'pending'))
     ).catch(() => {});
 
-    axiosClient.get(`/assignment-change-requests/pending`).then(res =>
+    axiosClient.get('/assignment-change-requests/pending').then(res =>
       setPendingChangeRequests(res.data)
     ).catch(() => {});
 
-    axiosClient.get(`/incidents/unresolved-urgent`).then(res =>
+    axiosClient.get('/incidents/unresolved-urgent').then(res =>
       setUrgentIncidents(res.data)
     ).catch(() => {});
 
-    axiosClient.get(`/field-ops/returns/summary`).then(res =>
-      setFleetStatus(res.data)
+    // Fleet status from TruckAssignment status (wired since 2026-05-02)
+    axiosClient.get(`/dispatch/${today}`).then(res => {
+      const assignments = res.data?.truck_assignments ?? [];
+      setFleetAssignments(assignments);
+    }).catch(() => {});
+
+    axiosClient.get('/shift-ops/rts-reports/pending').then(res =>
+      setPendingRTS(res.data)
     ).catch(() => {});
   }, []);
 
-  const handleApprove = (type: 'request' | 'offDay', id: string) => {
-    const url = type === 'request'
-      ? `/time-off-requests/${id}/approve`
-      : `/employee-off-days/${id}/approve`;
+  const handleApprove = async (type: 'request' | 'offDay', id: string) => {
+    const label = type === 'request' ? 'PTO request' : 'off-day request';
+    const ok = await confirm({ title: 'Approve Request', message: `Approve this ${label}?`, confirmLabel: 'Approve', variant: 'default' });
+    if (!ok) return;
+    const url = type === 'request' ? `/time-off-requests/${id}/approve` : `/employee-off-days/${id}/approve`;
     axiosClient.patch(url).then(() => {
       if (type === 'request') setPendingRequests(p => p.filter(r => r.id !== id));
       else setPendingOffDays(p => p.filter(r => r.id !== id));
     }).catch(() => {});
   };
 
-  const handleReject = (type: 'request' | 'offDay', id: string) => {
-    const url = type === 'request'
-      ? `/time-off-requests/${id}/reject`
-      : `/employee-off-days/${id}/reject`;
+  const handleReject = async (type: 'request' | 'offDay', id: string) => {
+    const label = type === 'request' ? 'PTO request' : 'off-day request';
+    const ok = await confirm({ title: 'Reject Request', message: `Reject this ${label}? The employee will be notified.`, confirmLabel: 'Reject', variant: 'danger' });
+    if (!ok) return;
+    const url = type === 'request' ? `/time-off-requests/${id}/reject` : `/employee-off-days/${id}/reject`;
     axiosClient.patch(url).then(() => {
       if (type === 'request') setPendingRequests(p => p.filter(r => r.id !== id));
       else setPendingOffDays(p => p.filter(r => r.id !== id));
     }).catch(() => {});
   };
 
-  const handleApproveChange = (id: string) => {
+  const handleApproveChange = async (id: string) => {
+    const ok = await confirm({ title: 'Approve Reassignment', message: 'Approve this truck reassignment request?', confirmLabel: 'Approve', variant: 'default' });
+    if (!ok) return;
     axiosClient.patch(`/assignment-change-requests/${id}/approve`).then(() =>
       setPendingChangeRequests(p => p.filter(r => r.id !== id))
     ).catch(() => {});
   };
 
-  const handleRejectChange = (id: string) => {
+  const handleRejectChange = async (id: string) => {
+    const ok = await confirm({ title: 'Reject Reassignment', message: 'Reject this reassignment request?', confirmLabel: 'Reject', variant: 'danger' });
+    if (!ok) return;
     axiosClient.patch(`/assignment-change-requests/${id}/reject`).then(() =>
       setPendingChangeRequests(p => p.filter(r => r.id !== id))
     ).catch(() => {});
   };
 
+  const handleApproveRTS = async (driverId: string, driverName: string) => {
+    const ok = await confirm({ title: 'Approve RTS Return', message: `Approve ${driverName}'s return-to-station request? They will be cleared to leave the field.`, confirmLabel: 'Approve Return', variant: 'default' });
+    if (!ok) return;
+    axiosClient.patch(`/shift-ops/rts-report/${driverId}`, { status: 'approved' }).then(() =>
+      setPendingRTS(p => p.filter(r => r.driver_id !== driverId))
+    ).catch(() => {});
+  };
+
+  const handleRejectRTS = async (driverId: string, driverName: string) => {
+    const ok = await confirm({ title: 'Reject RTS Return', message: `Reject ${driverName}'s return request? They will remain in the field.`, confirmLabel: 'Reject', variant: 'danger' });
+    if (!ok) return;
+    axiosClient.patch(`/shift-ops/rts-report/${driverId}`, { status: 'rejected' }).then(() =>
+      setPendingRTS(p => p.filter(r => r.driver_id !== driverId))
+    ).catch(() => {});
+  };
+
   const quickLinks = [
-    { icon: Truck, label: 'Dispatch Center', desc: 'Run daily algorithmic dispatch & manual overrides', href: '/dispatch' },
-    { icon: AlertTriangle, label: 'Incidents', desc: 'Review and resolve open field incident reports', href: '/incidents' },
+    { icon: Truck,       label: 'Dispatch Center',   desc: 'Run daily algorithmic dispatch & manual overrides', href: '/dispatch' },
+    { icon: AlertTriangle, label: 'Incidents',        desc: 'Review and resolve open field incident reports',    href: '/incidents' },
+    { icon: Package,     label: 'Anchor Points',      desc: 'View today\'s AP submissions and confirm locations', href: '/anchor-points' },
   ];
+
+  // Derive fleet counts from assignment statuses
+  const activeCount    = fleetAssignments.filter((a: any) => a.status === 'active').length;
+  const completedCount = fleetAssignments.filter((a: any) => a.status === 'completed').length;
+  const totalCount     = fleetAssignments.length;
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Quick links */}
         <div className="card h-full">
@@ -206,36 +247,88 @@ export default function DispatchView() {
         </div>
       </div>
 
-      {/* Fleet Return Status */}
-      <div className="card border-border/60">
-        <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
-          <Truck className="w-5 h-5 text-primary" />
-          <h2 className="text-lg font-semibold text-foreground">Fleet Return Status — Today</h2>
-          <span className="ml-auto text-xs text-subtle">
-            {fleetStatus.filter((d: any) => d.status === 'returned').length} / {fleetStatus.length} returned
-          </span>
-        </div>
-        {fleetStatus.length === 0 ? (
-          <p className="text-sm text-subtle text-center py-6">No departures recorded today.</p>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-            {fleetStatus.map((d: any) => (
-              <div key={d.employee_id} className={`p-3 rounded-xl border text-center space-y-1 ${d.status === 'returned' ? 'border-success/30 bg-success/5' : 'border-warning/30 bg-warning/5'}`}>
-                <p className="text-sm font-semibold text-foreground truncate">{d.driver_name}</p>
-                <p className={`text-xs font-bold uppercase tracking-wider ${d.status === 'returned' ? 'text-success' : 'text-warning'}`}>
-                  {d.status === 'returned' ? 'Returned' : 'Out'}
-                </p>
-                {d.duration_minutes != null ? (
-                  <p className="text-xs text-subtle">{Math.floor(d.duration_minutes / 60)}h {d.duration_minutes % 60}m</p>
-                ) : d.departed_at ? (
-                  <p className="text-xs text-subtle">
-                    Departed {new Date(d.departed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                ) : null}
-              </div>
-            ))}
+      {/* Second row: Fleet status + RTS queue */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Fleet Status — from TruckAssignment.status */}
+        <div className="card border-border/60">
+          <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+            <Truck className="w-5 h-5 text-primary" />
+            <h2 className="text-base font-semibold text-foreground">Fleet Status — Today</h2>
+            <span className="ml-auto text-xs text-subtle">
+              {completedCount} returned · {activeCount} out · {totalCount - activeCount - completedCount} planned
+            </span>
           </div>
-        )}
+          {totalCount === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No trucks dispatched today.</p>
+          ) : (
+            <div className="grid grid-cols-3 gap-3 text-center mb-4">
+              {[
+                { label: 'Planned',   count: totalCount - activeCount - completedCount, cls: 'text-muted-foreground', bg: 'bg-accent/40' },
+                { label: 'Out',       count: activeCount,    cls: 'text-warning',  bg: 'bg-warning/10 border border-warning/20' },
+                { label: 'Returned',  count: completedCount, cls: 'text-success',  bg: 'bg-success/10 border border-success/20' },
+              ].map(s => (
+                <div key={s.label} className={`rounded-xl p-3 ${s.bg}`}>
+                  <p className={`text-2xl font-bold ${s.cls}`}>{s.count}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* RTS Pending queue — drivers waiting for clearance to leave the field */}
+        <div className="card border-border/60">
+          <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+            <Package className="w-5 h-5 text-warning" />
+            <h2 className="text-base font-semibold text-foreground">RTS Return Requests</h2>
+            {pendingRTS.length > 0 && (
+              <span className="ml-auto badge badge-warning">{pendingRTS.length}</span>
+            )}
+          </div>
+          {pendingRTS.length === 0 ? (
+            <div className="text-center py-6 opacity-60">
+              <Package className="w-8 h-8 mb-2 text-muted-foreground mx-auto" />
+              <p className="text-sm font-medium">No pending RTS requests.</p>
+              <p className="text-xs text-subtle mt-1">Drivers waiting for field clearance appear here.</p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[240px] overflow-y-auto pr-1">
+              {pendingRTS.map(r => (
+                <div key={r.report_id} className="p-3 rounded-xl border border-warning/30 bg-warning/5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{r.driver_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {r.crew_confirmed} crew confirmed · {r.total_rts} RTS package{r.total_rts !== 1 ? 's' : ''}
+                      </p>
+                      {r.rts_packages?.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {r.rts_packages.map((p: any) => `${p.reason.replace(/_/g, ' ')} ×${p.count}`).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex gap-1.5 shrink-0">
+                      <button
+                        onClick={() => handleApproveRTS(r.driver_id, r.driver_name)}
+                        className="p-1.5 rounded-lg bg-success/10 hover:bg-success/20 text-success transition-colors"
+                        title="Clear to return"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleRejectRTS(r.driver_id, r.driver_name)}
+                        className="p-1.5 rounded-lg bg-danger/10 hover:bg-danger/20 text-danger transition-colors"
+                        title="Hold — needs follow-up"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
