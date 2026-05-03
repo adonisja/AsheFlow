@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app.core.security import verify_cognito_token
 from app.database import get_db
+from app.services.constants import OVERSIGHT_ROLES
 
 # This tells FastAPI an endpoint requires a "Bearer" token in the Authorization header.
 # It also adds the "Authorize" padlock button to our /docs Swagger UI automatically!
@@ -205,7 +206,7 @@ class RoleChecker:
         return user
 
 
-_PRIVILEGED_ROLES = frozenset({"dispatch", "management", "admin"})
+_PRIVILEGED_ROLES = frozenset(OVERSIGHT_ROLES)
 
 
 def assert_owns_or_privileged(caller, target_id: str, resource: str = "resource") -> None:

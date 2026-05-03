@@ -12,7 +12,6 @@ from app.services.assign_trainees import assign_trainees
 from app.services.assign_walkers import assign_walkers
 from app.services.graduate_trainees import graduate_eligible_trainees
 from app.services.constants import MIN_TRAINERS_PER_TRUCK, MIN_WALKERS_PER_TRUCK
-from app.services.training_injection import inject_curriculum
 from app.services.rebalance_crews import rebalance_crews
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord
@@ -317,9 +316,6 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
             db.add(assignment_member)
 
     db.commit()
-
-    # Curriculum Injection Logic: Hook into the trainee assignment flow
-    inject_curriculum(db, target_date, assigned_crews)
 
     formatted_crews = {}
     assignments = db.query(TruckAssignment).filter(TruckAssignment.date == target_date).all()

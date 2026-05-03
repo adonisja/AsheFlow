@@ -16,16 +16,27 @@ from app.models.truck import Truck
 from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.notification import Notification
 from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate, DispatchConfig
+from app.schemas.manifest import PackageManifestCreate, PackageManifestPatch, PackageManifestResponse
+from app.models.package_manifest import PackageManifest
 from app.services.run_dispatch import run_dispatch
 from app.services.available_pool import get_unavailable_staff
+from app.services.training_injection import inject_curriculum
+from app.models.training import TrainingRecord
 from app.core.redis import set_confirmation, get_all_confirmations, seed_pending
+from app.services.constants import (
+    ROLE_DRIVER, ROLE_TRAINER, ROLE_TRAINEE, ROLE_WALKER,
+    ROLE_DISPATCH, ROLE_ADMIN, OVERSIGHT_ROLES,
+)
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
 # Dispatch operations are limited to dispatch role and admin only.
 # Management (supervisory) accesses fleet data via reporting endpoints, not the operational dispatch tool.
-allow_dispatch_mgmt = RoleChecker(["dispatch", "admin"])
+allow_dispatch_mgmt = RoleChecker([ROLE_DISPATCH, ROLE_ADMIN])
 
 @router.get("/unavailable-staff/{dispatch_date}", status_code=status.HTTP_200_OK)
 def get_unavailable_staff_for_date(
@@ -91,10 +102,16 @@ def get_daily_dispatch(
             })
             
         assigned_crews[str(assignment.truck_id)] = crew_list
-        
+
+    truck_statuses = [
+        {"truck_id": str(a.truck_id), "status": a.status}
+        for a in assignments
+    ]
+
     return {
         "date": dispatch_date,
         "assigned_crews": assigned_crews,
+        "truck_assignments": truck_statuses,
         "warnings": []
     }
 
@@ -135,7 +152,7 @@ def trigger_dispatch(
     # These are dispatch-internal — employee_id is set to a dispatch/admin recipient so
     # they don't surface in field staff notification feeds.
     override_recipients = db.query(Employee).filter(
-        Employee.role.in_(["dispatch", "admin"]),
+        Employee.role.in_(list(OVERSIGHT_ROLES)),
         Employee.is_active == True,
     ).limit(1).all()  # just need one row to satisfy the FK; analytics filters by type
 
@@ -169,7 +186,7 @@ def trigger_dispatch(
     }
 
 @router.post("/assign", status_code=status.HTTP_201_CREATED)
-def manual_assignment(
+async def manual_assignment(
     assignment_in: ManualAssignmentCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(allow_dispatch_mgmt)
@@ -234,11 +251,11 @@ def manual_assignment(
         )
         
     # Handle Trainee Bumping Logic
-    if assignment_in.role == "trainee":
+    if assignment_in.role == ROLE_TRAINEE:
         # Check if the truck already has a trainee
         existing_trainee_assignment = db.query(AssignmentMember).filter(
             AssignmentMember.assignment_id == truck_assignment.id,
-            AssignmentMember.role == "trainee"
+            AssignmentMember.role == ROLE_TRAINEE
         ).first()
 
         if existing_trainee_assignment:
@@ -258,8 +275,8 @@ def manual_assignment(
                     continue
                 
                 members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
-                has_trainer = any(m.role == "trainer" for m in members)
-                has_trainee = any(m.role == "trainee" for m in members)
+                has_trainer = any(m.role == ROLE_TRAINER for m in members)
+                has_trainee = any(m.role == ROLE_TRAINEE for m in members)
 
                 if has_trainer and not has_trainee:
                     fallback_assignment_id = ta.id
@@ -271,7 +288,7 @@ def manual_assignment(
                     if ta.id == truck_assignment.id:
                         continue
                     members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
-                    has_trainee = any(m.role == "trainee" for m in members)
+                    has_trainee = any(m.role == ROLE_TRAINEE for m in members)
                     if not has_trainee:
                         fallback_assignment_id = ta.id
                         break
@@ -284,9 +301,38 @@ def manual_assignment(
                 )
                 db.add(bumped_member)
             else:
-                # If nowhere to put them, maybe convert to walker on some truck or just leave unassigned?
-                # We will just unassign them if there's no room, which is handled since we deleted them.
-                pass
+                # No fallback slot found — trainee is unassigned. Notify dispatch/admin.
+                bumped_emp = db.query(Employee).filter(Employee.id == bumped_trainee_id).first()
+                bumped_name = bumped_emp.name if bumped_emp else str(bumped_trainee_id)
+                incoming_emp = db.query(Employee).filter(Employee.id == assignment_in.employee_id).first()
+                incoming_name = incoming_emp.name if incoming_emp else str(assignment_in.employee_id)
+                alert_staff = (
+                    db.query(Employee)
+                    .filter(Employee.role.in_(list(OVERSIGHT_ROLES)), Employee.is_active == True)
+                    .all()
+                )
+                for staff in alert_staff:
+                    db.add(Notification(
+                        employee_id=staff.id,
+                        type="trainee_unassigned",
+                        message=(
+                            f"⚠️ **Trainee unassigned:** {bumped_name} was bumped from their truck "
+                            f"to make room for {incoming_name} but no free trainer slot was found. "
+                            f"Manual reassignment required for {assignment_in.date}."
+                        ),
+                        dispatch_date=assignment_in.date,
+                    ))
+                # Also notify the displaced trainee directly
+                if bumped_emp:
+                    db.add(Notification(
+                        employee_id=bumped_trainee_id,
+                        type="trainee_unassigned",
+                        message=(
+                            f"Your assignment for {assignment_in.date} was removed due to a reassignment. "
+                            f"Dispatch has been notified and will place you manually."
+                        ),
+                        dispatch_date=assignment_in.date,
+                    ))
 
 
     new_member = AssignmentMember(
@@ -296,16 +342,37 @@ def manual_assignment(
         is_manual=True,   # explicitly placed by dispatch after the algorithm ran
     )
     db.add(new_member)
+
+    # Seed a pending confirmation if none exists yet — handles the case where
+    # the employee was added after Publish (so they were never seeded by publish_dispatch).
+    existing_conf = db.query(DispatchConfirmation).filter(
+        DispatchConfirmation.employee_id == assignment_in.employee_id,
+        DispatchConfirmation.date == assignment_in.date,
+    ).first()
+    if not existing_conf:
+        db.add(DispatchConfirmation(
+            employee_id=assignment_in.employee_id,
+            date=assignment_in.date,
+            status="pending",
+            source="manual_assignment",
+        ))
+
     db.commit()
     db.refresh(new_member)
-    
+
+    # Mirror the pending status into Redis so the confirmations endpoint stays consistent.
+    try:
+        await set_confirmation(str(assignment_in.date), str(assignment_in.employee_id), "pending")
+    except Exception:
+        pass  # Redis unavailable — DB row is authoritative
+
     return {
         "message": "Manual assignment successful",
         "assignment": {
             "assignment_id": str(truck_assignment.id),
             "employee_id": str(new_member.employee_id),
             "truck_id": str(truck_assignment.truck_id),
-          "role": new_member.role,
+            "role": new_member.role,
             "date": truck_assignment.date.isoformat()
         }
     }
@@ -455,6 +522,8 @@ async def publish_dispatch(
     Seeds all assigned employees as 'pending' in Redis, then fires an
     internal webhook to the bot so it posts embeds and sends DMs.
     """
+    logger.info("publish_dispatch started date=%s publisher=%s", dispatch_date, current_user.get("username", "unknown"))
+
     assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
     if not assignments:
         raise HTTPException(
@@ -472,6 +541,8 @@ async def publish_dispatch(
     # Collect all assignments with role + truck context
     crew_by_assignment: list[tuple[AssignmentMember, Employee, Truck]] = []
     all_employee_ids: list[str] = []
+    # assigned_crews mirrors the shape inject_curriculum expects: truck_id -> list of {id, role}
+    assigned_crews: dict[str, list[dict]] = {}
 
     for assignment in assignments:
         truck = truck_map.get(str(assignment.truck_id))
@@ -481,9 +552,12 @@ async def publish_dispatch(
             .filter(AssignmentMember.assignment_id == assignment.id)
             .all()
         )
+        truck_crew: list[dict] = []
         for am, emp in rows:
             crew_by_assignment.append((am, emp, truck))
             all_employee_ids.append(str(emp.id))
+            truck_crew.append({"id": emp.id, "role": am.role, "name": emp.name})
+        assigned_crews[str(assignment.truck_id)] = truck_crew
 
     # Seed every employee as "pending" in Redis (idempotent)
     await seed_pending(str(dispatch_date), all_employee_ids)
@@ -515,20 +589,60 @@ async def publish_dispatch(
             .all()
     }
 
+    # Build trainer↔trainee pairing map for notification messages
+    # trainer_for[trainee_id] = trainer_name, trainee_for[trainer_id] = trainee_name
+    trainer_for: dict[str, str] = {}
+    trainee_for: dict[str, str] = {}
+    for truck_crew in assigned_crews.values():
+        trainers = [m for m in truck_crew if m["role"] == "trainer"]
+        trainees = [m for m in truck_crew if m["role"] == "trainee"]
+        if trainers and trainees:
+            # one trainee per truck — pair with the first trainer on that truck
+            trainer = trainers[0]
+            trainee = trainees[0]
+            trainer_for[str(trainee["id"])] = trainer["name"]
+            trainee_for[str(trainer["id"])] = trainee["name"]
+
     for am, emp, truck in crew_by_assignment:
         if str(emp.id) in existing_notif_ids:
             continue
 
         role = am.role
+        truck_name = truck.name if truck else "a truck"
         if role == "driver":
-            # Drivers see their truck name — same as bot Phase 1
             message = (
-                f"You have been assigned to **{truck.name if truck else 'a truck'}** "
+                f"You have been assigned to **{truck_name}** "
                 f"for {dispatch_date}. Please confirm or decline your assignment. "
                 f"Driver deadline: 08:20 AM."
             )
+        elif role == "trainer":
+            trainee_name = trainee_for.get(str(emp.id))
+            if trainee_name:
+                message = (
+                    f"You are assigned to **{truck_name}** for {dispatch_date} "
+                    f"and are paired with trainee **{trainee_name}**. "
+                    f"Please confirm your attendance. Deadline: 09:00 AM."
+                )
+            else:
+                message = (
+                    f"You are assigned to **{truck_name}** for {dispatch_date}. "
+                    f"No trainee is paired with you today. "
+                    f"Please confirm your attendance. Deadline: 09:00 AM."
+                )
+        elif role == "trainee":
+            trainer_name = trainer_for.get(str(emp.id))
+            if trainer_name:
+                message = (
+                    f"You are assigned to **{truck_name}** for {dispatch_date} "
+                    f"and are paired with trainer **{trainer_name}**. "
+                    f"Please confirm your attendance. Deadline: 09:00 AM."
+                )
+            else:
+                message = (
+                    f"You are assigned to **{truck_name}** for {dispatch_date}. "
+                    f"Please confirm your attendance. Deadline: 09:00 AM."
+                )
         else:
-            # All other roles: attendance-only, no truck details
             message = (
                 f"You have a shift assignment for {dispatch_date}. "
                 f"Please confirm your attendance. Deadline: 09:00 AM."
@@ -542,6 +656,11 @@ async def publish_dispatch(
         ))
 
     db.commit()
+
+    # Inject training curriculum for today's trainee-trainer pairings.
+    # Runs here so manual-only dispatches (no auto-assign) still get training records.
+    logger.info("inject_curriculum called date=%s truck_count=%d", dispatch_date, len(assigned_crews))
+    inject_curriculum(db, dispatch_date, assigned_crews)
 
     # Notify the bot via internal webhook
     bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
@@ -566,7 +685,193 @@ async def publish_dispatch(
             detail=f"Could not reach the Discord bot: {e}",
         )
 
+    logger.info("publish_dispatch complete date=%s employees_notified=%d", dispatch_date, len(all_employee_ids))
     return {"status": "published", "date": str(dispatch_date), "employees_notified": len(all_employee_ids)}
+
+
+def _reassign_trainee_on_trainer_decline(
+    db: Session,
+    trainer_id: UUID,
+    dispatch_date: date,
+) -> dict:
+    """When a trainer declines, find their paired trainee and move them to the
+    best available free trainer slot. Notifies all dispatch/admin employees.
+
+    Returns a dict describing what happened:
+      { "trainee_id": ..., "trainee_name": ..., "trainer_name": ...,
+        "new_truck_name": ... | None, "new_trainer_name": ... | None,
+        "placed": bool }
+    """
+    # Find the trainer's assignment for this date
+    trainer_assignment = (
+        db.query(AssignmentMember, TruckAssignment)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == trainer_id,
+            TruckAssignment.date == dispatch_date,
+        )
+        .first()
+    )
+    logger.info("_reassign_trainee_on_trainer_decline started trainer_id=%s date=%s", trainer_id, dispatch_date)
+
+    if not trainer_assignment:
+        logger.warning("_reassign_trainee_on_trainer_decline: no assignment found trainer_id=%s date=%s", trainer_id, dispatch_date)
+        return {}
+
+    trainer_am, trainer_ta = trainer_assignment
+    trainer_emp = db.query(Employee).filter(Employee.id == trainer_id).first()
+    trainer_name = trainer_emp.name if trainer_emp else str(trainer_id)
+
+    # Find this trainer's paired trainee on the same truck
+    trainee_am = (
+        db.query(AssignmentMember)
+        .filter(
+            AssignmentMember.assignment_id == trainer_ta.id,
+            AssignmentMember.role == ROLE_TRAINEE,
+        )
+        .first()
+    )
+    if not trainee_am:
+        # Trainer had no trainee — nothing to reassign
+        return {}
+
+    trainee_emp = db.query(Employee).filter(Employee.id == trainee_am.employee_id).first()
+    trainee_name = trainee_emp.name if trainee_emp else str(trainee_am.employee_id)
+
+    # Find the best destination: a truck where trainers > trainees (free slot)
+    # Ranked by fewest trainees first so we fill the emptiest slot
+    all_assignments = (
+        db.query(TruckAssignment)
+        .filter(TruckAssignment.date == dispatch_date)
+        .all()
+    )
+
+    best_ta = None
+    best_free_slots = 0
+    for ta in all_assignments:
+        if ta.id == trainer_ta.id:
+            continue
+        members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
+        trainer_count = sum(1 for m in members if m.role == ROLE_TRAINER)
+        trainee_count = sum(1 for m in members if m.role == ROLE_TRAINEE)
+        free = trainer_count - trainee_count
+        if free > best_free_slots:
+            best_free_slots = free
+            best_ta = ta
+
+    # Move the trainee
+    new_truck = db.query(Truck).filter(Truck.id == best_ta.truck_id).first() if best_ta else None
+    new_truck_name = new_truck.name if new_truck else None
+    placed = best_ta is not None
+
+    if placed:
+        trainee_am.assignment_id = best_ta.id
+
+        # Find the trainer on the destination truck with the fewest trainees (most free)
+        dest_members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == best_ta.id).all()
+        dest_trainers = [m for m in dest_members if m.role == ROLE_TRAINER]
+        dest_trainees_count = {t.employee_id: 0 for t in dest_trainers}
+        for m in dest_members:
+            if m.role == ROLE_TRAINEE and m.employee_id != trainee_am.employee_id:
+                # attribute to whichever trainer has fewest — use first trainer as proxy
+                if dest_trainers:
+                    dest_trainees_count[dest_trainers[0].employee_id] += 1
+
+        new_trainer_id = min(dest_trainees_count, key=dest_trainees_count.get) if dest_trainees_count else None
+        new_trainer_emp = db.query(Employee).filter(Employee.id == new_trainer_id).first() if new_trainer_id else None
+        new_trainer_name = (new_trainer_emp.name if new_trainer_emp else None) or "Unknown Trainer"
+
+        # Update the TrainingRecord to reflect the new trainer
+        training_record = (
+            db.query(TrainingRecord)
+            .filter(
+                TrainingRecord.trainee_id == trainee_am.employee_id,
+                TrainingRecord.record_date == dispatch_date,
+            )
+            .first()
+        )
+        if training_record and new_trainer_id:
+            training_record.trainer_id = new_trainer_id
+        elif training_record and not new_trainer_id:
+            logger.warning(
+                "_reassign_trainee_on_trainer_decline: no dest trainer found for trainee=%s on truck=%s date=%s",
+                trainee_am.employee_id, best_ta.truck_id if best_ta else "?", dispatch_date,
+            )
+    else:
+        new_trainer_name = None
+
+    db.flush()
+
+    # Notify all dispatch and admin employees
+    dispatch_staff = (
+        db.query(Employee)
+        .filter(Employee.role.in_(list(OVERSIGHT_ROLES)), Employee.is_active == True)
+        .all()
+    )
+
+    if placed:
+        message = (
+            f"⚠️ **Trainer declined — auto-reassignment:** "
+            f"**{trainer_name}** declined their assignment for {dispatch_date}. "
+            f"Their trainee **{trainee_name}** has been moved to **{new_truck_name}** "
+            f"(paired with **{new_trainer_name}**). Please review."
+        )
+    else:
+        message = (
+            f"⚠️ **Trainer declined — no free slot:** "
+            f"**{trainer_name}** declined their assignment for {dispatch_date}. "
+            f"Their trainee **{trainee_name}** has no available trainer slot. "
+            f"Manual reassignment required."
+        )
+
+    for staff in dispatch_staff:
+        db.add(Notification(
+            employee_id=staff.id,
+            type="trainer_decline_reassignment",
+            message=message,
+            dispatch_date=dispatch_date,
+        ))
+
+    # Notify the trainee of their updated pairing
+    if placed:
+        trainee_message = (
+            f"Your trainer for {dispatch_date} (**{trainer_name}**) is no longer available. "
+            f"You have been reassigned to **{new_truck_name}** with trainer **{new_trainer_name}**. "
+            f"Please check the dispatch board for details."
+        )
+    else:
+        trainee_message = (
+            f"Your trainer for {dispatch_date} (**{trainer_name}**) is no longer available. "
+            f"No free trainer slot was found — dispatch has been notified and will reassign you manually."
+        )
+    db.add(Notification(
+        employee_id=trainee_am.employee_id,
+        type="trainer_decline_reassignment",
+        message=trainee_message,
+        dispatch_date=dispatch_date,
+    ))
+
+    db.commit()
+
+    if placed:
+        logger.info(
+            "_reassign_trainee_on_trainer_decline placed trainee=%s (%s) to truck=%s trainer=%s date=%s",
+            trainee_am.employee_id, trainee_name, new_truck_name, new_trainer_name, dispatch_date,
+        )
+    else:
+        logger.warning(
+            "_reassign_trainee_on_trainer_decline no free slot for trainee=%s (%s) date=%s",
+            trainee_am.employee_id, trainee_name, dispatch_date,
+        )
+
+    return {
+        "trainee_id": str(trainee_am.employee_id),
+        "trainee_name": trainee_name,
+        "trainer_name": trainer_name,
+        "new_truck_name": new_truck_name,
+        "new_trainer_name": new_trainer_name,
+        "placed": placed,
+    }
 
 
 @router.post("/{dispatch_date}/confirmations", status_code=status.HTTP_200_OK)
@@ -598,9 +903,16 @@ async def record_confirmation(
             detail="Body must contain employee_id and status ('confirmed' | 'declined').",
         )
 
+    try:
+        employee_uuid = employee_uuid
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"employee_id is not a valid UUID: {employee_id!r}",
+        )
+
     # Field staff may only act on their own assignment.
-    privileged = {"dispatch", "management", "admin"}
-    if caller.role not in privileged and str(caller.id) != str(employee_id):
+    if caller.role not in OVERSIGHT_ROLES and str(caller.id) != str(employee_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only confirm or decline your own assignment.",
@@ -613,7 +925,7 @@ async def record_confirmation(
     # 1. Write to DB first — this is the authoritative audit trail.
     now = datetime.now(timezone.utc)
     row = db.query(DispatchConfirmation).filter(
-        DispatchConfirmation.employee_id == UUID(str(employee_id)),
+        DispatchConfirmation.employee_id == employee_uuid,
         DispatchConfirmation.date == dispatch_date,
     ).first()
     if row:
@@ -622,7 +934,7 @@ async def record_confirmation(
         row.source = source
     else:
         db.add(DispatchConfirmation(
-            employee_id=UUID(str(employee_id)),
+            employee_id=employee_uuid,
             date=dispatch_date,
             status=conf_status,
             confirmed_at=now,
@@ -636,20 +948,52 @@ async def record_confirmation(
     except Exception:
         pass  # DB is authoritative; Redis is a read-cache only
 
-    return {"date": str(dispatch_date), "employee_id": employee_id, "status": conf_status}
+    # 3. If a trainer declined, auto-reassign their trainee and alert dispatch.
+    reassignment = {}
+    if conf_status == "declined":
+        emp = db.query(Employee).filter(Employee.id == employee_uuid).first()
+        if emp and emp.role == ROLE_TRAINER:
+            reassignment = _reassign_trainee_on_trainer_decline(
+                db, employee_uuid, dispatch_date
+            )
+
+    return {
+        "date": str(dispatch_date),
+        "employee_id": employee_id,
+        "status": conf_status,
+        **({"reassignment": reassignment} if reassignment else {}),
+    }
 
 
 @router.get("/{dispatch_date}/confirmations", status_code=status.HTTP_200_OK)
 async def get_confirmations(
     dispatch_date: date,
+    db: Session = Depends(get_db),
     current_user: dict = Depends(allow_dispatch_mgmt),
 ):
     """Return all confirmation statuses for a dispatch date.
 
     Returns a dict of { employee_id: "pending" | "confirmed" | "declined" }.
-    Empty dict if publish has not been triggered yet.
+    Redis is the read cache; falls back to DB if Redis is empty (e.g. after
+    a restart) and re-seeds Redis from the DB result so subsequent reads are fast.
     """
     confirmations = await get_all_confirmations(str(dispatch_date))
+
+    if not confirmations:
+        # Redis is empty — read authoritative state from DB and re-seed Redis.
+        rows = (
+            db.query(DispatchConfirmation)
+            .filter(DispatchConfirmation.date == dispatch_date)
+            .all()
+        )
+        if rows:
+            confirmations = {str(r.employee_id): r.status for r in rows}
+            for employee_id, status_val in confirmations.items():
+                try:
+                    await set_confirmation(str(dispatch_date), employee_id, status_val)
+                except Exception:
+                    pass  # Redis unavailable — DB result still returned
+
     return {"date": str(dispatch_date), "confirmations": confirmations}
 
 
@@ -752,5 +1096,140 @@ def clear_daily_dispatch(
         db.query(AssignmentMember).filter(AssignmentMember.assignment_id == a.id).delete()
         db.delete(a)
     db.commit()
-    
+
     return
+
+
+# ---------------------------------------------------------------------------
+# Package Manifests
+# ---------------------------------------------------------------------------
+
+@router.post("/manifest", response_model=PackageManifestResponse, status_code=status.HTTP_201_CREATED)
+def create_package_manifest(
+    payload: PackageManifestCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Create a package manifest for a truck on a specific date. Dispatch/admin only.
+
+    Records how many totes and OV packages were loaded onto the truck.
+    One manifest per truck per date — use PATCH to update counts.
+    """
+    truck = db.query(Truck).filter(Truck.id == payload.truck_id).first()
+    if not truck:
+        raise HTTPException(status_code=404, detail="Truck not found.")
+
+    existing = db.query(PackageManifest).filter(
+        PackageManifest.truck_id == payload.truck_id,
+        PackageManifest.date == payload.date,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Manifest already exists for this truck on this date. Use PATCH to update.",
+        )
+
+    row = PackageManifest(
+        truck_id=payload.truck_id,
+        date=payload.date,
+        tote_count=payload.tote_count,
+        ov_count=payload.ov_count,
+        notes=payload.notes,
+        submitted_by=caller.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.patch("/manifest/{truck_id}", response_model=PackageManifestResponse)
+def update_package_manifest(
+    truck_id: UUID,
+    payload: PackageManifestPatch,
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Update package counts on an existing manifest."""
+    if target_date is None:
+        target_date = date.today()
+
+    row = db.query(PackageManifest).filter(
+        PackageManifest.truck_id == truck_id,
+        PackageManifest.date == target_date,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No manifest found for this truck on this date.")
+
+    if payload.tote_count is not None:
+        row.tote_count = payload.tote_count
+    if payload.ov_count is not None:
+        row.ov_count = payload.ov_count
+    if payload.notes is not None:
+        row.notes = payload.notes
+    row.submitted_by = caller.id
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/manifest/{truck_id}", response_model=PackageManifestResponse)
+def get_package_manifest(
+    truck_id: UUID,
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return the manifest for a truck on a given date (default today)."""
+    if target_date is None:
+        target_date = date.today()
+
+    row = db.query(PackageManifest).filter(
+        PackageManifest.truck_id == truck_id,
+        PackageManifest.date == target_date,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No manifest found.")
+    return row
+
+
+@router.get("/manifests/summary")
+def get_manifests_summary(
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_dispatch_mgmt),
+):
+    """Return all manifests for a date with truck names and totals. Dispatch/admin only."""
+    if target_date is None:
+        target_date = date.today()
+
+    rows = (
+        db.query(PackageManifest)
+        .filter(PackageManifest.date == target_date)
+        .order_by(PackageManifest.submitted_at.asc())
+        .all()
+    )
+
+    truck_ids = {r.truck_id for r in rows}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids)).all()}
+
+    return {
+        "date": target_date.isoformat(),
+        "total_totes": sum(r.tote_count for r in rows),
+        "total_ov": sum(r.ov_count for r in rows),
+        "trucks": [
+            {
+                "truck_id": str(r.truck_id),
+                "truck_name": truck_map[r.truck_id].name if r.truck_id in truck_map else "Unknown",
+                "tote_count": r.tote_count,
+                "ov_count": r.ov_count,
+                "notes": r.notes,
+                "submitted_at": r.submitted_at.isoformat() if r.submitted_at else None,
+            }
+            for r in rows
+        ],
+    }

@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { RefreshCw, X, Plus, Minus, RotateCcw, BarChart2, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { useConfirm } from '../hooks/useConfirm';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -139,6 +141,8 @@ function ScheduleAnalytics({ allRequests }: { allRequests: any[] }) {
 const ScheduleChanges = () => {
   const { user, groups } = useAuth();
   const isAdmin = groups.includes('admin');
+  const isPrivileged = isAdmin || groups.includes('management') || groups.includes('dispatch');
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
 
   const [myId, setMyId] = useState<string>(user?.userId || user?.username || '');
   const [offDays, setOffDays] = useState<string[]>([]);
@@ -154,15 +158,15 @@ const ScheduleChanges = () => {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (isPrivileged) {
       loadPendingRequests();
       loadAllRequests();
     }
-    if (!isAdmin && myId) {
+    if (!isPrivileged && myId) {
       loadOffDays();
       loadMyRequests();
     }
-  }, [myId, isAdmin]);
+  }, [myId, isPrivileged]);
 
   const loadOffDays = async () => {
     try {
@@ -240,6 +244,13 @@ const ScheduleChanges = () => {
   };
 
   const handleCancel = async (id: string) => {
+    const ok = await confirm({
+      title: 'Cancel Schedule Change Request',
+      message: 'Are you sure you want to cancel this request?',
+      confirmLabel: 'Yes, Cancel It',
+      variant: 'warning',
+    });
+    if (!ok) return;
     try {
       await axiosClient.delete(`/schedule-change-requests/${id}`);
       loadMyRequests();
@@ -249,10 +260,19 @@ const ScheduleChanges = () => {
   };
 
   const handleReview = async (id: string, action: 'approve' | 'reject') => {
+    const ok = await confirm({
+      title: action === 'approve' ? 'Approve Schedule Change' : 'Reject Schedule Change',
+      message: action === 'approve'
+        ? 'Approve this permanent schedule change request?'
+        : 'Reject this request? The employee will be notified.',
+      confirmLabel: action === 'approve' ? 'Approve' : 'Reject',
+      variant: action === 'approve' ? 'default' : 'danger',
+    });
+    if (!ok) return;
     try {
       await axiosClient.patch(`/schedule-change-requests/${id}/${action}`);
       loadPendingRequests();
-      if (isAdmin) loadAllRequests();
+      if (isPrivileged) loadAllRequests();
     } catch (err: any) {
       alert(err.response?.data?.detail || `Failed to ${action}.`);
     }
@@ -265,9 +285,9 @@ const ScheduleChanges = () => {
   };
 
   // ---------------------------------------------------------------------------
-  // Admin view — analytics + pending queue only
+  // Privileged view (admin / management / dispatch) — analytics + pending queue
   // ---------------------------------------------------------------------------
-  if (isAdmin) {
+  if (isPrivileged) {
     return (
       <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
         <div className="flex items-center gap-3">
@@ -321,6 +341,7 @@ const ScheduleChanges = () => {
   // ---------------------------------------------------------------------------
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
           <RefreshCw className="w-5 h-5 text-muted-foreground" />

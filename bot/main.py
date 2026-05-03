@@ -303,6 +303,58 @@ async def handle_post_to_channel(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_post_embed(request: web.Request) -> web.Response:
+    """POST /internal/post-embed
+
+    Body:
+    {
+        "channel_id": 123456789,
+        "title": "...",
+        "description": "...",      # optional
+        "color": 0x00ff00,         # optional, defaults to 0x5865F2 (Discord blurple)
+        "fields": [                # optional
+            { "name": "Label", "value": "text", "inline": true }
+        ],
+        "footer": "..."            # optional
+    }
+
+    Posts a rich Discord embed to the given channel.
+    Used by the backend for anchor point events so the truck room sees
+    nicely formatted AP updates.
+    """
+    secret = request.headers.get("X-Internal-Secret", "")
+    if secret != os.environ.get("INTERNAL_SECRET", ""):
+        return web.Response(status=401, text="Unauthorized")
+
+    data = await request.json()
+    channel_id = data.get("channel_id")
+    title = data.get("title", "")
+    if not channel_id or not title:
+        return web.Response(status=400, text="Missing channel_id or title")
+
+    embed = discord.Embed(
+        title=title,
+        description=data.get("description"),
+        color=data.get("color", 0x5865F2),
+    )
+    for field in data.get("fields", []):
+        embed.add_field(
+            name=field.get("name", ""),
+            value=field.get("value", ""),
+            inline=field.get("inline", False),
+        )
+    if footer := data.get("footer"):
+        embed.set_footer(text=footer)
+
+    guild = bot.get_guild(settings.discord_guild_id)
+    if guild:
+        channel = guild.get_channel(int(channel_id))
+        if channel:
+            asyncio.create_task(channel.send(embed=embed))
+
+    return web.json_response({"status": "ok"})
+
+
 async def start_webhook_server() -> None:
     app = web.Application()
     app.router.add_post("/internal/publish", handle_publish)
@@ -312,6 +364,7 @@ async def start_webhook_server() -> None:
     app.router.add_post("/internal/invite", handle_invite)
     app.router.add_post("/internal/dm", handle_dm)
     app.router.add_post("/internal/post-to-channel", handle_post_to_channel)
+    app.router.add_post("/internal/post-embed", handle_post_embed)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8001)

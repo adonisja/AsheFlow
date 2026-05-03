@@ -1,3 +1,89 @@
+## 2026-05-02 Dashboard Audit: Always Verify the Data Source Before Trusting a KPI
+
+This section was written after auditing all dashboard views post-shift-lifecycle backend (ADR-055).
+
+---
+
+### A metric that reads from the wrong table is worse than no metric
+
+`Fleet Today` in both DispatchView and ManagementView read from `Departure` rows. The intent was "how many trucks are out." The problem: `Departure` rows don't exist until drivers actually depart. At 6am the metric showed `0/0` — not "no data," but a confident wrong answer that looks like dispatch hasn't run yet.
+
+The fix was to read from `TruckAssignment.status`, which is written the moment dispatch runs. All trucks start as `planned`. That's the correct baseline.
+
+**Rule:** Before wiring a KPI, trace the full write path: *when is the first row written? What does zero mean?* A metric that's empty before noon every day isn't measuring anything useful.
+
+---
+
+### When a new column changes what a summary query means, update the UI to match
+
+Adding `inspection_type` to `VehicleInspection` changed the meaning of the inspections summary — rows that previously represented "one inspection per driver" now represent "one inspection per driver per type." The management table was titled "Pre-Trip Inspections" and had no type column, so EOD inspections silently appeared as if they were pre-trip.
+
+**Rule:** Whenever a unique constraint changes, grep for every UI that renders the affected table and check whether the display still makes sense. The constraint change is the signal; the UI audit is the required follow-up.
+
+---
+
+### Summary endpoints return different shapes — read them before wiring the frontend
+
+The station handoffs summary returns `{ date, total_totes_returned, total_rts_returned, drivers: [...] }`, not a flat list. The check-ins summary returns a flat list but uses `latest_check_in`, not `check_in_count`. Both would have caused silent bugs (rendering nothing or crashing) if the frontend had assumed a flat list.
+
+**Rule:** Before wiring any summary endpoint to the UI, read the actual backend implementation or run `curl` against it. Don't guess the shape from the field names.
+
+---
+
+## 2026-05-02 Shift Lifecycle Data Model
+
+This section was written after implementing the full daily shift lifecycle (ADR-053, ADR-054).
+
+---
+
+### Always clarify the real-world flow before modeling it
+
+The first attempt at the return-leg model (`RTSClearance`) conflated two physically distinct events into one table because the description "driver submits RTS before returning" sounded like a single action. It wasn't — it's a field gate (dispatch approval required) followed by a separate physical handoff at the station.
+
+**Rule:** Before writing a model, ask "who does this, where, and what happens next?" If the answer changes mid-description, you have two models, not one. The split between `RTSReport` and `StationHandoff` came directly from that question.
+
+---
+
+### Wiring a field that already exists is not the same as adding it
+
+`TruckAssignment.status` had a `planned | active | completed` constraint from the beginning but was never written. The management dashboard was reading it and always showing 0 active trucks — a silent wrong answer. When a column exists but has no write path, it's actively misleading.
+
+**Rule:** After adding a column, immediately ask "what writes this?" If the answer is "nothing yet," either remove the column or wire the writes in the same PR. Never leave a column that exists but is never updated.
+
+---
+
+### Unique constraints determine what "one record per X" means — get it right up front
+
+`VehicleInspection` had `UniqueConstraint("driver_id", "date")`, which sounded right for "one inspection per driver per day." But the shift has two inspections: pre-trip and EOD. The constraint had to be relaxed to `(driver_id, date, inspection_type)`.
+
+**Rule:** When defining a unique constraint, explicitly list all the cases that need to coexist. "One per driver per day" is usually incomplete — ask "one *what* per driver per day?"
+
+---
+
+### Denormalize counts when they're the primary query target
+
+`RTSReport.total_rts` is a sum of `rts_packages[].count`. Storing it redundantly as an integer avoids a JSONB aggregate on every dispatch queue query. Same pattern used in `PackageManifest` (no aggregation needed for the daily totals endpoint).
+
+**Rule:** If the most common query is "give me the total," store the total. Recompute it at write time, not at read time. Only matters when the source is JSONB or a variable-length list.
+
+---
+
+### Application-layer gates vs DB constraints — know which to use
+
+The `StationHandoff` endpoint enforces that the driver's `RTSReport` must be `approved` before they can submit. This is application-layer logic, not a foreign key or check constraint. That's correct — "approved" is a business state, not a referential integrity rule. A FK to `rts_reports` would only enforce that *a* report exists, not that it's *approved*.
+
+**Rule:** Use DB constraints for structural integrity (the row exists, the value is in range). Use application-layer checks for business state (the row is in the right status). Don't try to encode business workflow rules into the schema.
+
+---
+
+### Log everything before moving on
+
+Documentation was consistently skipped during implementation and had to be written as a separate catch-up step. This creates drift — details are harder to reconstruct and the journal ends up thinner than it should be.
+
+**Rule:** After any session that produces new models, migrations, or endpoint changes: write the journal entry, ADR(s), and LEARNING_GUIDE additions before closing the session or moving to the next feature. The three artifacts take ~15 minutes and save hours of archaeology later.
+
+---
+
 ## 2026-04-22 Bot DMs: Trainer-Trainee Pairing Callout and Simulation Reset
 
 This section was written after addressing the trainer-trainee notification gap and the reset_on_graduation flag (ADR-047).
@@ -1967,3 +2053,161 @@ The Vite dev server uses esbuild, which skips some TypeScript checks. `npm run b
 - Strict generic inference that esbuild approximates
 
 **Always run `npm run build` after any refactor that touches imports or type definitions** — don't rely on the dev server being error-free as a signal that the build is clean.
+
+---
+
+## 2026-05-02 Auth: Fix the Identity Gap, Don't Route Around the Auth Check
+
+When an endpoint 403'd because `get_caller_employee` couldn't find an `Employee` row for the admin account, the tempting fix was a new endpoint that bypassed employee resolution entirely. That was reverted.
+
+**The lesson:** when you're blocked on auth, the right question is "why can't the auth chain resolve this user?" not "how do I avoid the auth chain?" The existing `record_confirmation` endpoint already had a privileged-role bypass — it just never ran because the caller resolved to `None` first. A five-second DB insert fixed it cleanly. The bulk endpoint traded away audit trail and authorization scope for no real reason.
+
+Before adding a new endpoint to work around a permission error, ask:
+1. Does the existing endpoint already have the right logic for this role?
+2. Is the problem the endpoint's logic, or is the identity not resolving?
+3. What does the new endpoint give up (audit trail, ownership check, scope) compared to fixing the identity?
+
+---
+
+## 2026-05-02 React: Multiple `useConfirm` Instances Per File
+
+When a file has multiple independent sub-components (each with its own `return`), each one needs its own `useConfirm` instance and its own `<ConfirmDialog>` in that return. You cannot share one instance across sub-components because the dialog's `open` state is local to the hook.
+
+The pattern is mechanical — three things must happen together or TypeScript will warn "declared but never read":
+
+```tsx
+// 1. Declare the hook at the top of the sub-component function
+const { confirmState, confirm, cancelConfirm } = useConfirm();
+
+// 2. Put ConfirmDialog in the sub-component's return
+return (
+  <div>
+    <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+    {/* rest of UI */}
+  </div>
+);
+
+// 3. Replace window.confirm with await confirm({...})
+const ok = await confirm({ title: '...', message: '...', variant: 'danger' });
+if (!ok) return;
+```
+
+If any one of the three is missing, TypeScript hints surface immediately. Use them as a checklist.
+
+---
+
+## 2026-05-02 Data Modelling: Use a Dedicated Boolean Over a Sequence Filter for "First of Day"
+
+When querying for the first anchor point of the day for history suggestions, `WHERE sequence = 1` seems equivalent to `WHERE is_initial = true`. It isn't.
+
+`sequence = 1` is a derived property — it's only correct as long as no row with that sequence has been deleted or the sequence hasn't been renumbered. `is_initial` is stamped at insert time and never changes. It survives edge cases cleanly and makes the intent explicit in queries.
+
+**General rule:** if a fact about a row is true at the moment it's created and never changes, stamp it as a boolean at insert time rather than deriving it from relative position in a sequence.
+
+---
+
+## 2026-05-02 API Design: Fetch Only What the UI Can Act On
+
+When a list endpoint returns all records regardless of status, and the UI renders action buttons (Approve, Reject, Resolve) on every row, you will eventually send a state-transition request against a record that is already in a terminal state. The backend correctly rejects it with 404 or 409, but from the user's perspective it looks like a broken button.
+
+The fix is always on the fetch, not the render:
+
+```ts
+// Wrong — loads all, shows approve buttons on already-approved items
+axiosClient.get('/schedule-change-requests/')
+
+// Right — only actionable items in the pending queue
+axiosClient.get('/schedule-change-requests/?status=pending')
+```
+
+Keep analytics fetches (for counts, charts) separate and unfiltered. The pending action queue and the analytics dataset serve different purposes — they should be different requests even if they hit the same endpoint.
+
+---
+
+## 2026-05-03 Docker Compose: Use `:?` Not `:-` for Secret Variables
+
+Shell-style variable expansion in docker-compose environment values has two forms:
+
+- `${VAR:-fallback}` — substitutes `fallback` when `VAR` is unset or empty. **Silently.**
+- `${VAR:?error message}` — causes the compose process to exit with an error when `VAR` is unset or empty. **Loudly.**
+
+For secrets (`SECRET_KEY`, `INTERNAL_SECRET`, `POSTGRES_PASSWORD`) always use `:?`. A misconfigured environment should fail at startup with a clear message, not silently run with dev-grade credentials that look correct in logs.
+
+Non-sensitive defaults (`POSTGRES_USER`, `POSTGRES_DB`, port numbers) can still use `:-` — the cost of a wrong default is low and the convenience of skipping `.env` setup in a local environment is real.
+
+```yaml
+# Wrong — will start with "dev-secret-key-change-in-production" if .env is missing
+SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
+
+# Right — hard-fails at startup with a clear message
+SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+```
+
+Pair this with a `.env.example` at the project root that documents every required variable and includes generation instructions (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`). The example file should be committed; `.env` should be gitignored.
+
+---
+
+## 2026-05-03 React: `useRef` for Counters, `useState` for Render-Triggering Flags
+
+When tracking a counter that only matters when it crosses a threshold, use `useRef` instead of `useState`.
+
+```tsx
+// Wrong — triggers a re-render on every increment, even when nothing visible changes
+const [failCount, setFailCount] = useState(0);
+
+// Right — no re-render until the threshold flag flips
+const failCount = useRef(0);
+const [isStale, setIsStale] = useState(false);
+
+// In the catch block:
+failCount.current += 1;
+if (failCount.current >= 3) setIsStale(true);
+```
+
+The rule: if a value is only used to compute another value that drives rendering, the intermediate value can be a `useRef`. The flag that actually triggers the render is the `useState`. This avoids N unnecessary re-renders during normal operation (where the counter increments but the threshold is never crossed).
+
+---
+
+## 2026-05-03 Backend: Validate External Input Before Passing to UUID()
+
+`UUID(str(x))` will raise `ValueError` if `x` is not a valid UUID string. This turns a client input error (bad data from Redis, a malformed request body) into an unhandled 500.
+
+Always wrap `UUID()` calls on externally sourced values in a try/except at the point of entry, and return a 422 with a descriptive message:
+
+```python
+try:
+    employee_uuid = UUID(str(employee_id))
+except (ValueError, AttributeError):
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"employee_id is not a valid UUID: {employee_id!r}",
+    )
+# Use employee_uuid everywhere below — never UUID(str(employee_id)) again in this function
+```
+
+Store the validated value in a new variable and replace all downstream call sites with it. This also makes it obvious in code review that the value has been validated — `employee_uuid` signals "already checked", `employee_id` signals "raw input".
+
+---
+
+## 2026-05-03 Backend: Role Constants as a Single Source of Truth
+
+Scattering `"driver"`, `"admin"`, `"dispatch"` as bare string literals across 23 files means a typo silently passes — Python won't catch `"dispach"`. A future role rename requires a full-codebase grep with no compiler help.
+
+The fix is a constants module:
+
+```python
+# backend/app/services/constants.py
+ROLE_DRIVER    = "driver"
+ROLE_TRAINER   = "trainer"
+ROLE_TRAINEE   = "trainee"
+ROLE_WALKER    = "walker"
+ROLE_DISPATCH  = "dispatch"
+ROLE_MANAGEMENT = "management"
+ROLE_ADMIN     = "admin"
+
+OVERSIGHT_ROLES: tuple[str, ...] = ("management", "admin", "dispatch")
+```
+
+Import and use these for all ORM-level comparisons (`emp.role == ROLE_TRAINER`, `Employee.role.in_(list(OVERSIGHT_ROLES))`). Leave dict-level comparisons on external JSON data (bot responses, API payloads) as literals — those operate on data you don't control and substituting constants there doesn't prevent bugs at the source.
+
+Migrate incrementally: start with the files that have the most role comparisons (dispatch router, deps) and let others follow over time.

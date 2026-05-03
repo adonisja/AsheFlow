@@ -118,54 +118,132 @@ async def _fetch_trainee_phases(trainees: list[dict]) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Helper: build channel crew embed (used in truck channels at finalization)
+# Helper: build truck channel crew embed
 # ---------------------------------------------------------------------------
 
 def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date: str) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"🚛 {truck_name} — Crew Assignment",
-        description=f"**Date:** {dispatch_date}\nConfirmed crew for today:",
-        color=discord.Color.green(),
-    )
+    """Return a Discord embed crew card matching the reference terminal-chic layout.
+
+    Structure:
+      `         Truck Name         `   ← wide centered pill, no divider above
+      ---------------------------------  ← single divider
+      📋 Crew Leadership (field name)
+      Driver: `Name`
+
+      Trainers:
+      `Name padded      ` `Name padded      `
+
+      ---------------------------------
+      Walkers:
+      `Name padded      ` `Name padded      `
+      ...empty right pill when count is odd
+
+      ---------------------------------
+      Trainees:
+      `Name padded      ` `Name padded      `
+
+      ---------------------------------
+      Dispatch date: YYYY-MM-DD (footer)
+
+    COL=16 pads names to a fixed width so both columns are always equal.
+    The truck name pill is padded to HEADER_WIDTH so it spans ~75% of the card.
+    """
+    SEP = "------------------------------------------"
+    COL = 16          # characters per name column (right-padded with spaces)
+    HEADER_WIDTH = 34  # total chars inside truck name pill for wide centered look
+
+    embed = discord.Embed(color=0x5865F2)
 
     by_role: dict[str, list[str]] = {r: [] for r in ROLE_ORDER}
     for member in crew:
         by_role.setdefault(member.get("role", "walker"), []).append(member["name"])
 
-    for role in ROLE_ORDER:
-        names = by_role.get(role, [])
-        if names:
-            embed.add_field(
-                name=ROLE_LABELS.get(role, role),
-                value="\n".join(f"• {n}" for n in names),
-                inline=True,
-            )
+    def pills_paired(names: list[str]) -> str:
+        """Two equal-width pills per row. Odd name gets an empty right pill."""
+        lines = []
+        for i in range(0, len(names), 2):
+            pair = names[i:i + 2]
+            left  = f"`{pair[0]:<{COL}}`"
+            right = f"`{pair[1]:<{COL}}`" if len(pair) == 2 else f"`{'':<{COL}}`"
+            lines.append(f"{left} {right}")
+        return "\n".join(lines)
 
-    embed.set_footer(text="Assignments finalized for today. Good luck out there.")
+    # ── Truck name: wide centered pill, single divider below ──────────────────
+    padded_name = f"{truck_name:^{HEADER_WIDTH}}"
+    embed.add_field(
+        name="​",
+        value=f"`{padded_name}`\n{SEP}",
+        inline=False,
+    )
+
+    # ── Crew Leadership ───────────────────────────────────────────────────────
+    drivers  = by_role.get("driver",  [])
+    trainers = by_role.get("trainer", [])
+
+    leadership_lines = []
+    if drivers:
+        leadership_lines.append(f"**Driver:** `{drivers[0]}`")
+    if trainers:
+        if leadership_lines:
+            leadership_lines.append("")   # blank line between driver and trainers
+        leadership_lines.append("**Trainers:**")
+        leadership_lines.append(pills_paired(trainers))
+
+    if leadership_lines:
+        embed.add_field(
+            name="📋 Crew Leadership",
+            value="\n".join(leadership_lines),
+            inline=False,
+        )
+
+    # ── Walkers ───────────────────────────────────────────────────────────────
+    walkers = by_role.get("walker", [])
+    if walkers:
+        embed.add_field(
+            name="​",
+            value=f"{SEP}\n**Walkers:**\n{pills_paired(walkers)}",
+            inline=False,
+        )
+
+    # ── Trainees ──────────────────────────────────────────────────────────────
+    trainees = by_role.get("trainee", [])
+    if trainees:
+        embed.add_field(
+            name="​",
+            value=f"{SEP}\n**Trainees:**\n{pills_paired(trainees)}",
+            inline=False,
+        )
+
+    embed.set_footer(text=f"{SEP}\nDispatch date: {dispatch_date}")
     return embed
 
 
 # ---------------------------------------------------------------------------
-# Helper: build the #drivers-chat channel embed (master list at finalization)
+# Helper: build the #drivers-chat finalization post (drivers only)
 # ---------------------------------------------------------------------------
 
-def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"📋 Finalized Dispatch — {dispatch_date}",
-        description="Official crew assignments for today.",
-        color=discord.Color.gold(),
-    )
+def _build_drivers_chat_message(trucks_data: list[dict], dispatch_date: str) -> str:
+    """Plain-text finalization post for #drivers-chat.
+
+    Lists truck + assigned driver only. Full crew details are in each truck's
+    channel. Emoji are outside the code block to keep alignment intact.
+    """
+    COL = 16  # truck name column width (pure ASCII inside code block)
+    SEP = "-" * 38
+
+    inner: list[str] = [
+        f"Finalized Dispatch  {dispatch_date}",
+        SEP,
+    ]
     for entry in trucks_data:
         truck_name = entry["truck_name"]
         crew = entry["crew"]
         driver = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
-        others = [m["name"] for m in crew if m["role"] != "driver"]
-        value = f"**Driver:** {driver}"
-        if others:
-            value += "\n" + "\n".join(f"• {n}" for n in others)
-        embed.add_field(name=f"🚛 {truck_name}", value=value, inline=False)
-    embed.set_footer(text="All assignments confirmed. Dispatch complete.")
-    return embed
+        inner.append(f"{truck_name:<{COL}}  Driver: {driver}")
+    inner.append(SEP)
+    inner.append("Full crew details posted in each truck's channel.")
+
+    return "✅ **Dispatch Finalized**\n```\n" + "\n".join(inner) + "\n```"
 
 
 # ---------------------------------------------------------------------------
@@ -232,8 +310,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
             for member in crew:
                 discord_id = member.get("discord_id")
-                if not discord_id:
-                    logger.warning("No discord_id for %s — skipping DM.", member.get("name"))
+                if not discord_id or not discord_id.isdigit():
+                    logger.warning("No snowflake discord_id for %s — skipping DM.", member.get("name"))
                     continue
 
                 try:
@@ -402,22 +480,20 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             except Exception as e:
                 channel_errors.append(f"{truck_name}: permission error — {e}")
 
-            # ── Post crew embed to truck channel ──────────────────────────
+            # ── Post crew card to truck channel (never purge — keep full log) ──
+            crew_embed = _build_truck_channel_embed(truck_name, confirmed_crew, dispatch_date)
             try:
-                await truck_channel.purge(limit=10, check=lambda m: m.author == self.bot.user)
-            except Exception:
-                pass  # Non-fatal — old messages left in channel
-
-            embed = _build_truck_channel_embed(truck_name, confirmed_crew, dispatch_date)
-            try:
-                await truck_channel.send(embed=embed)
+                await truck_channel.send(embed=crew_embed)
             except Exception as e:
-                channel_errors.append(f"{truck_name}: could not post embed — {e}")
+                channel_errors.append(f"{truck_name}: could not post crew card — {e}")
 
             # ── DM confirmed crew with full details ───────────────────────
+            confirmed_trainers = [m for m in confirmed_crew if m["role"] == "trainer"]
+            confirmed_trainees = [m for m in confirmed_crew if m["role"] == "trainee"]
+
             for member in confirmed_crew:
                 discord_id = member.get("discord_id")
-                if not discord_id:
+                if not discord_id or not discord_id.isdigit():
                     continue
                 try:
                     discord_user = await self.bot.fetch_user(int(discord_id))
@@ -426,12 +502,34 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         for m in confirmed_crew
                         if m["employee_id"] != member["employee_id"]
                     )
+
+                    # Build role-specific pairing note from confirmed crew only
+                    role = member.get("role", "walker")
+                    pairing_note = ""
+                    if role == "trainer":
+                        if confirmed_trainees:
+                            phase_info = await _fetch_trainee_phases(confirmed_trainees)
+                            lines = "\n".join(
+                                f"  📋 **{name}** — Phase {phase}"
+                                for name, phase in phase_info
+                            )
+                            pairing_note = f"\n\n📋 **Your trainee today:**\n{lines}"
+                        else:
+                            pairing_note = "\n\n*(No trainee on your truck — one may be reassigned by dispatch.)*"
+                    elif role == "trainee":
+                        if confirmed_trainers:
+                            trainer_names = ", ".join(f"**{m['name']}**" for m in confirmed_trainers)
+                            pairing_note = f"\n\n🎓 **Your trainer today:** {trainer_names}"
+                        else:
+                            pairing_note = "\n\n⚠️ **No confirmed trainer on your truck** — contact dispatch for reassignment."
+
                     final_embed = discord.Embed(
                         title=f"✅ Final Assignment — {dispatch_date}",
                         description=(
                             f"**Truck:** {truck_name}\n"
-                            f"**Your role:** {ROLE_LABELS.get(member['role'], member['role'])}\n\n"
-                            f"**Confirmed crew:**\n{crew_lines or 'No other crew members.'}\n\n"
+                            f"**Your role:** {ROLE_LABELS.get(role, role)}\n\n"
+                            f"**Confirmed crew:**\n{crew_lines or 'No other crew members.'}"
+                            f"{pairing_note}\n\n"
                             f"You now have access to **#{truck_channel.name}** for today."
                         ),
                         color=discord.Color.green(),
@@ -440,9 +538,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 except Exception:
                     pass  # Non-fatal — channel embed is the primary delivery
 
-        # ── Master list in #drivers-chat ──────────────────────────────────
-        master_embed = _build_drivers_chat_embed(trucks_summary, dispatch_date)
-        await drivers_channel.send(embed=master_embed)
+        # ── Master list in #drivers-chat (truck + driver only) ───────────
+        await drivers_channel.send(_build_drivers_chat_message(trucks_summary, dispatch_date))
 
         # ── Report any channel errors to dispatch ─────────────────────────
         if channel_errors:
@@ -480,10 +577,12 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             if role:
                 await channel.set_permissions(role, view_channel=True, send_messages=True)
 
-        # Confirmed crew members — grant by Discord user ID
+        # Confirmed crew members — grant by Discord snowflake ID.
+        # Skip entries where discord_id is a username string (not yet migrated).
         for member in confirmed_crew:
             discord_id = member.get("discord_id")
-            if not discord_id:
+            if not discord_id or not discord_id.isdigit():
+                logger.warning("Skipping channel perm for %s — discord_id '%s' is not a snowflake.", member.get("name"), discord_id)
                 continue
             try:
                 guild_member = await guild.fetch_member(int(discord_id))

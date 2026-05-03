@@ -1,11 +1,13 @@
+# Copy .env.example → .env and fill in real values before starting.
+# Never commit .env — it contains secrets.
 services:
   postgres:
     image: postgres:15-alpine
     container_name: asheflow_postgres
     environment:
-      POSTGRES_USER: asheflow
-      POSTGRES_PASSWORD: asheflow_dev_password
-      POSTGRES_DB: asheflow_db
+      POSTGRES_USER: ${POSTGRES_USER:-asheflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-asheflow_db}
     ports:
       - "5432:5432"
     volumes:
@@ -35,12 +37,14 @@ services:
       dockerfile: Dockerfile
     container_name: asheflow_backend
     environment:
-      - DATABASE_URL=postgresql://asheflow:asheflow_dev_password@postgres:5432/asheflow_db
-      - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
-      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-asheflow}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-asheflow_db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       - BOT_INTERNAL_URL=http://bot:8001
-      - INTERNAL_SECRET=${INTERNAL_SECRET:-change-me-in-production}
+      - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
+      - DISCORD_DRIVERS_CHANNEL_ID=${DISCORD_DRIVERS_CHANNEL_ID:-}
+      - TZ=America/New_York
     ports:
       - "8000:8000"
     volumes:
@@ -62,6 +66,7 @@ services:
     environment:
       - API_BASE_URL=http://backend:8000/api/v1
       - INTERNAL_SECRET=${INTERNAL_SECRET:-change-me-in-production}
+      - TZ=America/New_York
     ports:
       - "8001:8001"
     depends_on:
@@ -77,10 +82,11 @@ services:
       dockerfile: Dockerfile
     container_name: asheflow_celery
     environment:
-      - DATABASE_URL=postgresql://asheflow:asheflow_dev_password@postgres:5432/asheflow_db
-      - REDIS_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
-      - INTERNAL_SECRET=${INTERNAL_SECRET:-change-me-in-production}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-asheflow}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-asheflow_db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
+      - TZ=America/New_York
     env_file:
       - ./backend/.env
     volumes:

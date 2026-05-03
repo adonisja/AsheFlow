@@ -18,3 +18,9 @@ from app.models.audit_log import AuditLog
 from app.models.trainer_coverage import TrainerCoverage
 from app.models.trainer_mark import TrainerMark
 from app.models.anchor_point import AnchorPoint
+from app.models.dock_assignment import DockAssignment
+from app.models.station_arrival import StationArrival
+from app.models.package_manifest import PackageManifest
+from app.models.crew_compliance import CrewCompliance
+from app.models.driver_check_in import DriverCheckIn
+from app.models.rts_clearance import RTSReport, StationHandoff

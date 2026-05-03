@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { useConfirm } from '../hooks/useConfirm';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -368,6 +370,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
 // ---------------------------------------------------------------------------
 
 function ManagementView() {
+  const { confirmState, confirm, cancelConfirm } = useConfirm();
   const [incidents, setIncidents] = useState<any[]>([]);
   const [filterSeverity, setFilterSeverity] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
@@ -388,6 +391,13 @@ function ManagementView() {
   useEffect(() => { load(); }, [filterSeverity, filterCategory, filterResolved]);
 
   const handleResolve = async (id: string) => {
+    const ok = await confirm({
+      title: 'Resolve Incident',
+      message: 'Mark this incident as resolved? This action is logged.',
+      confirmLabel: 'Resolve',
+      variant: 'default',
+    });
+    if (!ok) return;
     setResolving(id);
     try {
       await axiosClient.patch(`/incidents/${id}/resolve`);
@@ -401,6 +411,7 @@ function ManagementView() {
 
   return (
     <div className="space-y-4">
+      <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       {/* Filters */}
       <div className="card">
         <div className="flex flex-wrap gap-3">
