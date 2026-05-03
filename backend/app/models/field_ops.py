@@ -84,19 +84,23 @@ class FuelMileageLog(Base):
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
 
+INSPECTION_TYPES = ["pre_trip", "eod"]
+
+
 class VehicleInspection(Base):
-    """Pre-trip vehicle inspection checklist completed by the driver each morning."""
+    """Vehicle inspection checklist — one pre_trip and one eod record allowed per driver per date."""
     __tablename__ = "vehicle_inspections"
     __table_args__ = (
-        UniqueConstraint("driver_id", "date", name="uq_vehicle_inspections_driver_date"),
+        UniqueConstraint("driver_id", "date", "inspection_type", name="uq_vehicle_inspections_driver_date_type"),
     )
 
-    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    driver_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
-    truck_id     = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="SET NULL"), nullable=True, index=True)
-    date         = Column(Date, nullable=False, index=True)
+    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    driver_id       = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    truck_id        = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="SET NULL"), nullable=True, index=True)
+    date            = Column(Date, nullable=False, index=True)
+    inspection_type = Column(String(20), nullable=False, default="pre_trip")  # "pre_trip" | "eod"
     # items: {item_name: True (pass) | False (fail)}
-    items        = Column(JSONB, nullable=False, default=dict)
-    has_failures = Column(Boolean, nullable=False, default=False)
-    notes        = Column(Text, nullable=True)
-    submitted_at = Column(DateTime(timezone=True), server_default=func.now())
+    items           = Column(JSONB, nullable=False, default=dict)
+    has_failures    = Column(Boolean, nullable=False, default=False)
+    notes           = Column(Text, nullable=True)
+    submitted_at    = Column(DateTime(timezone=True), server_default=func.now())

@@ -12,15 +12,24 @@ class AnchorPointCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class AnchorPointArriveUpdate(BaseModel):
+    location: Optional[str] = None   # driver may change location on arrival
+    notes: Optional[str] = None
+
+
 class AnchorPointResponse(BaseModel):
     id: UUID
     truck_id: UUID
     driver_id: UUID
     date: date
+    sequence: int
+    is_initial: bool
+    status: str
     location: str
     eta: Optional[str] = None
     notes: Optional[str] = None
     submitted_at: datetime
+    arrived_at: Optional[datetime] = None
     confirmed_by: Optional[UUID] = None
     confirmed_at: Optional[datetime] = None
 

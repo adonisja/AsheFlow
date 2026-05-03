@@ -15,7 +15,7 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
-allow_mgmt = RoleChecker(["dispatch", "management", "admin"])
+allow_mgmt = RoleChecker(["management", "admin"])
 
 @router.get("/{employee_id}")
 def get_employee_schedule(
@@ -28,8 +28,12 @@ def get_employee_schedule(
     """Return schedule data for an employee over a date range.
 
     Field staff (driver/walker/trainer/trainee) may only query their own schedule.
-    Dispatch, management, and admin may query any employee.
+    Management and admin may query any employee's schedule.
+    Dispatch cannot access schedules — they don't work shifts.
     """
+    from fastapi import HTTPException, status as http_status
+    if caller.role == "dispatch":
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="Dispatch cannot access employee schedules.")
     assert_owns_or_privileged(caller, employee_id, "schedule")
     # Determine all dates to process
     delta = end_date - start_date

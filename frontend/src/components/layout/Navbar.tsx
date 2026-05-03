@@ -92,7 +92,6 @@ function useNotifications(isAuthenticated: boolean, groups: string[]) {
   return { notifications, markRead, markAllRead };
 }
 
-// Dropdown shown when bell is clicked
 function NotificationDropdown({
   notifications,
   onMarkRead,
@@ -150,28 +149,15 @@ function NotificationDropdown({
   );
 }
 
-const Navbar = () => {
+// ---------------------------------------------------------------------------
+// Title bar — brand + user controls
+// ---------------------------------------------------------------------------
+
+function TitleBar() {
   const { user, groups, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [isOpen, setIsOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const { notifications, markRead, markAllRead } = useNotifications(isAuthenticated, groups);
-
-  const isFieldStaff = groups.some(role => ['driver', 'walker', 'trainer', 'trainee'].includes(role));
-  const isMgmt = groups.includes('management');
-  const isAdmin = groups.includes('admin');
-  const canAccessFieldOps = isFieldStaff || isAdmin;
-  const canAccessScheduleChanges = isFieldStaff || groups.includes('dispatch') || isAdmin;
-  const canAccessSchedule = isFieldStaff || isMgmt || isAdmin;
-
-  const homeRoute = (() => {
-    if (groups.includes('admin'))       return '/admin';
-    if (groups.includes('dispatch'))    return '/dispatch-home';
-    if (groups.includes('management'))  return '/management';
-    if (groups.includes('trainer'))     return '/trainer-dashboard';
-    if (groups.includes('trainee'))     return '/my-training';
-    return '/';
-  })();
 
   const handleSignOut = async () => {
     try {
@@ -182,312 +168,290 @@ const Navbar = () => {
     }
   };
 
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-200 press ${
+  return (
+    <div className="w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-4">
+        {/* Brand */}
+        <div className="flex items-center gap-2 font-bold text-base tracking-tight shrink-0">
+          <div className="flex items-center justify-center w-7 h-7 rounded-lg gradient-primary shadow-glow-primary">
+            <Truck className="h-3.5 w-3.5 text-primary-foreground" />
+          </div>
+          <span className="font-display gradient-text-brand">AsheFlow</span>
+        </div>
+
+        {/* Right cluster — user + actions */}
+        <div className="flex items-center gap-1.5">
+          {/* Search / command palette */}
+          <button
+            onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 h-8 rounded-lg border border-border
+                       bg-surface text-muted-foreground hover:text-foreground hover:border-border-strong
+                       transition-colors press text-xs"
+            title="Open command palette"
+          >
+            <Search className="h-3 w-3" />
+            <span className="hidden md:inline">Search</span>
+            <span className="hidden lg:flex items-center gap-0.5 ml-1">
+              <span className="kbd">⌘</span><span className="kbd">K</span>
+            </span>
+          </button>
+
+          <ThemeToggle />
+
+          {/* Notification bell */}
+          <div className="relative">
+            <button
+              onClick={() => setBellOpen(o => !o)}
+              className="relative inline-flex items-center justify-center w-8 h-8 rounded-lg
+                         border border-border bg-surface text-muted-foreground
+                         hover:text-foreground hover:border-border-strong transition-colors press"
+              title="Notifications"
+            >
+              <Bell className="h-3.5 w-3.5" />
+              {notifications.length > 0 && (
+                <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-danger text-danger-foreground text-[10px] font-bold leading-none shadow-glow-danger">
+                  {notifications.length > 9 ? '9+' : notifications.length}
+                </span>
+              )}
+            </button>
+            {bellOpen && (
+              <NotificationDropdown
+                notifications={notifications}
+                onMarkRead={id => { markRead(id); }}
+                onMarkAllRead={() => { markAllRead(); setBellOpen(false); }}
+                onClose={() => setBellOpen(false)}
+              />
+            )}
+          </div>
+
+          {/* Username */}
+          <span className="hidden md:inline-block text-xs text-muted-foreground font-medium px-2 border-l border-border">
+            {user?.displayName || user?.username}
+          </span>
+
+          {/* Sign out */}
+          <button
+            onClick={handleSignOut}
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg
+                       text-muted-foreground hover:text-danger hover:bg-danger/5
+                       transition-colors press"
+            title="Sign out"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Nav bar — links only, scrollable on overflow
+// ---------------------------------------------------------------------------
+
+const Navbar = () => {
+  const { groups, isAuthenticated } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [trainerPhase, setTrainerPhase] = useState<number | null>(null);
+
+  const isFieldStaff = groups.some(role => ['driver', 'walker', 'trainer', 'trainee'].includes(role));
+  const isTrainer = groups.includes('trainer');
+  const isMgmt = groups.includes('management');
+  const isDispatch = groups.includes('dispatch');
+  const isAdmin = groups.includes('admin');
+  const canAccessFieldOps = groups.some(role => ['driver', 'walker', 'trainee'].includes(role)) || isMgmt || isDispatch || isAdmin;
+  const canAccessScheduleChanges = isFieldStaff || isDispatch || isAdmin;
+  const canAccessSchedule = isFieldStaff || isMgmt || isAdmin;
+
+  useEffect(() => {
+    if (!isAuthenticated || !isTrainer) return;
+    axiosClient.get('/training/trainer/today')
+      .then(res => setTrainerPhase(res.data?.record?.current_day_number ?? null))
+      .catch(() => setTrainerPhase(null));
+  }, [isAuthenticated, isTrainer]);
+
+  const homeRoute = (() => {
+    if (isAdmin)      return '/admin';
+    if (isDispatch)   return '/dispatch-home';
+    if (isMgmt)       return '/management';
+    if (isTrainer)    return '/trainer-dashboard';
+    if (groups.includes('trainee')) return '/my-training';
+    return '/';
+  })();
+
+  const linkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all duration-200 press ${
       isActive
         ? 'bg-accent text-accent-foreground shadow-sm'
         : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
     }`;
 
-  const mobileNavLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 ${
+  const links = (
+    <>
+      <NavLink to={homeRoute} className={linkClass}><Home className="w-3.5 h-3.5" /> Home</NavLink>
+
+      {canAccessSchedule && (
+        <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
+      )}
+      {isFieldStaff && (
+        <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
+      )}
+      {isTrainer && (
+        <NavLink to="/trainer-dashboard" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainer Dash</NavLink>
+      )}
+      {isTrainer && trainerPhase === 4 && (
+        <NavLink to="/phase4-observation" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Phase 4</NavLink>
+      )}
+      {groups.includes('trainee') && (
+        <NavLink to="/my-training" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> My Training</NavLink>
+      )}
+      {canAccessScheduleChanges && (
+        <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
+      )}
+      {canAccessFieldOps && (
+        <NavLink to="/field-ops" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Field Ops</NavLink>
+      )}
+      {groups.includes('driver') && (
+        <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Point</NavLink>
+      )}
+      <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
+
+      {(isDispatch || isAdmin) && (
+        <NavLink to="/dispatch-home" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Dispatch</NavLink>
+      )}
+      {(isDispatch || isAdmin) && (
+        <NavLink to="/dispatch" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
+      )}
+      {(isDispatch || isAdmin) && (
+        <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
+      )}
+
+      {isMgmt && (
+        <>
+          <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
+          <NavLink to="/trainee-management" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainees</NavLink>
+          <NavLink to="/vehicle-compliance" className={linkClass}><ShieldAlert className="w-3.5 h-3.5" /> Compliance</NavLink>
+          <NavLink to="/walker-performance" className={linkClass}><Star className="w-3.5 h-3.5" /> Walkers</NavLink>
+          <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+        </>
+      )}
+      {isDispatch && !isAdmin && (
+        <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+      )}
+      {isAdmin && (
+        <>
+          <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
+          <NavLink to="/feedback" className={linkClass}><MessageSquare className="w-3.5 h-3.5" /> Feedback</NavLink>
+          <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+          <NavLink to="/admin" className={linkClass}><Shield className="w-3.5 h-3.5" /> Admin</NavLink>
+        </>
+      )}
+    </>
+  );
+
+  return (
+    <header className="sticky top-0 z-40">
+      <TitleBar />
+
+      {/* Nav strip */}
+      <nav className="glass border-x-0 border-t-0 border-b border-border/60 rounded-none">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-10">
+
+            {/* Desktop: scrollable link row */}
+            <div className="hidden md:flex items-center min-w-0 flex-1">
+              <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none pr-2">
+                {links}
+              </div>
+            </div>
+
+            {/* Mobile: hamburger */}
+            <button
+              onClick={() => setMobileOpen(o => !o)}
+              className="md:hidden btn-ghost p-1.5"
+            >
+              <span className="sr-only">Toggle menu</span>
+              {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile menu */}
+        {mobileOpen && (
+          <div className="md:hidden animate-slide-up border-t border-border/50 bg-card">
+            <div className="px-3 py-3 flex flex-col gap-0.5">
+              {/* Re-render links with mobile classes */}
+              <MobileLinks
+                groups={groups}
+                isTrainer={isTrainer}
+                trainerPhase={trainerPhase}
+                homeRoute={homeRoute}
+                canAccessFieldOps={canAccessFieldOps}
+                canAccessScheduleChanges={canAccessScheduleChanges}
+                canAccessSchedule={canAccessSchedule}
+                isFieldStaff={isFieldStaff}
+                isMgmt={isMgmt}
+                isDispatch={isDispatch}
+                isAdmin={isAdmin}
+                onNav={() => setMobileOpen(false)}
+              />
+            </div>
+          </div>
+        )}
+      </nav>
+    </header>
+  );
+};
+
+function MobileLinks({
+  groups, isTrainer, trainerPhase, homeRoute,
+  canAccessFieldOps, canAccessScheduleChanges, canAccessSchedule,
+  isFieldStaff, isMgmt, isDispatch, isAdmin,
+  onNav,
+}: {
+  groups: string[]; isTrainer: boolean; trainerPhase: number | null;
+  homeRoute: string; canAccessFieldOps: boolean; canAccessScheduleChanges: boolean;
+  canAccessSchedule: boolean; isFieldStaff: boolean; isMgmt: boolean;
+  isDispatch: boolean; isAdmin: boolean; onNav: () => void;
+}) {
+  const cls = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
       isActive
         ? 'bg-accent text-accent-foreground shadow-sm'
         : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
     }`;
 
   return (
-    <nav className="sticky top-0 z-40 glass border-x-0 border-t-0 border-b border-border/60 rounded-none">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          <div className="flex items-center gap-8">
-            <div className="flex items-center gap-2.5 font-bold text-lg tracking-tight">
-              <div className="flex items-center justify-center w-8 h-8 rounded-lg gradient-primary shadow-glow-primary">
-                <Truck className="h-4 w-4 text-primary-foreground" />
-              </div>
-              <span className="font-display gradient-text-brand">AsheFlow</span>
-            </div>
-
-            {/* Desktop Navigation */}
-            <div className="hidden md:flex items-center gap-1">
-              <NavLink to={homeRoute} className={navLinkClass}>
-                <Home className="w-4 h-4" /> Home
-              </NavLink>
-              {canAccessSchedule && (
-                <NavLink to="/schedule" className={navLinkClass}>
-                  <Calendar className="w-4 h-4" /> Schedule
-                </NavLink>
-              )}
-              {/* Field staff only — admin has no employee record */}
-              {isFieldStaff && (
-                <NavLink to="/preferences" className={navLinkClass}>
-                  <Settings className="w-4 h-4" /> Preferences
-                </NavLink>
-              )}
-              {groups.includes('trainer') && (
-                <NavLink to="/trainer-dashboard" className={navLinkClass}>
-                  <ClipboardCheck className="w-4 h-4" /> Trainer Dash
-                </NavLink>
-              )}
-              {groups.includes('trainee') && (
-                <NavLink to="/my-training" className={navLinkClass}>
-                  <ClipboardCheck className="w-4 h-4" /> My Training
-                </NavLink>
-              )}
-              {canAccessScheduleChanges && (
-                <NavLink to="/schedule-changes" className={navLinkClass}>
-                  <RefreshCw className="w-4 h-4" /> Schedule Changes
-                </NavLink>
-              )}
-              {/* Field ops: field staff only — admin uses ⌘K */}
-              {isFieldStaff && (
-                <NavLink to="/field-ops" className={navLinkClass}>
-                  <MapPin className="w-4 h-4" /> Field Ops
-                </NavLink>
-              )}
-              {groups.includes('driver') && (
-                <NavLink to="/anchor-points" className={navLinkClass}>
-                  <MapPin className="w-4 h-4" /> Anchor Point
-                </NavLink>
-              )}
-              <NavLink to="/incidents" className={navLinkClass}>
-                <AlertTriangle className="w-4 h-4" /> Incidents
-              </NavLink>
-              {(groups.includes('dispatch') || isAdmin) && (
-                <NavLink to="/dispatch" className={navLinkClass}>
-                  <ClipboardCheck className="w-4 h-4" /> Assignments
-                </NavLink>
-              )}
-              {(groups.includes('dispatch') || isAdmin) && (
-                <NavLink to="/anchor-points" className={navLinkClass}>
-                  <MapPin className="w-4 h-4" /> Anchor Points
-                </NavLink>
-              )}
-              {/* Management tools: mgmt sees all four; admin only sees Assets */}
-              {isMgmt && (
-                <>
-                  <NavLink to="/assets" className={navLinkClass}>
-                    <Users className="w-4 h-4" /> Assets
-                  </NavLink>
-                  <NavLink to="/trainee-management" className={navLinkClass}>
-                    <ClipboardCheck className="w-4 h-4" /> Trainees
-                  </NavLink>
-                  <NavLink to="/vehicle-compliance" className={navLinkClass}>
-                    <ShieldAlert className="w-4 h-4" /> Compliance
-                  </NavLink>
-                  <NavLink to="/walker-performance" className={navLinkClass}>
-                    <Star className="w-4 h-4" /> Walkers
-                  </NavLink>
-                  <NavLink to="/operations-analytics" className={navLinkClass}>
-                    <BarChart2 className="w-4 h-4" /> Analytics
-                  </NavLink>
-                </>
-              )}
-              {(groups.includes('dispatch') && !isAdmin) && (
-                <NavLink to="/operations-analytics" className={navLinkClass}>
-                  <BarChart2 className="w-4 h-4" /> Analytics
-                </NavLink>
-              )}
-              {isAdmin && (
-                <>
-                  <NavLink to="/assets" className={navLinkClass}>
-                    <Users className="w-4 h-4" /> Assets
-                  </NavLink>
-                  <NavLink to="/feedback" className={navLinkClass}>
-                    <MessageSquare className="w-4 h-4" /> Feedback
-                  </NavLink>
-                  <NavLink to="/operations-analytics" className={navLinkClass}>
-                    <BarChart2 className="w-4 h-4" /> Analytics
-                  </NavLink>
-                  <NavLink to="/admin" className={navLinkClass}>
-                    <Shield className="w-4 h-4" /> Admin
-                  </NavLink>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Desktop right cluster */}
-          <div className="hidden md:flex items-center gap-2">
-            {/* Command palette trigger */}
-            <button
-              onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))}
-              className="hidden lg:inline-flex items-center gap-2 px-3 h-9 rounded-xl border border-border
-                         bg-surface text-muted-foreground hover:text-foreground hover:border-border-strong
-                         transition-colors press text-xs"
-              title="Open command palette"
-            >
-              <Search className="h-3.5 w-3.5" />
-              <span>Search</span>
-              <span className="ml-2 flex items-center gap-0.5">
-                <span className="kbd">⌘</span>
-                <span className="kbd">K</span>
-              </span>
-            </button>
-
-            <ThemeToggle />
-
-            {/* Notification Bell */}
-            <div className="relative">
-              <button
-                onClick={() => setBellOpen(o => !o)}
-                className="relative inline-flex items-center justify-center w-9 h-9 rounded-xl
-                           border border-border bg-surface text-muted-foreground
-                           hover:text-foreground hover:border-border-strong transition-colors press"
-                title="Notifications"
-              >
-                <Bell className="h-4 w-4" />
-                {notifications.length > 0 && (
-                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-danger text-danger-foreground text-[10px] font-bold leading-none shadow-glow-danger">
-                    {notifications.length > 9 ? '9+' : notifications.length}
-                  </span>
-                )}
-              </button>
-              {bellOpen && (
-                <NotificationDropdown
-                  notifications={notifications}
-                  onMarkRead={id => { markRead(id); }}
-                  onMarkAllRead={() => { markAllRead(); setBellOpen(false); }}
-                  onClose={() => setBellOpen(false)}
-                />
-              )}
-            </div>
-
-            <span className="hidden xl:inline-block text-sm text-muted-foreground font-medium pl-3 ml-1 border-l border-border">
-              {user?.displayName || user?.username}
-            </span>
-
-            <button
-              onClick={handleSignOut}
-              className="btn-ghost text-muted-foreground hover:text-danger"
-              title="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Mobile menu button */}
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            className="md:hidden btn-ghost"
-          >
-            <span className="sr-only">Open main menu</span>
-            {isOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-        </div>
-      </div>
-
-      {/* Mobile menu */}
-      {isOpen && (
-        <div className="md:hidden animate-slide-up border-t border-border/50 bg-card">
-          <div className="px-3 py-4 space-y-1">
-            <NavLink to={homeRoute} onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-              <Home className="w-5 h-5" /> Home
-            </NavLink>
-            {canAccessSchedule && (
-              <NavLink to="/schedule" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <Calendar className="w-5 h-5" /> Schedule
-              </NavLink>
-            )}
-            {isFieldStaff && (
-              <NavLink to="/preferences" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <Settings className="w-5 h-5" /> Preferences
-              </NavLink>
-            )}
-            {groups.includes('trainee') && (
-              <NavLink to="/my-training" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <ClipboardCheck className="w-5 h-5" /> My Training
-              </NavLink>
-            )}
-            {groups.includes('trainer') && (
-              <NavLink to="/trainer-dashboard" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <ClipboardCheck className="w-5 h-5" /> Trainer Dash
-              </NavLink>
-            )}
-            {canAccessScheduleChanges && (
-              <NavLink to="/schedule-changes" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <RefreshCw className="w-5 h-5" /> Schedule Changes
-              </NavLink>
-            )}
-            {isFieldStaff && (
-              <NavLink to="/field-ops" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <MapPin className="w-5 h-5" /> Field Ops
-              </NavLink>
-            )}
-            {groups.includes('driver') && (
-              <NavLink to="/anchor-points" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <MapPin className="w-5 h-5" /> Anchor Point
-              </NavLink>
-            )}
-            <NavLink to="/incidents" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-              <AlertTriangle className="w-5 h-5" /> Incidents
-            </NavLink>
-            {(groups.includes('dispatch') || isAdmin) && (
-              <NavLink to="/dispatch" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <ClipboardCheck className="w-5 h-5" /> Assignments
-              </NavLink>
-            )}
-            {(groups.includes('dispatch') || isAdmin) && (
-              <NavLink to="/anchor-points" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <MapPin className="w-5 h-5" /> Anchor Points
-              </NavLink>
-            )}
-            {isMgmt && (
-              <>
-                <NavLink to="/assets" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <Users className="w-5 h-5" /> Assets
-                </NavLink>
-                <NavLink to="/trainee-management" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <ClipboardCheck className="w-5 h-5" /> Trainees
-                </NavLink>
-                <NavLink to="/vehicle-compliance" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <ShieldAlert className="w-5 h-5" /> Compliance
-                </NavLink>
-                <NavLink to="/walker-performance" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <Star className="w-5 h-5" /> Walkers
-                </NavLink>
-                <NavLink to="/operations-analytics" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <BarChart2 className="w-5 h-5" /> Analytics
-                </NavLink>
-              </>
-            )}
-            {(groups.includes('dispatch') && !isAdmin) && (
-              <NavLink to="/operations-analytics" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                <BarChart2 className="w-5 h-5" /> Analytics
-              </NavLink>
-            )}
-            {isAdmin && (
-              <>
-                <NavLink to="/assets" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <Users className="w-5 h-5" /> Assets
-                </NavLink>
-                <NavLink to="/feedback" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <MessageSquare className="w-5 h-5" /> Feedback
-                </NavLink>
-                <NavLink to="/operations-analytics" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <BarChart2 className="w-5 h-5" /> Analytics
-                </NavLink>
-                <NavLink to="/admin" onClick={() => setIsOpen(false)} className={mobileNavLinkClass}>
-                  <Shield className="w-5 h-5" /> Admin
-                </NavLink>
-              </>
-            )}
-          </div>
-          <div className="px-3 py-4 border-t border-border/50">
-            <div className="px-4 mb-3 text-sm text-muted-foreground font-medium">
-              {user?.displayName || user?.username}
-            </div>
-            <button
-              onClick={handleSignOut}
-              className="flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-medium text-muted-foreground hover:text-danger hover:bg-danger/5 transition-all"
-            >
-              <LogOut className="w-5 h-5" /> Sign out
-            </button>
-          </div>
-        </div>
-      )}
-    </nav>
+    <>
+      <NavLink to={homeRoute} onClick={onNav} className={cls}><Home className="w-4 h-4" /> Home</NavLink>
+      {canAccessSchedule && <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>}
+      {isFieldStaff && <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>}
+      {isTrainer && <NavLink to="/trainer-dashboard" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainer Dash</NavLink>}
+      {isTrainer && trainerPhase === 4 && <NavLink to="/phase4-observation" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Phase 4</NavLink>}
+      {groups.includes('trainee') && <NavLink to="/my-training" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> My Training</NavLink>}
+      {canAccessScheduleChanges && <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>}
+      {canAccessFieldOps && <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>}
+      {groups.includes('driver') && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Point</NavLink>}
+      <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
+      {(isDispatch || isAdmin) && <NavLink to="/dispatch-home" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Dispatch</NavLink>}
+      {(isDispatch || isAdmin) && <NavLink to="/dispatch" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>}
+      {(isDispatch || isAdmin) && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>}
+      {isMgmt && <>
+        <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
+        <NavLink to="/trainee-management" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainees</NavLink>
+        <NavLink to="/vehicle-compliance" onClick={onNav} className={cls}><ShieldAlert className="w-4 h-4" /> Compliance</NavLink>
+        <NavLink to="/walker-performance" onClick={onNav} className={cls}><Star className="w-4 h-4" /> Walkers</NavLink>
+        <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+      </>}
+      {isDispatch && !isAdmin && <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>}
+      {isAdmin && <>
+        <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
+        <NavLink to="/feedback" onClick={onNav} className={cls}><MessageSquare className="w-4 h-4" /> Feedback</NavLink>
+        <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+        <NavLink to="/admin" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Admin</NavLink>
+      </>}
+    </>
   );
-};
+}
 
 export default Navbar;

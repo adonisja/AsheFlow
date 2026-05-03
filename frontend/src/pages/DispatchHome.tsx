@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import {
   Truck, Users, CheckCircle2, Clock, XCircle, AlertTriangle,
-  RefreshCw, ArrowRight, ClipboardCheck, CalendarClock,
+  RefreshCw, ArrowRight, ClipboardCheck, CalendarClock, Package, Check, X,
 } from 'lucide-react';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
@@ -39,10 +39,12 @@ export default function DispatchHome() {
   const today = getLocalYMD();
 
   const [dispatch, setDispatch] = useState<DispatchData | null>(null);
+  const [truckNameMap, setTruckNameMap] = useState<Record<string, string>>({});
   const [confirmations, setConfirmations] = useState<ConfirmationMap>({});
   const [unavailable, setUnavailable] = useState<UnavailableStaff[]>([]);
   const [changeRequests, setChangeRequests] = useState<ScheduleChangeRequest[]>([]);
   const [incidents, setIncidents] = useState<any[]>([]);
+  const [pendingRTS, setPendingRTS] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
@@ -54,6 +56,11 @@ export default function DispatchHome() {
         .then(r => setDispatch(
           Object.keys(r.data.assigned_crews).length > 0 ? r.data : null
         )),
+      axiosClient.get('/trucks')
+        .then(r => setTruckNameMap(
+          Object.fromEntries((r.data as { id: string; name: string }[]).map(t => [t.id, t.name]))
+        ))
+        .catch(() => {}),
       axiosClient.get(`/dispatch/${today}/confirmations`)
         .then(r => setConfirmations(r.data.confirmations || {})),
       axiosClient.get(`/dispatch/unavailable-staff/${today}`)
@@ -63,6 +70,9 @@ export default function DispatchHome() {
         .catch(() => {}),
       axiosClient.get('/incidents/?resolved=false&limit=5')
         .then(r => setIncidents(r.data))
+        .catch(() => {}),
+      axiosClient.get('/shift-ops/rts-reports/pending')
+        .then(r => setPendingRTS(r.data))
         .catch(() => {}),
     ]);
     setLoading(false);
@@ -111,7 +121,7 @@ export default function DispatchHome() {
       />
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <StatCard
           label="Assigned Today"
           value={totalAssigned}
@@ -143,6 +153,14 @@ export default function DispatchHome() {
           delay={0.21}
           hint={incidents.length === 0 ? 'All clear' : undefined}
         />
+        <StatCard
+          label="RTS Pending"
+          value={pendingRTS.length}
+          icon={Package}
+          tone={pendingRTS.length > 0 ? 'warning' : 'success'}
+          delay={0.28}
+          hint={pendingRTS.length === 0 ? 'No drivers waiting' : undefined}
+        />
       </div>
 
       {/* Main content row */}
@@ -172,7 +190,7 @@ export default function DispatchHome() {
                 return (
                   <div key={truckId} className="p-3 rounded-xl border border-border bg-surface-muted/50">
                     <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1.5">
-                      Truck · {crew.length} members
+                      {truckNameMap[truckId] ?? 'Truck'} · {crew.length} members
                     </p>
                     {driver && (
                       <p className="text-sm font-medium text-foreground">{driver.name}
@@ -334,6 +352,73 @@ export default function DispatchHome() {
         >
           Review all requests <ArrowRight className="w-3.5 h-3.5" />
         </button>
+      </MotionCard>
+
+      {/* RTS Return Requests */}
+      <MotionCard delay={0.36} hoverable={false}>
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <Package className="w-5 h-5 text-warning" />
+          <h2 className="text-base font-semibold text-foreground">RTS Return Requests</h2>
+          {pendingRTS.length > 0 && (
+            <span className="ml-auto badge badge-warning">{pendingRTS.length}</span>
+          )}
+        </div>
+
+        <p className="text-xs text-muted-foreground mb-3">
+          Drivers waiting for field clearance to head back to the station with RTS packages.
+          Approve to release them, or reject if their counts need follow-up.
+        </p>
+
+        {pendingRTS.length === 0 ? (
+          <div className="text-center py-6 opacity-60">
+            <CheckCircle2 className="w-8 h-8 mb-2 text-success mx-auto" />
+            <p className="text-sm font-medium">No drivers waiting for RTS clearance.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pendingRTS.map(r => (
+              <div key={r.report_id} className="flex items-start justify-between gap-3 p-3 rounded-xl border border-warning/30 bg-warning/5">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">{r.driver_name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {r.crew_confirmed} crew confirmed · {r.total_rts} RTS package{r.total_rts !== 1 ? 's' : ''}
+                  </p>
+                  {r.rts_packages?.length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {r.rts_packages.map((p: any) =>
+                        `${p.reason.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())} ×${p.count}`
+                      ).join(' · ')}
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      axiosClient.patch(`/shift-ops/rts-report/${r.driver_id}`, { status: 'approved' })
+                        .then(() => setPendingRTS(prev => prev.filter(x => x.driver_id !== r.driver_id)))
+                        .catch(() => {});
+                    }}
+                    className="p-1.5 rounded-lg bg-success/10 hover:bg-success/20 text-success transition-colors"
+                    title="Clear to return"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      axiosClient.patch(`/shift-ops/rts-report/${r.driver_id}`, { status: 'rejected' })
+                        .then(() => setPendingRTS(prev => prev.filter(x => x.driver_id !== r.driver_id)))
+                        .catch(() => {});
+                    }}
+                    className="p-1.5 rounded-lg bg-danger/10 hover:bg-danger/20 text-danger transition-colors"
+                    title="Hold — needs follow-up"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </MotionCard>
     </div>
   );

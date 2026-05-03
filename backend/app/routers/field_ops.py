@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
 from app.core.config import settings
-from app.models.field_ops import CheckIn, Departure, WalkerRating, VehicleInspection, FuelMileageLog, INSPECTION_ITEMS
+from app.models.field_ops import CheckIn, Departure, WalkerRating, VehicleInspection, FuelMileageLog, INSPECTION_ITEMS, INSPECTION_TYPES
+from app.models.dock_assignment import DockAssignment
+from app.models.station_arrival import StationArrival, ARRIVAL_TYPES
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
@@ -20,11 +22,13 @@ from app.schemas.field_ops import (
     WalkerRatingCreate, WalkerRatingResponse,
     VehicleInspectionCreate, VehicleInspectionResponse, VehicleInspectionSummaryItem,
     FuelMileageLogCreate, FuelMileageLogPatch, FuelMileageLogResponse, FuelMileageSummaryItem,
+    DockAssignmentCreate, DockAssignmentPatch, DockAssignmentResponse,
+    StationArrivalCreate, StationArrivalResponse,
 )
 
 router = APIRouter(prefix="/field-ops", tags=["field-ops"])
 
-allow_field_staff = RoleChecker(["driver", "walker", "trainer", "trainee"])
+allow_field_staff = RoleChecker(["driver", "walker", "trainee"])
 allow_driver      = RoleChecker(["driver"])
 allow_management  = RoleChecker(["dispatch", "management", "admin"])
 
@@ -214,6 +218,14 @@ def record_departure(
 
     row = Departure(**payload.model_dump())
     db.add(row)
+
+    # Activate the truck assignment when the first departure is recorded
+    _, assignment_id = _resolve_truck_for_employee(payload.employee_id, payload.date, db)
+    if assignment_id:
+        ta = db.query(TruckAssignment).filter(TruckAssignment.id == assignment_id).first()
+        if ta and ta.status == "planned":
+            ta.status = "active"
+
     db.commit()
     db.refresh(row)
     return row
@@ -306,6 +318,14 @@ def record_return(
         return departure  # Already returned — idempotent
 
     departure.returned_at = datetime.now(timezone.utc)
+
+    # Mark the truck assignment completed when driver returns
+    _, assignment_id = _resolve_truck_for_employee(employee_id, today, db)
+    if assignment_id:
+        ta = db.query(TruckAssignment).filter(TruckAssignment.id == assignment_id).first()
+        if ta and ta.status != "completed":
+            ta.status = "completed"
+
     db.commit()
     db.refresh(departure)
     return departure
@@ -435,19 +455,33 @@ def submit_inspection(
     _: dict = Depends(allow_driver),
     caller: Employee = Depends(get_caller_employee),
 ):
-    """Submit a pre-trip inspection. One allowed per driver per date."""
-    # Fix #2: caller can only submit their own inspection
+    """Submit a pre-trip or EOD inspection. One of each type allowed per driver per date."""
     if payload.driver_id != caller.id:
         raise HTTPException(status_code=403, detail="You can only submit your own inspection.")
+
+    if payload.inspection_type not in INSPECTION_TYPES:
+        raise HTTPException(status_code=400, detail=f"inspection_type must be one of {INSPECTION_TYPES}.")
 
     existing = db.query(VehicleInspection).filter(
         VehicleInspection.driver_id == payload.driver_id,
         VehicleInspection.date == payload.date,
+        VehicleInspection.inspection_type == payload.inspection_type,
     ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Inspection already submitted for today.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"{payload.inspection_type.replace('_', ' ').title()} inspection already submitted for today.",
+        )
 
-    # Fix #7: all canonical items must be present
+    # EOD requires a completed departure (driver must have departed first)
+    if payload.inspection_type == "eod":
+        departure = db.query(Departure).filter(
+            Departure.employee_id == payload.driver_id,
+            Departure.date == payload.date,
+        ).first()
+        if not departure:
+            raise HTTPException(status_code=400, detail="EOD inspection requires a departure record for today.")
+
     missing = [k for k in INSPECTION_ITEMS if k not in payload.items]
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing required inspection items: {missing}")
@@ -465,6 +499,7 @@ def submit_inspection(
         driver_id=payload.driver_id,
         truck_id=truck_id,
         date=payload.date,
+        inspection_type=payload.inspection_type,
         items=payload.items,
         has_failures=has_failures,
         notes=payload.notes,
@@ -476,8 +511,9 @@ def submit_inspection(
         failed_items = [k.replace("_", " ").title() for k, v in payload.items.items() if v is False]
         truck = db.query(Truck).filter(Truck.id == truck_id).first() if truck_id else None
         truck_label = truck.name if truck else "unassigned truck"
+        type_label = payload.inspection_type.replace("_", " ").title()
         message = (
-            f"Pre-trip inspection FAILED — {caller.name} · {truck_label} · {payload.date}. "
+            f"{type_label} inspection FAILED — {caller.name} · {truck_label} · {payload.date}. "
             f"Failed items: {', '.join(failed_items)}."
         )
         recipients = db.query(Employee).filter(
@@ -544,6 +580,7 @@ def get_inspections_summary(
             driver_name=emp.name if emp else "Unknown",
             truck_name=truck.name if truck else None,
             date=row.date,
+            inspection_type=row.inspection_type,
             has_failures=row.has_failures,
             submitted_at=row.submitted_at,
             failed_items=failed,
@@ -848,6 +885,7 @@ def get_inspections_history(
             "truck_id": str(row.truck_id) if row.truck_id else None,
             "truck_name": truck_map[row.truck_id].name if row.truck_id and row.truck_id in truck_map else None,
             "date": row.date.isoformat(),
+            "inspection_type": row.inspection_type,
             "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
             "has_failures": row.has_failures,
             "failed_items": [k for k, v in row.items.items() if v is False],
@@ -1120,3 +1158,221 @@ def get_inspection_failure_summary(
         "total_inspections": total_inspections,
         "failures": result,
     }
+
+
+# ---------------------------------------------------------------------------
+# Dock Assignments
+# ---------------------------------------------------------------------------
+
+@router.post("/dock-assignment", response_model=DockAssignmentResponse, status_code=status.HTTP_201_CREATED)
+def create_dock_assignment(
+    payload: DockAssignmentCreate,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Assign a dock zone to a driver for a specific date. Dispatch/management only.
+
+    Idempotent on conflict — if a record already exists, use PATCH to update it.
+    """
+    driver = db.query(Employee).filter(Employee.id == payload.driver_id).first()
+    if not driver or driver.role != "driver":
+        raise HTTPException(status_code=404, detail="Driver not found.")
+
+    existing = db.query(DockAssignment).filter(
+        DockAssignment.driver_id == payload.driver_id,
+        DockAssignment.date == payload.date,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Dock assignment already exists for this driver on this date. Use PATCH to update.",
+        )
+
+    row = DockAssignment(
+        driver_id=payload.driver_id,
+        date=payload.date,
+        dock_zone=payload.dock_zone,
+        assigned_by=caller.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.patch("/dock-assignment/{driver_id}", response_model=DockAssignmentResponse)
+def update_dock_assignment(
+    driver_id: UUID,
+    payload: DockAssignmentPatch,
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Update the dock zone for a driver on a given date (default today)."""
+    if target_date is None:
+        target_date = date.today()
+
+    row = db.query(DockAssignment).filter(
+        DockAssignment.driver_id == driver_id,
+        DockAssignment.date == target_date,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No dock assignment found for this driver on this date.")
+
+    row.dock_zone = payload.dock_zone
+    row.assigned_by = caller.id
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/dock-assignment/{driver_id}", response_model=Optional[DockAssignmentResponse])
+def get_dock_assignment(
+    driver_id: UUID,
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return the dock assignment for a driver on a given date (default today).
+
+    Returns null (200) when no assignment exists yet — not a 404 — since
+    "not assigned yet" is a normal pre-dispatch state, not an error.
+    Drivers may fetch their own; dispatch/management/admin may fetch any.
+    """
+    assert_owns_or_privileged(caller, driver_id, "dock assignment")
+
+    if target_date is None:
+        target_date = date.today()
+
+    return db.query(DockAssignment).filter(
+        DockAssignment.driver_id == driver_id,
+        DockAssignment.date == target_date,
+    ).first()
+
+
+@router.get("/dock-assignments/summary")
+def get_dock_assignments_summary(
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """Return all dock assignments for a given date with driver names. Management use."""
+    if target_date is None:
+        target_date = date.today()
+
+    rows = (
+        db.query(DockAssignment)
+        .filter(DockAssignment.date == target_date)
+        .order_by(DockAssignment.dock_zone.asc())
+        .all()
+    )
+
+    driver_ids = {r.driver_id for r in rows}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids)).all()}
+
+    return [
+        {
+            "dock_assignment_id": str(r.id),
+            "driver_id": str(r.driver_id),
+            "driver_name": emp_map[r.driver_id].name if r.driver_id in emp_map else "Unknown",
+            "dock_zone": r.dock_zone,
+            "assigned_at": r.assigned_at.isoformat() if r.assigned_at else None,
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Station Arrivals
+# ---------------------------------------------------------------------------
+
+@router.post("/station-arrival", response_model=StationArrivalResponse, status_code=status.HTTP_201_CREATED)
+def record_station_arrival(
+    payload: StationArrivalCreate,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_field_staff),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Record a station arrival. Two types per shift: 'loading' and 'return'.
+
+    - loading: driver arrives at station to load packages (before departure)
+    - return: driver arrives back at station with RTS packages (after route)
+
+    Drivers can only record their own arrivals. Idempotent — if already recorded,
+    returns 400 rather than overwriting so accidental double-taps don't corrupt timestamps.
+    """
+    if payload.employee_id != caller.id:
+        raise HTTPException(status_code=403, detail="You can only record your own station arrivals.")
+
+    if payload.arrival_type not in ARRIVAL_TYPES:
+        raise HTTPException(status_code=400, detail=f"arrival_type must be one of {ARRIVAL_TYPES}.")
+
+    existing = db.query(StationArrival).filter(
+        StationArrival.driver_id == payload.employee_id,
+        StationArrival.date == payload.date,
+        StationArrival.arrival_type == payload.arrival_type,
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{payload.arrival_type.title()} arrival already recorded for today.",
+        )
+
+    row = StationArrival(
+        driver_id=payload.employee_id,
+        date=payload.date,
+        arrival_type=payload.arrival_type,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/station-arrival/{employee_id}", response_model=List[StationArrivalResponse])
+def get_station_arrivals(
+    employee_id: UUID,
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return station arrivals for a driver, optionally filtered to a single date."""
+    assert_owns_or_privileged(caller, employee_id, "station arrivals")
+
+    q = db.query(StationArrival).filter(StationArrival.driver_id == employee_id)
+    if target_date:
+        q = q.filter(StationArrival.date == target_date)
+    return q.order_by(StationArrival.date.desc(), StationArrival.arrived_at.asc()).all()
+
+
+@router.get("/station-arrivals/summary")
+def get_station_arrivals_summary(
+    target_date: date = None,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),
+):
+    """Return all station arrivals for a date with driver names. Management use."""
+    if target_date is None:
+        target_date = date.today()
+
+    rows = (
+        db.query(StationArrival)
+        .filter(StationArrival.date == target_date)
+        .order_by(StationArrival.arrived_at.asc())
+        .all()
+    )
+
+    driver_ids = {r.driver_id for r in rows}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids)).all()}
+
+    return [
+        {
+            "driver_id": str(r.driver_id),
+            "driver_name": emp_map[r.driver_id].name if r.driver_id in emp_map else "Unknown",
+            "arrival_type": r.arrival_type,
+            "arrived_at": r.arrived_at.isoformat() if r.arrived_at else None,
+        }
+        for r in rows
+    ]

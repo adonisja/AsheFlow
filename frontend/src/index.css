@@ -147,6 +147,7 @@
 
   /* Custom scrollbar */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
+
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
     background: hsl(var(--border-strong));
@@ -324,6 +325,12 @@
   .text-gold { color: hsl(var(--gold)); }
   .bg-gold { background-color: hsl(var(--gold)); }
   .border-gold { border-color: hsl(var(--gold)); }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
 
   /* Press effect — for hover-scale style micro-interactions */
   .press {
