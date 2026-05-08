@@ -39,6 +39,7 @@ class TrainerContinuationRequest(Base):
     __tablename__ = "trainer_continuation_requests"
 
     id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     trainee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     status     = Column(String(20), nullable=False, default="pending")  # pending | accepted | nullified

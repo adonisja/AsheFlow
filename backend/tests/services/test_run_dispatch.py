@@ -208,28 +208,25 @@ class TestHeadcountCap:
 
 
 # ---------------------------------------------------------------------------
-# Excess trainer re-slotting
+# Excess trainer distribution
 # ---------------------------------------------------------------------------
 
 class TestExcessTrainerReSlot:
     """
-    If available trainers exceed num_trucks × MIN_TRAINERS_PER_TRUCK, the
-    excess trainers are converted to walkers before assignment. They appear
-    in the walker pool, not the trainer pool.
+    Excess trainers (beyond num_trucks × MIN_TRAINERS_PER_TRUCK) are distributed
+    evenly as trainers across all trucks — they are NOT re-slotted as walkers.
+    The assign_trainers service uses round-robin to spread them.
     """
 
-    def test_excess_trainers_appear_as_walkers_in_crew(self, db):
+    def test_excess_trainers_distributed_as_trainers(self, db):
         """
         ARRANGE:
-        - 1 truck. MIN_TRAINERS_PER_TRUCK=1 (so 1 trainer is needed).
-        - 3 trainers available → 2 are excess and should be re-slotted.
+        - 1 truck. 3 trainers available.
         ASSERT:
-        - Exactly 1 trainer in the crew (the minimum needed).
-        - 2 walkers in the crew (the re-slotted excess trainers).
+        - All 3 trainers appear in the crew as trainers (no reslotting).
 
-        WHY THIS MATTERS:
-        Without re-slotting, you'd end up with 3 trainers on 1 truck and 0
-        walkers. The re-slot ensures coverage is balanced between roles.
+        Reflects the current business rule: excess trainers stay as trainers
+        and are distributed evenly across trucks.
         """
         make_truck(db, "Truck A")
         make_employee(db, role="driver",  name="Driver")
@@ -241,14 +238,8 @@ class TestExcessTrainerReSlot:
 
         all_crew = [m for crew in formatted_crews.values() for m in crew]
         trainers = [m for m in all_crew if m["role"] == "trainer"]
-        walkers  = [m for m in all_crew if m["role"] == "walker"]
 
-        assert len(trainers) == MIN_TRAINERS_PER_TRUCK, (
-            f"Should have exactly {MIN_TRAINERS_PER_TRUCK} trainer(s) — the minimum needed"
-        )
-        assert len(walkers) == 3 - MIN_TRAINERS_PER_TRUCK, (
-            "Excess trainers should be re-slotted and appear as walkers"
-        )
+        assert len(trainers) == 3, "All 3 trainers should be assigned as trainers"
 
 
 # ---------------------------------------------------------------------------

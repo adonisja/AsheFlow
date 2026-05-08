@@ -261,7 +261,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
               value={channelId}
               onChange={e => setChannelId(e.target.value)}
               className={`input w-full font-mono ${!channelIdValid ? 'border-danger/60 focus:ring-danger/30' : ''}`}
-              placeholder="e.g. TRUCK_CHANNEL_REDACTED"
+              placeholder="e.g. 1234567890123456789"
             />
             {!channelIdValid && (
               <p className="text-xs text-danger">Must be a valid Discord snowflake (17–20 digits).</p>

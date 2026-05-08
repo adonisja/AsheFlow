@@ -111,7 +111,7 @@ export default function DispatchHome() {
     <div className="space-y-8">
       <SectionHeader
         eyebrow="Dispatch"
-        title={`Good ${greeting}, ${user?.displayName || user?.username}`}
+        title={`Good ${greeting}, ${user?.firstName || user?.displayName || user?.username}`}
         description={`Operations overview for ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
           <button onClick={fetchAll} className="btn-ghost flex items-center gap-2 text-sm">

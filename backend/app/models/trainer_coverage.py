@@ -24,6 +24,7 @@ class TrainerCoverage(Base):
     __tablename__ = "trainer_coverage"
 
     id                 = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     training_record_id = Column(UUID(as_uuid=True), ForeignKey("training_records.id", ondelete="CASCADE"), nullable=False, index=True)
     trainer_id         = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     curriculum_item_id = Column(UUID(as_uuid=True), ForeignKey("training_curriculums.id", ondelete="SET NULL"), nullable=True)

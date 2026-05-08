@@ -23,6 +23,7 @@ class TrainingCurriculum(Base):
     __tablename__ = "training_curriculums"
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     day_number  = Column(Integer, nullable=False, index=True)   # phase number: 1–4
     topic_title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
