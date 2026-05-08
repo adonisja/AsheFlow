@@ -70,6 +70,62 @@ class AsheFlowBot(commands.Bot):
         await super().close()
 
     # ------------------------------------------------------------------
+    # Member join — welcome to general, assign roles
+    # ------------------------------------------------------------------
+
+    # Maps the AsheFlow employee role to the corresponding Discord role ID.
+    _ROLE_MAP: dict[str, str] = {
+        "driver":     "discord_role_driver",
+        "walker":     "discord_role_walker",
+        "trainer":    "discord_role_captain",
+        "trainee":    "discord_role_walker",
+        "dispatch":   "discord_role_dispatch",
+        "management": "discord_role_manager",
+        "admin":      "discord_role_admin",
+    }
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        guild = self.get_guild(settings.discord_guild_id)
+        if not guild or member.guild.id != guild.id:
+            return
+
+        # Always assign the base AsheFlow member role
+        roles_to_assign: list[discord.Role] = []
+        base_role = guild.get_role(settings.discord_role_asheflow)
+        if base_role:
+            roles_to_assign.append(base_role)
+
+        # Look up job role by Discord ID
+        employee = await api.get_employee_by_discord(str(member.id))
+        if employee:
+            role_attr = self._ROLE_MAP.get(employee.get("role", ""))
+            if role_attr:
+                job_role_id = getattr(settings, role_attr, None)
+                if job_role_id:
+                    job_role = guild.get_role(job_role_id)
+                    if job_role:
+                        roles_to_assign.append(job_role)
+
+        if roles_to_assign:
+            try:
+                await member.add_roles(*roles_to_assign, reason="Auto-assigned on join")
+                logger.info("Assigned roles %s to %s", [r.name for r in roles_to_assign], member)
+            except discord.HTTPException as e:
+                logger.error("Failed to assign roles to %s: %s", member, e)
+
+        # Send welcome message to general channel
+        general = guild.get_channel(settings.discord_general_channel_id)
+        if general:
+            try:
+                name = employee.get("name", member.display_name) if employee else member.display_name
+                await general.send(
+                    f"Welcome to AsheFlow, {member.mention} ({name})! "
+                    f"Check your email for your sign-in credentials."
+                )
+            except discord.HTTPException as e:
+                logger.error("Failed to send welcome message: %s", e)
+
+    # ------------------------------------------------------------------
     # Internal publish trigger — called by the backend webhook handler
     # ------------------------------------------------------------------
 
@@ -137,17 +193,17 @@ class AsheFlowBot(commands.Bot):
             return
         await invite_cog.send_dm(discord_id, message)
 
-    async def trigger_invite(self, discord_id: str, name: str) -> None:
-        """DM a Discord guild invite to a newly activated employee.
+    async def create_invite_url(self, name: str) -> str | None:
+        """Create a guild invite URL for a newly activated employee.
 
-        Called when the backend fires POST /internal/invite after the
-        employee's first login stamps their cognito_sub.
+        Returns the invite URL so the caller (handle_invite) can return it
+        to the backend, which emails it to the employee.
         """
         invite_cog = self.cogs.get("Invite")
         if invite_cog is None:
-            logger.error("Invite cog not loaded — cannot send invite to %s.", discord_id)
-            return
-        await invite_cog.send_guild_invite(discord_id, name)
+            logger.error("Invite cog not loaded — cannot create invite for %s.", name)
+            return None
+        return await invite_cog.create_guild_invite(name)
 
 
 bot = AsheFlowBot()
@@ -175,24 +231,25 @@ async def handle_publish(request: web.Request) -> web.Response:
 
 
 async def handle_invite(request: web.Request) -> web.Response:
-    """POST /internal/invite  body: { "discord_id": "...", "name": "..." }
+    """POST /internal/invite  body: { "name": "..." }
 
-    Called by the backend when a new employee logs in for the first time
-    (account_status transitions from pending_verification → active).
-    Sends a Discord guild invite link via DM to the employee.
+    Called by the backend when a new employee activates their account on
+    first login. Creates a single-use guild invite and returns the URL so
+    the backend can email it to the employee. Discord DMs are not used —
+    the bot cannot DM users who don't already share a server with it.
     """
     secret = request.headers.get("X-Internal-Secret", "")
     if secret != os.environ.get("INTERNAL_SECRET", ""):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
-    discord_id = data.get("discord_id")
     name = data.get("name", "New Employee")
-    if not discord_id:
-        return web.Response(status=400, text="Missing discord_id")
 
-    asyncio.create_task(bot.trigger_invite(discord_id, name))
-    return web.json_response({"status": "queued", "discord_id": discord_id})
+    invite_url = await bot.create_invite_url(name)
+    if not invite_url:
+        return web.Response(status=502, text="Failed to create guild invite")
+
+    return web.json_response({"invite_url": invite_url})
 
 
 async def handle_lockdown_channel(request: web.Request) -> web.Response:

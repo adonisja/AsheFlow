@@ -23,7 +23,10 @@ import Phase4Observation from './pages/Phase4Observation';
 import TrainingCurriculum from './pages/TrainingCurriculum';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
+import CompanySettings from './pages/CompanySettings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import SuperAdminLayout from './components/layout/SuperAdminLayout';
+import Companies from './pages/superadmin/Companies';
 import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
 import WorkerView from './components/dashboard/WorkerView';
@@ -65,6 +68,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 
 function RoleRedirect() {
   const { groups } = useAuth();
+  if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
   if (groups.includes('admin'))       return <Navigate to="/admin" replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
@@ -308,6 +312,14 @@ function App() {
               }
             />
             <Route
+              path="/settings"
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <CompanySettings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/operations-analytics"
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
@@ -324,7 +336,19 @@ function App() {
               }
             />
           </Route>
-          
+
+          {/* Super admin — separate layout, no Navbar, violet ambient */}
+          <Route
+            element={
+              <ProtectedRoute allowedRoles={['super_admin']}>
+                <SuperAdminLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/superadmin/companies" element={<Companies />} />
+            <Route path="/superadmin" element={<Navigate to="/superadmin/companies" replace />} />
+          </Route>
+
         </Routes>
       </Router>
     </AuthProvider>

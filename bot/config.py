@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     discord_drivers_channel_id: int
     discord_trainers_channel_id: int
+    discord_general_channel_id: int
 
     # ------------------------------------------------------------------ #
     # Discord server role IDs                                              #
