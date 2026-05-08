@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/auth/Login';
+import Register from './pages/Register';
 import Layout from './components/layout/Layout';
 import Preferences from './pages/Preferences';
 import Schedule from './pages/Schedule';
@@ -160,7 +161,8 @@ function App() {
     <AuthProvider>
       <Router>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/login"    element={<Login />} />
+          <Route path="/register" element={<Register />} />
           
           <Route element={<Layout />}>
             <Route

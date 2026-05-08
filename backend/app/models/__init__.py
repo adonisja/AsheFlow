@@ -25,3 +25,4 @@ from app.models.crew_compliance import CrewCompliance
 from app.models.driver_check_in import DriverCheckIn
 from app.models.rts_clearance import RTSReport, StationHandoff
 from app.models.company import Company, CompanyConfig, CompanyZone
+from app.models.invite_token import InviteToken
