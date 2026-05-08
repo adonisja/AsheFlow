@@ -1,3 +1,232 @@
+## 2026-05-08 Multi-Tenant: Super Admin Dependency Pattern
+
+When a platform-level identity needs API access but has no row in the `employees` table, do not force one. Create a separate dependency that stops at the JWT:
+
+```python
+def get_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if "super_admin" not in current_user.get("cognito_groups", []):
+        raise HTTPException(status_code=403, detail="Super admin access required.")
+    return current_user
+```
+
+Never use `get_caller_employee` on super admin endpoints — it raises 403 for any caller without an Employee row. Never use `get_super_admin` on company-scoped endpoints — it returns no `company_id`. The two dependencies are mutually exclusive by design.
+
+## 2026-05-08 Multi-Tenant: Atomic Company + Config Provisioning
+
+When creating a parent row and a dependent row in one request, use `db.flush()` between them to populate the parent's UUID before the FK reference:
+
+```python
+company = Company(name=..., slug=...)
+db.add(company)
+db.flush()                          # company.id is now set
+db.add(CompanyConfig(company_id=company.id))
+db.commit()
+```
+
+Without `flush()`, `company.id` is still `None` when `CompanyConfig` is constructed, and the FK will be null or fail depending on the DB.
+
+Always create the config row at provisioning time, not lazily. Services that read config assume the row exists — making it optional forces every service to handle the "config missing" case.
+
+## 2026-05-08 Multi-Tenant: Idempotent Bootstrap Pattern
+
+Bootstrap endpoints (provisioning the first resource of a kind) should be safe to call multiple times. The pattern:
+
+1. Look up the target by a natural key (email, slug, etc.)
+2. If it exists and is already in the terminal state (e.g. `active`), return 409
+3. If it exists but is not yet terminal, skip creation and fall through to re-issue the token/credential
+4. If it doesn't exist, create it
+
+```python
+employee = db.query(Employee).filter(...email == payload.email).first()
+if employee:
+    if employee.account_status == "active":
+        raise HTTPException(409, "Already active.")
+    # else: re-issue invite below
+else:
+    employee = Employee(...); db.add(employee); db.flush()
+
+# always re-issue token
+db.query(InviteToken).filter(...employee_id == employee.id).delete()
+db.add(InviteToken(...))
+```
+
+Return a `sent: bool` field when the endpoint fires a side-effect (email, SMS). The operation should commit even if the side-effect fails — the caller can retry the endpoint to re-fire it.
+
+## 2026-05-08 Multi-Tenant: Scoping Indirect Models via Join
+
+When a model doesn't carry `company_id` directly (e.g. `AssignmentChangeRequest` references `employee_id`, not `company_id`), scope it by joining through the model that does:
+
+```python
+db.query(AssignmentChangeRequest)
+    .join(Employee, AssignmentChangeRequest.employee_id == Employee.id)
+    .filter(
+        AssignmentChangeRequest.id == request_id,
+        Employee.company_id == caller.company_id,
+    )
+```
+
+This is both a data-isolation guard and an ownership check — the record only exists in the result set if it belongs to the caller's company. A separate `if record.company != caller.company_id: raise 403` check is unnecessary when the join already enforces it.
+
+## 2026-05-08 Multi-Tenant: Three Write-Path Checklist
+
+Every endpoint that writes data needs three `company_id` stamps:
+
+1. **New model row** — `company_id=caller.company_id`
+2. **Notification rows** — `Notification(company_id=caller.company_id, ...)`
+3. **Audit call** — `write_audit(db, actor_id=str(caller.id), company_id=str(caller.company_id), ...)`
+
+Notification fanout queries must also be scoped: `Employee.company_id == caller.company_id` before `Employee.role.in_(["dispatch", "admin"])`. Without it, dispatchers from every tenant get notified for every company's events.
+
+## 2026-05-08 Multi-Tenant: Helper Functions Need company_id Threaded Through
+
+When a router delegates to helper functions (e.g. `_get_assignment`, `_crew_employee_ids`, `_notify` in `anchor_points.py`), those helpers must also receive and apply `company_id`. Don't let the helper re-query without it:
+
+```python
+# Bad — helper ignores tenant boundary
+def _crew_employee_ids(db, truck_id, date):
+    return [m.employee_id for m in db.query(AssignmentMember).join(...).filter(...).all()]
+
+# Good — company_id threaded through
+def _crew_employee_ids(db, truck_id, date, company_id):
+    return [m.employee_id for m in
+        db.query(AssignmentMember)
+            .join(TruckAssignment, ...)
+            .filter(TruckAssignment.company_id == company_id, ...)
+            .all()
+    ]
+```
+
+## 2026-05-08 Multi-Tenant: Direct Router Function Tests Need a Caller Object
+
+Tests that call router functions directly (bypassing the HTTP test client) must pass a real `caller` employee when the function signature requires one. The `Depends(get_caller_employee)` dependency is not resolved when calling outside FastAPI — passing nothing leaves the parameter as a `Depends` object, which crashes on `.company_id`.
+
+Pattern:
+```python
+def make_admin_caller(db) -> Employee:
+    emp = Employee(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, role="admin", ...)
+    db.add(emp); db.commit(); db.refresh(emp)
+    return emp
+
+# In test
+result = get_dispatch_fill_rate(start_date=..., end_date=..., db=db, caller=make_admin_caller(db), _={})
+```
+
+## 2026-05-08 Registration: Cognito AdminCreateUser Without TemporaryPassword
+
+Calling `AdminCreateUser` without a `TemporaryPassword` field makes Cognito auto-generate the password and email it to the user's `email` attribute. The user is placed in `FORCE_CHANGE_PASSWORD` status and must reset on first login.
+
+This is preferable to the `AdminCreateUser` + `AdminSetUserPassword(Permanent=True)` pattern when:
+- You want the employee to set their own password (not have one chosen for them or by the backend)
+- You want Cognito to handle credential delivery — one less SES call, and Cognito's email is transactional by nature
+
+Tradeoff: you don't control the credential email format. Send your own branded welcome email alongside it for context.
+
+## 2026-05-08 Registration: Server-Side Username Derivation
+
+Let the server derive `firstname.lastname` rather than asking the user to choose:
+
+```python
+def _derive_username(name: str, db: Session) -> str:
+    parts = name.strip().lower().split()
+    first = re.sub(r"[^a-z0-9]", "", parts[0])
+    last  = re.sub(r"[^a-z0-9]", "", parts[-1]) if len(parts) > 1 else ""
+    base  = f"{first}.{last}" if last else first
+    candidate = base
+    suffix = 2
+    while db.query(Employee).filter(Employee.username == candidate).first():
+        candidate = f"{base}{suffix}"
+        suffix += 1
+    return candidate
+```
+
+The loop is safe because usernames are unique in the DB and the suffix increments — it can't loop forever unless there are thousands of employees with identical names.
+
+## 2026-05-08 Backend: Role-Scoped Access Guards
+
+When an endpoint should be accessible to multiple roles but must restrict which *targets* they can act on, use a helper guard rather than duplicating the check:
+
+```python
+PROTECTED_ROLES = {"management", "admin"}
+
+def _assert_not_protected(caller_groups: set, target_role: str) -> None:
+    if target_role in PROTECTED_ROLES and "admin" not in caller_groups:
+        raise HTTPException(status_code=403, detail="Only admins can modify management or admin accounts.")
+```
+
+Call it immediately after the 404 check, before any mutation. For list endpoints use a DB-level filter (`.notin_()`) rather than filtering in Python — it scales and doesn't leak row count through pagination.
+
+Apply the same split in the frontend: silently hide rows the caller can't act on, and remove disallowed options from forms. The UI guard is UX; the API guard is security.
+
+## 2026-05-08 Multi-Tenant: PATCH Semantics with `exclude_unset=True`
+
+Config PATCH endpoints should only write the fields the caller explicitly provided. Use Pydantic's `model_dump(exclude_unset=True)` to get only the submitted fields:
+
+```python
+def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate) -> None:
+    data = payload.model_dump(exclude_unset=True)   # only fields in the request body
+    for field, value in data.items():
+        setattr(config, field, value)
+```
+
+If you use `model_dump()` without `exclude_unset=True`, every optional field that the caller didn't send becomes `None` and overwrites existing values with null — effectively a DELETE masquerading as a PATCH.
+
+This matters most for partial updates to rows with many optional fields (config, preferences, profile) where callers routinely only update 1–2 fields at a time.
+
+## 2026-05-08 Multi-Tenant: Field-Level Authorization in Config Endpoints
+
+When some fields in a shared schema should only be editable by a privileged role, enforce it at the application layer inside the helper that does the write — not by creating a separate schema:
+
+```python
+_SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"})
+
+def _apply_config_update(config, payload, allow_super_admin_fields=False):
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        if field in _SUPER_ADMIN_ONLY_FIELDS and not allow_super_admin_fields:
+            raise HTTPException(403, f"'{field}' can only be changed by a super admin.")
+        setattr(config, field, value)
+```
+
+Both endpoints call the same helper with different `allow_super_admin_fields`:
+- Super admin endpoint: `_apply_config_update(config, payload, allow_super_admin_fields=True)`
+- Company admin endpoint: `_apply_config_update(config, payload, allow_super_admin_fields=False)`
+
+Don't hide the field entirely from the schema — company admins can still read it in the response. The lock is write-only.
+
+## 2026-05-08 Multi-Tenant: Two Routers in One File
+
+When a module has two distinct access paths (e.g. `/admin/companies/...` for super admin and `/companies/...` for company admin), put them in the same file as two `APIRouter` instances and register both in `main.py`:
+
+```python
+# companies.py
+router = APIRouter(prefix="/admin/companies", tags=["companies"])
+company_admin_router = APIRouter(prefix="/companies", tags=["company-config"])
+
+# main.py
+api_v1_router.include_router(companies.router)
+api_v1_router.include_router(companies.company_admin_router)
+```
+
+This keeps related logic co-located while maintaining clean URL namespaces. The alternative — splitting into two files — creates a dependency cycle if the files need to share schemas or helpers.
+
+## 2026-05-08 Frontend: Time Fields as Text Inputs
+
+SQLAlchemy `Time` columns serialize to Python `datetime.time`, which JSON doesn't handle natively. The cleanest API contract is `"HH:MM"` strings both ways — input and output.
+
+On the frontend, use `type="text"` with an `HH:MM` placeholder rather than `type="time"`. Browser `type="time"` inputs have inconsistent locale formatting (some show 12-hour, some 24-hour) and are visually inconsistent across OS and browser. A plain text input with format documentation is clearer for non-technical users.
+
+Backend validation: split on `:` and construct `datetime.time(int(h), int(m))`. Raise a clear `ValueError` on bad format. The Pydantic `field_validator` converts on input; `from_orm_obj` converts on output.
+
+## 2026-05-08 Backend: Promote/Demote as POST Endpoints
+
+Role transitions with side effects (Cognito group sync, notification creation) belong on dedicated `POST /{id}/promote` and `POST /{id}/demote` endpoints, not on the general `PUT /{id}` update endpoint. Reasons:
+
+- `PUT` is for field updates; a role transition is a state machine event with invariants (walker→trainer only, trainer→walker only)
+- Side effects (Cognito call, notification) need to be clearly scoped — wrapping them in a generic update path makes them easy to miss or accidentally bypass
+- Validation is simpler: check `current_role == expected` and raise 400 early; no need to diff old vs new role inside a general update handler
+
+Cognito group sync is best-effort inside try/except — log the failure but don't roll back the DB change, since the DB is authoritative and groups are refreshed on next token issue.
+
 ## 2026-05-08 UI: Inline Feedback Pattern for One-Off Row Actions
 
 For actions that affect a single table row (resend invite, resend verification,

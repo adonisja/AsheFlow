@@ -6,15 +6,25 @@ import { ThemeProvider } from './contexts/ThemeContext'
 
 import { Amplify } from 'aws-amplify';
 
+const _poolId    = import.meta.env.VITE_AWS_POOL_ID;
+const _clientId  = import.meta.env.VITE_AWS_CLIENT_ID;
+const _authDomain = import.meta.env.VITE_AWS_DOMAIN;
+
+if (!_poolId || !_clientId || !_authDomain) {
+  throw new Error(
+    'Missing required Amplify env vars. Copy frontend/.env.template → frontend/.env.local and fill in values.'
+  );
+}
+
 Amplify.configure({
   Auth: {
     Cognito: {
-      userPoolId: import.meta.env.VITE_AWS_POOL_ID || 'us-east-2_xxxxxxxxx',
-      userPoolClientId: import.meta.env.VITE_AWS_CLIENT_ID || 'xxxxxxxxxxxxxxxxx',
+      userPoolId: _poolId,
+      userPoolClientId: _clientId,
       loginWith: {
         username: true,
         oauth: {
-          domain: import.meta.env.VITE_AWS_DOMAIN || 'asheflow.auth.us-east-2.amazoncognito.com',
+          domain: _authDomain,
           scopes: ['email', 'openid', 'profile'],
           redirectSignIn: [window.location.origin + '/'],
           redirectSignOut: [window.location.origin + '/login'],
