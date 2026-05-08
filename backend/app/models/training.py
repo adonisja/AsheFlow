@@ -92,6 +92,7 @@ class TrainingTask(Base):
     __tablename__ = "training_tasks"
 
     id                 = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id         = Column(UUID(as_uuid=True), nullable=False, index=True)
     training_record_id = Column(UUID(as_uuid=True), ForeignKey("training_records.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Snapshot of the curriculum task, ensuring historical consistency
