@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@contexts/AuthContext';
 import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 
 export default function LoginScreen() {
   const scheme = useColorScheme();
@@ -137,14 +138,14 @@ export default function LoginScreen() {
 
           {/* ── Federated buttons ───────────────────────────── */}
           <TouchableOpacity
-            style={[s.socialBtn, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: federatedLoading === 'Discord' ? 0.7 : 1 }]}
+            style={[s.socialBtn, { borderColor: '#5865F2', backgroundColor: c.surfaceMuted, opacity: federatedLoading === 'Discord' ? 0.7 : 1 }]}
             onPress={() => handleFederated('Discord')}
             disabled={loading || !!federatedLoading}
             activeOpacity={0.82}
           >
             {federatedLoading === 'Discord'
-              ? <ActivityIndicator color={c.foreground} style={s.socialIcon} />
-              : <Text style={s.discordIcon}>⚡</Text>
+              ? <ActivityIndicator color="#fff" style={s.socialIcon} />
+              : <View style={s.socialIcon}><DiscordIcon size={20} /></View>
             }
             <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Discord</Text>
           </TouchableOpacity>
@@ -157,7 +158,7 @@ export default function LoginScreen() {
           >
             {federatedLoading === 'Google'
               ? <ActivityIndicator color={c.foreground} style={s.socialIcon} />
-              : <Text style={s.googleIcon}>G</Text>
+              : <View style={s.socialIcon}><GoogleIcon size={20} /></View>
             }
             <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Google</Text>
           </TouchableOpacity>
@@ -173,6 +174,7 @@ export default function LoginScreen() {
     </KeyboardAvoidingView>
   );
 }
+
 
 const styles = (c: typeof lightColors) => StyleSheet.create({
   flex:       { flex: 1, backgroundColor: c.background },
@@ -258,9 +260,7 @@ const styles = (c: typeof lightColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
     marginBottom: spacing.sm,
   },
-  socialIcon:    { width: 24, marginRight: spacing.sm },
-  discordIcon:   { width: 24, fontSize: 16, textAlign: 'center', marginRight: spacing.sm },
-  googleIcon:    { width: 24, fontSize: 15, fontWeight: fontWeight.bold, textAlign: 'center', color: '#4285F4', marginRight: spacing.sm },
+  socialIcon:    { width: 22, height: 22, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center' },
   socialBtnText: { fontSize: fontSize.base, fontWeight: fontWeight.medium },
 
   hint: {
