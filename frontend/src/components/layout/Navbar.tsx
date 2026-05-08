@@ -343,6 +343,7 @@ const Navbar = () => {
           <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
           <NavLink to="/feedback" className={linkClass}><MessageSquare className="w-3.5 h-3.5" /> Feedback</NavLink>
           <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+          <NavLink to="/settings" className={linkClass}><Settings className="w-3.5 h-3.5" /> Settings</NavLink>
           <NavLink to="/admin" className={linkClass}><Shield className="w-3.5 h-3.5" /> Admin</NavLink>
         </>
       )}
@@ -448,6 +449,7 @@ function MobileLinks({
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
         <NavLink to="/feedback" onClick={onNav} className={cls}><MessageSquare className="w-4 h-4" /> Feedback</NavLink>
         <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+        <NavLink to="/settings" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Settings</NavLink>
         <NavLink to="/admin" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Admin</NavLink>
       </>}
     </>
