@@ -48,12 +48,15 @@ def create_feedback(
         f"{type_label} submitted by {sender_name}: "
         f"{feedback.message[:120]}{'…' if len(feedback.message) > 120 else ''}"
     )
+    company_id = caller.company_id if caller else None
     admins = db.query(Employee).filter(
         Employee.role == "admin",
         Employee.is_active == True,
+        *([Employee.company_id == company_id] if company_id else []),
     ).all()
     for admin in admins:
         db.add(Notification(
+            company_id=company_id,
             employee_id=admin.id,
             type="feedback_submitted",
             message=notif_message,

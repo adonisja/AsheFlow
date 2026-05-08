@@ -136,6 +136,7 @@ def make_open_training_record(db, trainee: Employee, trainer: Employee,
     """Create an open (not submitted) training record."""
     rec = TrainingRecord(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         trainee_id=trainee.id,
         trainer_id=trainer.id,
         current_day_number=day,
@@ -150,6 +151,7 @@ def make_closed_training_record(db, trainee: Employee, trainer: Employee) -> Tra
     """Create a closed (submitted) training record."""
     rec = TrainingRecord(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         trainee_id=trainee.id,
         trainer_id=trainer.id,
         current_day_number=2,
@@ -202,6 +204,22 @@ def make_confirmation(db, employee: Employee, dispatch_date: date,
 TODAY = date.today()
 
 
+def make_admin_caller(db) -> Employee:
+    """Return an admin employee scoped to SEED_COMPANY_ID for use as `caller`."""
+    emp = Employee(
+        id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
+        name="Test Admin",
+        role="admin",
+        is_active=True,
+        discord_id=str(uuid.uuid4()),
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
 # ---------------------------------------------------------------------------
 # 1. Dispatch Fill Rate
 # ---------------------------------------------------------------------------
@@ -215,7 +233,7 @@ class TestDispatchFillRate:
     def test_empty_range_returns_zero_summary(self, db):
         """No assignments in range → summary all zeros, by_date empty."""
         result = get_dispatch_fill_rate(
-            start_date=TODAY, end_date=TODAY, db=db, _={}
+            start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={}
         )
         assert result["summary"]["total_slots"]  == 0
         assert result["summary"]["algo_slots"]   == 0
@@ -237,7 +255,7 @@ class TestDispatchFillRate:
         make_member(db, ta, walker1, is_manual=False)
         make_member(db, ta, walker2, is_manual=True)
 
-        result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["summary"]["total_slots"]  == 3
         assert result["summary"]["algo_slots"]   == 2
@@ -250,7 +268,7 @@ class TestDispatchFillRate:
         d = make_employee(db, role="driver")
         make_member(db, ta, d, is_manual=True)
 
-        result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["summary"]["algo_pct"]   == 0.0
         assert result["summary"]["algo_slots"] == 0
@@ -266,7 +284,7 @@ class TestDispatchFillRate:
         d         = make_employee(db, role="driver")
         make_member(db, ta, d, is_manual=False)
 
-        result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["by_date"] == []
         assert result["summary"]["total_slots"] == 0
@@ -285,7 +303,7 @@ class TestDispatchFillRate:
         make_member(db, make_assignment(db, truck.id, day2), d2, is_manual=False)
 
         result = get_dispatch_fill_rate(
-            start_date=day1, end_date=day2, db=db, _={}
+            start_date=day1, end_date=day2, db=db, caller=make_admin_caller(db), _={}
         )
 
         assert len(result["by_date"]) == 2
@@ -300,7 +318,7 @@ class TestDispatchFillRate:
         make_member(db, make_assignment(db, truck.id, start), d_s)
         make_member(db, make_assignment(db, truck.id, end),   d_e)
 
-        result = get_dispatch_fill_rate(start_date=start, end_date=end, db=db, _={})
+        result = get_dispatch_fill_rate(start_date=start, end_date=end, db=db, caller=make_admin_caller(db), _={})
 
         dates_in_result = {row["date"] for row in result["by_date"]}
         assert str(start) in dates_in_result
@@ -318,7 +336,7 @@ class TestTrainerLoad:
     """
 
     def test_empty_db_returns_empty_list(self, db):
-        result = get_trainer_load(db=db, _={})
+        result = get_trainer_load(db=db, caller=make_admin_caller(db), _={})
         assert result == []
 
     def test_trainer_with_one_open_record_counted(self, db):
@@ -326,7 +344,7 @@ class TestTrainerLoad:
         trainee = make_employee(db, role="trainee", name="Trainee 1")
         make_open_training_record(db, trainee, trainer, day=1)
 
-        result = get_trainer_load(db=db, _={})
+        result = get_trainer_load(db=db, caller=make_admin_caller(db), _={})
 
         assert len(result) == 1
         assert result[0]["trainer_name"]    == "Trainer A"
@@ -343,7 +361,7 @@ class TestTrainerLoad:
         make_open_training_record(db, trainee1, trainer)
         make_closed_training_record(db, trainee2, trainer)
 
-        result = get_trainer_load(db=db, _={})
+        result = get_trainer_load(db=db, caller=make_admin_caller(db), _={})
 
         assert len(result) == 1
         assert result[0]["active_trainees"] == 1
@@ -354,7 +372,7 @@ class TestTrainerLoad:
         trainee = make_employee(db, role="trainee", name="Graduated")
         make_closed_training_record(db, trainee, trainer)
 
-        result = get_trainer_load(db=db, _={})
+        result = get_trainer_load(db=db, caller=make_admin_caller(db), _={})
 
         assert result == []
 
@@ -372,7 +390,7 @@ class TestTrainerLoad:
         make_open_training_record(db, t2, trainer_a)
         make_open_training_record(db, t3, trainer_b)
 
-        result = get_trainer_load(db=db, _={})
+        result = get_trainer_load(db=db, caller=make_admin_caller(db), _={})
 
         assert result[0]["trainer_name"] == "Busy Trainer"
         assert result[0]["active_trainees"] == 2
@@ -390,7 +408,7 @@ class TestTrainerLoad:
         make_open_training_record(db, trainee1, trainer, day=1)
         make_open_training_record(db, trainee2, trainer, day=2)
 
-        result = get_trainer_load(db=db, _={})
+        result = get_trainer_load(db=db, caller=make_admin_caller(db), _={})
 
         phases = result[0]["phases"]
         assert phases["1"] == 1
@@ -411,14 +429,14 @@ class TestBanOverrideFreq:
     """
 
     def test_no_overrides_returns_zero_total(self, db):
-        result = get_ban_override_freq(weeks=4, db=db, _={})
+        result = get_ban_override_freq(weeks=4, db=db, caller=make_admin_caller(db), _={})
         assert result["total_overrides"] == 0
         assert result["weeks"] == 4
 
     def test_always_returns_correct_week_count(self, db):
         """by_week must have exactly `weeks` entries regardless of data."""
         for n in [4, 8, 12]:
-            result = get_ban_override_freq(weeks=n, db=db, _={})
+            result = get_ban_override_freq(weeks=n, db=db, caller=make_admin_caller(db), _={})
             assert len(result["by_week"]) == n, f"Expected {n} week buckets, got {len(result['by_week'])}"
 
     def test_override_in_current_week_counted(self, db):
@@ -426,7 +444,7 @@ class TestBanOverrideFreq:
         employee = make_employee(db)
         make_override_notification(db, employee, when=datetime.now(timezone.utc))
 
-        result = get_ban_override_freq(weeks=4, db=db, _={})
+        result = get_ban_override_freq(weeks=4, db=db, caller=make_admin_caller(db), _={})
 
         assert result["total_overrides"] == 1
 
@@ -440,7 +458,7 @@ class TestBanOverrideFreq:
         old_time = datetime.now(timezone.utc) - timedelta(weeks=5)
         make_override_notification(db, employee, when=old_time)
 
-        result = get_ban_override_freq(weeks=4, db=db, _={})
+        result = get_ban_override_freq(weeks=4, db=db, caller=make_admin_caller(db), _={})
 
         assert result["total_overrides"] == 0
 
@@ -457,7 +475,7 @@ class TestBanOverrideFreq:
         )
         db.add(notif); db.commit()
 
-        result = get_ban_override_freq(weeks=4, db=db, _={})
+        result = get_ban_override_freq(weeks=4, db=db, caller=make_admin_caller(db), _={})
 
         assert result["total_overrides"] == 0
 
@@ -468,7 +486,7 @@ class TestBanOverrideFreq:
         for _ in range(3):
             make_override_notification(db, emp, when=now)
 
-        result = get_ban_override_freq(weeks=4, db=db, _={})
+        result = get_ban_override_freq(weeks=4, db=db, caller=make_admin_caller(db), _={})
 
         assert result["total_overrides"] == 3
 
@@ -486,7 +504,7 @@ class TestConfirmationTimes:
 
     def test_no_confirmations_returns_zero_overall(self, db):
         result = get_confirmation_times(
-            start_date=TODAY, end_date=TODAY, db=db, _={}
+            start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={}
         )
         assert result["overall"]["total_responses"] == 0
         assert result["overall"]["median_minutes"]  == 0.0
@@ -503,7 +521,7 @@ class TestConfirmationTimes:
         )
         db.add(conf); db.commit()
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["overall"]["total_responses"] == 0
 
@@ -512,7 +530,7 @@ class TestConfirmationTimes:
         emp = make_employee(db, role="driver")
         make_confirmation(db, emp, TODAY, status="confirmed", response_minutes=30)
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["overall"]["total_responses"] == 1
         assert result["overall"]["median_minutes"]  == 30.0
@@ -526,7 +544,7 @@ class TestConfirmationTimes:
             emp = make_employee(db, role="driver", name=name)
             make_confirmation(db, emp, TODAY, status="confirmed", response_minutes=minutes)
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["overall"]["total_responses"] == 3
         assert result["overall"]["median_minutes"]  == 20.0
@@ -540,7 +558,7 @@ class TestConfirmationTimes:
             emp = make_employee(db, role="driver", name=f"Driver {i}")
             make_confirmation(db, emp, TODAY, status="confirmed", response_minutes=minutes)
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         # Sorted: [10,20,30,40,50,60,70,80,90,100]. idx = int(10 * 90/100) = 9 → 100
         assert result["overall"]["p90_minutes"] == 100.0
@@ -555,7 +573,7 @@ class TestConfirmationTimes:
         make_confirmation(db, driver, TODAY, status="confirmed", response_minutes=10)
         make_confirmation(db, walker, TODAY, status="confirmed", response_minutes=40)
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         by_role = {r["role"]: r for r in result["by_role"]}
         assert "driver" in by_role
@@ -569,7 +587,7 @@ class TestConfirmationTimes:
         yesterday = TODAY - timedelta(days=1)
         make_confirmation(db, emp, yesterday, status="confirmed", response_minutes=15)
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["overall"]["total_responses"] == 0
 
@@ -581,7 +599,7 @@ class TestConfirmationTimes:
         emp = make_employee(db, role="driver")
         make_confirmation(db, emp, TODAY, status="declined", response_minutes=25)
 
-        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, _={})
+        result = get_confirmation_times(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 
         assert result["overall"]["total_responses"] == 1
         assert result["overall"]["median_minutes"]  == 25.0

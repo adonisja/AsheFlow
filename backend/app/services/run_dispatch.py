@@ -12,13 +12,11 @@ from app.services.assign_trainers import assign_trainers
 from app.services.assign_trainees import assign_trainees
 from app.services.assign_walkers import assign_walkers
 from app.services.graduate_trainees import graduate_eligible_trainees
-from app.services.constants import MIN_TRAINERS_PER_TRUCK, MIN_WALKERS_PER_TRUCK
+from app.services.constants import MIN_WALKERS_PER_TRUCK
 from app.services.rebalance_crews import rebalance_crews
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord
 
-
-_SEED_COMPANY_ID = _uuid.UUID("a0000000-0000-0000-0000-000000000001")
 
 
 def run_dispatch(db: Session, target_date: date = None, total_employees: int = None, total_trucks: int = None, company_id: _uuid.UUID = None) -> dict:
@@ -27,7 +25,7 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
     # Check and graduate any trainees who have completed 5 assignments before generating the pool
     graduation_warnings = graduate_eligible_trainees(db, target_date)
 
-    available_pool = get_available_pool(db, target_date)
+    available_pool = get_available_pool(db, target_date, company_id=company_id)
 
     trucks = db.query(Truck).filter(Truck.is_active == True).order_by(Truck.name).all()
     if total_trucks is not None and total_trucks > 0:
@@ -93,15 +91,6 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
     if total_employees is not None and total_employees > 0:
         num_trainers = len(available_pool["trainers"])
         num_walkers  = len(available_pool["walkers"])
-        if num_trainers < num_trucks * MIN_TRAINERS_PER_TRUCK:
-            missing = num_trucks * MIN_TRAINERS_PER_TRUCK - num_trainers
-            staffing_warnings.append({
-                "type": "understaffed_trainers",
-                "message": (
-                    f"Only {num_trainers} trainers available for {num_trucks} trucks. "
-                    f"{missing} trainer slot(s) will go unfilled."
-                ),
-            })
         if num_walkers < num_trucks * MIN_WALKERS_PER_TRUCK:
             missing = num_trucks * MIN_WALKERS_PER_TRUCK - num_walkers
             staffing_warnings.append({
@@ -291,11 +280,12 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
         else:
             warnings.append(w)
 
-    _company_id = company_id or _SEED_COMPANY_ID
+    if company_id is None:
+        raise ValueError("company_id is required for run_dispatch")
 
     for truck_id, crew in assigned_crews.items():
         truck_assignment = TruckAssignment(
-            company_id=_company_id,
+            company_id=company_id,
             truck_id=truck_id,
             date=target_date,
             status="planned"
@@ -319,7 +309,7 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
                 })
                 assigned_role = "trainer"
             assignment_member = AssignmentMember(
-                company_id=_company_id,
+                company_id=company_id,
                 assignment_id=truck_assignment.id,
                 employee_id=member["id"],
                 role=assigned_role,
@@ -331,7 +321,7 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
     formatted_crews = {}
     assignments = db.query(TruckAssignment).filter(
         TruckAssignment.date == target_date,
-        TruckAssignment.company_id == _company_id,
+        TruckAssignment.company_id == company_id,
     ).all()
     for assignment in assignments:
         members_query = db.query(AssignmentMember, Employee).join(

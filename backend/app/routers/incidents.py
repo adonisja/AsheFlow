@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, get_current_user, Pagination, get_caller_employee, get_caller_employee_optional
+from app.api.deps import RoleChecker, get_current_user, Pagination, get_caller_employee
 from app.services.audit import write_audit
 from app.models.incident import Incident
 from app.models.employee import Employee
@@ -70,12 +70,14 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
     )
 
     recipients = db.query(Employee).filter(
+        Employee.company_id == incident.company_id,
         Employee.role.in_(["dispatch", "management", "admin"]),
         Employee.is_active == True,
     ).all()
 
     for emp in recipients:
         db.add(Notification(
+            company_id=incident.company_id,
             employee_id=emp.id,
             type=notif_type,
             message=message,
@@ -125,6 +127,7 @@ def submit_incident(
         driver_id = reporter.id
 
     incident = Incident(
+        company_id=reporter.company_id,
         reporter_id=reporter.id,
         truck_id=truck_id,
         driver_id=driver_id,
@@ -167,7 +170,7 @@ def get_my_incidents(
     """
     q = (
         db.query(Incident)
-        .filter(Incident.reporter_id == caller.id)
+        .filter(Incident.reporter_id == caller.id, Incident.company_id == caller.company_id)
         .order_by(Incident.created_at.desc())
     )
     return pg.apply(q).all()
@@ -185,14 +188,12 @@ def list_incidents(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     pg: Pagination = Depends(),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_management),
 ):
-    """Return all incidents with optional filters. Management/dispatch/admin only.
-
-    Results include reporter name and truck name for display. Sorted newest first.
-    """
-    q = db.query(Incident)
+    """Return all incidents with optional filters. Management/dispatch/admin only."""
+    q = db.query(Incident).filter(Incident.company_id == caller.company_id)
     if severity:
         q = q.filter(Incident.severity == severity)
     if category:
@@ -239,16 +240,15 @@ def list_incidents(
 
 @router.get("/unresolved-urgent", response_model=List[IncidentListItem])
 def get_unresolved_urgent(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_management),
 ):
-    """Return unresolved warning + critical incidents, newest first.
-
-    Used by the management dashboard panel to show the active incident queue.
-    """
+    """Return unresolved warning + critical incidents, newest first."""
     incidents = (
         db.query(Incident)
         .filter(
+            Incident.company_id == caller.company_id,
             Incident.resolved == False,
             Incident.severity.in_(["warning", "critical"]),
         )
@@ -293,35 +293,40 @@ def get_unresolved_urgent(
 @router.patch("/{incident_id}/resolve", response_model=IncidentResponse)
 def resolve_incident(
     incident_id: UUID,
+    resolver: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_management),
-    resolver: Employee = Depends(get_caller_employee_optional),
 ):
     """Mark an incident as resolved. Records who resolved it and when."""
-    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    incident = db.query(Incident).filter(
+        Incident.id == incident_id,
+        Incident.company_id == resolver.company_id,
+    ).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found.")
     if incident.resolved:
         raise HTTPException(status_code=400, detail="Incident is already resolved.")
 
     incident.resolved = True
-    incident.resolved_by = resolver.id if resolver else None
+    incident.resolved_by = resolver.id
     incident.resolved_at = datetime.now(timezone.utc)
 
     # Notify reporter
     db.add(Notification(
+        company_id=resolver.company_id,
         employee_id=incident.reporter_id,
         type="incident_resolved",
         message=f"Your {incident.category.replace('_', ' ')} incident report from {incident.date.strftime('%a, %b %d')} has been reviewed and marked resolved.",
     ))
     write_audit(
         db,
-        actor_id=current_user.get("id"),
+        actor_id=str(resolver.id),
+        company_id=str(resolver.company_id),
         action_type="incident.resolved",
         target_table="incidents",
         target_id=str(incident.id),
         before={"resolved": False},
-        after={"resolved": True, "resolved_by": str(resolver.id) if resolver else None},
+        after={"resolved": True, "resolved_by": str(resolver.id)},
     )
 
     db.commit()
@@ -336,18 +341,16 @@ def resolve_incident(
 @router.get("/summary")
 def get_incident_summary(
     days: int = Query(7, ge=1, le=90),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_management),
 ):
-    """Return incident counts grouped by severity and category over the last N days.
-
-    Used by the management dashboard Incident Trend panel.
-    """
+    """Return incident counts grouped by severity and category over the last N days."""
     since = date.today() - timedelta(days=days - 1)
 
     incidents = (
         db.query(Incident)
-        .filter(Incident.date >= since)
+        .filter(Incident.company_id == caller.company_id, Incident.date >= since)
         .all()
     )
 

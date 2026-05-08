@@ -142,8 +142,9 @@ def get_employee_schedule(
 @router.get("/available/{target_date}")
 def get_available_employees(
     target_date: date,
-    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
     day_name = target_date.strftime("%A")
 
@@ -170,9 +171,10 @@ def get_available_employees(
     available_employees = (
         db.query(Employee)
         .filter(
+            Employee.company_id == caller.company_id,
             Employee.is_active == True,
             ~has_recurring_off,
-            ~has_specific_off
+            ~has_specific_off,
         )
         .order_by(Employee.role, Employee.name)
         .all()

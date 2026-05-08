@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker, Pagination
+from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.audit_log import AuditLog
 from app.models.employee import Employee
 
@@ -23,12 +23,15 @@ def get_audit_log(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     pg: Pagination = Depends(),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
 ):
-    """Return audit log entries with optional filters. Management and admin only."""
+    """Return audit log entries scoped to the caller's company. Management and admin only."""
     q = db.query(AuditLog, Employee).outerjoin(
         Employee, AuditLog.actor_id == Employee.id
+    ).filter(
+        AuditLog.company_id == caller.company_id,
     ).order_by(AuditLog.created_at.desc())
 
     if action_type:

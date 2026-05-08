@@ -28,6 +28,7 @@ def write_audit(
     target_table: str,
     target_id: str,
     actor_id: Optional[str] = None,
+    company_id: Optional[str] = None,
     before: Optional[dict[str, Any]] = None,
     after: Optional[dict[str, Any]] = None,
 ) -> None:
@@ -46,6 +47,13 @@ def write_audit(
         except (ValueError, AttributeError):
             pass
 
+    company_uuid: Optional[_UUID] = None
+    if company_id:
+        try:
+            company_uuid = _UUID(str(company_id))
+        except (ValueError, AttributeError):
+            pass
+
     try:
         target_uuid = _UUID(str(target_id))
     except (ValueError, AttributeError):
@@ -53,6 +61,7 @@ def write_audit(
 
     db.add(AuditLog(
         actor_id=actor_uuid,
+        company_id=company_uuid,
         action_type=action_type,
         target_table=target_table,
         target_id=target_uuid,
