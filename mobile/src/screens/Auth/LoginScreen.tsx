@@ -10,13 +10,14 @@ import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '
 export default function LoginScreen() {
   const scheme = useColorScheme();
   const c = scheme === 'dark' ? darkColors : lightColors;
-  const { signIn } = useAuth();
+  const { signIn, signInWithProvider } = useAuth();
 
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPw,   setShowPw]   = useState(false);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
+  const [username,       setUsername]       = useState('');
+  const [password,       setPassword]       = useState('');
+  const [showPw,         setShowPw]         = useState(false);
+  const [loading,        setLoading]        = useState(false);
+  const [federatedLoading, setFederatedLoading] = useState<'Discord' | 'Google' | null>(null);
+  const [error,          setError]          = useState<string | null>(null);
   const pwRef = useRef<TextInput>(null);
 
   const handleLogin = async () => {
@@ -35,6 +36,18 @@ export default function LoginScreen() {
     }
   };
 
+  const handleFederated = async (provider: 'Discord' | 'Google') => {
+    setFederatedLoading(provider);
+    setError(null);
+    try {
+      await signInWithProvider(provider);
+    } catch (err: any) {
+      setError(err.message ?? 'Sign-in failed. Please try again.');
+    } finally {
+      setFederatedLoading(null);
+    }
+  };
+
   const s = styles(c);
 
   return (
@@ -43,7 +56,6 @@ export default function LoginScreen() {
 
         {/* ── Top brand block ─────────────────────────────────── */}
         <View style={s.hero}>
-          {/* Logo mark */}
           <View style={s.logoRing}>
             <View style={s.logoInner}>
               <Text style={s.logoLetters}>AF</Text>
@@ -63,7 +75,7 @@ export default function LoginScreen() {
             <Text style={s.label}>Username</Text>
             <TextInput
               style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
-              placeholder="username or email"
+              placeholder="username"
               placeholderTextColor={c.mutedForeground}
               autoCapitalize="none"
               autoCorrect={false}
@@ -107,7 +119,7 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={[s.btn, { backgroundColor: c.primary, opacity: loading ? 0.7 : 1 }]}
             onPress={handleLogin}
-            disabled={loading}
+            disabled={loading || !!federatedLoading}
             activeOpacity={0.82}
           >
             {loading
@@ -115,11 +127,46 @@ export default function LoginScreen() {
               : <Text style={s.btnText}>Sign In</Text>
             }
           </TouchableOpacity>
+
+          {/* ── Divider ─────────────────────────────────────── */}
+          <View style={s.dividerRow}>
+            <View style={[s.dividerLine, { backgroundColor: c.border }]} />
+            <Text style={[s.dividerLabel, { color: c.mutedForeground }]}>or</Text>
+            <View style={[s.dividerLine, { backgroundColor: c.border }]} />
+          </View>
+
+          {/* ── Federated buttons ───────────────────────────── */}
+          <TouchableOpacity
+            style={[s.socialBtn, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: federatedLoading === 'Discord' ? 0.7 : 1 }]}
+            onPress={() => handleFederated('Discord')}
+            disabled={loading || !!federatedLoading}
+            activeOpacity={0.82}
+          >
+            {federatedLoading === 'Discord'
+              ? <ActivityIndicator color={c.foreground} style={s.socialIcon} />
+              : <Text style={s.discordIcon}>⚡</Text>
+            }
+            <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Discord</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[s.socialBtn, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: federatedLoading === 'Google' ? 0.7 : 1 }]}
+            onPress={() => handleFederated('Google')}
+            disabled={loading || !!federatedLoading}
+            activeOpacity={0.82}
+          >
+            {federatedLoading === 'Google'
+              ? <ActivityIndicator color={c.foreground} style={s.socialIcon} />
+              : <Text style={s.googleIcon}>G</Text>
+            }
+            <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Google</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ── Footer note ─────────────────────────────────────── */}
         <Text style={[s.hint, { color: c.mutedForeground }]}>
-          Accounts are managed by your manager.{'\n'}Contact your supervisor if you need access.
+          Accounts are managed by your dispatcher.{'\n'}
+          <Text style={{ color: c.foreground, fontWeight: fontWeight.semibold }}>No self-signup.</Text>
         </Text>
 
       </ScrollView>
@@ -163,7 +210,6 @@ const styles = (c: typeof lightColors) => StyleSheet.create({
     padding: spacing.lg,
     borderWidth: 1,
     borderColor: c.border,
-    // Soft shadow
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
@@ -186,8 +232,8 @@ const styles = (c: typeof lightColors) => StyleSheet.create({
     fontSize: fontSize.base,
   },
 
-  errorBox:   { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginBottom: spacing.sm },
-  errorText:  { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  errorBox:  { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginBottom: spacing.sm },
+  errorText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
 
   btn: {
     marginTop: spacing.xs,
@@ -195,7 +241,27 @@ const styles = (c: typeof lightColors) => StyleSheet.create({
     paddingVertical: spacing.sm + 6,
     alignItems: 'center',
   },
-  btnText:    { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: 0.2 },
+  btnText: { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: 0.2 },
+
+  // Divider
+  dividerRow:  { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
+  dividerLine: { flex: 1, height: 1 },
+  dividerLabel: { marginHorizontal: spacing.sm, fontSize: fontSize.xs, textTransform: 'uppercase', letterSpacing: 1 },
+
+  // Social buttons
+  socialBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm + 4,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  socialIcon:    { width: 24, marginRight: spacing.sm },
+  discordIcon:   { width: 24, fontSize: 16, textAlign: 'center', marginRight: spacing.sm },
+  googleIcon:    { width: 24, fontSize: 15, fontWeight: fontWeight.bold, textAlign: 'center', color: '#4285F4', marginRight: spacing.sm },
+  socialBtnText: { fontSize: fontSize.base, fontWeight: fontWeight.medium },
 
   hint: {
     textAlign: 'center',
