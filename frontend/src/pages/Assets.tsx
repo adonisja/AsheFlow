@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Users, Truck, Plus, Pencil, CheckCircle2, XCircle, AlertTriangle,
-  RefreshCw, X, ChevronDown, Settings, Trash2, FileUp,
+  RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,6 +21,7 @@ type Employee = {
   cognito_sub: string | null;
   role: string;
   is_active: boolean;
+  account_status: string;
   phone_number: string | null;
 };
 
@@ -316,6 +317,8 @@ function PeopleTab() {
   const [filter, setFilter]           = useState<string>('all');
   const [search, setSearch]           = useState('');
   const [page, setPage]               = useState(0);
+  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [resendMsg, setResendMsg]     = useState<{ id: string; ok: boolean; text: string } | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -343,6 +346,19 @@ function PeopleTab() {
     const res = await axiosClient.put(`/employees/${editTarget.id}`, payload);
     setEmployees(prev => prev.map(e => e.id === editTarget.id ? res.data : e));
     setEditTarget(null);
+  };
+
+  const handleResendInvite = async (emp: Employee) => {
+    setResendingId(emp.id);
+    setResendMsg(null);
+    try {
+      await axiosClient.post('/registration/invite', { employee_id: emp.id });
+      setResendMsg({ id: emp.id, ok: true, text: `Invite re-sent to ${emp.email}.` });
+    } catch (err: any) {
+      setResendMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Failed to send invite.' });
+    } finally {
+      setResendingId(null);
+    }
   };
 
   const handleToggleActive = async (emp: Employee) => {
@@ -459,7 +475,11 @@ function PeopleTab() {
                       {emp.phone_number ?? <span className="text-subtle italic">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {emp.is_active ? (
+                      {emp.account_status === 'pending_verification' ? (
+                        <span className="inline-flex items-center gap-1 text-warning text-xs font-medium">
+                          <Mail className="w-3 h-3" /> Pending
+                        </span>
+                      ) : emp.is_active ? (
                         <span className="inline-flex items-center gap-1 text-success text-xs font-medium">
                           <CheckCircle2 className="w-3 h-3" /> Active
                         </span>
@@ -471,6 +491,24 @@ function PeopleTab() {
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-2">
+                        {resendMsg?.id === emp.id && (
+                          <span className={`text-xs font-medium ${resendMsg.ok ? 'text-success' : 'text-danger'}`}>
+                            {resendMsg.text}
+                          </span>
+                        )}
+                        {emp.account_status === 'pending_verification' && emp.email && (
+                          <button
+                            onClick={() => handleResendInvite(emp)}
+                            disabled={resendingId === emp.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            title="Re-send invite email"
+                          >
+                            {resendingId === emp.id
+                              ? <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                              : <Mail className="w-3 h-3" />}
+                            Resend
+                          </button>
+                        )}
                         <button
                           onClick={() => setEditTarget(emp)}
                           className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"

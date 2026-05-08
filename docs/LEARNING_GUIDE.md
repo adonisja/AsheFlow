@@ -1,3 +1,17 @@
+## 2026-05-08 UI: Inline Feedback Pattern for One-Off Row Actions
+
+For actions that affect a single table row (resend invite, resend verification,
+etc.) where a modal would be overkill, use inline per-row feedback instead:
+
+```tsx
+const [resendingId, setResendingId] = useState<string | null>(null);
+const [resendMsg,   setResendMsg]   = useState<{ id: string; ok: boolean; text: string } | null>(null);
+```
+
+- `resendingId` gates the spinner and `disabled` state on the exact row being acted on
+- `resendMsg` is keyed by row ID so only that row shows the result
+- Clear `resendMsg` at the start of the next action so stale feedback doesn't persist
+
 ## 2026-05-08 Registration: Alembic Autogenerate Drift
 
 `alembic revision --autogenerate` compares the ORM models against the live DB
