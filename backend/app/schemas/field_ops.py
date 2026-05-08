@@ -139,6 +139,9 @@ class StationArrivalCreate(BaseModel):
     employee_id: UUID
     date: date
     arrival_type: str  # "loading" | "return"
+    # Staging check — only relevant for "loading" arrivals
+    was_staged: Optional[bool] = None
+    missing_items: Optional[List[str]] = None  # subset of STAGING_ITEMS
 
 
 class StationArrivalResponse(BaseModel):
@@ -147,6 +150,22 @@ class StationArrivalResponse(BaseModel):
     date: date
     arrival_type: str
     arrived_at: datetime
+    was_staged: Optional[bool] = None
+    missing_items: Optional[List[str]] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ManifestAcknowledgeResponse(BaseModel):
+    id: UUID
+    truck_id: UUID
+    date: date
+    tote_count: int
+    ov_count: int
+    notes: Optional[str] = None
+    submitted_by: Optional[UUID] = None
+    submitted_at: datetime
+    acknowledged_by: Optional[UUID] = None
+    acknowledged_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 

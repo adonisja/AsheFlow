@@ -109,8 +109,9 @@ def verify_cognito_token(token: str) -> dict:
                 issuer=COGNITO_ISSUER,
                 audience=settings.aws_cognito_app_client_id,
             )
-        except jwt.InvalidAudienceError:
+        except (jwt.InvalidAudienceError, jwt.MissingRequiredClaimError):
             # Fall back to access token path — no 'aud', validate 'client_id' manually
+            # MissingRequiredClaimError fires when the token has no 'aud' at all (access tokens)
             payload = jwt.decode(
                 token,
                 public_key,

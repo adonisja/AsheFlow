@@ -25,6 +25,7 @@ class AssignmentChangeRequest(Base):
     __tablename__ = "assignment_change_requests"
 
     id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     employee_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     requested_date = Column(Date, nullable=False, index=True)
     reason        = Column(Text, nullable=True)

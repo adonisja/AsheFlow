@@ -2,12 +2,14 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { getCurrentUser, fetchAuthSession } from 'aws-amplify/auth';
 import { Hub } from 'aws-amplify/utils';
 import { getUserGroups } from '../utils/auth';
+import axiosClient from '../api/axiosClient';
 
 interface AuthUser {
   username: string;
   userId: string;
   signInDetails?: Record<string, any>;
   displayName?: string;
+  firstName?: string;
 }
 
 interface AuthContextType {
@@ -15,6 +17,8 @@ interface AuthContextType {
   groups: string[];
   isAuthenticated: boolean;
   isLoading: boolean;
+  federatedError: string | null;
+  clearFederatedError: () => void;
   checkAuth: () => Promise<void>;
 }
 
@@ -24,6 +28,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [groups, setGroups] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [federatedError, setFederatedError] = useState<string | null>(null);
+
+  const clearFederatedError = () => setFederatedError(null);
 
   const checkAuth = async () => {
     setIsLoading(true);
@@ -31,11 +38,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // 1. Get the current user
       const currentUser = await getCurrentUser();
       
-      const session = await fetchAuthSession();
-      const email = session.tokens?.idToken?.payload?.email as string | undefined;
-      const displayName = email ? email.split('@')[0] : undefined;
-      
-      setUser({ ...currentUser, displayName });
+      // New pool: currentUser.username is the Cognito username (e.g. "danny.rivera")
+      // Use it as the display name fallback; /employees/me first name takes priority.
+      const displayName = currentUser.username ?? undefined;
+
+      // Resolve DB first name before setting user so greeting is correct on first render
+      let firstName = displayName;
+      try {
+        const res = await axiosClient.get<{ name: string }>('/employees/me');
+        firstName = res.data?.name?.split(' ')[0] ?? displayName;
+      } catch {
+        // keep Cognito username as fallback
+      }
+
+      setUser({ ...currentUser, displayName, firstName });
       
       // 2. Decode the JWT to get their Cognito groups using our utility
       const userGroups = await getUserGroups();
@@ -63,6 +79,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setUser(null);
           setGroups([]);
           break;
+        case 'signIn_failure': {
+          // Fired when a federated flow is rejected — e.g. pre-signup Lambda blocks the user.
+          // Extract the human-readable message from the error description if present.
+          const raw = (payload.data as any)?.error?.message ?? (payload.data as any)?.message ?? '';
+          const friendly = raw.includes('No AsheFlow account')
+            ? 'No AsheFlow account found for this email. Ask your dispatcher to create your account first.'
+            : raw || 'Sign in failed. Please try again.';
+          setFederatedError(friendly);
+          break;
+        }
       }
     });
 
@@ -74,6 +100,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     groups,
     isAuthenticated: !!user,
     isLoading,
+    federatedError,
+    clearFederatedError,
     checkAuth,
   };
 

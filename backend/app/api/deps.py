@@ -65,19 +65,26 @@ def _resolve_employee_from_cognito(current_user: dict, db: Session):
     email    = current_user.get("email", "")
 
     employee = None
+
+    # Fast path: cognito_sub stamped on first login
     if sub:
         employee = db.query(Employee).filter(Employee.cognito_sub == sub).first()
 
-    if not employee:
-        if username:
+    if not employee and username:
+        # New pool: username is danny.rivera — match Employee.username
+        employee = db.query(Employee).filter(Employee.username == username).first()
+        # Old pool fallback: username was the discord_id
+        if not employee:
             employee = db.query(Employee).filter(Employee.discord_id == username).first()
-        if not employee and email:
-            employee = db.query(Employee).filter(Employee.email == email).first()
-        if not employee and sub:
-            try:
-                employee = db.query(Employee).filter(Employee.id == _UUID(sub)).first()
-            except (ValueError, AttributeError):
-                pass
+
+    if not employee and email:
+        employee = db.query(Employee).filter(Employee.email == email).first()
+
+    if not employee and sub:
+        try:
+            employee = db.query(Employee).filter(Employee.id == _UUID(sub)).first()
+        except (ValueError, AttributeError):
+            pass
 
     return employee, sub
 

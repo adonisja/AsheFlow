@@ -92,6 +92,7 @@ def graduate_eligible_trainees(db: Session, target_date):
         # Notify every management/admin/dispatch employee.
         for recipient in recipients:
             db.add(Notification(
+                company_id=trainee.company_id,
                 employee_id=recipient.id,
                 type=outcome_type,
                 message=message_mgmt,
@@ -99,6 +100,7 @@ def graduate_eligible_trainees(db: Session, target_date):
 
         # Notify the trainee themselves.
         db.add(Notification(
+            company_id=trainee.company_id,
             employee_id=trainee.id,
             type=outcome_type,
             message=message_self,

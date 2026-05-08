@@ -33,6 +33,8 @@ The CheckConstraints on DispatchConfirmation use SQLite-compatible SQL.
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
+SEED_COMPANY_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
+
 import pytest
 from sqlalchemy import create_engine, MetaData
 from sqlalchemy.orm import sessionmaker
@@ -91,7 +93,7 @@ def db():
 # ---------------------------------------------------------------------------
 
 def make_employee(db, role: str = "driver", name: str = "Test") -> Employee:
-    emp = Employee(id=uuid.uuid4(), name=name, role=role, is_active=True,
+    emp = Employee(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, name=name, role=role, is_active=True,
                    discord_id=str(uuid.uuid4()))
     db.add(emp); db.commit(); db.refresh(emp)
     return emp
@@ -104,7 +106,7 @@ def make_assignment(db, truck_id, target_date: date) -> TruckAssignment:
         TruckAssignment.date == target_date,
     ).first()
     if ta is None:
-        ta = TruckAssignment(id=uuid.uuid4(), truck_id=truck_id, date=target_date)
+        ta = TruckAssignment(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, truck_id=truck_id, date=target_date)
         db.add(ta); db.commit(); db.refresh(ta)
     return ta
 
@@ -113,6 +115,7 @@ def make_member(db, assignment: TruckAssignment, employee: Employee,
                 role: str = "driver", is_manual: bool = False) -> AssignmentMember:
     m = AssignmentMember(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         assignment_id=assignment.id,
         employee_id=employee.id,
         role=role,
@@ -123,7 +126,7 @@ def make_member(db, assignment: TruckAssignment, employee: Employee,
 
 
 def make_truck(db, name: str = "Truck") -> Truck:
-    t = Truck(id=uuid.uuid4(), name=name, is_active=True)
+    t = Truck(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, name=name, is_active=True)
     db.add(t); db.commit(); db.refresh(t)
     return t
 
@@ -161,6 +164,7 @@ def make_override_notification(db, employee: Employee,
                                 when: datetime = None) -> Notification:
     notif = Notification(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         employee_id=employee.id,
         type="ban_override_reassignment",
         message="Override fired",
@@ -183,6 +187,7 @@ def make_confirmation(db, employee: Employee, dispatch_date: date,
 
     conf = DispatchConfirmation(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         employee_id=employee.id,
         date=dispatch_date,
         status=status,
@@ -444,6 +449,7 @@ class TestBanOverrideFreq:
         employee = make_employee(db)
         notif = Notification(
             id=uuid.uuid4(),
+            company_id=SEED_COMPANY_ID,
             employee_id=employee.id,
             type="trainee_graduated",
             message="Graduated",
@@ -491,7 +497,7 @@ class TestConfirmationTimes:
         """A confirmation with status='pending' and no confirmed_at must not count."""
         emp = make_employee(db, role="driver")
         conf = DispatchConfirmation(
-            id=uuid.uuid4(), employee_id=emp.id, date=TODAY,
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=emp.id, date=TODAY,
             status="pending", confirmed_at=None,
             created_at=datetime.now(timezone.utc), source="discord_bot",
         )

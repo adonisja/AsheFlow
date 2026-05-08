@@ -42,6 +42,7 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
+from tests.conftest import SEED_COMPANY_ID
 from app.models.notification import Notification
 from app.models.training import TrainingRecord, TrainingTask
 from app.models.trainer_continuation_request import TrainerContinuationRequest
@@ -70,12 +71,13 @@ def make_past_assignment(db, truck: Truck, employee: Employee, days_ago: int = 1
         TruckAssignment.date == past_date,
     ).first()
     if ta is None:
-        ta = TruckAssignment(id=uuid.uuid4(), truck_id=truck.id, date=past_date)
+        ta = TruckAssignment(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, truck_id=truck.id, date=past_date)
         db.add(ta)
         db.commit()
         db.refresh(ta)
     member = AssignmentMember(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         assignment_id=ta.id,
         employee_id=employee.id,
         role="trainee",
@@ -94,6 +96,7 @@ def give_assignments(db, truck: Truck, trainee: Employee, count: int):
 def make_continuation_request(db, trainee: Employee, trainer: Employee, status: str = "pending") -> TrainerContinuationRequest:
     req = TrainerContinuationRequest(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         trainee_id=trainee.id,
         trainer_id=trainer.id,
         status=status,
@@ -203,9 +206,9 @@ class TestThreshold:
         give_assignments(db, truck, trainee, count=4)
 
         # Add one assignment for today (should NOT count)
-        ta = TruckAssignment(id=uuid.uuid4(), truck_id=truck.id, date=TARGET)
+        ta = TruckAssignment(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, truck_id=truck.id, date=TARGET)
         db.add(ta); db.commit(); db.refresh(ta)
-        db.add(AssignmentMember(id=uuid.uuid4(), assignment_id=ta.id, employee_id=trainee.id, role="trainee"))
+        db.add(AssignmentMember(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, assignment_id=ta.id, employee_id=trainee.id, role="trainee"))
         db.commit()
 
         warnings = graduate_eligible_trainees(db, TARGET)

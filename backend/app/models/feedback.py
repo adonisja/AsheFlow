@@ -8,6 +8,7 @@ class Feedback(Base):
     __tablename__ = "feedbacks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     employee_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     type = Column(String(50), nullable=False) # 'bug', 'feature_request', 'general'
     message = Column(Text, nullable=False)
