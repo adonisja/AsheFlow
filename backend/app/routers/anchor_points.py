@@ -46,13 +46,14 @@ allow_any_auth   = RoleChecker(["driver", "walker", "trainer", "trainee", "dispa
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_assignment(db: Session, truck_id: UUID, target_date: date, driver_id: UUID) -> TruckAssignment:
+def _get_assignment(db: Session, truck_id: UUID, target_date: date, driver_id: UUID, company_id: UUID) -> TruckAssignment:
     assignment = (
         db.query(TruckAssignment)
         .join(AssignmentMember, TruckAssignment.id == AssignmentMember.assignment_id)
         .filter(
             TruckAssignment.truck_id == truck_id,
             TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
             AssignmentMember.employee_id == driver_id,
             AssignmentMember.role == "driver",
         )
@@ -66,20 +67,24 @@ def _get_assignment(db: Session, truck_id: UUID, target_date: date, driver_id: U
     return assignment
 
 
-def _crew_employee_ids(db: Session, truck_id: UUID, target_date: date) -> List[UUID]:
+def _crew_employee_ids(db: Session, truck_id: UUID, target_date: date, company_id: UUID) -> List[UUID]:
     """Return employee IDs for everyone on the truck that day (for in-app notifications)."""
     members = (
         db.query(AssignmentMember)
         .join(TruckAssignment, TruckAssignment.id == AssignmentMember.assignment_id)
-        .filter(TruckAssignment.truck_id == truck_id, TruckAssignment.date == target_date)
+        .filter(
+            TruckAssignment.truck_id == truck_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
         .all()
     )
     return [m.employee_id for m in members]
 
 
-def _notify(db: Session, employee_ids: List[UUID], notif_type: str, message: str) -> None:
+def _notify(db: Session, employee_ids: List[UUID], notif_type: str, message: str, company_id: UUID) -> None:
     for eid in employee_ids:
-        db.add(Notification(employee_id=eid, type=notif_type, message=message))
+        db.add(Notification(company_id=company_id, employee_id=eid, type=notif_type, message=message))
 
 
 async def _post_embed_to_discord(channel_id: int, payload: dict) -> None:
@@ -130,12 +135,16 @@ async def submit_anchor_point(
     row with an incremented sequence number. Crew and dispatch are notified on
     every submission.
     """
-    _get_assignment(db, payload.truck_id, payload.date, caller.id)
+    _get_assignment(db, payload.truck_id, payload.date, caller.id, caller.company_id)
 
     # All APs for this truck today, ordered by sequence
     todays = (
         db.query(AnchorPoint)
-        .filter(AnchorPoint.truck_id == payload.truck_id, AnchorPoint.date == payload.date)
+        .filter(
+            AnchorPoint.truck_id == payload.truck_id,
+            AnchorPoint.date == payload.date,
+            AnchorPoint.company_id == caller.company_id,
+        )
         .order_by(AnchorPoint.sequence.asc())
         .all()
     )
@@ -162,6 +171,7 @@ async def submit_anchor_point(
             ap.status = "relocated"
 
     new_ap = AnchorPoint(
+        company_id = caller.company_id,
         truck_id   = payload.truck_id,
         driver_id  = caller.id,
         date       = payload.date,
@@ -201,10 +211,14 @@ async def submit_anchor_point(
         + (f" ETA {payload.eta}" if payload.eta else "")
     )
 
-    crew_ids      = _crew_employee_ids(db, payload.truck_id, payload.date)
-    dispatch_emps = db.query(Employee).filter(Employee.role.in_(["dispatch", "admin"]), Employee.is_active == True).all()
+    crew_ids      = _crew_employee_ids(db, payload.truck_id, payload.date, caller.company_id)
+    dispatch_emps = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.role.in_(["dispatch", "admin"]),
+        Employee.is_active == True,
+    ).all()
     all_notify    = list({*crew_ids, *(e.id for e in dispatch_emps)})
-    _notify(db, all_notify, "anchor_point_submitted", notif_message)
+    _notify(db, all_notify, "anchor_point_submitted", notif_message, caller.company_id)
 
     db.commit()
     db.refresh(new_ap)
@@ -238,7 +252,10 @@ async def arrive_anchor_point(
     preliminary. Sets status to "arrived" and stamps arrived_at.
     Notifies crew and dispatch with an "Arrived" tag.
     """
-    ap = db.query(AnchorPoint).filter(AnchorPoint.id == anchor_id).first()
+    ap = db.query(AnchorPoint).filter(
+        AnchorPoint.id == anchor_id,
+        AnchorPoint.company_id == caller.company_id,
+    ).first()
     if not ap:
         raise HTTPException(status_code=404, detail="Anchor point not found.")
     if ap.driver_id != caller.id:
@@ -265,10 +282,14 @@ async def arrive_anchor_point(
 
     notif_message = f"✅ {truck_name} — {caller.name} arrived at: {ap.location}"
 
-    crew_ids      = _crew_employee_ids(db, ap.truck_id, ap.date)
-    dispatch_emps = db.query(Employee).filter(Employee.role.in_(["dispatch", "admin"]), Employee.is_active == True).all()
+    crew_ids      = _crew_employee_ids(db, ap.truck_id, ap.date, caller.company_id)
+    dispatch_emps = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.role.in_(["dispatch", "admin"]),
+        Employee.is_active == True,
+    ).all()
     all_notify    = list({*crew_ids, *(e.id for e in dispatch_emps)})
-    _notify(db, all_notify, "anchor_point_arrived", notif_message)
+    _notify(db, all_notify, "anchor_point_arrived", notif_message, caller.company_id)
 
     db.commit()
     db.refresh(ap)
@@ -304,7 +325,10 @@ def confirm_anchor_point(
     _: dict = Depends(allow_dispatch),
 ):
     """Dispatch acknowledges/confirms an anchor point. Idempotent."""
-    ap = db.query(AnchorPoint).filter(AnchorPoint.id == anchor_id).first()
+    ap = db.query(AnchorPoint).filter(
+        AnchorPoint.id == anchor_id,
+        AnchorPoint.company_id == caller.company_id,
+    ).first()
     if not ap:
         raise HTTPException(status_code=404, detail="Anchor point not found.")
 
@@ -338,12 +362,13 @@ def get_my_anchor_points_today(
 def get_anchor_points_for_date(
     target_date: date,
     db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_dispatch),
 ):
     """All anchor point submissions for a given date. Dispatch/admin only."""
     return (
         db.query(AnchorPoint)
-        .filter(AnchorPoint.date == target_date)
+        .filter(AnchorPoint.date == target_date, AnchorPoint.company_id == caller.company_id)
         .order_by(AnchorPoint.truck_id, AnchorPoint.sequence.asc())
         .all()
     )
@@ -354,6 +379,7 @@ def get_anchor_points_for_truck(
     truck_id: UUID,
     limit: int = Query(default=5, ge=1, le=30),
     db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_truck_read),
 ):
     """Return the last N initial APs for a truck (is_initial=True only).
@@ -362,7 +388,12 @@ def get_anchor_points_for_truck(
     """
     return (
         db.query(AnchorPoint)
-        .filter(AnchorPoint.truck_id == truck_id, AnchorPoint.is_initial == True)
+        .join(Truck, AnchorPoint.truck_id == Truck.id)
+        .filter(
+            AnchorPoint.truck_id == truck_id,
+            AnchorPoint.is_initial == True,
+            Truck.company_id == caller.company_id,
+        )
         .order_by(AnchorPoint.date.desc())
         .limit(limit)
         .all()

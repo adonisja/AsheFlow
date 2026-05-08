@@ -101,18 +101,23 @@ def get_caller_employee(
     """
     employee, sub = _resolve_employee_from_cognito(current_user, db)
 
+    needs_commit = False
+
+    # Stamp cognito_sub on first login so future calls take the fast path
     if employee and sub and not employee.cognito_sub:
         employee.cognito_sub = sub
-        # Stamp cognito_sub permanently so future logins use the fast path.
-        # Also activate the account on first successful login.
-        if employee.account_status == "pending_verification":
-            employee.account_status = "active"
-            employee.is_active = True
-            db.commit()
-            # Fire Discord server invite in the background — best effort
-            _send_discord_invite(employee.discord_id, employee.name)
-        else:
-            db.commit()
+        needs_commit = True
+
+    # Activate on first successful login regardless of when cognito_sub was stamped
+    # (registration now stamps it before the employee ever signs in)
+    if employee and employee.account_status == "pending_verification":
+        employee.account_status = "active"
+        employee.is_active = True
+        needs_commit = True
+        _send_discord_invite(employee)
+
+    if needs_commit:
+        db.commit()
 
     if not employee:
         raise HTTPException(
@@ -122,27 +127,45 @@ def get_caller_employee(
     return employee
 
 
-def _send_discord_invite(discord_id: str, name: str) -> None:
-    """Fire a POST to the bot's /internal/invite endpoint — best effort, non-blocking."""
+def _send_discord_invite(employee) -> None:
+    """Get a guild invite URL from the bot and email it to the employee — best effort, non-blocking."""
     import threading
     import requests
     import os
+    from app.services.email import send_discord_invite_email
+    from botocore.exceptions import ClientError
 
     def _fire():
+        log = __import__("logging").getLogger(__name__)
+        if not employee.email:
+            log.warning("No email on file for %s — skipping Discord invite email.", employee.name)
+            return
         try:
             bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
             secret  = os.environ.get("INTERNAL_SECRET") or ""
-            requests.post(
+            resp = requests.post(
                 f"{bot_url}/internal/invite",
-                json={"discord_id": discord_id, "name": name},
+                json={"name": employee.name},
                 headers={"X-Internal-Secret": secret},
-                timeout=5,
+                timeout=10,
             )
+            resp.raise_for_status()
+            invite_url = resp.json().get("invite_url")
+            if not invite_url:
+                log.error("Bot returned no invite_url for %s.", employee.name)
+                return
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Discord invite webhook failed for %s (%s): %s", name, discord_id, e
+            log.warning("Discord invite bot call failed for %s: %s", employee.name, e)
+            return
+
+        try:
+            send_discord_invite_email(
+                to_email=employee.email,
+                employee_name=employee.name,
+                invite_url=invite_url,
             )
+        except ClientError as e:
+            log.error("Discord invite email failed for %s: %s", employee.email, e)
 
     threading.Thread(target=_fire, daemon=True).start()
 
@@ -192,6 +215,23 @@ class Pagination:
 
     def apply(self, query):
         return query.offset(self.skip).limit(self.limit)
+
+
+def get_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency for super-admin-only endpoints.
+
+    Reads the JWT groups and returns the claims dict if the caller belongs to
+    the 'super_admin' Cognito group. Raises 403 otherwise.
+
+    Intentionally never touches the Employee table — the platform owner has no
+    Employee row. Do NOT use this on company-scoped endpoints.
+    """
+    if "super_admin" not in current_user.get("cognito_groups", []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin access required.",
+        )
+    return current_user
 
 
 class RoleChecker:

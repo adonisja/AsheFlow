@@ -111,6 +111,7 @@ def submit_schedule_change_request(
         )
 
     req = ScheduleChangeRequest(
+        company_id=caller.company_id,
         employee_id=payload.employee_id,
         request_type=payload.request_type,
         days_to_add=payload.days_to_add,
@@ -123,6 +124,7 @@ def submit_schedule_change_request(
 
     # Notify management/admin reviewers
     reviewers = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
         Employee.role.in_(["management", "admin"]),
         Employee.is_active == True,
     ).all()
@@ -135,6 +137,7 @@ def submit_schedule_change_request(
 
     for reviewer in reviewers:
         db.add(Notification(
+            company_id=caller.company_id,
             employee_id=reviewer.id,
             type="schedule_change_request",
             message=f"{caller.name} has submitted a request to {type_label}."
@@ -166,7 +169,11 @@ def get_my_schedule_change_requests(
 
     return (
         db.query(ScheduleChangeRequest)
-        .filter(ScheduleChangeRequest.employee_id == employee_id)
+        .join(Employee, ScheduleChangeRequest.employee_id == Employee.id)
+        .filter(
+            ScheduleChangeRequest.employee_id == employee_id,
+            Employee.company_id == caller.company_id,
+        )
         .order_by(ScheduleChangeRequest.created_at.desc())
         .all()
     )
@@ -178,15 +185,17 @@ def get_my_schedule_change_requests(
 
 @router.get("/", response_model=List[dict])
 def get_all_schedule_change_requests(
-    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_reviewer),
     filter_status: Optional[str] = Query(None, alias="status", description="Filter by status: pending, approved, rejected. Omit for all."),
+    db: Session = Depends(get_db),
 ):
-    """Return schedule change requests with employee details. Management/admin only.
-
-    Use ?status=pending (default view), ?status=approved, ?status=rejected, or omit for all.
-    """
-    q = db.query(ScheduleChangeRequest)
+    """Return schedule change requests with employee details. Management/admin only."""
+    q = (
+        db.query(ScheduleChangeRequest)
+        .join(Employee, ScheduleChangeRequest.employee_id == Employee.id)
+        .filter(Employee.company_id == caller.company_id)
+    )
     if filter_status is not None:
         q = q.filter(ScheduleChangeRequest.status == filter_status)
     requests = q.order_by(ScheduleChangeRequest.created_at.asc()).all()
@@ -215,22 +224,21 @@ def get_all_schedule_change_requests(
 @router.patch("/{request_id}/approve", response_model=ScheduleChangeRequestResponse)
 def approve_schedule_change_request(
     request_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_reviewer),
     reviewer: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_reviewer),
+    db: Session = Depends(get_db),
 ):
-    """Approve and auto-apply a schedule change request.
-
-    Applies changes directly to employee_off_days:
-    - add_day: removes the day from employee_off_days (making them eligible again)
-    - drop_day: inserts new employee_off_days rows for each dropped day
-    - full_rework: clears all existing off days, inserts new ones for any day
-                   NOT in proposed_schedule
-    """
-    req = db.query(ScheduleChangeRequest).filter(
-        ScheduleChangeRequest.id == request_id,
-        ScheduleChangeRequest.status == "pending",
-    ).first()
+    """Approve and auto-apply a schedule change request."""
+    req = (
+        db.query(ScheduleChangeRequest)
+        .join(Employee, ScheduleChangeRequest.employee_id == Employee.id)
+        .filter(
+            ScheduleChangeRequest.id == request_id,
+            ScheduleChangeRequest.status == "pending",
+            Employee.company_id == reviewer.company_id,
+        )
+        .first()
+    )
     if not req:
         raise HTTPException(status_code=404, detail="Pending schedule change request not found.")
 
@@ -255,6 +263,7 @@ def approve_schedule_change_request(
         for day in req.days_to_drop:
             if day not in existing_off_days:
                 db.add(EmployeeOffDay(
+                    company_id=reviewer.company_id,
                     employee_id=req.employee_id,
                     day_of_week=day,
                     status="approved",
@@ -271,6 +280,7 @@ def approve_schedule_change_request(
         for day in VALID_DAYS:
             if day not in working_days:
                 db.add(EmployeeOffDay(
+                    company_id=reviewer.company_id,
                     employee_id=req.employee_id,
                     day_of_week=day,
                     status="approved",
@@ -289,13 +299,15 @@ def approve_schedule_change_request(
     }.get(req.request_type, req.request_type)
 
     db.add(Notification(
+        company_id=reviewer.company_id,
         employee_id=req.employee_id,
         type="schedule_change_approved",
         message=f"Your request to {type_label} has been approved and your schedule has been updated.",
     ))
     write_audit(
         db,
-        actor_id=current_user.get("id"),
+        actor_id=str(reviewer.id),
+        company_id=str(reviewer.company_id),
         action_type="schedule_change.approved",
         target_table="schedule_change_requests",
         target_id=str(req.id),
@@ -315,15 +327,21 @@ def approve_schedule_change_request(
 @router.patch("/{request_id}/reject", response_model=ScheduleChangeRequestResponse)
 def reject_schedule_change_request(
     request_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_reviewer),
     reviewer: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_reviewer),
+    db: Session = Depends(get_db),
 ):
     """Reject a pending schedule change request. No schedule changes are applied."""
-    req = db.query(ScheduleChangeRequest).filter(
-        ScheduleChangeRequest.id == request_id,
-        ScheduleChangeRequest.status == "pending",
-    ).first()
+    req = (
+        db.query(ScheduleChangeRequest)
+        .join(Employee, ScheduleChangeRequest.employee_id == Employee.id)
+        .filter(
+            ScheduleChangeRequest.id == request_id,
+            ScheduleChangeRequest.status == "pending",
+            Employee.company_id == reviewer.company_id,
+        )
+        .first()
+    )
     if not req:
         raise HTTPException(status_code=404, detail="Pending schedule change request not found.")
 
@@ -332,13 +350,15 @@ def reject_schedule_change_request(
     req.reviewed_by = reviewer.id
 
     db.add(Notification(
+        company_id=reviewer.company_id,
         employee_id=req.employee_id,
         type="schedule_change_rejected",
         message="Your schedule change request was reviewed and not approved.",
     ))
     write_audit(
         db,
-        actor_id=current_user.get("id"),
+        actor_id=str(reviewer.id),
+        company_id=str(reviewer.company_id),
         action_type="schedule_change.rejected",
         target_table="schedule_change_requests",
         target_id=str(req.id),
@@ -362,10 +382,16 @@ def cancel_schedule_change_request(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Cancel a pending schedule change request. Employee can only cancel their own."""
-    req = db.query(ScheduleChangeRequest).filter(
-        ScheduleChangeRequest.id == request_id,
-        ScheduleChangeRequest.status == "pending",
-    ).first()
+    req = (
+        db.query(ScheduleChangeRequest)
+        .join(Employee, ScheduleChangeRequest.employee_id == Employee.id)
+        .filter(
+            ScheduleChangeRequest.id == request_id,
+            ScheduleChangeRequest.status == "pending",
+            Employee.company_id == caller.company_id,
+        )
+        .first()
+    )
     if not req:
         raise HTTPException(status_code=404, detail="Pending schedule change request not found.")
 

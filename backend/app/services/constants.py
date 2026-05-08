@@ -40,7 +40,6 @@ MUTUAL_BONUS = {
 CONSECUTIVE_PENALTY = 0.05
 CAP = 0.85
 
-MIN_TRAINERS_PER_TRUCK = 2
 MIN_WALKERS_PER_TRUCK = 3
 
 # Number of dispatch days a mandatory task can be carried as debt before the

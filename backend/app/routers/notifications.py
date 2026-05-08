@@ -33,7 +33,10 @@ def get_notifications(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     return (
         db.query(Notification)
-        .filter(Notification.employee_id == employee_id)
+        .filter(
+            Notification.employee_id == employee_id,
+            Notification.company_id == caller.company_id,
+        )
         .order_by(Notification.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -48,7 +51,7 @@ def mark_read(
     caller: Employee = Depends(get_caller_employee),
 ):
     """Mark a single notification as read. Only the owning employee can mark their own."""
-    notif = db.query(Notification).filter(Notification.id == notification_id).first()
+    notif = db.query(Notification).filter(Notification.id == notification_id, Notification.company_id == caller.company_id).first()
     if notif:
         if notif.employee_id != caller.id and caller.role not in ("dispatch", "management", "admin"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
@@ -74,6 +77,7 @@ def mark_all_read(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     db.query(Notification).filter(
         Notification.employee_id == employee_id,
+        Notification.company_id == caller.company_id,
         Notification.is_read == False,
         Notification.type != "dispatch_assignment",
     ).update({"is_read": True})
@@ -84,6 +88,7 @@ def mark_all_read(
 @router.delete("/prune", status_code=status.HTTP_200_OK)
 def prune_notifications(
     days: int = Query(default=30, ge=1, le=365, description="Delete read notifications older than this many days"),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
 ):
@@ -96,6 +101,7 @@ def prune_notifications(
     deleted = (
         db.query(Notification)
         .filter(
+            Notification.company_id == caller.company_id,
             Notification.is_read == True,
             Notification.created_at < cutoff,
         )

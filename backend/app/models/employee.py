@@ -37,8 +37,9 @@ class Employee(Base):
             "account_status IN ('pending_verification', 'active', 'deactivated')",
             name="ck_employees_account_status_valid",
         ),
-        UniqueConstraint("company_id", "discord_id", name="uq_employees_company_discord_id"),
-        UniqueConstraint("company_id", "email",      name="uq_employees_company_email"),
+        # Partial unique index — only enforced when discord_id is not null,
+        # allowing multiple pending employees without a Discord ID yet.
+        UniqueConstraint("company_id", "email", name="uq_employees_company_email"),
     )
 
     id                   = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -46,7 +47,7 @@ class Employee(Base):
     name                 = Column(String(255),        nullable=False)
     username             = Column(String(100),        nullable=True,  unique=True, index=True)
     email                = Column(String(255),        nullable=True,  index=True)
-    discord_id           = Column(String(100),        nullable=False, index=True)
+    discord_id           = Column(String(100),        nullable=True,  index=True)
     cognito_sub          = Column(String(255),        nullable=True,  unique=True, index=True)
     role                 = Column(String(50),         nullable=False, index=True)
     is_active            = Column(Boolean,            nullable=False, default=False, index=True)

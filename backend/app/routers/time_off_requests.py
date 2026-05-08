@@ -21,10 +21,15 @@ allow_mgmt        = RoleChecker(["management", "admin", "dispatch"])
 @router.get("/", response_model=list[TimeOffRequestResponse])
 def get_all_time_off_requests(
     pg: Pagination = Depends(),
-    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
-    return pg.apply(db.query(TimeOffRequest)).all()
+    return pg.apply(
+        db.query(TimeOffRequest)
+        .join(Employee, TimeOffRequest.employee_id == Employee.id)
+        .filter(Employee.company_id == caller.company_id)
+    ).all()
 
 @router.get("/{employee_id}", response_model=list[TimeOffRequestResponse])
 def get_time_off_requests(
@@ -102,22 +107,30 @@ def delete_time_off_request(
 @router.patch("/{request_id}/approve", response_model=TimeOffRequestResponse)
 def approve_time_off_request(
     request_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_mgmt),
 ):
-    db_request = db.query(TimeOffRequest).filter(TimeOffRequest.id == request_id).first()
+    db_request = (
+        db.query(TimeOffRequest)
+        .join(Employee, TimeOffRequest.employee_id == Employee.id)
+        .filter(TimeOffRequest.id == request_id, Employee.company_id == caller.company_id)
+        .first()
+    )
     if not db_request:
         raise HTTPException(status_code=404, detail="Time-off request not found")
 
     db_request.status = "approved"
     db.add(Notification(
+        company_id=caller.company_id,
         employee_id=db_request.employee_id,
         type="pto_approved",
-        message=f"Your PTO request for {db_request.date} has been approved."
+        message=f"Your PTO request for {db_request.date} has been approved.",
     ))
     write_audit(
         db,
-        actor_id=current_user.get("id"),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
         action_type="pto.approved",
         target_table="time_off_requests",
         target_id=str(db_request.id),
@@ -128,25 +141,34 @@ def approve_time_off_request(
     db.refresh(db_request)
     return db_request
 
+
 @router.patch("/{request_id}/reject", response_model=TimeOffRequestResponse)
 def reject_time_off_request(
     request_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_mgmt),
 ):
-    db_request = db.query(TimeOffRequest).filter(TimeOffRequest.id == request_id).first()
+    db_request = (
+        db.query(TimeOffRequest)
+        .join(Employee, TimeOffRequest.employee_id == Employee.id)
+        .filter(TimeOffRequest.id == request_id, Employee.company_id == caller.company_id)
+        .first()
+    )
     if not db_request:
         raise HTTPException(status_code=404, detail="Time-off request not found")
 
     db_request.status = "rejected"
     db.add(Notification(
+        company_id=caller.company_id,
         employee_id=db_request.employee_id,
         type="pto_rejected",
-        message=f"Your PTO request for {db_request.date} was not approved."
+        message=f"Your PTO request for {db_request.date} was not approved.",
     ))
     write_audit(
         db,
-        actor_id=current_user.get("id"),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
         action_type="pto.rejected",
         target_table="time_off_requests",
         target_id=str(db_request.id),
