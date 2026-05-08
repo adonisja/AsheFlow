@@ -38,64 +38,39 @@ class InviteCog(commands.Cog, name="Invite"):
         except discord.HTTPException as e:
             logger.error("Failed to DM user %s: %s", discord_id, e)
 
-    async def send_guild_invite(self, discord_id: str, name: str) -> None:
-        """DM a one-time guild invite link to the employee.
+    async def create_guild_invite(self, name: str) -> str | None:
+        """Create a single-use, 7-day guild invite and return the URL.
 
-        Steps:
-        1. Fetch the guild and its invite channel (uses the drivers channel
-           as the landing channel — change DISCORD_INVITE_CHANNEL_ID in .env
-           if you want a dedicated #welcome channel).
-        2. Create a single-use, 7-day invite.
-        3. DM the invite to the user by their Discord ID.
-
-        Failures are logged but do not raise — the account is already active
-        in the DB so a failed invite is recoverable (admin can resend manually).
+        Returns the invite URL string, or None on failure.
+        The backend emails this link to the employee — Discord DMs cannot
+        be sent to users who don't already share a server with the bot.
         """
         guild = self.bot.get_guild(settings.discord_guild_id)
         if not guild:
-            logger.error("Guild %s not found — cannot send invite to %s.", settings.discord_guild_id, discord_id)
-            return
+            logger.error("Guild %s not found — cannot create invite for %s.", settings.discord_guild_id, name)
+            return None
 
-        # Use the configured invite channel, falling back to the drivers channel
         invite_channel_id = getattr(settings, "discord_invite_channel_id", None) or settings.discord_drivers_channel_id
         channel = guild.get_channel(int(invite_channel_id))
         if not channel:
             logger.error("Invite channel %s not found — cannot create invite.", invite_channel_id)
-            return
+            return None
 
         try:
             invite = await channel.create_invite(
                 max_uses=1,
-                max_age=7 * 24 * 3600,  # 7 days in seconds
+                max_age=7 * 24 * 3600,
                 unique=True,
                 reason=f"New employee onboarding: {name}",
             )
+            logger.info("Guild invite created for %s: %s", name, invite.url)
+            return invite.url
         except discord.Forbidden:
             logger.error("Bot lacks permission to create invites in channel %s.", invite_channel_id)
-            return
+            return None
         except discord.HTTPException as e:
-            logger.error("Failed to create guild invite: %s", e)
-            return
-
-        try:
-            user = await self.bot.fetch_user(int(discord_id))
-        except (discord.NotFound, discord.HTTPException, ValueError) as e:
-            logger.warning("Could not fetch Discord user %s (%s): %s", discord_id, name, e)
-            return
-
-        message = (
-            f"Hi **{name}**! Your AsheFlow account is now active.\n\n"
-            f"Use this link to join the server: {invite.url}\n\n"
-            f"This invite is single-use and expires in 7 days."
-        )
-
-        try:
-            await user.send(message)
-            logger.info("Guild invite sent to %s (%s).", name, discord_id)
-        except discord.Forbidden:
-            logger.warning("Could not DM %s (%s) — DMs may be disabled.", name, discord_id)
-        except discord.HTTPException as e:
-            logger.error("Failed to DM invite to %s (%s): %s", name, discord_id, e)
+            logger.error("Failed to create guild invite for %s: %s", name, e)
+            return None
 
 
 async def setup(bot: commands.Bot) -> None:

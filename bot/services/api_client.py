@@ -34,14 +34,18 @@ class AsheFlowClient:
 
     async def start(self) -> None:
         """Create the aiohttp session. Call once on bot startup."""
-        # aiohttp base_url only accepts an origin (scheme+host+port), no path.
-        # We split the configured URL and prepend the path prefix on each call.
         from urllib.parse import urlparse
         parsed = urlparse(settings.api_base_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         self._path_prefix = parsed.path.rstrip("/")
         self._session = aiohttp.ClientSession(base_url=origin)
-        await self._refresh_token()
+        try:
+            await self._refresh_token()
+        except ClientError as e:
+            # Auth failure on startup (e.g. throttle cooldown, wrong password).
+            # Log and continue — the bot's internal webhook server still starts.
+            # Token will be retried lazily on the first API call.
+            logger.warning("Startup Cognito auth failed (will retry on first API call): %s", e)
 
     async def close(self) -> None:
         """Close the aiohttp session. Call on bot shutdown."""
@@ -130,6 +134,22 @@ class AsheFlowClient:
         ) as resp:
             resp.raise_for_status()
             return await resp.json()
+
+    async def get_employee_by_discord(self, discord_id: str) -> dict[str, Any] | None:
+        """Look up an employee record by Discord ID. Returns None if not found."""
+        token = await self._ensure_token()
+        try:
+            async with self._session.get(
+                f"{self._path_prefix}/employees/by-discord/{discord_id}",
+                headers=self._headers(token),
+            ) as resp:
+                if resp.status == 404:
+                    return None
+                resp.raise_for_status()
+                return await resp.json()
+        except Exception as e:
+            logger.warning("Could not fetch employee for discord_id %s: %s", discord_id, e)
+            return None
 
     async def get_trainee_current_phase(self, trainee_id: str) -> int | None:
         """Return the current training phase number for a trainee (1–4), or None if no record."""
