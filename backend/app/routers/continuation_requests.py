@@ -41,17 +41,19 @@ def submit_continuation_request(
             detail="You can only submit continuation requests for yourself.",
         )
 
-    # Verify trainee exists
+    # Verify trainee exists within this company
     trainee = db.query(Employee).filter(
         Employee.id == payload.trainee_id,
+        Employee.company_id == caller.company_id,
         Employee.role == "trainee",
     ).first()
     if not trainee:
         raise HTTPException(status_code=404, detail="Trainee not found.")
 
-    # Verify target trainer exists
+    # Verify target trainer exists within this company
     trainer = db.query(Employee).filter(
         Employee.id == payload.trainer_id,
+        Employee.company_id == caller.company_id,
         Employee.role == "trainer",
     ).first()
     if not trainer:

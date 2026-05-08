@@ -14,7 +14,9 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
+from app.models.notification import Notification
 from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult
+from app.services.audit import write_audit
 from app.services.email import send_invite_email
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,26 @@ def _cognito_client():
     return boto3.client("cognito-idp", region_name=settings.aws_region)
 
 
+def _cognito_revoke_access(cognito_username: str | None) -> None:
+    """Disable the Cognito user and revoke all their tokens — best effort.
+
+    AdminDisableUser blocks new token issuance immediately.
+    AdminUserGlobalSignOut invalidates all existing refresh tokens so the
+    current access token (max 15 min TTL) cannot be silently renewed.
+    """
+    if not cognito_username:
+        return
+    cognito = _cognito_client()
+    for action in ("admin_disable_user", "admin_user_global_sign_out"):
+        try:
+            getattr(cognito, action)(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+            )
+        except ClientError as e:
+            logger.warning("Cognito %s failed for %s: %s", action, cognito_username, e)
+
+
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
 def create_employee(
     employee: EmployeeCreate,
@@ -47,20 +69,35 @@ def create_employee(
     No Cognito user is created here — the employee sets their own username and
     password by following the link in the invite email (POST /registration/complete).
     """
+    # Walker and trainer roles cannot be directly assigned — walkers start as trainees,
+    # trainers are promoted from walkers via POST /employees/{id}/promote
+    if employee.role in ("walker", "trainer"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Walkers must start as trainees and be assigned the walker role by dispatch. "
+                if employee.role == "walker"
+                else "Trainers can only be promoted from existing walkers by a manager or admin."
+            ),
+        )
+
+    # Management callers may only create field-entry roles (driver or trainee)
+    if caller.role == "management" and employee.role not in ("driver", "trainee"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Management users can only create driver or trainee accounts.",
+        )
+
     if employee.email and db.query(Employee).filter(
         Employee.company_id == caller.company_id,
         Employee.email == employee.email,
     ).first():
         raise HTTPException(status_code=400, detail="An employee with this email already exists.")
-    if db.query(Employee).filter(
-        Employee.company_id == caller.company_id,
-        Employee.discord_id == employee.discord_id,
-    ).first():
-        raise HTTPException(status_code=400, detail="An employee with this Discord ID already exists.")
 
     now = datetime.now(timezone.utc)
     db_employee = Employee(
         **employee.model_dump(),
+        company_id=caller.company_id,
         is_active=False,
         account_status="pending_verification",
         invited_at=now,
@@ -142,6 +179,7 @@ def bulk_import_employees(
 
         db_employee = Employee(
             **row.model_dump(),
+            company_id=caller.company_id,
             is_active=False,
             account_status="pending_verification",
             invited_at=now,
@@ -193,8 +231,19 @@ def bulk_import_employees(
     return results
 
 
-PRIVILEGED_ROLES = {"management", "admin", "dispatch"}
-FIELD_ROLES      = {"driver", "walker", "trainer", "trainee"}
+PRIVILEGED_ROLES  = {"management", "admin", "dispatch"}
+FIELD_ROLES       = {"driver", "walker", "trainer", "trainee"}
+# Roles that only admins may create, edit, deactivate, or view
+PROTECTED_ROLES   = {"management", "admin"}
+
+
+def _assert_not_protected(caller_groups: set, target_role: str) -> None:
+    """Raise 403 if target has a protected role and caller is not admin."""
+    if target_role in PROTECTED_ROLES and "admin" not in caller_groups:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can modify management or admin accounts.",
+        )
 
 
 @router.get("/", response_model=list[EmployeeResponse])
@@ -219,6 +268,10 @@ def get_all_employees(
     else:
         q = q.filter(Employee.is_active == True)
 
+    # Management callers cannot see management or admin accounts
+    if "management" in caller_groups and "admin" not in caller_groups:
+        q = q.filter(Employee.role.notin_(PROTECTED_ROLES))
+
     employees = pg.apply(q).all()
 
     if caller_groups & PRIVILEGED_ROLES:
@@ -234,9 +287,27 @@ def get_my_employee(
     return EmployeeResponse.model_validate(caller)
 
 
+@router.get("/by-discord/{discord_id}", response_model=EmployeeResponse)
+def get_employee_by_discord(
+    discord_id: str,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(list(PRIVILEGED_ROLES | FIELD_ROLES))),
+    db: Session = Depends(get_db),
+):
+    """Fetch an employee by Discord ID. Used by the bot on member-join to assign roles."""
+    employee = db.query(Employee).filter(
+        Employee.discord_id == discord_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="No employee found with that Discord ID.")
+    return EmployeeResponse.model_validate(employee)
+
+
 @router.get("/{employee_id}", response_model=EmployeeResponse)
 def get_employee(
     employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
     current_user: dict = Depends(RoleChecker(list(PRIVILEGED_ROLES | FIELD_ROLES))),
     db: Session = Depends(get_db),
 ):
@@ -245,26 +316,46 @@ def get_employee(
     Management/admin/dispatch receive the full record. Field staff receive the
     redacted version without phone, email, and cognito_sub.
     """
-    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
     caller_groups = set(current_user.get("cognito_groups", []))
+
+    # Management callers cannot retrieve management or admin records
+    if "management" in caller_groups and "admin" not in caller_groups:
+        _assert_not_protected(caller_groups, employee.role)
+
     if caller_groups & PRIVILEGED_ROLES:
         return EmployeeResponse.model_validate(employee)
     return EmployeePublicResponse.model_validate(employee)
 
 
 @router.put("/{employee_id}", response_model=EmployeeResponse)
-def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: dict = Depends(RoleChecker(["management", "admin"])), db: Session = Depends(get_db)):
+def update_employee(
+    employee_id: UUID,
+    employee: EmployeeUpdate,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
     """Update an existing employee's fields.
 
     When the role changes, the employee is removed from their old Cognito group
     and added to the new one so permissions take effect on their next token refresh.
     """
-    db_employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    caller_groups = set(current_user.get("cognito_groups", []))
+    _assert_not_protected(caller_groups, db_employee.role)
 
     updates = employee.model_dump(exclude_unset=True)
     new_role  = updates.get("role")
@@ -354,39 +445,239 @@ def update_employee(employee_id: UUID, employee: EmployeeUpdate, current_user: d
 
 
 @router.put("/{employee_id}/deactivate", response_model=EmployeeResponse)
-def deactivate_employee(employee_id: UUID, current_user: dict = Depends(RoleChecker(["management", "admin"])), db: Session = Depends(get_db)):
-    """Set an employee's active status to False.
-
-    Args:
-        employee_id: UUID of the employee to deactivate.
-        db: Database session.
-
-    Returns:
-        The updated Employee record with ``is_active`` set to False.
-
-    Raises:
-        HTTPException(404): If no employee with the given ID exists.
-    """
-    db_employee = (db.query(Employee)
-                   .filter(Employee.id == employee_id)
-                   .first()
-                )
+def deactivate_employee(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Set an employee's active status to False."""
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
+    caller_groups = set(current_user.get("cognito_groups", []))
+    _assert_not_protected(caller_groups, db_employee.role)
+
     db_employee.is_active = False
+    db.commit()
+    db.refresh(db_employee)
+
+    # Revoke Cognito session — blocks token refresh immediately
+    _cognito_revoke_access(db_employee.email or db_employee.username)
+
+    return db_employee
+
+
+@router.put("/{employee_id}/reactivate", response_model=EmployeeResponse)
+def reactivate_employee(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Set an employee's active status back to True."""
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not db_employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    caller_groups = set(current_user.get("cognito_groups", []))
+    _assert_not_protected(caller_groups, db_employee.role)
+
+    db_employee.is_active = True
+    db.commit()
+    db.refresh(db_employee)
+
+    # Re-enable the Cognito user so they can sign in again
+    # Prefer username — Cognito accounts are created under the derived username.
+    # Fall back to email only for legacy accounts predating the username column.
+    cognito_username = db_employee.username or db_employee.email
+    if cognito_username:
+        try:
+            _cognito_client().admin_enable_user(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+            )
+        except ClientError as e:
+            logger.warning("Cognito admin_enable_user failed for %s: %s", cognito_username, e)
+
+    return db_employee
+
+
+@router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_employee(
+    employee_id: UUID,
+    current_user: dict = Depends(RoleChecker(["admin"])),
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete an employee record. Admin only.
+
+    Revokes the Cognito session and deletes the Cognito user before removing
+    the DB record so the employee loses access immediately.
+    """
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not db_employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    # Prefer username — Cognito accounts are created under the derived username.
+    # Fall back to email only for legacy accounts predating the username column.
+    cognito_username = db_employee.username or db_employee.email
+
+    # Revoke session first, then delete the Cognito user
+    _cognito_revoke_access(cognito_username)
+    if cognito_username:
+        try:
+            _cognito_client().admin_delete_user(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+            )
+        except ClientError as e:
+            logger.warning("Cognito admin_delete_user failed for %s: %s", cognito_username, e)
+
+    logger.info(
+        "Employee %s (%s) deleted by admin %s",
+        db_employee.name, employee_id, current_user.get("username") or current_user.get("id"),
+    )
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="employee.deleted",
+        target_table="employees",
+        target_id=str(employee_id),
+        before={
+            "name":           db_employee.name,
+            "email":          db_employee.email,
+            "role":           db_employee.role,
+            "username":       db_employee.username,
+            "account_status": db_employee.account_status,
+            "is_active":      db_employee.is_active,
+            "company_id":     str(db_employee.company_id),
+        },
+    )
+    db.delete(db_employee)
+    db.commit()
+
+
+@router.post("/{employee_id}/promote", response_model=EmployeeResponse)
+def promote_employee(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Promote a walker to trainer.
+
+    Syncs the Cognito group and fires an in-app notification to the employee.
+    """
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not db_employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+    if db_employee.role != "walker":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Can only promote walkers to trainer (current role: {db_employee.role}).",
+        )
+
+    old_role = db_employee.role
+    db_employee.role = "trainer"
+    db.flush()
+
+    # Sync Cognito group
+    if db_employee.cognito_sub and db_employee.account_status == "active":
+        cognito = _cognito_client()
+        cognito_username = db_employee.email or db_employee.cognito_sub
+        try:
+            cognito.admin_remove_user_from_group(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+                GroupName=ROLE_TO_COGNITO_GROUP["walker"],
+            )
+            cognito.admin_add_user_to_group(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+                GroupName=ROLE_TO_COGNITO_GROUP["trainer"],
+            )
+        except ClientError as e:
+            logger.error("Cognito group sync failed for promote %s: %s", employee_id, e)
+
+    # In-app notification
+    db.add(Notification(
+        company_id=db_employee.company_id,
+        employee_id=db_employee.id,
+        type="role_change",
+        message=f"Congratulations! You have been promoted from {old_role} to trainer by {caller.name}.",
+    ))
     db.commit()
     db.refresh(db_employee)
     return db_employee
 
 
-@router.put("/{employee_id}/reactivate", response_model=EmployeeResponse)
-def reactivate_employee(employee_id: UUID, current_user: dict = Depends(RoleChecker(["management", "admin"])), db: Session = Depends(get_db)):
-    """Set an employee's active status back to True."""
-    db_employee = db.query(Employee).filter(Employee.id == employee_id).first()
+@router.post("/{employee_id}/demote", response_model=EmployeeResponse)
+def demote_employee(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Demote a trainer back to walker.
+
+    Syncs the Cognito group and fires an in-app notification to the employee.
+    """
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-    db_employee.is_active = True
+    if db_employee.role != "trainer":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Can only demote trainers to walker (current role: {db_employee.role}).",
+        )
+
+    old_role = db_employee.role
+    db_employee.role = "walker"
+    db.flush()
+
+    # Sync Cognito group
+    if db_employee.cognito_sub and db_employee.account_status == "active":
+        cognito = _cognito_client()
+        cognito_username = db_employee.email or db_employee.cognito_sub
+        try:
+            cognito.admin_remove_user_from_group(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+                GroupName=ROLE_TO_COGNITO_GROUP["trainer"],
+            )
+            cognito.admin_add_user_to_group(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=cognito_username,
+                GroupName=ROLE_TO_COGNITO_GROUP["walker"],
+            )
+        except ClientError as e:
+            logger.error("Cognito group sync failed for demote %s: %s", employee_id, e)
+
+    # In-app notification
+    db.add(Notification(
+        company_id=db_employee.company_id,
+        employee_id=db_employee.id,
+        type="role_change",
+        message=f"Your role has been updated from {old_role} to walker by {caller.name}.",
+    ))
     db.commit()
     db.refresh(db_employee)
     return db_employee
@@ -422,6 +713,7 @@ def request_email_change(
         db_check = SessionLocal()
         existing = db_check.query(Employee).filter(
             Employee.email == new_email,
+            Employee.company_id == caller.company_id,
             Employee.id    != caller.id,
         ).first()
     finally:

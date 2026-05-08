@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
-from app.services.email import send_invite_email
+from app.services.email import send_invite_email, send_credentials_email
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/registration", tags=["registration"])
@@ -41,35 +41,57 @@ class ValidateResponse(BaseModel):
     name: str
     email: str
     role: str
+    phone_last4: str | None  # last 4 digits of phone on file, or None
 
 
 class CompleteRequest(BaseModel):
     token: str
-    username: str
-    password: str
+    discord_id: str
+    phone_number: str
+    # No username or password — Cognito generates a temp password,
+    # employee is forced to reset on first login.
 
-    @field_validator("username")
+    @field_validator("discord_id")
     @classmethod
-    def username_valid(cls, v: str) -> str:
-        v = v.strip().lower()
-        if len(v) < 3:
-            raise ValueError("Username must be at least 3 characters.")
-        if not all(c.isalnum() or c in (".", "_", "-") for c in v):
-            raise ValueError("Username may only contain letters, numbers, dots, underscores, and hyphens.")
+    def discord_id_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Discord ID is required.")
         return v
 
-    @field_validator("password")
+    @field_validator("phone_number")
     @classmethod
-    def password_valid(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters.")
-        return v
+    def phone_valid(cls, v: str) -> str:
+        digits = "".join(c for c in v if c.isdigit())
+        if len(digits) < 10:
+            raise ValueError("Phone number must contain at least 10 digits.")
+        return v.strip()
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _cognito():
     return boto3.client("cognito-idp", region_name=settings.aws_region)
+
+
+def _derive_username(name: str, db: Session) -> str:
+    """Derive a unique username as firstname.lastname with optional numeric suffix.
+
+    'Jane Smith' → 'jane.smith', or 'jane.smith2' if taken, etc.
+    Non-alphanumeric characters in name parts are stripped.
+    """
+    import re
+    parts = name.strip().lower().split()
+    first = re.sub(r"[^a-z0-9]", "", parts[0]) if parts else "user"
+    last  = re.sub(r"[^a-z0-9]", "", parts[-1]) if len(parts) > 1 else ""
+    base  = f"{first}.{last}" if last else first
+
+    candidate = base
+    suffix    = 2
+    while db.query(Employee).filter(Employee.username == candidate).first():
+        candidate = f"{base}{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _get_valid_token(token_str: str, db: Session) -> InviteToken:
@@ -141,6 +163,71 @@ def send_invite(
     return {"detail": f"Invite sent to {employee.email}."}
 
 
+@router.post("/resend-credentials", status_code=status.HTTP_200_OK)
+def resend_credentials(
+    body: InviteRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Re-send the credentials email to a registered-but-not-yet-signed-in employee.
+
+    Only valid for employees in the 'registered' lifecycle state (username set,
+    account_status still pending_verification). Generates a fresh temp password,
+    updates it in Cognito, and resends the branded credentials email.
+    """
+    employee = db.query(Employee).filter(
+        Employee.id == body.employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found.")
+    if not employee.username:
+        raise HTTPException(status_code=400, detail="Employee has not completed registration yet. Use Resend Invite instead.")
+    if employee.account_status == "active":
+        raise HTTPException(status_code=400, detail="Employee has already signed in.")
+    if not employee.email:
+        raise HTTPException(status_code=400, detail="Employee has no email address on file.")
+
+    import string
+    temp_password = (
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice("!@#$%^&*") +
+        secrets.choice("!@#$%^&*")
+    )
+
+    try:
+        _cognito().admin_set_user_password(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=employee.username,
+            Password=temp_password,
+            Permanent=False,
+        )
+    except ClientError as e:
+        logger.error("admin_set_user_password failed for %s: %s", employee.username, e)
+        raise HTTPException(status_code=502, detail="Failed to reset credentials. Please try again.")
+
+    try:
+        send_credentials_email(
+            to_email=employee.email,
+            employee_name=employee.name,
+            username=employee.username,
+            temp_password=temp_password,
+        )
+    except ClientError as e:
+        logger.error("Credentials resend email failed for %s: %s", employee.email, e)
+        raise HTTPException(status_code=502, detail="Credentials reset but email delivery failed.")
+
+    return {"detail": f"Credentials resent to {employee.email}."}
+
+
 @router.get("/validate", response_model=ValidateResponse)
 def validate_token(
     token: str,
@@ -155,12 +242,22 @@ def validate_token(
     employee = db.query(Employee).filter(Employee.id == record.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Invite link is invalid.")
+    if employee.company_id != record.company_id:
+        raise HTTPException(status_code=400, detail="Invite link is invalid.")
+
+    # Extract last 4 digits from phone_number if present
+    phone_last4 = None
+    if employee.phone_number:
+        digits = "".join(c for c in employee.phone_number if c.isdigit())
+        if len(digits) >= 4:
+            phone_last4 = digits[-4:]
 
     return ValidateResponse(
         employee_id=str(employee.id),
         name=employee.name,
         email=employee.email or "",
         role=employee.role,
+        phone_last4=phone_last4,
     )
 
 
@@ -169,92 +266,127 @@ def complete_registration(
     body: CompleteRequest,
     db: Session = Depends(get_db),
 ):
-    """Complete employee registration: set username + password, activate account.
+    """Complete employee registration: collect missing info, create Cognito account.
 
     1. Validates the token
-    2. Checks the chosen username is not already taken in Cognito or our DB
-    3. Creates the Cognito user with the chosen username and permanent password
-    4. Adds the user to their role group
-    5. Stamps cognito_sub, username, activates the Employee record
-    6. Marks the token used
+    2. Checks Discord ID is not already taken in this company
+    3. Derives username as firstname.lastname (with numeric suffix if taken)
+    4. Creates Cognito user via AdminCreateUser — Cognito generates a temp password
+       and sends it to the employee's email; they are forced to reset on first login
+    5. Adds the user to their role group
+    6. Stamps cognito_sub, username, discord_id, phone_number on the Employee record
+    7. Marks the token used
+    8. Sends a welcome email with the derived username
     """
     record = _get_valid_token(body.token, db)
     employee = db.query(Employee).filter(Employee.id == record.employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Invite link is invalid.")
+    if employee.company_id != record.company_id:
+        raise HTTPException(status_code=400, detail="Invite link is invalid.")
 
-    # Username uniqueness check in DB
+    # Discord ID uniqueness within the company
     if db.query(Employee).filter(
-        Employee.username == body.username,
+        Employee.company_id == employee.company_id,
+        Employee.discord_id == body.discord_id,
         Employee.id != employee.id,
     ).first():
-        raise HTTPException(status_code=409, detail="That username is already taken.")
+        raise HTTPException(status_code=409, detail="That Discord ID is already linked to another account.")
+
+    username = _derive_username(employee.name, db)
+
+    # Generate our own temp password so we can include it in our branded email
+    # instead of letting Cognito send its own plain-text system email.
+    # Format: 3 uppercase + 3 digits + 3 lowercase + 2 symbols — satisfies
+    # Cognito's default password policy (upper, lower, number, symbol, min 8).
+    import string
+    temp_password = (
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.digits) +
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice("!@#$%^&*") +
+        secrets.choice("!@#$%^&*")
+    )
 
     cognito = _cognito()
 
-    # Create the Cognito user with the employee's chosen username
-    try:
-        response = cognito.admin_create_user(
-            UserPoolId=settings.aws_cognito_user_pool_id,
-            Username=body.username,
-            TemporaryPassword=body.password,
-            UserAttributes=[
-                {"Name": "email",          "Value": employee.email or ""},
-                {"Name": "email_verified", "Value": "true"},
-                {"Name": "name",           "Value": employee.name},
-            ],
-            MessageAction="SUPPRESS",  # We sent our own invite email
-        )
-        cognito_sub = next(
-            (a["Value"] for a in response["User"]["Attributes"] if a["Name"] == "sub"),
-            None,
-        )
-    except ClientError as e:
-        code = e.response["Error"]["Code"]
-        if code == "UsernameExistsException":
-            raise HTTPException(status_code=409, detail="That username is already taken.")
-        logger.error("AdminCreateUser failed for employee %s: %s", employee.id, e)
-        raise HTTPException(status_code=502, detail="Failed to create account. Please try again.")
-
-    # Set the password as permanent (no force-change on first login)
-    try:
-        cognito.admin_set_user_password(
-            UserPoolId=settings.aws_cognito_user_pool_id,
-            Username=body.username,
-            Password=body.password,
-            Permanent=True,
-        )
-    except ClientError as e:
-        logger.error("AdminSetUserPassword failed for %s: %s", body.username, e)
-        # Clean up the Cognito user we just created
+    # SUPPRESS Cognito's system email — we send our own branded credentials email.
+    # Retry with a numeric suffix if Cognito already has that username (e.g. orphaned
+    # user from a previous failed registration that wasn't cleaned up in Cognito).
+    cognito_sub = None
+    response = None
+    suffix = 2
+    max_attempts = 10
+    for attempt in range(max_attempts):
         try:
-            cognito.admin_delete_user(
+            response = cognito.admin_create_user(
                 UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=body.username,
+                Username=username,
+                TemporaryPassword=temp_password,
+                UserAttributes=[
+                    {"Name": "email",          "Value": employee.email or ""},
+                    {"Name": "email_verified", "Value": "true"},
+                    {"Name": "name",           "Value": employee.name},
+                ],
+                MessageAction="SUPPRESS",
             )
-        except ClientError:
-            pass
-        raise HTTPException(status_code=502, detail="Failed to set password. Please try again.")
+            cognito_sub = next(
+                (a["Value"] for a in response["User"]["Attributes"] if a["Name"] == "sub"),
+                None,
+            )
+            break
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code == "UsernameExistsException":
+                # Cognito has this username (orphaned) — try the next suffix
+                import re
+                base = re.sub(r'\d+$', '', username)
+                username = f"{base}{suffix}"
+                suffix += 1
+                logger.warning("Username exists in Cognito, retrying as %s", username)
+                continue
+            logger.error("AdminCreateUser failed for employee %s: %s", employee.id, e)
+            raise HTTPException(status_code=502, detail="Failed to create account. Please try again.")
+    else:
+        raise HTTPException(status_code=502, detail="Could not allocate a unique username. Please try again.")
 
-    # Add to role group
+    # Add to role group (best-effort)
     group = ROLE_TO_COGNITO_GROUP.get(employee.role)
     if group:
         try:
             cognito.admin_add_user_to_group(
                 UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=body.username,
+                Username=username,
                 GroupName=group,
             )
         except ClientError as e:
-            logger.error("AdminAddUserToGroup failed for %s: %s", body.username, e)
+            logger.error("AdminAddUserToGroup failed for %s: %s", username, e)
 
-    # Activate employee record
-    employee.username     = body.username
+    # Stamp the employee record — account_status stays pending_verification until
+    # they actually sign in (get_caller_employee flips it to active on first login)
+    employee.username     = username
     employee.cognito_sub  = cognito_sub
-    employee.is_active    = True
-    employee.account_status = "active"
+    employee.discord_id   = body.discord_id
+    employee.phone_number = body.phone_number
 
     record.used = True
     db.commit()
 
-    return {"detail": "Account activated. You can now sign in."}
+    # Send one branded email with both username and temp password
+    if employee.email:
+        try:
+            send_credentials_email(
+                to_email=employee.email,
+                employee_name=employee.name,
+                username=username,
+                temp_password=temp_password,
+            )
+        except ClientError as e:
+            logger.error("Credentials email failed for %s: %s", employee.email, e)
+
+    return {"detail": "Registration complete. Check your email for sign-in credentials.", "username": username}

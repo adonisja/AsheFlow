@@ -110,6 +110,7 @@ def make_continuation_request(db, trainee: Employee, trainer: Employee, status: 
 def make_training_record(db, trainee: Employee, trainer: Employee) -> TrainingRecord:
     rec = TrainingRecord(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         trainee_id=trainee.id,
         trainer_id=trainer.id,
         current_day_number=1,

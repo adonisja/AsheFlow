@@ -1,6 +1,7 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional, Literal, List
 from uuid import UUID
+from datetime import datetime
 
 VALID_ROLES = ("driver", "walker", "trainer", "trainee", "dispatch", "management", "admin")
 RoleStr = Literal["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"]
@@ -9,7 +10,7 @@ RoleStr = Literal["driver", "walker", "trainer", "trainee", "dispatch", "managem
 class EmployeeCreate(BaseModel):
     name: str
     email: str
-    discord_id: str
+    discord_id: Optional[str] = None
     role: RoleStr
     phone_number: Optional[str] = None
 
@@ -28,12 +29,14 @@ class EmployeeResponse(BaseModel):
     id: UUID
     name: str
     email: Optional[str] = None
-    discord_id: str
+    discord_id: Optional[str] = None
     cognito_sub: Optional[str] = None
+    username: Optional[str] = None
     role: str
     is_active: bool
     phone_number: Optional[str] = None
     account_status: str = "active"
+    invited_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -63,7 +66,7 @@ class EmployeePublicResponse(BaseModel):
     """
     id: UUID
     name: str
-    discord_id: str
+    discord_id: Optional[str] = None
     role: str
     is_active: bool
 

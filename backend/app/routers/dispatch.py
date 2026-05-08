@@ -61,7 +61,7 @@ def get_unavailable_staff_for_date(
     """
     return {
         "date": dispatch_date,
-        "unavailable_staff": get_unavailable_staff(db, dispatch_date, roles=roles),
+        "unavailable_staff": get_unavailable_staff(db, dispatch_date, roles=roles, company_id=caller.company_id),
     }
 
 
@@ -123,6 +123,7 @@ def trigger_dispatch(
     config: Optional[DispatchConfig] = None,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Run today's dispatch if one does not already exist."""
 
@@ -169,6 +170,7 @@ def trigger_dispatch(
             favoured_id = w.get("in_favour_of_employee_id")
             from_truck  = w.get("from_truck_id")
             db.add(Notification(
+                company_id=caller.company_id,
                 employee_id=override_recipients[0].id,
                 type="ban_override_reassignment",
                 message=(
@@ -197,6 +199,7 @@ async def manual_assignment(
     assignment_in: ManualAssignmentCreate,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Manually assign an employee to a truck for a given date.
 
@@ -398,9 +401,10 @@ async def manual_assignment(
 @router.delete("/assign/{date}/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_assignment(
     date: date,
-    employee_id: str,
+    employee_id: UUID,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Remove an employee from a dispatch run.
 
@@ -440,6 +444,7 @@ def swap_assignment(
     assignment_in: ManualAssignmentUpdate,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Swap an employee to a different truck after dispatch has run.
 
@@ -540,6 +545,7 @@ async def publish_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Publish the day's dispatch to Discord.
 
@@ -1089,6 +1095,7 @@ async def finalize_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Finalize the day's dispatch — post confirmed crews to Discord truck channels.
 
@@ -1138,6 +1145,7 @@ def clear_daily_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
 ):
     """Clear all truck assignments for a specific date.
     Returns 403 if the user tries to delete a dispatch for a past date.

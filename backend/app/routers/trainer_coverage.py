@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, get_db
+from app.api.deps import RoleChecker, get_db, get_caller_employee
 from app.models.employee import Employee
 from app.models.trainer_coverage import TrainerCoverage
 
@@ -17,6 +17,7 @@ allow_mgmt_trainer = RoleChecker(["management", "admin", "trainer"])
 def get_coverage_for_record(
     record_id: UUID,
     db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt_trainer),
 ):
     """Full topic-by-topic coverage log for a training record, ordered by time.
@@ -27,7 +28,10 @@ def get_coverage_for_record(
     """
     rows = (
         db.query(TrainerCoverage)
-        .filter(TrainerCoverage.training_record_id == record_id)
+        .filter(
+            TrainerCoverage.training_record_id == record_id,
+            TrainerCoverage.company_id == caller.company_id,
+        )
         .order_by(TrainerCoverage.covered_at)
         .all()
     )

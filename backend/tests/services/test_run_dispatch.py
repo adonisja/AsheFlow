@@ -5,8 +5,8 @@ HOW run_dispatch WORKS (summary):
 1. Graduate eligible trainees (5+ assignments → role becomes walker).
 2. Build available_pool from active employees not on a scheduled off day.
 3. Optionally trim pool to total_employees cap (walkers first, then trainees, trainers).
-4. Emit staffing warnings: understaffed_drivers always; trainer/walker only when capped.
-5. Re-slot excess trainers as walkers (beyond num_trucks × MIN_TRAINERS_PER_TRUCK).
+4. Emit staffing warnings: understaffed_drivers always; understaffed_walkers only when capped.
+5. Distribute excess trainers evenly across trucks (they stay as trainers — no re-slotting).
 6. Run assign_drivers → assign_trainers → continuation pre-pass → assign_trainees
    → assign_walkers → rebalance_crews.
 7. Persist TruckAssignment + AssignmentMember rows, inject curriculum.
@@ -16,7 +16,7 @@ WHAT WE'RE VERIFYING AT THIS LEVEL:
 - The pipeline produces valid output shape (not tested by unit tests).
 - Staffing warnings are emitted under the right conditions.
 - The headcount cap trims the pool correctly.
-- Excess trainers are re-slotted as walkers.
+- Excess trainers are distributed as trainers (not re-slotted as walkers).
 - TruckAssignment and AssignmentMember rows are committed to the DB.
 
 WHY INTEGRATION TESTS HERE:
@@ -30,11 +30,10 @@ from datetime import date
 import pytest
 
 from app.services.run_dispatch import run_dispatch
-from app.services.constants import MIN_TRAINERS_PER_TRUCK
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 
-from tests.conftest import make_employee, make_truck
+from tests.conftest import make_employee, make_truck, SEED_COMPANY_ID
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +64,7 @@ class TestHappyPath:
         make_employee(db, role="driver", name="Driver A")
         make_employee(db, role="driver", name="Driver B")
 
-        formatted_crews, warnings = run_dispatch(db, target_date=date.today())
+        formatted_crews, warnings = run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         assert len(formatted_crews) == 2, "Should produce one crew entry per truck"
 
@@ -88,7 +87,7 @@ class TestHappyPath:
         make_truck(db, "Truck A")
         driver = make_employee(db, role="driver", name="Known Driver")
 
-        formatted_crews, _ = run_dispatch(db, target_date=date.today())
+        formatted_crews, _ = run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         all_members = [m for crew in formatted_crews.values() for m in crew]
         assert len(all_members) >= 1
@@ -126,7 +125,7 @@ class TestDriverShortage:
         make_truck(db, "Truck B")
         make_employee(db, role="driver", name="Solo Driver")
 
-        _, warnings = run_dispatch(db, target_date=date.today())
+        _, warnings = run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         shortage = [w for w in warnings if w.get("type") == "understaffed_drivers"]
         assert len(shortage) == 1, "Exactly one understaffed_drivers warning expected"
@@ -142,7 +141,7 @@ class TestDriverShortage:
         make_employee(db, role="driver", name="Driver A")
         make_employee(db, role="driver", name="Driver B")
 
-        _, warnings = run_dispatch(db, target_date=date.today())
+        _, warnings = run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         shortage = [w for w in warnings if w.get("type") == "understaffed_drivers"]
         assert shortage == []
@@ -179,7 +178,7 @@ class TestHeadcountCap:
         make_employee(db, role="walker",  name="Walker 2")
 
         formatted_crews, warnings = run_dispatch(
-            db, target_date=date.today(), total_employees=2
+            db, target_date=date.today(), total_employees=2, company_id=SEED_COMPANY_ID
         )
 
         walker_warning = [w for w in warnings if w.get("type") == "understaffed_walkers"]
@@ -201,7 +200,7 @@ class TestHeadcountCap:
         make_employee(db, role="driver", name="Driver")
         # No walkers in pool at all
 
-        _, warnings = run_dispatch(db, target_date=date.today())
+        _, warnings = run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         walker_warning = [w for w in warnings if w.get("type") == "understaffed_walkers"]
         assert walker_warning == [], "Walker warning should not fire without an explicit cap"
@@ -213,9 +212,8 @@ class TestHeadcountCap:
 
 class TestExcessTrainerReSlot:
     """
-    Excess trainers (beyond num_trucks × MIN_TRAINERS_PER_TRUCK) are distributed
-    evenly as trainers across all trucks — they are NOT re-slotted as walkers.
-    The assign_trainers service uses round-robin to spread them.
+    Excess trainers are distributed evenly as trainers across all trucks — they are
+    NOT re-slotted as walkers. assign_trainers uses round-robin to spread them.
     """
 
     def test_excess_trainers_distributed_as_trainers(self, db):
@@ -234,7 +232,7 @@ class TestExcessTrainerReSlot:
         make_employee(db, role="trainer", name="Trainer 2")
         make_employee(db, role="trainer", name="Trainer 3")
 
-        formatted_crews, _ = run_dispatch(db, target_date=date.today())
+        formatted_crews, _ = run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         all_crew = [m for crew in formatted_crews.values() for m in crew]
         trainers = [m for m in all_crew if m["role"] == "trainer"]
@@ -266,7 +264,7 @@ class TestPersistence:
         make_employee(db, role="driver", name="Driver A")
         make_employee(db, role="driver", name="Driver B")
 
-        run_dispatch(db, target_date=date.today())
+        run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         assignments = db.query(TruckAssignment).filter(
             TruckAssignment.date == date.today()
@@ -286,7 +284,7 @@ class TestPersistence:
         make_truck(db, "Truck A")
         make_employee(db, role="driver", name="Driver")
 
-        run_dispatch(db, target_date=date.today())
+        run_dispatch(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
 
         members = db.query(AssignmentMember).all()
         assert len(members) >= 1, "At least one AssignmentMember row should be committed"
