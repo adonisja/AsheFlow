@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, CheckCircle } from 'lucide-react';
+import { CheckCircle2, Lock, Phone, Hash, AlertCircle, HelpCircle, Pencil } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1';
 
@@ -9,25 +9,71 @@ type TokenInfo = {
   name: string;
   email: string;
   role: string;
+  phone_last4: string | null;
+};
+
+type DoneInfo = { username: string };
+
+function formatUSPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '').slice(0, 10);
+  if (digits.length === 0) return '';
+  if (digits.length <= 3)  return `(${digits}`;
+  if (digits.length <= 6)  return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+function isValidUSPhone(raw: string): boolean {
+  return raw.replace(/\D/g, '').length === 10;
+}
+
+function toE164Phone(formatted: string): string {
+  const digits = formatted.replace(/\D/g, '');
+  return digits.length === 10 ? `+1${digits}` : formatted;
+}
+
+const ROLE_COLORS: Record<string, string> = {
+  driver:  'bg-sky-100 text-sky-700',
+  trainee: 'bg-amber-100 text-amber-700',
+  walker:  'bg-emerald-100 text-emerald-700',
+  trainer: 'bg-violet-100 text-violet-700',
 };
 
 export default function Register() {
-  const [params] = useSearchParams();
+  const [params]  = useSearchParams();
   const navigate  = useNavigate();
   const token     = params.get('token') ?? '';
 
-  const [tokenInfo,   setTokenInfo]   = useState<TokenInfo | null>(null);
-  const [tokenError,  setTokenError]  = useState('');
-  const [validating,  setValidating]  = useState(true);
+  const [tokenInfo,  setTokenInfo]  = useState<TokenInfo | null>(null);
+  const [tokenError, setTokenError] = useState('');
+  const [validating, setValidating] = useState(true);
 
-  const [username,    setUsername]    = useState('');
-  const [password,    setPassword]    = useState('');
-  const [confirm,     setConfirm]     = useState('');
-  const [showPw,      setShowPw]      = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [fieldError,  setFieldError]  = useState('');
-  const [submitting,  setSubmitting]  = useState(false);
-  const [done,        setDone]        = useState(false);
+  const [discordId,  setDiscordId]  = useState('');
+  const [phone,      setPhone]      = useState('');
+  const [fieldError, setFieldError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [done,       setDone]       = useState<DoneInfo | null>(null);
+
+  // 'form' | 'review'
+  const [step, setStep] = useState<'form' | 'review'>('form');
+
+  const [showDiscordTip, setShowDiscordTip] = useState(false);
+  const tipRef = useRef<HTMLDivElement>(null);
+
+  const handlePhoneChange = (v: string) => {
+    setPhone(formatUSPhone(v));
+    setFieldError('');
+  };
+
+  useEffect(() => {
+    if (!showDiscordTip) return;
+    const handler = (e: MouseEvent) => {
+      if (tipRef.current && !tipRef.current.contains(e.target as Node)) {
+        setShowDiscordTip(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showDiscordTip]);
 
   useEffect(() => {
     if (!token) {
@@ -44,203 +90,319 @@ export default function Register() {
         return res.json() as Promise<TokenInfo>;
       })
       .then(info => { setTokenInfo(info); setValidating(false); })
-      .catch(err => { setTokenError(err.message); setValidating(false); });
+      .catch(err  => { setTokenError(err.message); setValidating(false); });
   }, [token]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleFormNext = (e: React.FormEvent) => {
     e.preventDefault();
     setFieldError('');
 
-    if (password !== confirm) {
-      setFieldError('Passwords do not match.');
+    if (!discordId.trim()) {
+      setFieldError('Discord ID is required.');
       return;
     }
-    if (password.length < 8) {
-      setFieldError('Password must be at least 8 characters.');
+    if (!isValidUSPhone(phone)) {
+      setFieldError('Enter a valid 10-digit US phone number.');
+      return;
+    }
+    const digits = phone.replace(/\D/g, '');
+    if (tokenInfo?.phone_last4 && !digits.endsWith(tokenInfo.phone_last4)) {
+      setFieldError(`Phone number doesn't match — it should end in ···${tokenInfo.phone_last4}.`);
       return;
     }
 
+    setStep('review');
+  };
+
+  const handleConfirm = async () => {
+    setFieldError('');
     setSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/registration/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, username: username.trim(), password }),
+        body: JSON.stringify({
+          token,
+          discord_id:   discordId.trim(),
+          phone_number: toE164Phone(phone),
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.detail ?? 'Registration failed.');
-      setDone(true);
+      setDone({ username: body.username });
     } catch (err: any) {
       setFieldError(err.message);
+      setStep('form');
     } finally {
       setSubmitting(false);
     }
   };
 
+  // ── Loading ───────────────────────────────────────────────────────────────
   if (validating) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
-        <p className="text-gray-500 dark:text-gray-400">Validating invite link…</p>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-muted-foreground">Validating invite link…</p>
+        </div>
       </div>
     );
   }
 
+  // ── Invalid token ─────────────────────────────────────────────────────────
   if (tokenError) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 px-4">
-        <div className="max-w-md w-full bg-white dark:bg-gray-900 rounded-2xl shadow-lg p-8 border border-gray-200 dark:border-gray-800 text-center">
-          <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mx-auto mb-4">
-            <span className="text-red-600 dark:text-red-400 text-xl font-bold">!</span>
+      <div className="min-h-screen flex items-center justify-center bg-background px-4">
+        <div className="max-w-sm w-full text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-danger/10 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-7 h-7 text-danger" />
           </div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Invalid Link</h1>
-          <p className="text-gray-500 dark:text-gray-400 text-sm">{tokenError}</p>
+          <h1 className="text-xl font-bold text-foreground">Invalid invite link</h1>
+          <p className="text-sm text-muted-foreground">{tokenError}</p>
         </div>
       </div>
     );
   }
 
+  // ── Done screen ───────────────────────────────────────────────────────────
   if (done) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 px-4">
-        <div className="max-w-md w-full bg-white dark:bg-gray-900 rounded-2xl shadow-lg p-8 border border-gray-200 dark:border-gray-800 text-center">
-          <div className="w-14 h-14 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mx-auto mb-4">
-            <CheckCircle className="w-7 h-7 text-green-600 dark:text-green-400" />
+      <div className="min-h-screen flex items-center justify-center bg-background px-4">
+        <div className="max-w-sm w-full space-y-6 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-success/10 flex items-center justify-center mx-auto">
+            <CheckCircle2 className="w-8 h-8 text-success" />
           </div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Account activated!</h1>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
-            You can now sign in with your username and password.
-          </p>
-          <button
-            onClick={() => navigate('/login')}
-            className="w-full py-2.5 px-4 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-semibold text-sm transition-colors"
-          >
-            Go to Sign In
-          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">You're all set!</h1>
+            <p className="text-sm text-muted-foreground mt-1">Your account has been created.</p>
+          </div>
+
+          <div className="card p-4 text-left space-y-2">
+            <p className="text-sm text-foreground">
+              An email has been sent to <span className="font-semibold">{tokenInfo!.email}</span> with your username and a temporary password.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Open that email, then return here to sign in. You'll be prompted to set a new password on first login.
+            </p>
+          </div>
         </div>
       </div>
     );
   }
 
+  // ── Shared layout wrapper ─────────────────────────────────────────────────
+  const roleColorClass = ROLE_COLORS[tokenInfo!.role] ?? 'bg-accent text-foreground';
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 px-4 py-12">
-      <div className="max-w-md w-full">
-        {/* Brand */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-violet-600 mb-4">
-            <span className="text-white text-xl font-extrabold tracking-tight">AF</span>
+    <div className="min-h-screen bg-background flex items-center justify-center px-4 py-12">
+      <div className="w-full max-w-md space-y-6 animate-slide-up">
+
+        {/* Brand mark */}
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary shadow-lg shadow-primary/30 mx-auto">
+            <span className="text-primary-foreground text-xl font-extrabold tracking-tight">AF</span>
           </div>
-          <h1 className="text-2xl font-extrabold text-gray-900 dark:text-white">AsheFlow</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Field operations, simplified</p>
+          <div>
+            <h1 className="text-2xl font-extrabold text-foreground tracking-tight">AsheFlow</h1>
+            <p className="text-sm text-muted-foreground">Field operations, simplified</p>
+          </div>
         </div>
 
         {/* Card */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-800 p-8">
-          <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-1">Activate your account</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-            Welcome, <span className="font-semibold text-gray-700 dark:text-gray-300">{tokenInfo!.name}</span>.
-            Choose a username and password to get started.
-          </p>
-
-          {/* Pre-filled info */}
-          <div className="rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-4 py-3 mb-6 text-sm space-y-1">
-            <div className="flex justify-between">
-              <span className="text-gray-500 dark:text-gray-400">Email</span>
-              <span className="text-gray-800 dark:text-gray-200 font-medium">{tokenInfo!.email}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500 dark:text-gray-400">Role</span>
-              <span className="text-gray-800 dark:text-gray-200 font-medium capitalize">{tokenInfo!.role}</span>
-            </div>
+        <div className="card p-0 overflow-hidden">
+          {/* Card header stripe */}
+          <div className="bg-primary/5 border-b border-border px-6 py-4">
+            <h2 className="text-base font-semibold text-foreground">
+              Welcome, {tokenInfo!.name}.
+            </h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {step === 'form' ? 'Confirm your details below to complete setup.' : 'Review your information before submitting.'}
+            </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Username */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                Username
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={e => { setUsername(e.target.value); setFieldError(''); }}
-                placeholder="e.g. danny.rivera"
-                autoCapitalize="none"
-                autoCorrect="off"
-                required
-                className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2.5 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
-              <p className="text-xs text-gray-400 mt-1">Letters, numbers, dots, underscores, hyphens only.</p>
+          <div className="px-6 py-5 space-y-5">
+            {/* Locked info (always visible) */}
+            <div className="rounded-xl border border-border bg-accent/30 divide-y divide-border overflow-hidden">
+              {[
+                { label: 'Name',  value: tokenInfo!.name },
+                { label: 'Email', value: tokenInfo!.email },
+                { label: 'Role',  value: (
+                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${roleColorClass}`}>
+                    {tokenInfo!.role}
+                  </span>
+                )},
+              ].map(({ label, value }) => (
+                <div key={label} className="flex items-center justify-between px-4 py-2.5">
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Lock className="w-3 h-3" /> {label}
+                  </span>
+                  <span className="text-sm font-medium text-foreground">{value}</span>
+                </div>
+              ))}
             </div>
 
-            {/* Password */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showPw ? 'text' : 'password'}
-                  value={password}
-                  onChange={e => { setPassword(e.target.value); setFieldError(''); }}
-                  placeholder="At least 8 characters"
-                  required
-                  className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2.5 pr-10 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
+            {/* ── STEP 1: Form ── */}
+            {step === 'form' && (
+              <form onSubmit={handleFormNext} className="space-y-4">
+
+                {/* Discord ID */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      Discord ID <span className="text-danger">*</span>
+                    </label>
+                    <div className="relative" ref={tipRef}>
+                      <button
+                        type="button"
+                        onClick={() => setShowDiscordTip(v => !v)}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        aria-label="How to find your Discord ID"
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                      </button>
+                      {showDiscordTip && (
+                        <div className="absolute left-0 top-6 z-20 w-64 rounded-xl border border-border bg-card shadow-lg p-3 text-xs text-foreground leading-relaxed">
+                          <p className="font-semibold mb-1">How to find your Discord ID</p>
+                          <p className="text-subtle mb-2">Enable Developer Mode in Discord settings, then right-click your profile and select <span className="font-medium text-foreground">Copy User ID</span>.</p>
+                          <a
+                            href="https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary font-medium hover:underline"
+                          >
+                            Step-by-step guide →
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
+                    <span className="flex items-center px-3 text-muted-foreground bg-accent/60 border-r border-border shrink-0">
+                      <Hash className="w-4 h-4" />
+                    </span>
+                    <input
+                      type="text"
+                      value={discordId}
+                      onChange={e => { setDiscordId(e.target.value); setFieldError(''); }}
+                      placeholder="e.g. 123456789012345678"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      required
+                      className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+                  <p className="text-xs text-subtle">Your numeric Discord user ID — used for dispatch notifications.</p>
+                </div>
+
+                {/* Phone */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Phone number <span className="text-danger">*</span>
+                  </label>
+                  <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
+                    <span className="flex items-center gap-1.5 px-3 text-sm font-semibold text-muted-foreground bg-accent/60 border-r border-border select-none shrink-0">
+                      <Phone className="w-3.5 h-3.5" /> +1
+                    </span>
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={e => handlePhoneChange(e.target.value)}
+                      placeholder="(555) 000-0000"
+                      required
+                      className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+                  {tokenInfo!.phone_last4 ? (
+                    <p className="text-xs text-subtle">
+                      Must match the number on file ending in{' '}
+                      <span className="font-mono font-semibold text-foreground">···{tokenInfo!.phone_last4}</span>.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-subtle">Your mobile number for account verification.</p>
+                  )}
+                </div>
+
+                {fieldError && (
+                  <div className="flex items-start gap-2 rounded-xl bg-danger/10 border border-danger/20 px-3 py-2.5">
+                    <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                    <p className="text-sm text-danger">{fieldError}</p>
+                  </div>
+                )}
+
                 <button
-                  type="button"
-                  onClick={() => setShowPw(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  tabIndex={-1}
+                  type="submit"
+                  className="btn-primary w-full py-2.5 flex items-center justify-center gap-2"
                 >
-                  {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Review &amp; Confirm
                 </button>
-              </div>
-            </div>
-
-            {/* Confirm password */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                Confirm password
-              </label>
-              <div className="relative">
-                <input
-                  type={showConfirm ? 'text' : 'password'}
-                  value={confirm}
-                  onChange={e => { setConfirm(e.target.value); setFieldError(''); }}
-                  placeholder="Re-enter your password"
-                  required
-                  className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2.5 pr-10 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirm(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  tabIndex={-1}
-                >
-                  {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {fieldError && (
-              <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-4 py-2.5">
-                <p className="text-sm text-red-600 dark:text-red-400">{fieldError}</p>
-              </div>
+              </form>
             )}
 
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white font-semibold text-sm transition-colors mt-2"
-            >
-              {submitting ? 'Activating…' : 'Activate Account'}
-            </button>
-          </form>
+            {/* ── STEP 2: Review ── */}
+            {step === 'review' && (
+              <div className="space-y-4">
+                {/* Review card */}
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <div className="px-4 py-2.5 bg-accent/40 border-b border-border">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Your information</p>
+                  </div>
+                  <div className="divide-y divide-border">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Hash className="w-3.5 h-3.5" /> Discord ID
+                      </span>
+                      <span className="font-mono text-sm font-semibold text-foreground">{discordId.trim()}</span>
+                    </div>
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Phone className="w-3.5 h-3.5" /> Phone
+                      </span>
+                      <span className="text-sm font-semibold text-foreground">+1 {phone}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-center text-muted-foreground">
+                  Double-check your details above. Once submitted, your account will be created and credentials sent to <span className="font-medium text-foreground">{tokenInfo!.email}</span>.
+                </p>
+
+                {fieldError && (
+                  <div className="flex items-start gap-2 rounded-xl bg-danger/10 border border-danger/20 px-3 py-2.5">
+                    <AlertCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                    <p className="text-sm text-danger">{fieldError}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setStep('form')}
+                    disabled={submitting}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirm}
+                    disabled={submitting}
+                    className="flex-1 btn-primary py-2.5 flex items-center justify-center gap-2"
+                  >
+                    {submitting && (
+                      <div className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                    )}
+                    {submitting ? 'Submitting…' : 'Confirm & Submit'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">
-          Accounts are managed by your dispatcher.&nbsp;
-          <span className="font-semibold text-gray-500">No self-signup.</span>
+        <p className="text-center text-xs text-subtle">
+          Accounts are managed by your admin.{' '}
+          <span className="font-semibold text-muted-foreground">No self-signup.</span>
         </p>
       </div>
     </div>

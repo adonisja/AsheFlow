@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Users, Truck, Plus, Pencil, CheckCircle2, XCircle, AlertTriangle,
-  RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail,
+  Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
+  RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail, ArrowUp, ArrowDown,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -17,12 +17,33 @@ type Employee = {
   id: string;
   name: string;
   email: string | null;
-  discord_id: string;
+  discord_id: string | null;
   cognito_sub: string | null;
+  username: string | null;
   role: string;
   is_active: boolean;
   account_status: string;
   phone_number: string | null;
+  invited_at: string | null;
+};
+
+type EmployeeLifecycle = 'not_invited' | 'invited' | 'registered' | 'active' | 'deactivated';
+
+function getLifecycle(e: Employee): EmployeeLifecycle {
+  if (e.account_status === 'active' && !e.is_active) return 'deactivated';
+  if (e.account_status === 'active'  &&  e.is_active) return 'active';
+  // pending_verification below
+  if (e.username) return 'registered';   // form submitted, Cognito account exists, not signed in yet
+  if (e.invited_at) return 'invited';    // invite email sent, link not yet used
+  return 'not_invited';                  // record created, invite never sent
+}
+
+const LIFECYCLE_BADGE: Record<EmployeeLifecycle, { label: string; cls: string }> = {
+  not_invited: { label: 'Not invited',  cls: 'bg-accent text-muted-foreground' },
+  invited:     { label: 'Invited',      cls: 'bg-warning/10 text-warning' },
+  registered:  { label: 'Registered',   cls: 'bg-info/10 text-info' },
+  active:      { label: 'Active',       cls: 'bg-success/10 text-success' },
+  deactivated: { label: 'Deactivated',  cls: 'bg-danger/10 text-danger' },
 };
 
 type TruckRecord = {
@@ -35,6 +56,37 @@ type TruckRecord = {
 type Tab = 'people' | 'fleet' | 'system';
 
 const ROLES = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'];
+// Roles that can be directly assigned at creation time — walker and trainer are earned, not assigned
+const CREATABLE_ROLES = ['driver', 'trainee', 'dispatch', 'management', 'admin'];
+// Management callers are further restricted to field-entry roles only
+const MANAGEMENT_CREATABLE_ROLES = ['driver', 'trainee'];
+const PROTECTED_ROLES = ['management', 'admin'];
+
+const ROLE_CREATION_NOTICES: Partial<Record<string, string>> = {
+  walker:  'Walkers must start as trainees and be assigned the walker role by dispatch.',
+  trainer: 'Trainers can only be promoted from existing walkers by a manager or admin.',
+};
+
+// Formats the 10-digit local portion as (xxx) xxx-xxxx as the user types.
+// The +1 country code is rendered as a static prefix outside the input.
+function formatUSPhone(raw: string): string {
+  // Strip everything except digits, cap at 10
+  const digits = raw.replace(/\D/g, '').slice(0, 10);
+  if (digits.length === 0)  return '';
+  if (digits.length <= 3)   return `(${digits}`;
+  if (digits.length <= 6)   return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+function isValidUSPhone(raw: string): boolean {
+  return raw.replace(/\D/g, '').length === 10;
+}
+
+// Storage format for the DB — always +1xxxxxxxxxx
+function toE164Phone(formatted: string): string {
+  const digits = formatted.replace(/\D/g, '');
+  return digits.length === 10 ? `+1${digits}` : formatted;
+}
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -62,130 +114,253 @@ type EmployeeFormProps = {
   onSave: (data: Record<string, string>) => Promise<void>;
   onClose: () => void;
   isCreate: boolean;
+  allowedRoles?: string[];
 };
 
-function EmployeeModal({ initial = {}, onSave, onClose, isCreate }: EmployeeFormProps) {
+function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles = ROLES }: EmployeeFormProps) {
+  const defaultRole = allowedRoles.includes('driver') ? 'driver' : allowedRoles[0] ?? 'driver';
   const [form, setForm] = useState({
     name:         initial.name         ?? '',
     email:        initial.email        ?? '',
     discord_id:   initial.discord_id   ?? '',
-    role:         initial.role         ?? 'driver',
+    role:         initial.role         ?? defaultRole,
     phone_number: initial.phone_number ?? '',
   });
-  const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState('');
+  const [step,       setStep]       = useState<'form' | 'review'>('form');
+  const [saving,     setSaving]     = useState(false);
+  const [error,      setError]      = useState('');
+  const [phoneError, setPhoneError] = useState('');
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handlePhoneChange = (v: string) => {
+    set('phone_number', formatUSPhone(v));
+    setPhoneError('');
+  };
+
+  const handleFormNext = (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.phone_number && !isValidUSPhone(form.phone_number)) {
+      setPhoneError('Enter a valid 10-digit US phone number.');
+      return;
+    }
+    if (isCreate) { setStep('review'); return; }
+    handleSave();
+  };
+
+  const handleSave = async () => {
     setSaving(true);
     setError('');
     try {
-      await onSave(form);
+      await onSave({
+        ...form,
+        phone_number: form.phone_number ? toE164Phone(form.phone_number) : '',
+      });
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? 'Something went wrong.');
+      setStep('form');
     } finally {
       setSaving(false);
     }
   };
 
+  const roleNotice = isCreate ? ROLE_CREATION_NOTICES[form.role] : undefined;
+  const roleLabel  = form.role.charAt(0).toUpperCase() + form.role.slice(1);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="bg-card w-full max-w-md rounded-2xl border border-border shadow-xl animate-slide-up">
-        <div className="flex items-center justify-between p-5 border-b border-border">
-          <h2 className="font-semibold text-foreground">
-            {isCreate ? 'Invite New Employee' : 'Edit Employee'}
-          </h2>
-          <button onClick={onClose} className="btn-ghost p-1.5"><X className="w-4 h-4" /></button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {error && (
-            <div className="text-sm text-danger bg-danger/10 border border-danger/20 rounded-xl px-3 py-2">
-              {error}
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-border bg-primary/[0.03]">
+          <div className="flex items-start justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                {isCreate ? (step === 'review' ? 'Confirm Invite' : 'Invite New Employee') : 'Edit Employee'}
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {isCreate
+                  ? (step === 'review' ? 'Review the details below before sending.' : "They'll receive an email with a registration link.")
+                  : "Update this employee's details."}
+              </p>
             </div>
-          )}
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Full Name *</label>
-            <input
-              required
-              value={form.name}
-              onChange={e => set('name', e.target.value)}
-              className="input w-full"
-              placeholder="Jane Smith"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Email {isCreate && <span className="text-danger">*</span>}
-            </label>
-            <input
-              required={isCreate}
-              type="email"
-              value={form.email}
-              onChange={e => set('email', e.target.value)}
-              className="input w-full"
-              placeholder="jane@example.com"
-            />
-            {isCreate && (
-              <p className="text-xs text-subtle">An invite email will be sent to this address.</p>
-            )}
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Discord ID *</label>
-            <input
-              required
-              value={form.discord_id}
-              onChange={e => set('discord_id', e.target.value)}
-              className="input w-full"
-              placeholder="username#1234 or user ID"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Role *</label>
-            <div className="relative">
-              <select
-                required
-                value={form.role}
-                onChange={e => set('role', e.target.value)}
-                className="input w-full appearance-none pr-8 capitalize"
-              >
-                {ROLES.map(r => (
-                  <option key={r} value={r} className="capitalize">{r}</option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Phone (optional)</label>
-            <input
-              type="tel"
-              value={form.phone_number}
-              onChange={e => set('phone_number', e.target.value)}
-              className="input w-full"
-              placeholder="+1 (555) 000-0000"
-            />
-          </div>
-
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose} className="btn-ghost">Cancel</button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="btn-primary flex items-center gap-2"
-            >
-              {saving && <div className="w-3.5 h-3.5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
-              {isCreate ? 'Send Invite' : 'Save Changes'}
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors -mt-0.5">
+              <X className="w-4 h-4" />
             </button>
           </div>
-        </form>
+        </div>
+
+        {/* ── STEP 1: Form ── */}
+        {step === 'form' && (
+          <form onSubmit={handleFormNext} className="p-6 space-y-5">
+            {error && (
+              <div className="flex items-start gap-2 text-sm text-danger bg-danger/10 border border-danger/20 rounded-xl px-3 py-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                {error}
+              </div>
+            )}
+
+            {/* Name */}
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">
+                Full name <span className="text-danger">*</span>
+              </label>
+              <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
+                <input
+                  required
+                  value={form.name}
+                  onChange={e => set('name', e.target.value)}
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  placeholder="Jane Smith"
+                />
+              </div>
+            </div>
+
+            {/* Email */}
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">
+                Email {isCreate && <span className="text-danger">*</span>}
+              </label>
+              <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
+                <input
+                  required={isCreate}
+                  type="email"
+                  value={form.email}
+                  onChange={e => set('email', e.target.value)}
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  placeholder="jane@example.com"
+                />
+              </div>
+              {isCreate && (
+                <p className="text-xs text-muted-foreground">A registration link will be sent to this address.</p>
+              )}
+            </div>
+
+            {/* Discord ID (edit only) */}
+            {!isCreate && (
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-foreground">Discord ID</label>
+                <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
+                  <input
+                    value={form.discord_id}
+                    onChange={e => set('discord_id', e.target.value)}
+                    className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    placeholder="Numeric user ID (e.g. 123456789012345678)"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Role */}
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">
+                Role <span className="text-danger">*</span>
+              </label>
+              <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
+                <select
+                  required
+                  value={form.role}
+                  onChange={e => set('role', e.target.value)}
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground appearance-none focus:outline-none pr-8"
+                >
+                  {allowedRoles.map(r => (
+                    <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
+                  ))}
+                </select>
+                <span className="flex items-center pr-3 text-muted-foreground pointer-events-none shrink-0">
+                  <ChevronDown className="w-4 h-4" />
+                </span>
+              </div>
+              {roleNotice && (
+                <p className="text-xs text-warning bg-warning/10 border border-warning/20 rounded-lg px-2.5 py-1.5">
+                  {roleNotice}
+                </p>
+              )}
+            </div>
+
+            {/* Phone */}
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-foreground">
+                Phone <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+              </label>
+              <div className={`flex items-stretch rounded-xl border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all ${phoneError ? 'border-danger/60' : 'border-border'}`}>
+                <span className="flex items-center px-3 text-sm font-semibold text-muted-foreground bg-accent/60 border-r border-border select-none shrink-0">
+                  +1
+                </span>
+                <input
+                  type="tel"
+                  value={form.phone_number}
+                  onChange={e => handlePhoneChange(e.target.value)}
+                  className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  placeholder="(555) 000-0000"
+                />
+              </div>
+              {phoneError && <p className="text-xs text-danger">{phoneError}</p>}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-1">
+              <button type="button" onClick={onClose} className="btn-ghost px-4">Cancel</button>
+              <button type="submit" className="btn-primary flex items-center gap-2 px-5">
+                {isCreate ? 'Review Invite' : 'Save Changes'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* ── STEP 2: Review (create only) ── */}
+        {step === 'review' && (
+          <div className="p-6 space-y-5">
+            {error && (
+              <div className="flex items-start gap-2 text-sm text-danger bg-danger/10 border border-danger/20 rounded-xl px-3 py-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                {error}
+              </div>
+            )}
+
+            {/* Summary card */}
+            <div className="rounded-xl border border-border overflow-hidden">
+              <div className="px-4 py-2.5 bg-accent/40 border-b border-border">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Invite summary</p>
+              </div>
+              <div className="divide-y divide-border">
+                {[
+                  { label: 'Name',  value: form.name },
+                  { label: 'Email', value: form.email },
+                  { label: 'Role',  value: roleLabel },
+                  ...(form.phone_number ? [{ label: 'Phone', value: `+1 ${form.phone_number}` }] : []),
+                ].map(({ label, value }) => (
+                  <div key={label} className="flex items-center justify-between px-4 py-3">
+                    <span className="text-xs text-muted-foreground">{label}</span>
+                    <span className="text-sm font-medium text-foreground">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground text-center">
+              A registration link will be sent to <span className="font-medium text-foreground">{form.email}</span>.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setStep('form')}
+                disabled={saving}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+              >
+                <Pencil className="w-3.5 h-3.5" /> Edit
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="flex-1 btn-primary py-2.5 flex items-center justify-center gap-2"
+              >
+                {saving && <div className="w-3.5 h-3.5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
+                {saving ? 'Sending…' : 'Send Invite'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -305,7 +480,10 @@ const PEOPLE_PAGE_SIZE = 25;
 
 function PeopleTab() {
   const { groups }                    = useAuth();
-  const canImport                     = groups.includes('management') || groups.includes('admin');
+  const isAdmin                       = groups.includes('admin');
+  const isManagement                  = groups.includes('management') && !isAdmin;
+  const canImport                     = groups.includes('management') || isAdmin;
+  const allowedRoles                  = isManagement ? MANAGEMENT_CREATABLE_ROLES : CREATABLE_ROLES;
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
   const [employees, setEmployees]     = useState<Employee[]>([]);
@@ -315,15 +493,18 @@ function PeopleTab() {
   const [showImport, setShowImport]   = useState(false);
   const [editTarget, setEditTarget]   = useState<Employee | null>(null);
   const [filter, setFilter]           = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending' | 'deactivated'>('all');
   const [search, setSearch]           = useState('');
   const [page, setPage]               = useState(0);
-  const [resendingId, setResendingId] = useState<string | null>(null);
-  const [resendMsg, setResendMsg]     = useState<{ id: string; ok: boolean; text: string } | null>(null);
+  const [resendingId, setResendingId]     = useState<string | null>(null);
+  const [resendMsg, setResendMsg]         = useState<{ id: string; ok: boolean; text: string } | null>(null);
+  const [promotingId, setPromotingId]     = useState<string | null>(null);
+  const [promoteMsg, setPromoteMsg]       = useState<{ id: string; ok: boolean; text: string } | null>(null);
 
   const load = () => {
     setLoading(true);
     setLoadError(null);
-    axiosClient.get('/employees/?limit=500')
+    axiosClient.get('/employees/?limit=500&include_inactive=true')
       .then(r => setEmployees(r.data))
       .catch(() => setLoadError('Failed to load employees. Check your connection and try again.'))
       .finally(() => setLoading(false));
@@ -361,6 +542,19 @@ function PeopleTab() {
     }
   };
 
+  const handleResendCredentials = async (emp: Employee) => {
+    setResendingId(emp.id);
+    setResendMsg(null);
+    try {
+      await axiosClient.post('/registration/resend-credentials', { employee_id: emp.id });
+      setResendMsg({ id: emp.id, ok: true, text: `Credentials re-sent to ${emp.email}.` });
+    } catch (err: any) {
+      setResendMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Failed to resend credentials.' });
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const handleToggleActive = async (emp: Employee) => {
     const action = emp.is_active ? 'deactivate' : 'reactivate';
     const ok = await confirm({
@@ -374,12 +568,69 @@ function PeopleTab() {
     setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
   };
 
+  const handlePromote = async (emp: Employee) => {
+    const ok = await confirm({
+      title: 'Promote to Trainer',
+      message: `Promote ${emp.name} from walker to trainer? They will gain trainer permissions on their next login.`,
+      confirmLabel: 'Promote',
+      variant: 'default',
+    });
+    if (!ok) return;
+    setPromotingId(emp.id);
+    setPromoteMsg(null);
+    try {
+      const res = await axiosClient.post(`/employees/${emp.id}/promote`);
+      setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
+      setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} promoted to trainer.` });
+    } catch (err: any) {
+      setPromoteMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Promotion failed.' });
+    } finally {
+      setPromotingId(null);
+    }
+  };
+
+  const handleDemote = async (emp: Employee) => {
+    const ok = await confirm({
+      title: 'Demote to Walker',
+      message: `Demote ${emp.name} from trainer to walker? They will lose trainer permissions on their next login.`,
+      confirmLabel: 'Demote',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setPromotingId(emp.id);
+    setPromoteMsg(null);
+    try {
+      const res = await axiosClient.post(`/employees/${emp.id}/demote`);
+      setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
+      setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} demoted to walker.` });
+    } catch (err: any) {
+      setPromoteMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Demotion failed.' });
+    } finally {
+      setPromotingId(null);
+    }
+  };
+
+  const handleDelete = async (emp: Employee) => {
+    const ok = await confirm({
+      title: 'Delete Employee',
+      message: `Permanently delete ${emp.name}? This revokes their access immediately and cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    await axiosClient.delete(`/employees/${emp.id}`);
+    setEmployees(prev => prev.filter(e => e.id !== emp.id));
+  };
+
   const visible = employees.filter(e => {
+    // Management callers never see management/admin rows
+    if (isManagement && PROTECTED_ROLES.includes(e.role)) return false;
     const matchRole   = filter === 'all' || e.role === filter;
     const matchSearch = !search || e.name.toLowerCase().includes(search.toLowerCase())
       || (e.email ?? '').toLowerCase().includes(search.toLowerCase())
       || (e.discord_id ?? '').toLowerCase().includes(search.toLowerCase());
-    return matchRole && matchSearch;
+    const matchStatus = statusFilter === 'all' || getLifecycle(e) === statusFilter;
+    return matchRole && matchSearch && matchStatus;
   });
 
   const totalPages  = Math.ceil(visible.length / PEOPLE_PAGE_SIZE);
@@ -409,6 +660,21 @@ function PeopleTab() {
           </select>
           <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
+        <div className="relative">
+          <select
+            value={statusFilter}
+            onChange={e => { setStatusFilter(e.target.value as typeof statusFilter); setPage(0); }}
+            className="input pr-8 appearance-none"
+          >
+            <option value="all">All Statuses</option>
+            <option value="not_invited">Not Invited</option>
+            <option value="invited">Invited</option>
+            <option value="registered">Registered</option>
+            <option value="active">Active</option>
+            <option value="deactivated">Deactivated</option>
+          </select>
+          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        </div>
         <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
           <RefreshCw className="w-4 h-4" />
         </button>
@@ -430,7 +696,10 @@ function PeopleTab() {
 
       {/* Count */}
       <p className="text-xs text-subtle">
-        {visible.filter(e => e.is_active).length} active · {visible.filter(e => !e.is_active).length} inactive
+        {employees.filter(e => e.account_status === 'active' && e.is_active).length} active ·{' '}
+        {employees.filter(e => e.account_status === 'pending_verification').length} pending ·{' '}
+        {employees.filter(e => e.account_status === 'active' && !e.is_active).length} deactivated
+        {visible.length !== employees.length && ` · ${visible.length} shown`}
       </p>
 
       {/* Table */}
@@ -460,7 +729,7 @@ function PeopleTab() {
               </thead>
               <tbody className="divide-y divide-border">
                 {pageSlice.map(emp => (
-                  <tr key={emp.id} className={`transition-colors hover:bg-accent/20 ${!emp.is_active ? 'opacity-50' : ''}`}>
+                  <tr key={emp.id} className={`transition-colors hover:bg-accent/20 ${emp.account_status === 'active' && !emp.is_active ? 'opacity-50' : ''}`}>
                     <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">{emp.name}</td>
                     <td className="px-4 py-3">
                       <span className={badge(emp.role)}>{emp.role}</span>
@@ -475,57 +744,119 @@ function PeopleTab() {
                       {emp.phone_number ?? <span className="text-subtle italic">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {emp.account_status === 'pending_verification' ? (
-                        <span className="inline-flex items-center gap-1 text-warning text-xs font-medium">
-                          <Mail className="w-3 h-3" /> Pending
-                        </span>
-                      ) : emp.is_active ? (
-                        <span className="inline-flex items-center gap-1 text-success text-xs font-medium">
-                          <CheckCircle2 className="w-3 h-3" /> Active
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-muted-foreground text-xs font-medium">
-                          <XCircle className="w-3 h-3" /> Inactive
-                        </span>
-                      )}
+                      {(() => {
+                        const { label, cls } = LIFECYCLE_BADGE[getLifecycle(emp)];
+                        return (
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-2">
-                        {resendMsg?.id === emp.id && (
-                          <span className={`text-xs font-medium ${resendMsg.ok ? 'text-success' : 'text-danger'}`}>
-                            {resendMsg.text}
+                        {promoteMsg?.id === emp.id && (
+                          <span
+                            className={`text-xs font-medium max-w-[160px] truncate ${promoteMsg.ok ? 'text-success' : 'text-danger'}`}
+                            title={promoteMsg.text}
+                          >
+                            {promoteMsg.ok ? 'Done' : 'Failed'}
                           </span>
                         )}
-                        {emp.account_status === 'pending_verification' && emp.email && (
+                        {resendMsg?.id === emp.id && (
+                          <span
+                            className={`text-xs font-medium max-w-[160px] truncate ${resendMsg.ok ? 'text-success' : 'text-danger'}`}
+                            title={resendMsg.text}
+                          >
+                            {resendMsg.ok ? 'Invite sent' : 'Failed'}
+                          </span>
+                        )}
+                        {/* Resend invite — only for not-invited / invited states */}
+                        {(getLifecycle(emp) === 'not_invited' || getLifecycle(emp) === 'invited') && emp.email && (
                           <button
                             onClick={() => handleResendInvite(emp)}
                             disabled={resendingId === emp.id}
                             className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                            title="Re-send invite email"
+                            title="Re-send registration invite email"
                           >
                             {resendingId === emp.id
                               ? <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                               : <Mail className="w-3 h-3" />}
-                            Resend
+                            {getLifecycle(emp) === 'not_invited' ? 'Send Invite' : 'Resend Invite'}
                           </button>
                         )}
-                        <button
-                          onClick={() => setEditTarget(emp)}
-                          className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                          title="Edit"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleToggleActive(emp)}
-                          className={`text-xs font-medium px-2 py-1 rounded-lg transition-colors ${
-                            emp.is_active
-                              ? 'text-danger hover:bg-danger/10'
-                              : 'text-success hover:bg-success/10'
-                          }`}
-                        >
-                          {emp.is_active ? 'Deactivate' : 'Reactivate'}
-                        </button>
+                        {/* Resend credentials — only for registered state (form done, not yet signed in) */}
+                        {getLifecycle(emp) === 'registered' && emp.email && (
+                          <button
+                            onClick={() => handleResendCredentials(emp)}
+                            disabled={resendingId === emp.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-info hover:bg-info/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            title="Re-send credentials email (username + temp password)"
+                          >
+                            {resendingId === emp.id
+                              ? <div className="w-3 h-3 border-2 border-info border-t-transparent rounded-full animate-spin" />
+                              : <Mail className="w-3 h-3" />}
+                            Resend Credentials
+                          </button>
+                        )}
+                        {emp.role === 'walker' && emp.account_status === 'active' && (
+                          <button
+                            onClick={() => handlePromote(emp)}
+                            disabled={promotingId === emp.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-violet hover:bg-violet/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            title="Promote to trainer"
+                          >
+                            {promotingId === emp.id
+                              ? <div className="w-3 h-3 border-2 border-violet border-t-transparent rounded-full animate-spin" />
+                              : <ArrowUp className="w-3 h-3" />}
+                            Promote
+                          </button>
+                        )}
+                        {emp.role === 'trainer' && emp.account_status === 'active' && (
+                          <button
+                            onClick={() => handleDemote(emp)}
+                            disabled={promotingId === emp.id}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-warning hover:bg-warning/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            title="Demote to walker"
+                          >
+                            {promotingId === emp.id
+                              ? <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" />
+                              : <ArrowDown className="w-3 h-3" />}
+                            Demote
+                          </button>
+                        )}
+                        {(!isManagement || !PROTECTED_ROLES.includes(emp.role)) && (
+                          <>
+                            <button
+                              onClick={() => setEditTarget(emp)}
+                              className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                              title="Edit"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            {(getLifecycle(emp) === 'active' || getLifecycle(emp) === 'deactivated') && (
+                              <button
+                                onClick={() => handleToggleActive(emp)}
+                                className={`text-xs font-medium px-2 py-1 rounded-lg transition-colors ${
+                                  getLifecycle(emp) === 'active'
+                                    ? 'text-danger hover:bg-danger/10'
+                                    : 'text-success hover:bg-success/10'
+                                }`}
+                              >
+                                {getLifecycle(emp) === 'active' ? 'Deactivate' : 'Reactivate'}
+                              </button>
+                            )}
+                            {isAdmin && (
+                              <button
+                                onClick={() => handleDelete(emp)}
+                                className="p-1.5 rounded-lg hover:bg-danger/10 text-muted-foreground hover:text-danger transition-colors"
+                                title="Delete employee"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -579,6 +910,7 @@ function PeopleTab() {
           isCreate={true}
           onSave={handleCreate}
           onClose={() => setShowModal(false)}
+          allowedRoles={allowedRoles}
         />
       )}
       {editTarget && (
@@ -587,6 +919,7 @@ function PeopleTab() {
           initial={editTarget}
           onSave={handleEdit}
           onClose={() => setEditTarget(null)}
+          allowedRoles={allowedRoles}
         />
       )}
       {showImport && (
