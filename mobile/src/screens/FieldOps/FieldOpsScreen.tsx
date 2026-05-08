@@ -578,7 +578,8 @@ export default function FieldOpsScreen() {
 
   const updateDraft = useCallback((walkerId: string, patch: Partial<WalkerDraft>) => {
     setWalkerDrafts(prev => {
-      const next = { ...prev, [walkerId]: { stars: 0, comment: '', ...prev[walkerId], ...patch } };
+      const existing = prev[walkerId] ?? { stars: 0, comment: '' };
+      const next = { ...prev, [walkerId]: { ...existing, ...patch } };
       saveDrafts(employeeId, next);
       return next;
     });

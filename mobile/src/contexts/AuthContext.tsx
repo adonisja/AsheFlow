@@ -6,14 +6,17 @@ import React, {
   useCallback,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL } from '@env';
+import InAppBrowser from 'react-native-inappbrowser-reborn';
+import { Linking } from 'react-native';
+import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
 
-const USER_POOL_ID = COGNITO_USER_POOL_ID ?? '';
-const CLIENT_ID    = COGNITO_CLIENT_ID ?? '';
-const API_BASE     = ASHEFLOW_API_URL ?? 'http://localhost:8000/api/v1';
-// Derive region from pool id (format: region_xxxxxxx)
-const REGION       = USER_POOL_ID.split('_')[0] ?? 'us-east-2';
+const USER_POOL_ID    = COGNITO_USER_POOL_ID ?? '';
+const CLIENT_ID       = COGNITO_CLIENT_ID ?? '';
+const API_BASE        = ASHEFLOW_API_URL ?? 'http://localhost:8000/api/v1';
+const REGION          = USER_POOL_ID.split('_')[0] ?? 'us-east-2';
 const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
+const OAUTH_DOMAIN    = COGNITO_OAUTH_DOMAIN ?? '';
+const REDIRECT_URI    = COGNITO_REDIRECT_URI ?? 'asheflow://callback';
 
 type AuthUser = {
   id: string;
@@ -28,6 +31,7 @@ type AuthContextType = {
   isLoading: boolean;
   isAuthenticated: boolean;
   signIn: (username: string, password: string) => Promise<void>;
+  signInWithProvider: (provider: 'Discord' | 'Google') => Promise<void>;
   signOut: () => Promise<void>;
   hasRole: (...roles: string[]) => boolean;
 };
@@ -45,14 +49,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const idToken = await AsyncStorage.getItem('asheflow_id_token');
       if (!idToken) { setLoading(false); return; }
       const base = buildUserFromToken(idToken);
-      // Show the app immediately — patch first name in background
       setUser(base);
       setLoading(false);
       resolveFirstName(idToken, base.firstName).then(firstName =>
         setUser(prev => prev ? { ...prev, firstName } : prev)
       );
     } catch {
-      // corrupted storage — start fresh
       setLoading(false);
     }
   };
@@ -72,21 +74,77 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     const data = await res.json();
-
     if (!res.ok) {
       throw new Error(data.message ?? data.__type ?? 'Sign in failed');
     }
 
     const { AuthenticationResult } = data;
-    await AsyncStorage.setMany({
-      asheflow_access_token:  AuthenticationResult.AccessToken,
-      asheflow_id_token:      AuthenticationResult.IdToken,
-      asheflow_refresh_token: AuthenticationResult.RefreshToken,
-    });
-
+    await storeTokens(AuthenticationResult);
     const base = buildUserFromToken(AuthenticationResult.IdToken);
     setUser(base);
     resolveFirstName(AuthenticationResult.IdToken, base.firstName).then(firstName =>
+      setUser(prev => prev ? { ...prev, firstName } : prev)
+    );
+  }, []);
+
+  const signInWithProvider = useCallback(async (provider: 'Discord' | 'Google') => {
+    const authUrl = buildHostedUiUrl(provider);
+
+    const available = await InAppBrowser.isAvailable();
+    if (!available) {
+      // Fallback: open system browser — user must manually return to app
+      await Linking.openURL(authUrl);
+      return;
+    }
+
+    const result = await InAppBrowser.openAuth(authUrl, REDIRECT_URI, {
+      // iOS
+      dismissButtonStyle: 'cancel',
+      preferredBarTintColor: '#5B21B6',
+      preferredControlTintColor: '#ffffff',
+      readerMode: false,
+      animated: true,
+      modalEnabled: true,
+      enableBarCollapsing: false,
+      // Android
+      showTitle: false,
+      toolbarColor: '#5B21B6',
+      secondaryToolbarColor: 'black',
+      navigationBarColor: 'black',
+      navigationBarDividerColor: 'white',
+      enableUrlBarHiding: true,
+      enableDefaultShare: false,
+      forceCloseOnRedirection: false,
+    });
+
+    if (result.type !== 'success' || !result.url) {
+      throw new Error('Sign in was cancelled or failed.');
+    }
+
+    // Extract the authorization code from the redirect URL
+    const redirectUrl = new URL(result.url);
+    const code = redirectUrl.searchParams.get('code');
+    const errorParam = redirectUrl.searchParams.get('error');
+    const errorDesc = redirectUrl.searchParams.get('error_description');
+
+    if (errorParam) {
+      // Lambda pre-signup rejection surfaces here as an error in the redirect
+      const friendly = errorDesc?.includes('No AsheFlow account')
+        ? 'No AsheFlow account found for this email. Ask your dispatcher to create your account first.'
+        : errorDesc ?? 'Sign in failed. Please try again.';
+      throw new Error(friendly);
+    }
+
+    if (!code) {
+      throw new Error('No authorization code returned. Please try again.');
+    }
+
+    // Exchange authorization code for tokens
+    const tokens = await exchangeCodeForTokens(code);
+    await storeTokens(tokens);
+    const base = buildUserFromToken(tokens.IdToken);
+    setUser(base);
+    resolveFirstName(tokens.IdToken, base.firstName).then(firstName =>
       setUser(prev => prev ? { ...prev, firstName } : prev)
     );
   }, []);
@@ -106,7 +164,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, signIn, signOut, hasRole }}>
+    <AuthContext.Provider value={{
+      user, isLoading, isAuthenticated: !!user,
+      signIn, signInWithProvider, signOut, hasRole,
+    }}>
       {children}
     </AuthContext.Provider>
   );
@@ -117,6 +178,7 @@ const AUTH_FALLBACK: AuthContextType = {
   isLoading: true,
   isAuthenticated: false,
   signIn: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
+  signInWithProvider: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signOut: async () => {},
   hasRole: () => false,
 };
@@ -125,7 +187,58 @@ export function useAuth() {
   return useContext(AuthContext) ?? AUTH_FALLBACK;
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+function buildHostedUiUrl(provider: 'Discord' | 'Google'): string {
+  const params = new URLSearchParams({
+    client_id:     CLIENT_ID,
+    response_type: 'code',
+    scope:         'email openid profile',
+    redirect_uri:  REDIRECT_URI,
+    identity_provider: provider,
+  });
+  return `https://${OAUTH_DOMAIN}/oauth2/authorize?${params.toString()}`;
+}
+
+async function exchangeCodeForTokens(code: string): Promise<{
+  AccessToken: string;
+  IdToken: string;
+  RefreshToken: string;
+}> {
+  const body = new URLSearchParams({
+    grant_type:   'authorization_code',
+    client_id:    CLIENT_ID,
+    code,
+    redirect_uri: REDIRECT_URI,
+  });
+
+  const res = await fetch(`https://${OAUTH_DOMAIN}/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error_description ?? data.error ?? 'Token exchange failed');
+  }
+
+  return {
+    AccessToken:  data.access_token,
+    IdToken:      data.id_token,
+    RefreshToken: data.refresh_token,
+  };
+}
+
+async function storeTokens(tokens: {
+  AccessToken: string;
+  IdToken: string;
+  RefreshToken: string;
+}) {
+  await AsyncStorage.setItem('asheflow_access_token',  tokens.AccessToken);
+  await AsyncStorage.setItem('asheflow_id_token',      tokens.IdToken);
+  await AsyncStorage.setItem('asheflow_refresh_token', tokens.RefreshToken);
+}
 
 function parseJwtPayload(token: string): Record<string, any> {
   try {
@@ -150,14 +263,14 @@ async function resolveFirstName(idToken: string, fallback: string): Promise<stri
 }
 
 function buildUserFromToken(idToken: string): AuthUser {
-  const payload  = parseJwtPayload(idToken);
-  const email    = payload.email ?? '';
+  const payload = parseJwtPayload(idToken);
+  const email   = payload.email ?? '';
   const cognitoUsername = payload['cognito:username'] ?? email.split('@')[0];
   return {
     id:        payload.sub ?? '',
     email,
     username:  cognitoUsername,
     groups:    payload['cognito:groups'] ?? [],
-    firstName: cognitoUsername, // placeholder until DB name resolves via /employees/me
+    firstName: cognitoUsername,
   };
 }
