@@ -104,7 +104,7 @@ function Dashboard() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="page-title">
-            Good {greeting}, {user?.displayName || user?.username}
+            Good {greeting}, {user?.firstName || user?.displayName || user?.username}
           </h1>
           <p className="text-subtle mt-1">Here's your {viewLabel[activeView]} for today.</p>
         </div>

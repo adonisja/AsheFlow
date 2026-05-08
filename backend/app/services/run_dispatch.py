@@ -1,4 +1,5 @@
 from datetime import date
+import uuid as _uuid
 from sqlalchemy.orm import Session
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
@@ -17,7 +18,10 @@ from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingRecord
 
 
-def run_dispatch(db: Session, target_date: date = None, total_employees: int = None, total_trucks: int = None) -> dict:
+_SEED_COMPANY_ID = _uuid.UUID("a0000000-0000-0000-0000-000000000001")
+
+
+def run_dispatch(db: Session, target_date: date = None, total_employees: int = None, total_trucks: int = None, company_id: _uuid.UUID = None) -> dict:
     target_date = target_date or date.today()
 
     # Check and graduate any trainees who have completed 5 assignments before generating the pool
@@ -107,17 +111,6 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
                     f"{missing} walker slot(s) will go unfilled."
                 ),
             })
-
-    # --- Cap excess trainers and re-slot them as walkers ---
-    # Excess trainers are appended to the walker pool as Employee ORM objects.
-    # assign_walkers writes role="walker" into assigned_crews regardless of the
-    # ORM object's role field, so no mutation of the Employee object is needed.
-    max_trainers_needed = num_trucks * MIN_TRAINERS_PER_TRUCK
-    all_trainers = available_pool.get("trainers", [])
-    if len(all_trainers) > max_trainers_needed:
-        excess_trainers = all_trainers[max_trainers_needed:]
-        available_pool["walkers"].extend(excess_trainers)
-        available_pool["trainers"] = all_trainers[:max_trainers_needed]
 
     base_weights = get_base_weights(truck_ids)
     assigned_crews = {truck_id: [] for truck_id in truck_ids}
@@ -298,8 +291,11 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
         else:
             warnings.append(w)
 
+    _company_id = company_id or _SEED_COMPANY_ID
+
     for truck_id, crew in assigned_crews.items():
         truck_assignment = TruckAssignment(
+            company_id=_company_id,
             truck_id=truck_id,
             date=target_date,
             status="planned"
@@ -308,17 +304,35 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
         db.flush()
 
         for member in crew:
+            assigned_role = member["role"]
+            # Guard: look up the employee's canonical role and warn if it conflicts.
+            # This catches any future code path that would silently demote a trainer.
+            emp_obj = db.query(Employee).filter(Employee.id == member["id"]).first()
+            if emp_obj and emp_obj.role == "trainer" and assigned_role != "trainer":
+                warnings.append({
+                    "type": "role_integrity_violation",
+                    "message": (
+                        f"DISPATCH BUG: {emp_obj.name} is a trainer in the employee table "
+                        f"but was about to be written as role='{assigned_role}' in assignment_members. "
+                        f"Role corrected to 'trainer'. Investigate dispatch logic."
+                    ),
+                })
+                assigned_role = "trainer"
             assignment_member = AssignmentMember(
+                company_id=_company_id,
                 assignment_id=truck_assignment.id,
                 employee_id=member["id"],
-                role="walker" if member.get("role") == "walker" else member["role"]
+                role=assigned_role,
             )
             db.add(assignment_member)
 
     db.commit()
 
     formatted_crews = {}
-    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == target_date).all()
+    assignments = db.query(TruckAssignment).filter(
+        TruckAssignment.date == target_date,
+        TruckAssignment.company_id == _company_id,
+    ).all()
     for assignment in assignments:
         members_query = db.query(AssignmentMember, Employee).join(
             Employee, AssignmentMember.employee_id == Employee.id

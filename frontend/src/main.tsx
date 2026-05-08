@@ -12,7 +12,7 @@ Amplify.configure({
       userPoolId: import.meta.env.VITE_AWS_POOL_ID || 'us-east-2_xxxxxxxxx',
       userPoolClientId: import.meta.env.VITE_AWS_CLIENT_ID || 'xxxxxxxxxxxxxxxxx',
       loginWith: {
-        email: true,
+        username: true,
         oauth: {
           domain: import.meta.env.VITE_AWS_DOMAIN || 'asheflow.auth.us-east-2.amazoncognito.com',
           scopes: ['email', 'openid', 'profile'],

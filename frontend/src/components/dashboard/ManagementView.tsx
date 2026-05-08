@@ -54,7 +54,7 @@ export default function ManagementView() {
             <LayoutDashboard className="w-4 h-4 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="page-title">Good {greeting}, {user?.displayName || user?.username}</h1>
+            <h1 className="page-title">Good {greeting}, {user?.firstName || user?.displayName || user?.username}</h1>
             <p className="text-subtle mt-0.5">Management overview for {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.</p>
           </div>
         </div>

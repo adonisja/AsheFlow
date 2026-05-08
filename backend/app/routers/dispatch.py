@@ -42,7 +42,7 @@ allow_dispatch_mgmt = RoleChecker([ROLE_DISPATCH, ROLE_ADMIN])
 def get_unavailable_staff_for_date(
     dispatch_date: date,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
     roles: List[str] = Query(default=["driver", "trainer", "walker"]),
 ):
     """Return active field staff excluded from the available pool on a given date.
@@ -69,11 +69,14 @@ def get_unavailable_staff_for_date(
 def get_daily_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt)
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Retrieve all truck assignments and their crews for a specific date."""
-    
-    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+
+    assignments = db.query(TruckAssignment).filter(
+        TruckAssignment.date == dispatch_date,
+        TruckAssignment.company_id == caller.company_id,
+    ).all()
     
     if not assignments:
         return {
@@ -119,14 +122,17 @@ def get_daily_dispatch(
 def trigger_dispatch(
     config: Optional[DispatchConfig] = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt)
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Run today's dispatch if one does not already exist."""
-    
+
     target_date = config.date if config and config.date else date.today()
 
     # prevent double-dispatch — if any TruckAssignment row exists for today, reject immediately
-    existing = db.query(TruckAssignment).filter(TruckAssignment.date == target_date).first()
+    existing = db.query(TruckAssignment).filter(
+        TruckAssignment.date == target_date,
+        TruckAssignment.company_id == caller.company_id,
+    ).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -137,14 +143,14 @@ def trigger_dispatch(
     try:
         total_employees = config.total_employees if config else None
         total_trucks = config.total_trucks if config else None
-        
+
         if not total_trucks or total_trucks <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Total number of trucks is required to run dispatch."
             )
-            
-        assigned_crews, warnings = run_dispatch(db, target_date, total_employees, total_trucks)
+
+        assigned_crews, warnings = run_dispatch(db, target_date, total_employees, total_trucks, company_id=caller.company_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -152,6 +158,7 @@ def trigger_dispatch(
     # These are dispatch-internal — employee_id is set to a dispatch/admin recipient so
     # they don't surface in field staff notification feeds.
     override_recipients = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
         Employee.role.in_(list(OVERSIGHT_ROLES)),
         Employee.is_active == True,
     ).limit(1).all()  # just need one row to satisfy the FK; analytics filters by type
@@ -189,7 +196,7 @@ def trigger_dispatch(
 async def manual_assignment(
     assignment_in: ManualAssignmentCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt)
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Manually assign an employee to a truck for a given date.
 
@@ -208,16 +215,22 @@ async def manual_assignment(
         HTTPException(404): If the employee or truck does not exist.
         HTTPException(409): If the employee is already assigned on the given date.
     """
-    # Verify employee exists
-    employee = db.query(Employee).filter(Employee.id == assignment_in.employee_id).first()
+    # Verify employee exists within this company
+    employee = db.query(Employee).filter(
+        Employee.id == assignment_in.employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not employee:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee {assignment_in.employee_id} not found"
         )
-    
-    # Verify truck exists
-    truck = db.query(Truck).filter(Truck.id == assignment_in.truck_id).first()
+
+    # Verify truck exists within this company
+    truck = db.query(Truck).filter(
+        Truck.id == assignment_in.truck_id,
+        Truck.company_id == caller.company_id,
+    ).first()
     if not truck:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -232,12 +245,13 @@ async def manual_assignment(
     
     if not truck_assignment:
         truck_assignment = TruckAssignment(
+            company_id=caller.company_id,
             truck_id=assignment_in.truck_id,
-            date=assignment_in.date
+            date=assignment_in.date,
         )
         db.add(truck_assignment)
         db.flush()
-        
+
     # Prevent assigning an employee to the same truck/date twice or on two different trucks
     existing_assignment = db.query(AssignmentMember).join(TruckAssignment).filter(
         AssignmentMember.employee_id == assignment_in.employee_id,
@@ -308,7 +322,11 @@ async def manual_assignment(
                 incoming_name = incoming_emp.name if incoming_emp else str(assignment_in.employee_id)
                 alert_staff = (
                     db.query(Employee)
-                    .filter(Employee.role.in_(list(OVERSIGHT_ROLES)), Employee.is_active == True)
+                    .filter(
+                        Employee.company_id == caller.company_id,
+                        Employee.role.in_(list(OVERSIGHT_ROLES)),
+                        Employee.is_active == True,
+                    )
                     .all()
                 )
                 for staff in alert_staff:
@@ -382,7 +400,7 @@ def remove_assignment(
     date: date,
     employee_id: str,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt)
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Remove an employee from a dispatch run.
 
@@ -400,7 +418,8 @@ def remove_assignment(
     # Since date is on TruckAssignment, we join the two tables to filter
     target_member = db.query(AssignmentMember).join(TruckAssignment).filter(
         AssignmentMember.employee_id == employee_id,
-        TruckAssignment.date == date
+        TruckAssignment.date == date,
+        TruckAssignment.company_id == caller.company_id,
     ).first()
     
     # Step 2: If we don't find them, raise an explicit 404 error
@@ -420,7 +439,7 @@ def remove_assignment(
 def swap_assignment(
     assignment_in: ManualAssignmentUpdate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt)
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Swap an employee to a different truck after dispatch has run.
 
@@ -444,17 +463,21 @@ def swap_assignment(
     # Step 1: Guarantee the employee is currently assigned on this date
     target_member = db.query(AssignmentMember).join(TruckAssignment).filter(
         AssignmentMember.employee_id == assignment_in.employee_id,
-        TruckAssignment.date == assignment_in.date
+        TruckAssignment.date == assignment_in.date,
+        TruckAssignment.company_id == caller.company_id,
     ).first()
-    
+
     if not target_member:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Employee {assignment_in.employee_id} is not scheduled on {assignment_in.date}."
         )
 
-    # Step 2: Guarantee the target truck exists
-    destination_truck = db.query(Truck).filter(Truck.id == assignment_in.new_truck_id).first()
+    # Step 2: Guarantee the target truck exists within this company
+    destination_truck = db.query(Truck).filter(
+        Truck.id == assignment_in.new_truck_id,
+        Truck.company_id == caller.company_id,
+    ).first()
     if not destination_truck:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -470,8 +493,9 @@ def swap_assignment(
     #   If it does NOT exist, we create one and add it to the db, and flush()!
     if not destination_assignment:
         destination_assignment = TruckAssignment(
+            company_id=caller.company_id,
             truck_id=assignment_in.new_truck_id,
-            date=assignment_in.date
+            date=assignment_in.date,
         )
         db.add(destination_assignment)
     
@@ -515,16 +539,19 @@ def swap_assignment(
 async def publish_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Publish the day's dispatch to Discord.
 
     Seeds all assigned employees as 'pending' in Redis, then fires an
     internal webhook to the bot so it posts embeds and sends DMs.
     """
-    logger.info("publish_dispatch started date=%s publisher=%s", dispatch_date, current_user.get("username", "unknown"))
+    logger.info("publish_dispatch started date=%s publisher=%s", dispatch_date, caller.username or str(caller.id))
 
-    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    assignments = db.query(TruckAssignment).filter(
+        TruckAssignment.date == dispatch_date,
+        TruckAssignment.company_id == caller.company_id,
+    ).all()
     if not assignments:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -685,7 +712,7 @@ async def publish_dispatch(
             detail=f"Could not reach the Discord bot: {e}",
         )
 
-    logger.info("publish_dispatch complete date=%s employees_notified=%d", dispatch_date, len(all_employee_ids))
+    logger.info("publish_dispatch complete date=%s employees_notified=%d company=%s", dispatch_date, len(all_employee_ids), caller.company_id)
     return {"status": "published", "date": str(dispatch_date), "employees_notified": len(all_employee_ids)}
 
 
@@ -904,7 +931,7 @@ async def record_confirmation(
         )
 
     try:
-        employee_uuid = employee_uuid
+        employee_uuid = UUID(employee_id)
     except (ValueError, AttributeError):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -920,7 +947,7 @@ async def record_confirmation(
 
     # Determine source: bot service account is role "dispatch" or "admin";
     # field staff confirming in-app gets labelled "app".
-    source = "app" if caller.role not in privileged else "dispatch_override"
+    source = "app" if caller.role not in OVERSIGHT_ROLES else "dispatch_override"
 
     # 1. Write to DB first — this is the authoritative audit trail.
     now = datetime.now(timezone.utc)
@@ -965,11 +992,37 @@ async def record_confirmation(
     }
 
 
+@router.get("/{dispatch_date}/my-confirmation", status_code=status.HTTP_200_OK)
+def get_my_confirmation(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return the caller's own confirmation status for a dispatch date.
+
+    Returns { "date": "...", "status": "pending" | "confirmed" | "declined" | null }
+    where null means no confirmation record exists for this employee on that date.
+    """
+    row = (
+        db.query(DispatchConfirmation)
+        .filter(
+            DispatchConfirmation.employee_id == caller.id,
+            DispatchConfirmation.date == dispatch_date,
+        )
+        .first()
+    )
+    return {
+        "date": str(dispatch_date),
+        "status": row.status if row else None,
+        "confirmed_at": row.confirmed_at.isoformat() if (row and row.confirmed_at) else None,
+    }
+
+
 @router.get("/{dispatch_date}/confirmations", status_code=status.HTTP_200_OK)
 async def get_confirmations(
     dispatch_date: date,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return all confirmation statuses for a dispatch date.
 
@@ -1002,7 +1055,7 @@ def get_confirmation_history(
     start_date: date = Query(..., description="Start of date range (inclusive)"),
     end_date:   date = Query(..., description="End of date range (inclusive)"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return confirmation records for a date range for analytics.
 
@@ -1011,6 +1064,7 @@ def get_confirmation_history(
     rows = (
         db.query(DispatchConfirmation)
         .filter(
+            DispatchConfirmation.company_id == caller.company_id,
             DispatchConfirmation.date >= start_date,
             DispatchConfirmation.date <= end_date,
         )
@@ -1034,7 +1088,7 @@ def get_confirmation_history(
 async def finalize_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Finalize the day's dispatch — post confirmed crews to Discord truck channels.
 
@@ -1044,7 +1098,10 @@ async def finalize_dispatch(
       - Sets per-day channel permissions (confirmed crew + privileged roles only)
       - Posts the master driver list to #drivers-chat
     """
-    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    assignments = db.query(TruckAssignment).filter(
+        TruckAssignment.date == dispatch_date,
+        TruckAssignment.company_id == caller.company_id,
+    ).all()
     if not assignments:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1080,18 +1137,21 @@ async def finalize_dispatch(
 def clear_daily_dispatch(
     dispatch_date: date,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt)
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Clear all truck assignments for a specific date.
     Returns 403 if the user tries to delete a dispatch for a past date.
     """
-    if dispatch_date < date.today() and "admin" not in current_user.get("cognito_groups", []):
+    if dispatch_date < date.today() and caller.role not in (ROLE_ADMIN,):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot delete assignment records for past days."
         )
 
-    assignments = db.query(TruckAssignment).filter(TruckAssignment.date == dispatch_date).all()
+    assignments = db.query(TruckAssignment).filter(
+        TruckAssignment.date == dispatch_date,
+        TruckAssignment.company_id == caller.company_id,
+    ).all()
     for a in assignments:
         db.query(AssignmentMember).filter(AssignmentMember.assignment_id == a.id).delete()
         db.delete(a)
@@ -1108,7 +1168,6 @@ def clear_daily_dispatch(
 def create_package_manifest(
     payload: PackageManifestCreate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
     caller: Employee = Depends(get_caller_employee),
 ):
     """Create a package manifest for a truck on a specific date. Dispatch/admin only.
@@ -1116,11 +1175,15 @@ def create_package_manifest(
     Records how many totes and OV packages were loaded onto the truck.
     One manifest per truck per date — use PATCH to update counts.
     """
-    truck = db.query(Truck).filter(Truck.id == payload.truck_id).first()
+    truck = db.query(Truck).filter(
+        Truck.id == payload.truck_id,
+        Truck.company_id == caller.company_id,
+    ).first()
     if not truck:
         raise HTTPException(status_code=404, detail="Truck not found.")
 
     existing = db.query(PackageManifest).filter(
+        PackageManifest.company_id == caller.company_id,
         PackageManifest.truck_id == payload.truck_id,
         PackageManifest.date == payload.date,
     ).first()
@@ -1131,6 +1194,7 @@ def create_package_manifest(
         )
 
     row = PackageManifest(
+        company_id=caller.company_id,
         truck_id=payload.truck_id,
         date=payload.date,
         tote_count=payload.tote_count,
@@ -1150,7 +1214,6 @@ def update_package_manifest(
     payload: PackageManifestPatch,
     target_date: date = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
     caller: Employee = Depends(get_caller_employee),
 ):
     """Update package counts on an existing manifest."""
@@ -1158,6 +1221,7 @@ def update_package_manifest(
         target_date = date.today()
 
     row = db.query(PackageManifest).filter(
+        PackageManifest.company_id == caller.company_id,
         PackageManifest.truck_id == truck_id,
         PackageManifest.date == target_date,
     ).first()
@@ -1189,6 +1253,7 @@ def get_package_manifest(
         target_date = date.today()
 
     row = db.query(PackageManifest).filter(
+        PackageManifest.company_id == caller.company_id,
         PackageManifest.truck_id == truck_id,
         PackageManifest.date == target_date,
     ).first()
@@ -1201,7 +1266,7 @@ def get_package_manifest(
 def get_manifests_summary(
     target_date: date = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(allow_dispatch_mgmt),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return all manifests for a date with truck names and totals. Dispatch/admin only."""
     if target_date is None:
@@ -1209,7 +1274,10 @@ def get_manifests_summary(
 
     rows = (
         db.query(PackageManifest)
-        .filter(PackageManifest.date == target_date)
+        .filter(
+            PackageManifest.company_id == caller.company_id,
+            PackageManifest.date == target_date,
+        )
         .order_by(PackageManifest.submitted_at.asc())
         .all()
     )

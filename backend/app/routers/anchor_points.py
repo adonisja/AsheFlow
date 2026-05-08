@@ -141,6 +141,19 @@ async def submit_anchor_point(
     )
 
     is_first = len(todays) == 0
+
+    # Idempotency guard: if this is the initial AP and one already exists as
+    # "preliminary" with the same location, return it rather than duplicating.
+    if is_first is False:
+        pass  # relocation — always create a new record
+    else:
+        existing_preliminary = next(
+            (a for a in todays if a.status == "preliminary" and a.location == payload.location),
+            None,
+        )
+        if existing_preliminary:
+            return existing_preliminary
+
     sequence = 1 if is_first else todays[-1].sequence + 1
 
     # Mark the current active (non-relocated) AP as relocated

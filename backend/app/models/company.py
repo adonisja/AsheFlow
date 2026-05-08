@@ -1,0 +1,98 @@
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
+from app.models.base import Base
+import uuid
+from datetime import datetime, timezone
+
+
+class Company(Base):
+    """A DSP company onboarded to AsheFlow.
+
+    One row per company. All tenant-scoped tables reference this via company_id.
+    """
+    __tablename__ = "companies"
+
+    id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name             = Column(String(255),        nullable=False)
+    slug             = Column(String(100),        nullable=False, unique=True, index=True)
+    amazon_dsp_code  = Column(String(20),         nullable=True)
+    timezone         = Column(String(64),         nullable=False, default="America/New_York")
+    is_active        = Column(Boolean,            nullable=False, default=True, index=True)
+    created_at       = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    config = relationship("CompanyConfig", back_populates="company", uselist=False)
+    zones  = relationship("CompanyZone",   back_populates="company")
+
+
+class CompanyConfig(Base):
+    """All configurable operational values for a company.
+
+    One row per company. NULL means "not yet configured" — the backend
+    falls back to the hardcoded defaults in constants.py until set.
+    """
+    __tablename__ = "company_configs"
+
+    id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, unique=True, index=True)
+
+    # ── Shift timing ──────────────────────────────────────────────────────────
+    shift_start    = Column(Time, nullable=True)   # e.g. 07:00
+    shift_end      = Column(Time, nullable=True)   # e.g. 18:00
+    checkin_open   = Column(Time, nullable=True)   # earliest accepted check-in
+    checkin_close  = Column(Time, nullable=True)   # latest accepted check-in
+
+    # ── Walker rating window ──────────────────────────────────────────────────
+    # Hours after driver departure that walker ratings are accepted.
+    rating_window_hours = Column(Integer, nullable=True)   # default 6
+
+    # ── Account lifecycle ─────────────────────────────────────────────────────
+    invite_expiry_days = Column(Integer, nullable=True)    # default 7
+
+    # ── Crew requirements per truck ───────────────────────────────────────────
+    min_trainers_per_truck = Column(Integer, nullable=True)   # default 2
+    min_walkers_per_truck  = Column(Integer, nullable=True)   # default 3
+
+    # ── Training rules ────────────────────────────────────────────────────────
+    graduation_assignments          = Column(Integer, nullable=True)   # default 5
+    debt_escalation_threshold       = Column(Integer, nullable=True)   # default 3
+    phase4_pass_score               = Column(Float,   nullable=True)   # default 90.0
+    underperforming_trainer_threshold = Column(Integer, nullable=True) # default 3
+    max_training_phase              = Column(Integer, nullable=True)   # default 4
+
+    # ── Dispatch algorithm weights ────────────────────────────────────────────
+    dispatch_weight_driver          = Column(Float, nullable=True)   # default 0.70
+    dispatch_weight_trainer         = Column(Float, nullable=True)   # default 0.50
+    dispatch_weight_walker          = Column(Float, nullable=True)   # default 0.30
+    dispatch_mutual_bonus           = Column(Float, nullable=True)   # default 0.10
+    dispatch_tridirectional_bonus   = Column(Float, nullable=True)   # default 0.20
+    dispatch_consecutive_penalty    = Column(Float, nullable=True)   # default 0.05
+    dispatch_weight_cap             = Column(Float, nullable=True)   # default 0.85
+
+    # ── Walker rating anomaly detection ───────────────────────────────────────
+    flag_threshold = Column(Float, nullable=True)   # default 1.0
+
+    # ── Driver mid-shift check-ins ────────────────────────────────────────────
+    driver_checkin_count = Column(Integer, nullable=True)   # default 4
+
+    company = relationship("Company", back_populates="config")
+
+
+class CompanyZone(Base):
+    """A geographic zone assigned to a company's DSP operation.
+
+    Zones can be nested: a top-level zone covers the full DSP area;
+    child zones (parent_zone_id set) are subsections used for route mapping.
+    bounds stores a GeoJSON Polygon object.
+    """
+    __tablename__ = "company_zones"
+
+    id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id     = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, index=True)
+    parent_zone_id = Column(UUID(as_uuid=True), nullable=True,  index=True)
+    name           = Column(String(255),        nullable=False)
+    bounds         = Column(JSONB,              nullable=True)   # GeoJSON Polygon
+    is_active      = Column(Boolean,            nullable=False, default=True)
+    created_at     = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    company = relationship("Company", back_populates="zones")

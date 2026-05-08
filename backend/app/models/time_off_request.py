@@ -9,6 +9,7 @@ class TimeOffRequest(Base):
     __tablename__ = "time_off_requests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     employee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
     date = Column(Date, nullable=False)
     status = Column(String, default="pending", nullable=False)  # pending, approved, rejected, expired

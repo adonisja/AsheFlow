@@ -9,20 +9,20 @@ class Settings(BaseSettings):
     # Named channels                                                       #
     # ------------------------------------------------------------------ #
     discord_drivers_channel_id: int
-    discord_trainers_channel_id: int = TRAINERS_CHANNEL_REDACTED
+    discord_trainers_channel_id: int
 
     # ------------------------------------------------------------------ #
     # Discord server role IDs                                              #
     # Roles that always have read access to ALL truck channels.            #
     # ------------------------------------------------------------------ #
-    discord_role_admin: int    = ROLE_ADMIN_REDACTED
-    discord_role_manager: int  = ROLE_MANAGER_REDACTED
-    discord_role_asheflow: int = ROLE_ASHEFLOW_REDACTED
-    discord_role_bot: int      = ROLE_BOT_REDACTED
-    discord_role_dispatch: int = ROLE_DISPATCH_REDACTED
-    discord_role_driver: int   = ROLE_DRIVER_REDACTED
-    discord_role_captain: int  = ROLE_CAPTAIN_REDACTED
-    discord_role_walker: int   = ROLE_WALKER_REDACTED
+    discord_role_admin: int
+    discord_role_manager: int
+    discord_role_asheflow: int
+    discord_role_bot: int
+    discord_role_dispatch: int
+    discord_role_driver: int
+    discord_role_captain: int
+    discord_role_walker: int
 
     # ------------------------------------------------------------------ #
     # API / auth                                                           #
