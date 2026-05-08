@@ -125,6 +125,7 @@ def make_training_record(db, trainee: Employee, trainer: Employee) -> TrainingRe
 def make_training_task(db, record: TrainingRecord) -> TrainingTask:
     task = TrainingTask(
         id=uuid.uuid4(),
+        company_id=record.company_id,
         training_record_id=record.id,
         topic_title="Test Topic",
         is_completed=False,
