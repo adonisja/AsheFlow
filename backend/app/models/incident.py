@@ -38,6 +38,7 @@ class Incident(Base):
     __tablename__ = "incidents"
 
     id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     reporter_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     truck_id      = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="SET NULL"), nullable=True)
     date          = Column(Date, nullable=False, index=True)

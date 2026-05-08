@@ -17,6 +17,8 @@ KEY CONCEPTS:
 import uuid
 from datetime import date
 
+SEED_COMPANY_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -115,6 +117,7 @@ def make_employee(db, role: str = "driver", name: str = "Test Employee") -> Empl
     """Insert and return an active Employee with a fresh UUID."""
     emp = Employee(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         name=name,
         role=role,
         is_active=True,
@@ -130,6 +133,7 @@ def make_truck(db, name: str = "Truck A") -> Truck:
     """Insert and return a Truck with a fresh UUID."""
     truck = Truck(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         name=name,
         is_active=True,
     )
@@ -143,6 +147,7 @@ def make_assignment(db, truck: Truck, target_date: date = None) -> TruckAssignme
     """Insert and return a TruckAssignment for a truck on a given date."""
     ta = TruckAssignment(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         truck_id=truck.id,
         date=target_date or date.today(),
     )
@@ -156,6 +161,7 @@ def make_member(db, assignment: TruckAssignment, employee: Employee, role: str) 
     """Link an employee to a TruckAssignment as a specific role."""
     member = AssignmentMember(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         assignment_id=assignment.id,
         employee_id=employee.id,
         role=role,
@@ -170,6 +176,7 @@ def make_relationship(db, employee: Employee, target: Employee, rel_type: str) -
     """Insert a fav or ban relationship between two employees."""
     rel = EmployeeRelationship(
         id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
         employee_id=employee.id,
         target_employee_id=target.id,
         relationship_type=rel_type,

@@ -36,7 +36,7 @@ def _cognito_client():
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
 def create_employee(
     employee: EmployeeCreate,
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
 ):
     """Create an employee record and send a Cognito invite to their email.
@@ -45,10 +45,16 @@ def create_employee(
     Also adds them to the correct Cognito group matching their role.
     The employee's cognito_sub is stamped automatically on their first login.
     """
-    # Check for duplicate email or discord_id before touching Cognito
-    if db.query(Employee).filter(Employee.email == employee.email).first():
+    # Duplicate checks scoped to the caller's company
+    if employee.email and db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.email == employee.email,
+    ).first():
         raise HTTPException(status_code=400, detail="An employee with this email already exists.")
-    if db.query(Employee).filter(Employee.discord_id == employee.discord_id).first():
+    if db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.discord_id == employee.discord_id,
+    ).first():
         raise HTTPException(status_code=400, detail="An employee with this Discord ID already exists.")
 
     # Create the Cognito user and send the invite email.
@@ -103,7 +109,7 @@ def create_employee(
 @router.post("/bulk", response_model=List[BulkImportResult], status_code=status.HTTP_200_OK)
 def bulk_import_employees(
     rows: List[BulkImportRow],
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
 ):
     """Import multiple employees in one request.
@@ -127,15 +133,21 @@ def bulk_import_employees(
     results: List[BulkImportResult] = []
 
     for i, row in enumerate(rows, start=1):
-        # Duplicate checks
-        if db.query(Employee).filter(Employee.email == row.email).first():
+        # Duplicate checks scoped to caller's company
+        if db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.email == row.email,
+        ).first():
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
                 reason="Email already exists.",
             ))
             continue
 
-        if db.query(Employee).filter(Employee.discord_id == row.discord_id).first():
+        if db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.discord_id == row.discord_id,
+        ).first():
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
                 reason="Discord ID already exists.",
@@ -406,3 +418,100 @@ def reactivate_employee(employee_id: UUID, current_user: dict = Depends(RoleChec
     db.commit()
     db.refresh(db_employee)
     return db_employee
+
+
+@router.post("/me/email/request-change", status_code=status.HTTP_200_OK)
+def request_email_change(
+    payload: dict,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])),
+):
+    """Step 1: Request an email address change.
+
+    Calls Cognito UpdateUserAttributes with the user's own access token.
+    Cognito sends a verification code to the new email address.
+
+    Body: { "access_token": "<cognito_access_token>", "new_email": "<email>" }
+    """
+    access_token = payload.get("access_token")
+    new_email    = payload.get("new_email", "").strip().lower()
+
+    if not access_token or not new_email:
+        raise HTTPException(status_code=422, detail="access_token and new_email are required.")
+
+    # Basic format check
+    if "@" not in new_email or "." not in new_email.split("@")[-1]:
+        raise HTTPException(status_code=422, detail="Invalid email address.")
+
+    # Check the new email isn't already taken in our DB
+    existing = db_check = None
+    try:
+        from app.database import SessionLocal
+        db_check = SessionLocal()
+        existing = db_check.query(Employee).filter(
+            Employee.email == new_email,
+            Employee.id    != caller.id,
+        ).first()
+    finally:
+        if db_check:
+            db_check.close()
+
+    if existing:
+        raise HTTPException(status_code=409, detail="That email is already in use by another account.")
+
+    cognito = _cognito_client()
+    try:
+        cognito.update_user_attributes(
+            AccessToken=access_token,
+            UserAttributes=[{"Name": "email", "Value": new_email}],
+        )
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "NotAuthorizedException":
+            raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
+        raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
+
+    return {"detail": "Verification code sent to the new email address."}
+
+
+@router.post("/me/email/confirm-change", status_code=status.HTTP_200_OK)
+def confirm_email_change(
+    payload: dict,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Step 2: Confirm the email change with the verification code.
+
+    Calls Cognito VerifyUserAttribute, then updates the employee DB record.
+
+    Body: { "access_token": "<cognito_access_token>", "code": "<6-digit code>", "new_email": "<email>" }
+    """
+    access_token = payload.get("access_token")
+    code         = payload.get("code", "").strip()
+    new_email    = payload.get("new_email", "").strip().lower()
+
+    if not access_token or not code or not new_email:
+        raise HTTPException(status_code=422, detail="access_token, code, and new_email are required.")
+
+    cognito = _cognito_client()
+    try:
+        cognito.verify_user_attribute(
+            AccessToken=access_token,
+            AttributeName="email",
+            Code=code,
+        )
+    except ClientError as e:
+        code_name = e.response["Error"]["Code"]
+        if code_name == "CodeMismatchException":
+            raise HTTPException(status_code=400, detail="Incorrect verification code.")
+        if code_name == "ExpiredCodeException":
+            raise HTTPException(status_code=400, detail="Verification code has expired. Request a new one.")
+        if code_name == "NotAuthorizedException":
+            raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
+        raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
+
+    # Cognito confirmed — sync to our DB
+    caller.email = new_email
+    db.commit()
+
+    return {"detail": "Email updated successfully.", "email": new_email}

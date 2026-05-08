@@ -1,3 +1,71 @@
+## 2026-05-07 Multi-Tenant: Config NULL Fallback Pattern
+
+When migrating from a hardcoded-constant system to per-company config, make all
+config columns nullable and resolve values in order: `company_configs` row →
+hardcoded constant. This lets the migration happen incrementally — existing
+behavior is unchanged until a company admin explicitly sets a value. Never
+delete the hardcoded constants until every company has a real config row.
+
+**Rule:** Before touching a service that reads a constant (e.g. `GRADUATION_ASSIGNMENTS = 5`),
+ensure the calling code resolves `company_config.graduation_assignments or GRADUATION_ASSIGNMENTS`.
+Only then remove the constant.
+
+---
+
+## 2026-05-05 React Native: "Should Have a Queue" Is Not Always a Conditional Hook
+
+The error "Should have a queue. You are likely calling Hooks conditionally" is React's generic "hook count changed between renders" panic. It does not always mean a conditional `useState`/`useEffect` call. Any synchronous `throw` that interrupts the hooks sequence mid-component produces the same message — even if every hook call is unconditional.
+
+**Root cause pattern:** A hook helper (`useAuth`) called `throw new Error(...)` when its context was null. One hook (`useColorScheme`) had already run before the throw. On the next render, React counted one fewer hook and panicked with the queue error instead of the actual missing-provider message.
+
+**Fix:** Never throw synchronously from a hook that is called during render. Return a safe fallback value instead. If the caller must know that the context is absent, return `null` or a typed sentinel — don't throw. Reserve throws for imperative call sites (event handlers, async functions) where the hooks queue is not active.
+
+**Rule:** When you see "Should have a queue," first check whether any hook-like helper throws rather than looking for misplaced `if` statements around `useState`.
+
+---
+
+## 2026-05-04 Mobile: Stack Screens Are Dead Without a Navigate Call
+
+Registering a screen in a `createNativeStackNavigator` does not make it reachable. If no code ever calls `navigation.navigate('ScreenName')`, the screen simply never appears — no error, no warning, just a silent dead end. This happened to `TrainerHistory`, `TrainerPerformance`, `Phase4`, and `TraineeHistory`, all of which were registered but orphaned.
+
+**Fix:** when a feature has multiple sub-views (Today / History / Performance), own the tab bar in a wrapper component (`TrainerDashboard`) that renders the sub-screens directly. The navigator registers one screen; navigation is handled by `useState` inside the wrapper. This mirrors how the web works (tabs inside a page, not separate routes).
+
+**Rule:** After adding a screen to a navigator, immediately verify there is a code path that reaches it. If there isn't one, the screen doesn't exist from the user's perspective.
+
+---
+
+## 2026-05-04 Mobile: `id_token` vs `access_token` in Cognito
+
+Cognito issues two tokens after sign-in. The access token authorizes API calls but carries no user attributes — no `cognito:groups`, no `email`. The id_token carries all of that. If the backend reads `cognito:groups` from the JWT (as the `RoleChecker` dependency does), the Bearer token must be the id_token. Sending the access token causes silent 403s on every role-gated route — the API returns 403 but no network error, so screens just render empty.
+
+**Rule:** Store and send the id_token for any backend that reads group membership or user attributes from the JWT payload.
+
+---
+
+## 2026-05-04 Mobile: UTC Date Bug in US Timezones
+
+`new Date().toISOString().split('T')[0]` returns the UTC date. In US Eastern time at midnight to ~8am, that's yesterday's date. Any schedule or dispatch query using this will silently return the wrong day's data. Always derive local date with `getFullYear()` / `getMonth()` / `getDate()`.
+
+---
+
+## 2026-05-04 Mobile: Task List UX — Group, Not Card-Per-Row
+
+Rendering each task as its own bordered card creates visual noise and wastes vertical space. The correct pattern (Things 3, iOS Settings, Linear): all tasks in a group share one rounded container (`overflow: hidden`), rows are separated by inset dividers only (no border on the last row). Description text is hidden by default and expands on row tap — the checkbox is an independent touch target with `hitSlop` so it doesn't conflict with the expand gesture.
+
+---
+
+## 2026-05-04 Backend: Excess-Trainer Walker Re-Slotting Corrupts Assignment Roles
+
+The dispatch engine capped excess trainers by extending the walker pool with them. Because `assign_walkers` hardcodes `role="walker"` for every employee it receives, those trainers ended up in `assignment_members` with the wrong role. The corruption was silent — no guard compared `AssignmentMember.role` against `Employee.role`.
+
+**Root cause pattern:** passing an employee ORM object to a pool that stamps a fixed role. Any future "spill-over" design must carry the original role through, not borrow the destination pool's role.
+
+**Fix:** Remove the cap entirely. `assign_trainers` already does pure round-robin distribution with no ceiling — the cap was the only thing blocking it. With the cap gone, all available trainers distribute evenly across trucks (e.g. 12 trainers / 5 trucks → 2-2-2-3-3). "Excess trainers" is not a real concept when distribution is dynamic. Add a role-integrity guard at write time that auto-corrects any trainer assigned a non-trainer role and appends a `role_integrity_violation` warning.
+
+**Takeaway:** When writing an employee into a pool, the pool must not overwrite their canonical role. Either the role travels with the member dict, or a guard verifies it before the DB write. Never let the slot type determine the stored role. And before adding a warning/fallback for an edge case, ask whether the algorithm already handles it — the cap created the "excess" problem that didn't need to exist.
+
+---
+
 ## 2026-05-02 Dashboard Audit: Always Verify the Data Source Before Trusting a KPI
 
 This section was written after auditing all dashboard views post-shift-lifecycle backend (ADR-055).
@@ -2210,4 +2278,112 @@ OVERSIGHT_ROLES: tuple[str, ...] = ("management", "admin", "dispatch")
 
 Import and use these for all ORM-level comparisons (`emp.role == ROLE_TRAINER`, `Employee.role.in_(list(OVERSIGHT_ROLES))`). Leave dict-level comparisons on external JSON data (bot responses, API payloads) as literals — those operate on data you don't control and substituting constants there doesn't prevent bugs at the source.
 
+---
+
+## 2026-05-05 Alembic: Always Run `alembic current` Before Writing `down_revision`
+
+Copying `down_revision` from another migration file (or from a stale branch) creates a hidden multi-head divergence. Alembic will not error on `alembic upgrade head` if the new migration points to a revision the DB has already passed — it just becomes an unreachable head. Symptom: `alembic heads` shows two hashes instead of one.
+
+**Rule:** Before writing a new migration, run `alembic current` (or `docker exec <container> alembic current`) and set `down_revision` to exactly that output. If the DB is at multiple heads, resolve the merge first.
+
+---
+
+## 2026-05-05 Mobile: Step-Gated Lifecycle Screens
+
+For a long ordered workflow (e.g. 19-step driver shift), a single screen with step-gated rendering beats a multi-screen navigator:
+
+- One `useEffect` on mount fetches all shift state and derives a `currentStep: number`.
+- Each step component is only rendered when `currentStep >= stepNum`.
+- Completed steps collapse to a summary chip (not unmounted — just swapped to a summary view so state is preserved).
+- Future steps are hidden entirely, not disabled — drivers should never see UI they can't interact with.
+
+This avoids navigation complexity, back-button confusion, and partial-state bugs across screens. All state lives in one place and refreshes together.
+
+---
+
+## 2026-05-05 Mobile: AsyncStorage for Multi-Entry Drafts
+
+When a user must fill out the same form for N items (e.g. walker ratings, one per crew member) and may not finish in one session:
+
+- Key pattern: `{feature}:{userId}:{date}:{itemId}` — scoped so old drafts never bleed into a new day.
+- Draft state is loaded on mount and merged with the live item list.
+- On final submit (end-of-day), all drafts are flushed atomically: submit each, then clear keys.
+- If a rating was already submitted server-side, skip it silently — idempotent submit is safer than checking first.
+
+Avoid storing drafts in component state alone — a single app kill loses everything. AsyncStorage is the right persistence layer for anything the user hasn't formally submitted.
+
+---
+
+## 2026-05-05 Backend: Nullable Staging Fields Pattern
+
+When adding context-dependent columns (fields that only apply in some cases), make them nullable and enforce the context at the API layer, not the DB layer:
+
+```python
+# schema
+was_staged: Optional[bool] = None
+missing_items: Optional[List[str]] = None
+
+# router — strip fields that don't apply
+if data.arrival_type != "loading":
+    data.was_staged = None
+    data.missing_items = None
+```
+
+This keeps the DB schema simple (one table, no polymorphic split) while preventing nonsensical data (a "return" arrival with a staging check).
+
 Migrate incrementally: start with the files that have the most role comparisons (dispatch router, deps) and let others follow over time.
+
+## 2026-05-07 Config: Shell Environment Variables Override `.env`
+
+`pydantic-settings` loads configuration in priority order: shell env vars beat `.env`, which beats class defaults. A `.env` update that appears correct will be silently ignored if the same variable is exported in `~/.zshrc` or `~/.bash_profile`.
+
+**Symptom:** you update `.env`, restart nothing, run a quick Python check, and see the old value.
+
+**Diagnosis:**
+```bash
+echo $VARIABLE_NAME   # if this returns the old value, the shell wins
+```
+
+**Fix:** update the `export` line in the shell config file, not just `.env`. Both must agree.
+
+This caught us during the Cognito pool migration — `AWS_COGNITO_USER_POOL_ID` was exported in `~/.zshrc` with the old pool ID, so every Python import of `settings` returned the stale value despite the correct `.env`.
+
+## 2026-05-07 AWS: PyJWT Access Tokens Have No `aud` Claim
+
+AWS Cognito issues two JWT types with different claim shapes:
+
+| Token type | `aud` claim | Client identity |
+|---|---|---|
+| ID token | set to app client ID | `aud` |
+| Access token | **absent** | `client_id` in payload |
+
+When you call `jwt.decode(token, key, audience=client_id)` on an access token, PyJWT raises `MissingRequiredClaimError("aud")` — **not** `InvalidAudienceError`. A fallback that only catches `InvalidAudienceError` will silently 401 all access tokens.
+
+```python
+# Correct — catch both so the fallback fires for either token type
+except (jwt.InvalidAudienceError, jwt.MissingRequiredClaimError):
+    # access token path: no 'aud', validate 'client_id' manually
+    payload = jwt.decode(token, key, algorithms=["RS256"],
+                         issuer=COGNITO_ISSUER, options={"verify_aud": False})
+    if payload.get("client_id") != settings.aws_cognito_app_client_id:
+        raise HTTPException(401, "Wrong client")
+```
+
+## 2026-05-07 Architecture: Pass `company_id` Into Services, Don't Read It From State
+
+Service functions that write rows should receive `company_id` as an explicit parameter from the router, not derive it by querying the first related row in the DB.
+
+**Why:** If the query returns an unexpected row (wrong scope, stale session, or the service is called from a test with no rows at all), the derived `company_id` will be wrong and you'll silently write to the wrong tenant's data. An explicit parameter makes the data flow visible and testable.
+
+```python
+# Bad — reads from DB state; breaks in tests and in edge cases
+def create_assignment(db, truck_id):
+    truck = db.query(Truck).filter(Truck.id == truck_id).first()
+    row = TruckAssignment(company_id=truck.company_id, ...)  # fragile
+
+# Good — caller passes it in; test can supply SEED_COMPANY_ID
+def create_assignment(db, truck_id, company_id: UUID):
+    row = TruckAssignment(company_id=company_id, ...)
+```
+
+The router always has `caller.company_id` (from `get_caller_employee`) and should forward it explicitly to every service call that writes rows.

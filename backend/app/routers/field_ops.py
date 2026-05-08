@@ -10,7 +10,8 @@ from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privil
 from app.core.config import settings
 from app.models.field_ops import CheckIn, Departure, WalkerRating, VehicleInspection, FuelMileageLog, INSPECTION_ITEMS, INSPECTION_TYPES
 from app.models.dock_assignment import DockAssignment
-from app.models.station_arrival import StationArrival, ARRIVAL_TYPES
+from app.models.station_arrival import StationArrival, ARRIVAL_TYPES, STAGING_ITEMS
+from app.models.package_manifest import PackageManifest
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
@@ -24,6 +25,7 @@ from app.schemas.field_ops import (
     FuelMileageLogCreate, FuelMileageLogPatch, FuelMileageLogResponse, FuelMileageSummaryItem,
     DockAssignmentCreate, DockAssignmentPatch, DockAssignmentResponse,
     StationArrivalCreate, StationArrivalResponse,
+    ManifestAcknowledgeResponse,
 )
 
 router = APIRouter(prefix="/field-ops", tags=["field-ops"])
@@ -1309,6 +1311,11 @@ def record_station_arrival(
     if payload.arrival_type not in ARRIVAL_TYPES:
         raise HTTPException(status_code=400, detail=f"arrival_type must be one of {ARRIVAL_TYPES}.")
 
+    if payload.missing_items:
+        bad = [i for i in payload.missing_items if i not in STAGING_ITEMS]
+        if bad:
+            raise HTTPException(status_code=400, detail=f"Unknown staging items: {bad}. Must be one of {STAGING_ITEMS}.")
+
     existing = db.query(StationArrival).filter(
         StationArrival.driver_id == payload.employee_id,
         StationArrival.date == payload.date,
@@ -1324,6 +1331,8 @@ def record_station_arrival(
         driver_id=payload.employee_id,
         date=payload.date,
         arrival_type=payload.arrival_type,
+        was_staged=payload.was_staged if payload.arrival_type == "loading" else None,
+        missing_items=payload.missing_items if payload.arrival_type == "loading" else None,
     )
     db.add(row)
     db.commit()
@@ -1373,6 +1382,66 @@ def get_station_arrivals_summary(
             "driver_name": emp_map[r.driver_id].name if r.driver_id in emp_map else "Unknown",
             "arrival_type": r.arrival_type,
             "arrived_at": r.arrived_at.isoformat() if r.arrived_at else None,
+            "was_staged": r.was_staged,
+            "missing_items": r.missing_items,
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Package Manifest
+# ---------------------------------------------------------------------------
+
+@router.get("/manifest/{truck_id}", response_model=Optional[ManifestAcknowledgeResponse])
+def get_manifest(
+    truck_id: UUID,
+    target_date: Optional[date] = Query(default=None),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return today's package manifest for a truck.
+
+    Returns null (200) when no manifest has been entered yet — "not staged" is a
+    normal pre-shift state, not an error. Drivers on the truck and management can view.
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    row = db.query(PackageManifest).filter(
+        PackageManifest.truck_id == truck_id,
+        PackageManifest.date == target_date,
+    ).first()
+    return row
+
+
+@router.patch("/manifest/{truck_id}/acknowledge", response_model=ManifestAcknowledgeResponse)
+def acknowledge_manifest(
+    truck_id: UUID,
+    target_date: Optional[date] = Query(default=None),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Driver acknowledges they have reviewed and loaded the manifest.
+
+    Stamps acknowledged_by and acknowledged_at. Idempotent — re-acknowledging
+    updates the timestamp to the most recent confirmation.
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    row = db.query(PackageManifest).filter(
+        PackageManifest.truck_id == truck_id,
+        PackageManifest.date == target_date,
+    ).first()
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail="No manifest found for this truck today. Contact dispatch.",
+        )
+
+    row.acknowledged_by = caller.id
+    row.acknowledged_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return row

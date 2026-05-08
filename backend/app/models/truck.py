@@ -17,6 +17,7 @@ class Truck(Base):
     __tablename__ = "trucks"
 
     id                 = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     name               = Column(String(100),        nullable=False, unique=True, index=True)
     is_active          = Column(Boolean,            nullable=False, default=True, index=True)
     discord_channel_id = Column(BigInteger,         nullable=True)

@@ -109,6 +109,6 @@ When a driver confirms AP arrival the embed fires only to their truck channel. D
 
 **Fix:** `PATCH /{anchor_id}/arrive` now also calls `/internal/post-to-channel` with `DISCORD_DRIVERS_CHANNEL_ID` after posting the truck-channel embed. Message format: `📍 **{truck_name}** — {driver} confirmed AP: **{location}**`.
 
-`DISCORD_DRIVERS_CHANNEL_ID` is sourced from `backend/.env` (same value as the bot — `DRIVERS_CHANNEL_REDACTED`) and mounted into the backend container via `env_file` in `docker-compose.yml`. The backend already reads `BOT_INTERNAL_URL` / `INTERNAL_SECRET` the same way; this follows the same pattern.
+`DISCORD_DRIVERS_CHANNEL_ID` is sourced from `backend/.env` and mounted into the backend container via `env_file` in `docker-compose.yml`. The backend already reads `BOT_INTERNAL_URL` / `INTERNAL_SECRET` the same way; this follows the same pattern.
 
 Guard: the channel post is skipped if `DISCORD_DRIVERS_CHANNEL_ID` is unset or non-numeric, so dev environments without a Discord config are unaffected.

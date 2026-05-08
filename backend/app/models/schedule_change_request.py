@@ -35,6 +35,7 @@ class ScheduleChangeRequest(Base):
     __tablename__ = "schedule_change_requests"
 
     id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     employee_id     = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     request_type    = Column(String(20), nullable=False)           # add_day | drop_day | full_rework
     days_to_add     = Column(ARRAY(String), nullable=False, default=list, server_default="{}")

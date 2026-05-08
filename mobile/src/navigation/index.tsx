@@ -1,0 +1,242 @@
+import React, { useState, useCallback, createContext, useContext } from 'react';
+import {
+  NavigationContainer,
+} from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import {
+  View, Text, TouchableOpacity, ScrollView, StyleSheet,
+  useColorScheme, ActivityIndicator, SafeAreaView,
+} from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { useAuth } from '@contexts/AuthContext';
+import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+
+// ── Screens ───────────────────────────────────────────────────────────────────
+import LoginScreen              from '@screens/Auth/LoginScreen';
+import HomeScreen               from '@screens/Home/HomeScreen';
+import TodayAssignmentScreen    from '@screens/Home/TodayAssignmentScreen';
+import ProfileScreen            from '@screens/Profile/ProfileScreen';
+import FieldOpsScreen           from '@screens/FieldOps/FieldOpsScreen';
+import ScheduleScreen           from '@screens/Schedule/ScheduleScreen';
+import NotificationsScreen      from '@screens/Notifications/NotificationsScreen';
+import IncidentsScreen          from '@screens/Incidents/IncidentsScreen';
+import TrainerDashboard         from '@screens/Trainer/TrainerDashboard';
+import TraineeDashboard         from '@screens/Trainee/TraineeDashboard';
+import AnchorPointsScreen       from '@screens/AnchorPoints/AnchorPointsScreen';
+import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
+
+// ── Role constants ────────────────────────────────────────────────────────────
+export const FIELD_ROLES        = ['driver', 'trainer', 'trainee', 'walker'] as const;
+export const FIELD_OPS_ROLES    = ['driver'] as const;
+export const ANCHOR_POINT_ROLES = ['driver'] as const;
+export const PREFERENCES_ROLES  = ['driver', 'walker', 'trainer'] as const;
+export const SCHEDULE_ROLES     = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const INCIDENT_ROLES     = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const TRAINER_ROLES      = ['trainer'] as const;
+export const TRAINEE_ROLES      = ['trainee'] as const;
+
+// ── Tab-switch context (lets child screens navigate to a different tab) ───────
+const TabSwitchContext = createContext<(key: string) => void>(() => {});
+export const useTabSwitch = () => useContext(TabSwitchContext);
+
+// ── Navigator param lists ─────────────────────────────────────────────────────
+export type RootStackParamList = { Auth: undefined; Main: undefined };
+
+export type HomeStackParamList = {
+  HomeMain: undefined;
+  TodayAssignment: undefined;
+  Profile: undefined;
+};
+
+export type TrainerStackParamList = {
+  TrainerDashboard: undefined;
+};
+
+export type TraineeStackParamList = {
+  TraineeDashboard: undefined;
+};
+
+const RootStack    = createNativeStackNavigator<RootStackParamList>();
+const HomeStack    = createNativeStackNavigator<HomeStackParamList>();
+const TrainerStack = createNativeStackNavigator<TrainerStackParamList>();
+const TraineeStack = createNativeStackNavigator<TraineeStackParamList>();
+
+// ── Tab definition ────────────────────────────────────────────────────────────
+type TabDef = {
+  key: string;
+  label: string;
+  icon: string;
+  roles: readonly string[];
+  component: React.ComponentType<any>;
+};
+
+const ALL_TABS: TabDef[] = [
+  { key: 'Home',          label: 'Home',          icon: '⌂',  roles: [],               component: HomeNavigator },
+  { key: 'FieldOps',      label: 'Field Ops',      icon: '🔧', roles: FIELD_OPS_ROLES,    component: FieldOpsScreen },
+  { key: 'AnchorPoints',  label: 'Anchor Points',  icon: '📍', roles: ANCHOR_POINT_ROLES, component: AnchorPointsScreen },
+  { key: 'Training',      label: 'Training',       icon: '📋', roles: TRAINER_ROLES,      component: TrainerNavigator },
+  { key: 'MyTraining',    label: 'My Training',    icon: '📚', roles: TRAINEE_ROLES,      component: TraineeNavigator },
+  { key: 'Schedule',      label: 'Schedule',       icon: '📅', roles: SCHEDULE_ROLES,     component: ScheduleScreen },
+  { key: 'Incidents',     label: 'Incidents',      icon: '⚠️', roles: INCIDENT_ROLES,     component: IncidentsScreen },
+  { key: 'Preferences',   label: 'Preferences',    icon: '⚙️', roles: PREFERENCES_ROLES,  component: PreferencesScreen },
+  { key: 'Notifications', label: 'Notifications',  icon: '🔔', roles: [],                 component: NotificationsScreen },
+];
+
+// ── Home stack navigator ──────────────────────────────────────────────────────
+function HomeNavigator() {
+  const scheme = useColorScheme();
+  const c = scheme === 'dark' ? darkColors : lightColors;
+  return (
+    <HomeStack.Navigator
+      screenOptions={{
+        headerStyle: { backgroundColor: c.surface },
+        headerTintColor: c.primary,
+        headerTitleStyle: { fontWeight: fontWeight.semibold, color: c.foreground, fontSize: fontSize.base },
+        headerShadowVisible: false,
+      }}
+    >
+      <HomeStack.Screen name="HomeMain"         component={HomeScreen}            options={{ headerShown: false }} />
+      <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ title: "Today's Assignment" }} />
+      <HomeStack.Screen name="Profile"          component={ProfileScreen}         options={{ headerShown: false }} />
+    </HomeStack.Navigator>
+  );
+}
+
+// ── Trainer nested navigator ──────────────────────────────────────────────────
+function TrainerNavigator() {
+  return (
+    <TrainerStack.Navigator screenOptions={{ headerShown: false }}>
+      <TrainerStack.Screen name="TrainerDashboard" component={TrainerDashboard} />
+    </TrainerStack.Navigator>
+  );
+}
+
+// ── Trainee nested navigator ──────────────────────────────────────────────────
+function TraineeNavigator() {
+  return (
+    <TraineeStack.Navigator screenOptions={{ headerShown: false }}>
+      <TraineeStack.Screen name="TraineeDashboard" component={TraineeDashboard} />
+    </TraineeStack.Navigator>
+  );
+}
+
+// ── Horizontal scroll tab bar ─────────────────────────────────────────────────
+function HorizontalTabBar({
+  tabs,
+  activeKey,
+  onSelect,
+}: {
+  tabs: TabDef[];
+  activeKey: string;
+  onSelect: (key: string) => void;
+}) {
+  const scheme = useColorScheme();
+  const c = scheme === 'dark' ? darkColors : lightColors;
+  const insets = useSafeAreaInsets();
+  const s = tabBarStyles(c);
+
+  return (
+    <View style={[s.container, { paddingBottom: insets.bottom }]}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={s.scroll}
+      >
+        {tabs.map(tab => {
+          const active = tab.key === activeKey;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[s.tab, active && s.tabActive]}
+              onPress={() => onSelect(tab.key)}
+              activeOpacity={0.7}
+            >
+              <Text style={[s.icon, active && s.iconActive]}>{tab.icon}</Text>
+              <Text style={[s.label, active && s.labelActive]}>{tab.label}</Text>
+              {active && <View style={s.indicator} />}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+const tabBarStyles = (c: typeof lightColors) => StyleSheet.create({
+  container: {
+    backgroundColor: c.surface,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
+  scroll:      { paddingHorizontal: spacing.sm, paddingTop: spacing.xs },
+  tab:         { alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, minWidth: 64, position: 'relative' },
+  tabActive:   {},
+  icon:        { fontSize: 20, marginBottom: 2 },
+  iconActive:  {},
+  label:       { fontSize: 10, color: '#9CA3AF', fontWeight: '500' },
+  labelActive: { color: c.primary, fontWeight: '600' },
+  indicator:   {
+    position: 'absolute', top: 0,
+    left: spacing.md, right: spacing.md,
+    height: 2, backgroundColor: c.primary,
+    borderBottomLeftRadius: 2, borderBottomRightRadius: 2,
+  },
+});
+
+// ── Main app shell ────────────────────────────────────────────────────────────
+function MainShell() {
+  const { hasRole } = useAuth();
+
+  const visibleTabs = ALL_TABS.filter(t =>
+    t.roles.length === 0 || hasRole(...t.roles)
+  );
+
+  const [activeKey, setActiveKey] = useState(visibleTabs[0]?.key ?? 'Home');
+
+  // Remap 'NotificationsTab' alias so HomeScreen can switch to it by a stable name
+  const switchTab = useCallback((key: string) => {
+    const target = key === 'NotificationsTab' ? 'Notifications' : key;
+    setActiveKey(target);
+  }, []);
+
+  const ActiveScreen = visibleTabs.find(t => t.key === activeKey)?.component ?? HomeNavigator;
+
+  return (
+    <TabSwitchContext.Provider value={switchTab}>
+      <View style={{ flex: 1 }}>
+        <View style={{ flex: 1 }}>
+          <ActiveScreen />
+        </View>
+        <HorizontalTabBar tabs={visibleTabs} activeKey={activeKey} onSelect={setActiveKey} />
+      </View>
+    </TabSwitchContext.Provider>
+  );
+}
+
+// ── Root navigator ────────────────────────────────────────────────────────────
+export default function RootNavigator() {
+  const { isAuthenticated, isLoading } = useAuth();
+  const scheme = useColorScheme();
+  const c = scheme === 'dark' ? darkColors : lightColors;
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: c.background }}>
+        <ActivityIndicator size="large" color={c.primary} />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <RootStack.Navigator screenOptions={{ headerShown: false }}>
+        {isAuthenticated ? (
+          <RootStack.Screen name="Main" component={MainShell} />
+        ) : (
+          <RootStack.Screen name="Auth" component={LoginScreen} />
+        )}
+      </RootStack.Navigator>
+    </NavigationContainer>
+  );
+}
