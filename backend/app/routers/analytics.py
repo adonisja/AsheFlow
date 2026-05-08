@@ -20,11 +20,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 
 from app.database import get_db
-from app.api.deps import RoleChecker
+from app.api.deps import RoleChecker, get_caller_employee
+from app.models.employee import Employee as EmployeeModel
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.dispatch_confirmation import DispatchConfirmation
-from app.models.employee import Employee
 from app.models.training import TrainingRecord
 from app.models.notification import Notification
 
@@ -41,20 +41,10 @@ allow_mgmt = RoleChecker(["dispatch", "management", "admin"])
 def get_dispatch_fill_rate(
     start_date: date = Query(..., description="Start of range (inclusive)"),
     end_date:   date = Query(..., description="End of range (inclusive)"),
-    db: Session = Depends(get_db),
+    caller: EmployeeModel = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
-    """Return per-day breakdown of algorithm-placed vs manually-placed crew slots.
-
-    Response:
-    ```json
-    {
-      "start_date": "...", "end_date": "...",
-      "summary": { "total_slots": N, "algo_slots": N, "manual_slots": N, "algo_pct": 0.0 },
-      "by_date": [{ "date": "...", "total": N, "algo": N, "manual": N }]
-    }
-    ```
-    """
     rows = (
         db.query(
             TruckAssignment.date,
@@ -64,6 +54,7 @@ def get_dispatch_fill_rate(
         )
         .join(AssignmentMember, TruckAssignment.id == AssignmentMember.assignment_id)
         .filter(
+            TruckAssignment.company_id == caller.company_id,
             TruckAssignment.date >= start_date,
             TruckAssignment.date <= end_date,
         )
@@ -104,23 +95,14 @@ def get_dispatch_fill_rate(
 
 @router.get("/trainer-load")
 def get_trainer_load(
-    db: Session = Depends(get_db),
+    caller: EmployeeModel = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
-    """Return active trainee count and phase breakdown per trainer.
-
-    "Active" = training record with no submitted_at (not yet graduated/closed).
-
-    Response:
-    ```json
-    [{ "trainer_id": "...", "trainer_name": "...", "active_trainees": N,
-       "phases": { "1": N, "2": N, "3": N, "4": N } }]
-    ```
-    """
-    # Fetch all open (unsubmitted) training records that have a trainer assigned
     open_records = (
         db.query(TrainingRecord)
         .filter(
+            TrainingRecord.company_id == caller.company_id,
             TrainingRecord.submitted_at.is_(None),
             TrainingRecord.trainer_id.isnot(None),
         )
@@ -130,7 +112,7 @@ def get_trainer_load(
     trainer_ids = list({r.trainer_id for r in open_records})
     trainers = {
         e.id: e
-        for e in db.query(Employee).filter(Employee.id.in_(trainer_ids)).all()
+        for e in db.query(EmployeeModel).filter(EmployeeModel.id.in_(trainer_ids)).all()
     }
 
     # Aggregate
@@ -159,30 +141,17 @@ def get_trainer_load(
 @router.get("/ban-override-freq")
 def get_ban_override_freq(
     weeks: int = Query(default=8, ge=1, le=52, description="Number of past weeks to include"),
-    db: Session = Depends(get_db),
+    caller: EmployeeModel = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
-    """Return count of ban override events per week over the last N weeks.
-
-    Ban override events are persisted as Notification rows with
-    type='ban_override_reassignment'. Each event = one walker was moved
-    because their ban on a candidate was overridden by a driver/trainer fav.
-
-    Response:
-    ```json
-    {
-      "weeks": N,
-      "total_overrides": N,
-      "by_week": [{ "week_start": "YYYY-MM-DD", "count": N }]
-    }
-    ```
-    """
     today = date.today()
     range_start = today - timedelta(weeks=weeks)
 
     rows = (
         db.query(Notification)
         .filter(
+            Notification.company_id == caller.company_id,
             Notification.type == "ban_override_reassignment",
             Notification.created_at >= datetime.combine(range_start, datetime.min.time()).replace(tzinfo=timezone.utc),
         )
@@ -219,28 +188,15 @@ def get_ban_override_freq(
 def get_confirmation_times(
     start_date: date = Query(..., description="Start of range (inclusive)"),
     end_date:   date = Query(..., description="End of range (inclusive)"),
-    db: Session = Depends(get_db),
+    caller: EmployeeModel = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
-    """Return median and p90 confirmation response time (minutes) per role.
-
-    Response time = confirmed_at − created_at (the publish timestamp).
-    Only includes rows where status='confirmed' or 'declined' with a confirmed_at.
-    Pending rows are excluded.
-
-    Response:
-    ```json
-    {
-      "start_date": "...", "end_date": "...",
-      "overall": { "median_minutes": N, "p90_minutes": N, "total_responses": N },
-      "by_role": [{ "role": "...", "median_minutes": N, "p90_minutes": N, "count": N }]
-    }
-    ```
-    """
     rows = (
-        db.query(DispatchConfirmation, Employee)
-        .join(Employee, DispatchConfirmation.employee_id == Employee.id)
+        db.query(DispatchConfirmation, EmployeeModel)
+        .join(EmployeeModel, DispatchConfirmation.employee_id == EmployeeModel.id)
         .filter(
+            DispatchConfirmation.company_id == caller.company_id,
             DispatchConfirmation.date >= start_date,
             DispatchConfirmation.date <= end_date,
             DispatchConfirmation.confirmed_at.isnot(None),
@@ -268,7 +224,7 @@ def get_confirmation_times(
     for conf, emp in rows:
         mins = _minutes(conf)
         all_times.append(mins)
-        role = emp.role
+        role = emp.role  # type: ignore[union-attr]
         by_role.setdefault(role, []).append(mins)
 
     overall = {

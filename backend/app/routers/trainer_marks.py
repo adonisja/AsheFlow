@@ -21,13 +21,20 @@ allow_trainer_self = RoleChecker(["trainer", "management", "admin"])
 
 @router.get("/", response_model=List[dict])
 def list_all_marks(
-    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
     """List all trainer marks with trainer name, trainee name, date, and reason.
     Most recent first. Management/admin only.
     """
-    marks = db.query(TrainerMark).order_by(TrainerMark.created_at.desc()).all()
+    marks = (
+        db.query(TrainerMark)
+        .join(Employee, TrainerMark.trainer_id == Employee.id)
+        .filter(Employee.company_id == caller.company_id)
+        .order_by(TrainerMark.created_at.desc())
+        .all()
+    )
 
     emp_ids = {m.trainer_id for m in marks} | {m.trainee_id for m in marks}
     emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
@@ -127,18 +134,19 @@ def my_marks_summary(
 
 @router.get("/summary", response_model=List[dict])
 def trainer_mark_summary(
-    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
 ):
-    """Per-trainer mark count and underperforming flag status.
-    Sorted by mark count descending.
-    """
+    """Per-trainer mark count and underperforming flag status. Sorted by mark count descending."""
     rows = (
         db.query(
             TrainerMark.trainer_id,
             func.count(TrainerMark.id).label("total_marks"),
             func.count(TrainerMark.trainee_id.distinct()).label("distinct_trainees"),
         )
+        .join(Employee, TrainerMark.trainer_id == Employee.id)
+        .filter(Employee.company_id == caller.company_id)
         .group_by(TrainerMark.trainer_id)
         .all()
     )

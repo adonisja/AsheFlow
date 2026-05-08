@@ -31,7 +31,10 @@ def create_employee_off_day(
     if caller.role not in mgmt_roles and caller.id != employee_off_day.employee_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only add off-days for yourself.")
 
-    db_employee = db.query(Employee).filter(Employee.id == employee_off_day.employee_id).first()
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_off_day.employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
@@ -42,16 +45,17 @@ def create_employee_off_day(
     return db_off_day
 
 @router.get("/", response_model=list[EmployeeOffDayResponse])
-def get_all_employee_off_days(db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
-    """Return all employee off-day records.
-
-    Args:
-        db: Database session.
-
-    Returns:
-        List of all EmployeeOffDay records.
-    """
-    return db.query(EmployeeOffDay).all()
+def get_all_employee_off_days(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(EmployeeOffDay)
+        .join(Employee, EmployeeOffDay.employee_id == Employee.id)
+        .filter(Employee.company_id == caller.company_id)
+        .all()
+    )
 
 @router.get("/{employee_id}", response_model=list[EmployeeOffDayResponse])
 def get_employee_off_days(
@@ -67,39 +71,44 @@ def get_employee_off_days(
     if caller.role not in mgmt_roles and caller.id != employee_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only view your own off-days.")
 
-    return db.query(EmployeeOffDay).filter(EmployeeOffDay.employee_id == employee_id).all()
+    return (
+        db.query(EmployeeOffDay)
+        .join(Employee, EmployeeOffDay.employee_id == Employee.id)
+        .filter(EmployeeOffDay.employee_id == employee_id, Employee.company_id == caller.company_id)
+        .all()
+    )
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
-def delete_all_off_days(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
-    """Delete all recurring off days for an employee.
-
-    Args:
-        employee_id: UUID of the employee whose off days to clear.
-        db: Database session.
-
-    Raises:
-        HTTPException(404): If the referenced employee does not exist.
-    """
-    employee = db.query(Employee).filter(Employee.id == employee_id).first()
-
+def delete_all_off_days(
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
     if not employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-    
+
     db.query(EmployeeOffDay).filter(EmployeeOffDay.employee_id == employee_id).delete()
     db.commit()
 
 @router.delete("/{off_day_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_mgmt)):
-    """Delete a single employee off-day record by its ID.
-
-    Args:
-        off_day_id: UUID of the EmployeeOffDay record to remove.
-        db: Database session.
-
-    Raises:
-        HTTPException(404): If no off-day record with the given ID exists.
-    """
-    off_day = db.query(EmployeeOffDay).filter(EmployeeOffDay.id == off_day_id).first()
+def delete_employee_off_day(
+    off_day_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    """Delete a single employee off-day record by its ID. Management/admin only."""
+    off_day = (
+        db.query(EmployeeOffDay)
+        .join(Employee, EmployeeOffDay.employee_id == Employee.id)
+        .filter(EmployeeOffDay.id == off_day_id, Employee.company_id == caller.company_id)
+        .first()
+    )
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
 
@@ -107,30 +116,53 @@ def delete_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), _: 
     db.commit()
 
 @router.patch("/{off_day_id}/approve", response_model=EmployeeOffDayResponse)
-def approve_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), current_user: dict = Depends(allow_mgmt)):
-    off_day = db.query(EmployeeOffDay).filter(EmployeeOffDay.id == off_day_id).first()
+def approve_employee_off_day(
+    off_day_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    off_day = (
+        db.query(EmployeeOffDay)
+        .join(Employee, EmployeeOffDay.employee_id == Employee.id)
+        .filter(EmployeeOffDay.id == off_day_id, Employee.company_id == caller.company_id)
+        .first()
+    )
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
     off_day.status = "approved"
     db.add(Notification(
+        company_id=caller.company_id,
         employee_id=off_day.employee_id,
         type="offday_approved",
-        message=f"Your request to have {off_day.day_of_week}s off has been approved."
+        message=f"Your request to have {off_day.day_of_week}s off has been approved.",
     ))
     db.commit()
     db.refresh(off_day)
     return off_day
 
+
 @router.patch("/{off_day_id}/reject", response_model=EmployeeOffDayResponse)
-def reject_employee_off_day(off_day_id: UUID, db: Session = Depends(get_db), current_user: dict = Depends(allow_mgmt)):
-    off_day = db.query(EmployeeOffDay).filter(EmployeeOffDay.id == off_day_id).first()
+def reject_employee_off_day(
+    off_day_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    off_day = (
+        db.query(EmployeeOffDay)
+        .join(Employee, EmployeeOffDay.employee_id == Employee.id)
+        .filter(EmployeeOffDay.id == off_day_id, Employee.company_id == caller.company_id)
+        .first()
+    )
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
     off_day.status = "rejected"
     db.add(Notification(
+        company_id=caller.company_id,
         employee_id=off_day.employee_id,
         type="offday_rejected",
-        message=f"Your request to have {off_day.day_of_week}s off was not approved."
+        message=f"Your request to have {off_day.day_of_week}s off was not approved.",
     ))
     db.commit()
     db.refresh(off_day)
