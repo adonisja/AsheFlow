@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # record is automatically deleted by the Celery cleanup job.
     invite_expiry_days: int = 7
 
+    # SES sender address — must be a verified identity in SES.
+    ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
+
+    # Public base URL of the web app — used to build invite links in emails.
+    app_base_url: str = "http://localhost:5173"
+
     # Comma-separated list of allowed CORS origins.
     # Dev default covers common Vite/CRA ports; override in production.
     cors_origins: str = (
