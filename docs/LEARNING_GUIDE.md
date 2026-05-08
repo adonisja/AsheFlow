@@ -1,3 +1,31 @@
+## 2026-05-08 Registration: Alembic Autogenerate Drift
+
+`alembic revision --autogenerate` compares the ORM models against the live DB
+schema. If the live DB has constraints or columns that are no longer in the ORM
+(e.g. FKs from a previous migration that was written by hand with different
+naming), autogenerate will include `op.drop_constraint` / `op.drop_column` calls
+for all of them — not just the table you're adding.
+
+**Rule:** After running `--autogenerate`, always inspect the output and trim
+everything outside the feature you're adding. Only commit the minimal diff. The
+extra `drop_*` operations are not harmless — they can destroy constraints that
+are still in use.
+
+## 2026-05-08 Registration: AdminCreateUser + AdminSetUserPassword Pattern
+
+To create a Cognito user with a permanent password (no force-change challenge on
+first login):
+1. Call `AdminCreateUser` with `MessageAction="SUPPRESS"` — this creates the user
+   without sending a Cognito system email and without triggering a temp-password
+   requirement.
+2. Immediately call `AdminSetUserPassword` with `Permanent=True` — this promotes
+   the password from temporary to permanent so the user can sign in without a
+   challenge.
+
+If step 2 fails, delete the Cognito user created in step 1 before re-raising,
+otherwise the username is permanently blocked (Cognito `UsernameExistsException`
+on retry).
+
 ## 2026-05-07 Multi-Tenant: Config NULL Fallback Pattern
 
 When migrating from a hardcoded-constant system to per-company config, make all
