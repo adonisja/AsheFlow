@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
-from app.core.config import settings
+from app.services.company_config import get_company_config
 from app.models.field_ops import CheckIn, Departure, WalkerRating, VehicleInspection, FuelMileageLog, INSPECTION_ITEMS, INSPECTION_TYPES
 from app.models.dock_assignment import DockAssignment
 from app.models.station_arrival import StationArrival, ARRIVAL_TYPES, STAGING_ITEMS
@@ -360,12 +360,13 @@ def submit_rating(
         )
 
     # Gate 2 — rating window must still be open
+    cfg = get_company_config(db, caller.company_id)
     now = datetime.now(timezone.utc)
-    window_close = departure.departed_at + timedelta(hours=settings.rating_window_hours)
+    window_close = departure.departed_at + timedelta(hours=cfg.rating_window_hours)
     if now > window_close:
         raise HTTPException(
             status_code=400,
-            detail=f"The rating window has closed. Ratings must be submitted within {settings.rating_window_hours} hours of departure.",
+            detail=f"The rating window has closed. Ratings must be submitted within {cfg.rating_window_hours} hours of departure.",
         )
 
     if payload.present and (payload.stars is None or not (1 <= payload.stars <= 5)):
@@ -1052,6 +1053,7 @@ def get_walker_profile(
 def get_walker_consistency(
     walker_id: UUID,
     db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_management),
 ):
     """Per-driver rating breakdown for a walker.
@@ -1070,8 +1072,9 @@ def get_walker_consistency(
         .all()
     )
 
+    cfg = get_company_config(db, caller.company_id)
     if not rows:
-        return {"walker_avg_stars": None, "drivers": [], "flag_threshold": 1.0}
+        return {"walker_avg_stars": None, "drivers": [], "flag_threshold": cfg.flag_threshold}
 
     # Group by driver
     from collections import defaultdict
@@ -1089,7 +1092,7 @@ def get_walker_consistency(
     overall_stars = [r.stars for r in rows]
     walker_avg = round(sum(overall_stars) / len(overall_stars), 2)
 
-    FLAG_THRESHOLD = 1.0
+    FLAG_THRESHOLD = cfg.flag_threshold
     drivers_out = []
     for did, stars_list in driver_buckets.items():
         avg = round(sum(stars_list) / len(stars_list), 2)
