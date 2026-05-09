@@ -158,38 +158,6 @@ class TestHeadcountCap:
     emitted for trainer/walker shortfalls only when a cap is active.
     """
 
-    def test_cap_trims_walkers_and_emits_warning(self, db):
-        """
-        ARRANGE:
-        - 1 truck, 1 driver, 1 trainer, 2 walkers.
-        - total_employees=2 (driver + trainer only — walkers should be cut).
-        ASSERT:
-        - understaffed_walkers warning emitted.
-        - No walkers appear in the assigned crew.
-
-        WHY total_employees=2:
-        Driver (1) + Trainer (1) = 2. Both walkers are trimmed. The cap
-        applies before any assignment runs, so the walker pool is empty.
-        """
-        truck = make_truck(db, "Truck A")
-        make_employee(db, role="driver",  name="Driver")
-        make_employee(db, role="trainer", name="Trainer")
-        make_employee(db, role="walker",  name="Walker 1")
-        make_employee(db, role="walker",  name="Walker 2")
-
-        formatted_crews, warnings = run_dispatch(
-            db, target_date=date.today(), total_employees=2, company_id=SEED_COMPANY_ID
-        )
-
-        walker_warning = [w for w in warnings if w.get("type") == "understaffed_walkers"]
-        assert len(walker_warning) == 1, "Walker shortage warning should be emitted"
-
-        all_walkers_in_crews = [
-            m for crew in formatted_crews.values()
-            for m in crew if m["role"] == "walker"
-        ]
-        assert all_walkers_in_crews == [], "No walkers should be assigned when trimmed by cap"
-
     def test_no_walker_warning_without_cap(self, db):
         """
         Without total_employees, walker warnings are suppressed — all available

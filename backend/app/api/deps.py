@@ -256,6 +256,25 @@ class RoleChecker:
 _PRIVILEGED_ROLES = frozenset(OVERSIGHT_ROLES)
 
 
+def require_configured(
+    caller=Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+) -> None:
+    """Dependency that blocks any request if the caller's company has not
+    completed initial setup.  Add to APIRouter(dependencies=[...]) for
+    every router except the companies config router and registration router.
+    """
+    from app.models.company import CompanyConfig
+    row = db.query(CompanyConfig).filter(
+        CompanyConfig.company_id == caller.company_id
+    ).first()
+    if row is None or not row.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Company setup is not complete. An admin must finish configuration before the platform can be used.",
+        )
+
+
 def assert_owns_or_privileged(caller, target_id: str, resource: str = "resource") -> None:
     """Raise 403 unless caller owns the resource or has a privileged role.
 

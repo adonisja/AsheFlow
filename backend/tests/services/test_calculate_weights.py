@@ -27,7 +27,17 @@ import pytest
 
 from app.services.calculate_weights import calculate_weights
 from app.services.assign_drivers import assign_drivers
-from app.services.constants import ROLE_BOOST, MUTUAL_BONUS
+from app.services.company_config import PLATFORM_DEFAULTS
+
+ROLE_BOOST = {
+    "driver":  PLATFORM_DEFAULTS["dispatch_weight_driver"],
+    "trainer": PLATFORM_DEFAULTS["dispatch_weight_trainer"],
+    "walker":  PLATFORM_DEFAULTS["dispatch_weight_walker"],
+}
+MUTUAL_BONUS = {
+    "bidirectional":  PLATFORM_DEFAULTS["dispatch_mutual_bonus"],
+    "tridirectional": PLATFORM_DEFAULTS["dispatch_tridirectional_bonus"],
+}
 
 from tests.conftest import make_employee, make_truck, make_assignment, make_member, make_relationship
 

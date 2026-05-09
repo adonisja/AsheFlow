@@ -103,7 +103,8 @@ def db():
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    # Seed Company + CompanyConfig so get_company_config doesn't raise.
+    # Seed Company + fully-configured CompanyConfig so get_company_config
+    # doesn't raise in tests. All required fields set to platform defaults.
     session.add(Company(
         id=SEED_COMPANY_ID,
         name="Test Company",
@@ -114,6 +115,22 @@ def db():
     session.add(CompanyConfig(
         id=uuid.UUID("b0000000-0000-0000-0000-000000000001"),
         company_id=SEED_COMPANY_ID,
+        is_configured=True,
+        rating_window_hours=6,
+        invite_expiry_days=7,
+        graduation_assignments=5,
+        debt_escalation_threshold=3,
+        phase4_pass_score=90.0,
+        underperforming_trainer_threshold=3,
+        max_training_phase=4,
+        dispatch_weight_driver=0.70,
+        dispatch_weight_trainer=0.50,
+        dispatch_weight_walker=0.30,
+        dispatch_mutual_bonus=0.10,
+        dispatch_tridirectional_bonus=0.20,
+        dispatch_consecutive_penalty=0.05,
+        dispatch_weight_cap=0.85,
+        flag_threshold=1.0,
     ))
     session.commit()
 
