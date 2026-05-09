@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.models.training import TrainingRecord, TrainingTask, TrainingCurriculum
 from app.models.employee import Employee
 from app.models.trainer_continuation_request import TrainerContinuationRequest
-from app.services.constants import DEBT_ESCALATION_THRESHOLD
+from app.services.company_config import ResolvedConfig
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 MAX_CURRICULUM_PHASE = 4
 
 
-def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, List[Dict]]) -> None:
+def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, List[Dict]], cfg: ResolvedConfig = None) -> None:
     """
     Hook called at dispatch publish time to auto-generate daily training records
     for all trainees assigned today.
@@ -171,7 +171,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
                 is_training_debt=True,
                 record_type="coverage",
                 debt_age=new_debt_age,
-                is_escalated=new_debt_age >= DEBT_ESCALATION_THRESHOLD,
+                is_escalated=new_debt_age >= (cfg.debt_escalation_threshold if cfg else 3),
             )
             db.add(debt_task)
 

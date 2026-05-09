@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.models.trainer_mark import TrainerMark
 from app.models.training import TrainingRecord
-from app.services.record_trainer_mark import UNDERPERFORMING_MARK_THRESHOLD
+from app.services.company_config import get_company_config
 
 router = APIRouter(prefix="/trainer-marks", tags=["trainer-marks"])
 
@@ -125,10 +125,11 @@ def my_marks_summary(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     marks = db.query(TrainerMark).filter(TrainerMark.trainer_id == caller.id).all()
     distinct_trainees = len({m.trainee_id for m in marks})
+    cfg = get_company_config(db, caller.company_id)
     return {
         "total_marks": len(marks),
         "distinct_trainees_with_marks": distinct_trainees,
-        "underperforming": distinct_trainees >= UNDERPERFORMING_MARK_THRESHOLD,
+        "underperforming": distinct_trainees >= cfg.underperforming_trainer_threshold,
     }
 
 
@@ -154,6 +155,7 @@ def trainer_mark_summary(
     trainer_ids = [r.trainer_id for r in rows]
     emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(trainer_ids)).all()}
 
+    cfg = get_company_config(db, caller.company_id)
     result = []
     for row in rows:
         trainer = emp_map.get(row.trainer_id)
@@ -161,7 +163,7 @@ def trainer_mark_summary(
             "trainer": _emp_stub(trainer),
             "total_marks": row.total_marks,
             "distinct_trainees_with_marks": row.distinct_trainees,
-            "underperforming": row.distinct_trainees >= UNDERPERFORMING_MARK_THRESHOLD,
+            "underperforming": row.distinct_trainees >= cfg.underperforming_trainer_threshold,
         })
 
     result.sort(key=lambda r: r["total_marks"], reverse=True)
