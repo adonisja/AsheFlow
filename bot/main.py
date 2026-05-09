@@ -1,8 +1,13 @@
 """AsheFlow Discord Bot — entry point.
 
-Loads all cogs and starts the bot. The bot listens for an internal
-`publish_dispatch` event which is fired by the backend when dispatch
-coordinator clicks "Publish to Discord" in the web app.
+Loads all cogs and starts the bot. The bot listens for internal webhook
+events fired by the backend when dispatch coordinators take action in the
+web app.
+
+Guild configuration (guild/channel/role IDs) is fetched per-company from
+the backend's /internal/guild-config/{company_id} endpoint and cached for
+5 minutes.  This allows one bot token to serve multiple DSP tenants, each
+with their own Discord server.
 """
 
 import asyncio
@@ -15,6 +20,7 @@ from discord.ext import commands
 
 from config import settings
 from services.api_client import api
+from services.guild_config import get_guild_config, get_company_id_for_guild
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,13 +63,14 @@ class AsheFlowBot(commands.Bot):
                 name="dispatch assignments",
             )
         )
-        try:
-            guild = discord.Object(id=settings.discord_guild_id)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            logger.info("Synced %d slash command(s) to guild.", len(synced))
-        except Exception as e:
-            logger.error("Failed to sync slash commands: %s", e)
+        # Sync slash commands to all guilds the bot is in
+        for guild in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                logger.info("Synced %d slash command(s) to guild %s.", len(synced), guild.id)
+            except Exception as e:
+                logger.error("Failed to sync slash commands to guild %s: %s", guild.id, e)
 
     async def close(self) -> None:
         await api.close()
@@ -73,34 +80,43 @@ class AsheFlowBot(commands.Bot):
     # Member join — welcome to general, assign roles
     # ------------------------------------------------------------------
 
-    # Maps the AsheFlow employee role to the corresponding Discord role ID.
     _ROLE_MAP: dict[str, str] = {
-        "driver":     "discord_role_driver",
-        "walker":     "discord_role_walker",
-        "trainer":    "discord_role_captain",
-        "trainee":    "discord_role_walker",
-        "dispatch":   "discord_role_dispatch",
-        "management": "discord_role_manager",
-        "admin":      "discord_role_admin",
+        "driver":     "role_driver",
+        "walker":     "role_walker",
+        "trainer":    "role_captain",
+        "trainee":    "role_walker",
+        "dispatch":   "role_dispatch",
+        "management": "role_manager",
+        "admin":      "role_admin",
     }
 
     async def on_member_join(self, member: discord.Member) -> None:
-        guild = self.get_guild(settings.discord_guild_id)
+        guild_id = member.guild.id
+        company_id = get_company_id_for_guild(guild_id)
+        if company_id is None:
+            logger.debug("on_member_join: guild %s has no mapped company — skipping.", guild_id)
+            return
+
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            return
+
+        guild = self.get_guild(cfg.guild_id)
         if not guild or member.guild.id != guild.id:
             return
 
-        # Always assign the base AsheFlow member role
         roles_to_assign: list[discord.Role] = []
-        base_role = guild.get_role(settings.discord_role_asheflow)
-        if base_role:
-            roles_to_assign.append(base_role)
 
-        # Look up job role by Discord ID
+        if cfg.role_asheflow:
+            base_role = guild.get_role(cfg.role_asheflow)
+            if base_role:
+                roles_to_assign.append(base_role)
+
         employee = await api.get_employee_by_discord(str(member.id))
         if employee:
             role_attr = self._ROLE_MAP.get(employee.get("role", ""))
             if role_attr:
-                job_role_id = getattr(settings, role_attr, None)
+                job_role_id = getattr(cfg, role_attr, None)
                 if job_role_id:
                     job_role = guild.get_role(job_role_id)
                     if job_role:
@@ -113,48 +129,43 @@ class AsheFlowBot(commands.Bot):
             except discord.HTTPException as e:
                 logger.error("Failed to assign roles to %s: %s", member, e)
 
-        # Send welcome message to general channel
-        general = guild.get_channel(settings.discord_general_channel_id)
-        if general:
-            try:
-                name = employee.get("name", member.display_name) if employee else member.display_name
-                await general.send(
-                    f"Welcome to AsheFlow, {member.mention} ({name})! "
-                    f"Check your email for your sign-in credentials."
-                )
-            except discord.HTTPException as e:
-                logger.error("Failed to send welcome message: %s", e)
+        if cfg.general_channel_id:
+            general = guild.get_channel(cfg.general_channel_id)
+            if general:
+                try:
+                    name = employee.get("name", member.display_name) if employee else member.display_name
+                    await general.send(
+                        f"Welcome to AsheFlow, {member.mention} ({name})! "
+                        f"Check your email for your sign-in credentials."
+                    )
+                except discord.HTTPException as e:
+                    logger.error("Failed to send welcome message: %s", e)
 
     # ------------------------------------------------------------------
-    # Internal publish trigger — called by the backend webhook handler
+    # Internal publish trigger
     # ------------------------------------------------------------------
 
-    async def trigger_publish(self, dispatch_date: str) -> None:
-        """Fire the publish flow for a given date.
-
-        Called when the backend receives POST /dispatch/{date}/publish
-        and forwards the event to the bot via this method.
-        """
+    async def trigger_publish(self, dispatch_date: str, company_id: str) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
             logger.error("Dispatch cog not loaded — cannot publish.")
             return
-        await dispatch_cog.publish_assignments(dispatch_date)
+        await dispatch_cog.publish_assignments(dispatch_date, company_id)
 
-    async def trigger_lockdown_channel(self, channel_id: int) -> None:
-        """Strip all crew overwrites from a channel and restore baseline permissions.
-
-        Called when a truck is deactivated. Reuses the setup cog's lock logic
-        so the channel matches the same baseline as /setup-channels would set.
-        """
+    async def trigger_lockdown_channel(self, channel_id: int, company_id: str) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
             logger.error("Dispatch cog not loaded — cannot lockdown channel.")
             return
 
-        guild = self.get_guild(settings.discord_guild_id)
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            logger.info("Lockdown skipped for company %s — Discord not configured.", company_id)
+            return
+
+        guild = self.get_guild(cfg.guild_id)
         if not guild:
-            logger.error("Guild not found for channel lockdown.")
+            logger.error("Guild %s not found for channel lockdown.", cfg.guild_id)
             return
 
         channel = guild.get_channel(channel_id)
@@ -163,89 +174,74 @@ class AsheFlowBot(commands.Bot):
             return
 
         try:
-            await dispatch_cog._set_truck_channel_permissions(guild, channel, confirmed_crew=[])
+            await dispatch_cog._set_truck_channel_permissions(guild, channel, confirmed_crew=[], cfg=cfg)
             logger.info("Locked down channel %s (truck deactivated).", channel_id)
         except Exception as e:
             logger.error("Failed to lockdown channel %s: %s", channel_id, e)
 
-    async def trigger_finalize(self, dispatch_date: str) -> None:
-        """Fire the finalization flow for a given date.
-
-        Called when dispatch clicks "Finalize" in the web app (~09:10 AM).
-        Posts confirmed crew to each truck channel, sets per-day permissions,
-        and posts the master driver list to #drivers-chat.
-        """
+    async def trigger_finalize(self, dispatch_date: str, company_id: str) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
             logger.error("Dispatch cog not loaded — cannot finalize.")
             return
-        await dispatch_cog.finalize_assignments(dispatch_date)
+        await dispatch_cog.finalize_assignments(dispatch_date, company_id)
 
     async def trigger_dm(self, discord_id: str, message: str) -> None:
-        """Send a plain DM to a Discord user by ID.
-
-        Called when the backend fires POST /internal/dm — used for graduation
-        notifications, role-change confirmations, and similar system events.
-        """
         invite_cog = self.cogs.get("Invite")
         if invite_cog is None:
             logger.error("Invite cog not loaded — cannot send DM to %s.", discord_id)
             return
         await invite_cog.send_dm(discord_id, message)
 
-    async def create_invite_url(self, name: str) -> str | None:
-        """Create a guild invite URL for a newly activated employee.
-
-        Returns the invite URL so the caller (handle_invite) can return it
-        to the backend, which emails it to the employee.
-        """
+    async def create_invite_url(self, name: str, company_id: str) -> str | None:
         invite_cog = self.cogs.get("Invite")
         if invite_cog is None:
             logger.error("Invite cog not loaded — cannot create invite for %s.", name)
             return None
-        return await invite_cog.create_guild_invite(name)
+        return await invite_cog.create_guild_invite(name, company_id)
 
 
 bot = AsheFlowBot()
 
 
 # ---------------------------------------------------------------------------
-# Internal webhook server — receives publish triggers from the backend
+# Internal webhook server — receives triggers from the backend
 # ---------------------------------------------------------------------------
 
 from aiohttp import web
 
+
+def _check_secret(request: web.Request) -> bool:
+    return request.headers.get("X-Internal-Secret", "") == os.environ.get("INTERNAL_SECRET", "")
+
+
 async def handle_publish(request: web.Request) -> web.Response:
-    """POST /internal/publish  body: { "date": "YYYY-MM-DD" }"""
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/publish  body: { "date": "YYYY-MM-DD", "company_id": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     dispatch_date = data.get("date")
-    if not dispatch_date:
-        return web.Response(status=400, text="Missing date")
+    company_id = data.get("company_id")
+    if not dispatch_date or not company_id:
+        return web.Response(status=400, text="Missing date or company_id")
 
-    asyncio.create_task(bot.trigger_publish(dispatch_date))
+    asyncio.create_task(bot.trigger_publish(dispatch_date, company_id))
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
 async def handle_invite(request: web.Request) -> web.Response:
-    """POST /internal/invite  body: { "name": "..." }
-
-    Called by the backend when a new employee activates their account on
-    first login. Creates a single-use guild invite and returns the URL so
-    the backend can email it to the employee. Discord DMs are not used —
-    the bot cannot DM users who don't already share a server with it.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/invite  body: { "name": "...", "company_id": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     name = data.get("name", "New Employee")
+    company_id = data.get("company_id")
+    if not company_id:
+        return web.Response(status=400, text="Missing company_id")
 
-    invite_url = await bot.create_invite_url(name)
+    invite_url = await bot.create_invite_url(name, company_id)
     if not invite_url:
         return web.Response(status=502, text="Failed to create guild invite")
 
@@ -253,75 +249,60 @@ async def handle_invite(request: web.Request) -> web.Response:
 
 
 async def handle_lockdown_channel(request: web.Request) -> web.Response:
-    """POST /internal/lockdown-channel  body: { "channel_id": 1234567890 }
-
-    Strips all member-level permission overwrites from a truck channel and
-    re-applies the baseline (privileged roles only, @everyone denied).
-    Called when a truck is deactivated so yesterday's crew loses access.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/lockdown-channel  body: { "channel_id": 123, "company_id": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     channel_id = data.get("channel_id")
-    if not channel_id:
-        return web.Response(status=400, text="Missing channel_id")
+    company_id = data.get("company_id")
+    if not channel_id or not company_id:
+        return web.Response(status=400, text="Missing channel_id or company_id")
 
-    asyncio.create_task(bot.trigger_lockdown_channel(int(channel_id)))
+    asyncio.create_task(bot.trigger_lockdown_channel(int(channel_id), company_id))
     return web.json_response({"status": "queued", "channel_id": channel_id})
 
 
 async def handle_alert(request: web.Request) -> web.Response:
-    """POST /internal/alert  body: { "date": "YYYY-MM-DD", "message": "..." }
-
-    Posts a plain-text alert to #drivers-chat. Used by the Celery 09:05 reminder.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/alert  body: { "date": "YYYY-MM-DD", "message": "...", "company_id": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     message = data.get("message", "")
-    if not message:
-        return web.Response(status=400, text="Missing message")
+    company_id = data.get("company_id")
+    if not message or not company_id:
+        return web.Response(status=400, text="Missing message or company_id")
 
-    guild = bot.get_guild(settings.discord_guild_id)
-    if guild:
-        channel = guild.get_channel(settings.discord_drivers_channel_id)
-        if channel:
-            asyncio.create_task(channel.send(f"🕘 {message}"))
+    cfg = await get_guild_config(company_id)
+    if cfg and cfg.is_configured and cfg.drivers_channel_id:
+        guild = bot.get_guild(cfg.guild_id)
+        if guild:
+            channel = guild.get_channel(cfg.drivers_channel_id)
+            if channel:
+                asyncio.create_task(channel.send(f"🕘 {message}"))
 
     return web.json_response({"status": "ok"})
 
 
 async def handle_finalize(request: web.Request) -> web.Response:
-    """POST /internal/finalize  body: { "date": "YYYY-MM-DD" }
-
-    Called by the backend when dispatch clicks "Finalize" (~09:10 AM).
-    Posts finalized crew assignments to truck channels and #drivers-chat.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/finalize  body: { "date": "YYYY-MM-DD", "company_id": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     dispatch_date = data.get("date")
-    if not dispatch_date:
-        return web.Response(status=400, text="Missing date")
+    company_id = data.get("company_id")
+    if not dispatch_date or not company_id:
+        return web.Response(status=400, text="Missing date or company_id")
 
-    asyncio.create_task(bot.trigger_finalize(dispatch_date))
+    asyncio.create_task(bot.trigger_finalize(dispatch_date, company_id))
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
 async def handle_dm(request: web.Request) -> web.Response:
-    """POST /internal/dm  body: { "discord_id": "...", "message": "..." }
-
-    Sends a plain DM to a Discord user by their Discord ID (snowflake string).
-    Used for graduation notifications, role-change confirmations, etc.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/dm  body: { "discord_id": "...", "message": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
@@ -335,59 +316,39 @@ async def handle_dm(request: web.Request) -> web.Response:
 
 
 async def handle_post_to_channel(request: web.Request) -> web.Response:
-    """POST /internal/post-to-channel  body: { "channel_id": 123, "message": "..." }
-
-    Posts a plain-text message to any guild channel by ID.
-    Used by the backend for anchor point submissions and other driver-initiated
-    events that need to appear in the truck's Discord channel.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/post-to-channel  body: { "channel_id": 123, "message": "...", "company_id": "..." }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     channel_id = data.get("channel_id")
     message = data.get("message", "")
-    if not channel_id or not message:
-        return web.Response(status=400, text="Missing channel_id or message")
+    company_id = data.get("company_id")
+    if not channel_id or not message or not company_id:
+        return web.Response(status=400, text="Missing channel_id, message, or company_id")
 
-    guild = bot.get_guild(settings.discord_guild_id)
-    if guild:
-        channel = guild.get_channel(int(channel_id))
-        if channel:
-            asyncio.create_task(channel.send(message))
+    cfg = await get_guild_config(company_id)
+    if cfg and cfg.is_configured:
+        guild = bot.get_guild(cfg.guild_id)
+        if guild:
+            channel = guild.get_channel(int(channel_id))
+            if channel:
+                asyncio.create_task(channel.send(message))
 
     return web.json_response({"status": "ok"})
 
 
 async def handle_post_embed(request: web.Request) -> web.Response:
-    """POST /internal/post-embed
-
-    Body:
-    {
-        "channel_id": 123456789,
-        "title": "...",
-        "description": "...",      # optional
-        "color": 0x00ff00,         # optional, defaults to 0x5865F2 (Discord blurple)
-        "fields": [                # optional
-            { "name": "Label", "value": "text", "inline": true }
-        ],
-        "footer": "..."            # optional
-    }
-
-    Posts a rich Discord embed to the given channel.
-    Used by the backend for anchor point events so the truck room sees
-    nicely formatted AP updates.
-    """
-    secret = request.headers.get("X-Internal-Secret", "")
-    if secret != os.environ.get("INTERNAL_SECRET", ""):
+    """POST /internal/post-embed  body: { "channel_id": 123, "title": "...", "company_id": "...", ... }"""
+    if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     channel_id = data.get("channel_id")
     title = data.get("title", "")
-    if not channel_id or not title:
-        return web.Response(status=400, text="Missing channel_id or title")
+    company_id = data.get("company_id")
+    if not channel_id or not title or not company_id:
+        return web.Response(status=400, text="Missing channel_id, title, or company_id")
 
     embed = discord.Embed(
         title=title,
@@ -403,25 +364,27 @@ async def handle_post_embed(request: web.Request) -> web.Response:
     if footer := data.get("footer"):
         embed.set_footer(text=footer)
 
-    guild = bot.get_guild(settings.discord_guild_id)
-    if guild:
-        channel = guild.get_channel(int(channel_id))
-        if channel:
-            asyncio.create_task(channel.send(embed=embed))
+    cfg = await get_guild_config(company_id)
+    if cfg and cfg.is_configured:
+        guild = bot.get_guild(cfg.guild_id)
+        if guild:
+            channel = guild.get_channel(int(channel_id))
+            if channel:
+                asyncio.create_task(channel.send(embed=embed))
 
     return web.json_response({"status": "ok"})
 
 
 async def start_webhook_server() -> None:
     app = web.Application()
-    app.router.add_post("/internal/publish", handle_publish)
-    app.router.add_post("/internal/finalize", handle_finalize)
-    app.router.add_post("/internal/alert", handle_alert)
+    app.router.add_post("/internal/publish",          handle_publish)
+    app.router.add_post("/internal/finalize",         handle_finalize)
+    app.router.add_post("/internal/alert",            handle_alert)
     app.router.add_post("/internal/lockdown-channel", handle_lockdown_channel)
-    app.router.add_post("/internal/invite", handle_invite)
-    app.router.add_post("/internal/dm", handle_dm)
-    app.router.add_post("/internal/post-to-channel", handle_post_to_channel)
-    app.router.add_post("/internal/post-embed", handle_post_embed)
+    app.router.add_post("/internal/invite",           handle_invite)
+    app.router.add_post("/internal/dm",               handle_dm)
+    app.router.add_post("/internal/post-to-channel",  handle_post_to_channel)
+    app.router.add_post("/internal/post-embed",       handle_post_embed)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8001)

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import {
   Building2, Plus, RefreshCw, CheckCircle2, XCircle,
-  ChevronDown, ChevronUp, Send, AlertTriangle,
+  ChevronDown, ChevronUp, Send, AlertTriangle, ChevronRight,
+  ShieldCheck, ShieldAlert, X, UserX,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import SectionHeader from '../../components/ui/SectionHeader';
@@ -22,6 +24,7 @@ interface Company {
   timezone: string;
   is_active: boolean;
   created_at: string;
+  has_admin: boolean;
 }
 
 interface BootstrapResult {
@@ -37,8 +40,13 @@ interface BootstrapResult {
 // Create company form
 // ---------------------------------------------------------------------------
 
-function CreateCompanyForm({ onCreated }: { onCreated: (c: Company) => void }) {
-  const [open, setOpen] = useState(false);
+function CreateCompanyForm({
+  onCreated,
+  onClose,
+}: {
+  onCreated: (c: Company) => void;
+  onClose: () => void;
+}) {
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [dspCode, setDspCode] = useState('');
@@ -46,7 +54,6 @@ function CreateCompanyForm({ onCreated }: { onCreated: (c: Company) => void }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Auto-derive slug from name
   const handleNameChange = (v: string) => {
     setName(v);
     setSlug(v.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
@@ -64,8 +71,7 @@ function CreateCompanyForm({ onCreated }: { onCreated: (c: Company) => void }) {
         timezone,
       });
       onCreated(res.data);
-      setOpen(false);
-      setName(''); setSlug(''); setDspCode('');
+      onClose();
     } catch (err: any) {
       setError(err.response?.data?.detail ?? 'Failed to create company.');
     } finally {
@@ -74,89 +80,83 @@ function CreateCompanyForm({ onCreated }: { onCreated: (c: Company) => void }) {
   };
 
   return (
-    <div>
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="btn-primary flex items-center gap-2 text-sm"
-      >
-        <Plus className="w-4 h-4" />
-        New Company
-      </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.2 }}
-            className="mt-4 card max-w-lg"
-          >
-            <h3 className="font-semibold text-sm mb-4">Create New Company</h3>
-            {error && <ErrorBanner message={error} className="mb-3" />}
-            <form onSubmit={handleSubmit} className="space-y-3">
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Company Name</label>
-                <input
-                  className="input-field"
-                  value={name}
-                  onChange={e => handleNameChange(e.target.value)}
-                  placeholder="Acme DSP LLC"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">
-                  Slug <span className="text-muted-foreground/60">(URL-safe, auto-derived)</span>
-                </label>
-                <input
-                  className="input-field font-mono text-sm"
-                  value={slug}
-                  onChange={e => setSlug(e.target.value.toLowerCase())}
-                  placeholder="acme-dsp"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">
-                  Amazon DSP Code <span className="text-muted-foreground/60">(optional)</span>
-                </label>
-                <input
-                  className="input-field"
-                  value={dspCode}
-                  onChange={e => setDspCode(e.target.value)}
-                  placeholder="DSPX1234"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Timezone</label>
-                <select
-                  className="input-field"
-                  value={timezone}
-                  onChange={e => setTimezone(e.target.value)}
-                >
-                  <option value="America/New_York">America/New_York (ET)</option>
-                  <option value="America/Chicago">America/Chicago (CT)</option>
-                  <option value="America/Denver">America/Denver (MT)</option>
-                  <option value="America/Los_Angeles">America/Los_Angeles (PT)</option>
-                  <option value="America/Phoenix">America/Phoenix (AZ)</option>
-                  <option value="America/Anchorage">America/Anchorage (AKT)</option>
-                  <option value="Pacific/Honolulu">Pacific/Honolulu (HT)</option>
-                </select>
-              </div>
-              <div className="flex justify-end gap-2 pt-1">
-                <button type="button" onClick={() => setOpen(false)} className="btn-ghost text-sm">
-                  Cancel
-                </button>
-                <button type="submit" disabled={saving} className="btn-primary text-sm">
-                  {saving ? 'Creating…' : 'Create Company'}
-                </button>
-              </div>
-            </form>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <motion.div
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -6 }}
+      transition={{ duration: 0.15 }}
+      className="card"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-semibold text-sm">Create New Company</h3>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      {error && <ErrorBanner message={error} className="mb-3" />}
+      <form onSubmit={handleSubmit}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Company Name</label>
+            <input
+              className="input-field"
+              value={name}
+              onChange={e => handleNameChange(e.target.value)}
+              placeholder="Acme DSP LLC"
+              required
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">
+              Slug <span className="text-muted-foreground/60">(auto-derived)</span>
+            </label>
+            <input
+              className="input-field font-mono text-sm"
+              value={slug}
+              onChange={e => setSlug(e.target.value.toLowerCase())}
+              placeholder="acme-dsp"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">
+              Amazon DSP Code <span className="text-muted-foreground/60">(optional)</span>
+            </label>
+            <input
+              className="input-field"
+              value={dspCode}
+              onChange={e => setDspCode(e.target.value)}
+              placeholder="DSPX1234"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Timezone</label>
+            <select
+              className="input-field"
+              value={timezone}
+              onChange={e => setTimezone(e.target.value)}
+            >
+              <option value="America/New_York">America/New_York (ET)</option>
+              <option value="America/Chicago">America/Chicago (CT)</option>
+              <option value="America/Denver">America/Denver (MT)</option>
+              <option value="America/Los_Angeles">America/Los_Angeles (PT)</option>
+              <option value="America/Phoenix">America/Phoenix (AZ)</option>
+              <option value="America/Anchorage">America/Anchorage (AKT)</option>
+              <option value="Pacific/Honolulu">Pacific/Honolulu (HT)</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <button type="button" onClick={onClose} className="btn-ghost text-sm">
+            Cancel
+          </button>
+          <button type="submit" disabled={saving} className="btn-primary text-sm">
+            {saving ? 'Creating…' : 'Create Company'}
+          </button>
+        </div>
+      </form>
+    </motion.div>
   );
 }
 
@@ -191,7 +191,7 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
   };
 
   return (
-    <div>
+    <div onClick={e => e.stopPropagation()}>
       <button
         onClick={() => setOpen(v => !v)}
         className="flex items-center gap-1.5 text-xs text-violet-500 hover:text-violet-400 transition-colors font-medium"
@@ -262,10 +262,12 @@ function CompanyRow({
   company: Company;
   onToggle: (id: string, active: boolean) => void;
 }) {
+  const navigate = useNavigate();
   const [bootstrapResult, setBootstrapResult] = useState<BootstrapResult | null>(null);
   const [toggling, setToggling] = useState(false);
 
-  const handleToggle = async () => {
+  const handleToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     setToggling(true);
     try {
       const action = company.is_active ? 'deactivate' : 'reactivate';
@@ -281,7 +283,8 @@ function CompanyRow({
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="card hover:shadow-md transition-shadow"
+      onClick={() => navigate(`/superadmin/companies/${company.id}`)}
+      className="card hover:shadow-md hover:border-violet-500/30 transition-all cursor-pointer group"
     >
       <div className="flex items-start justify-between gap-4 flex-wrap">
         {/* Left: identity */}
@@ -292,12 +295,21 @@ function CompanyRow({
             <Building2 className={`w-4 h-4 ${company.is_active ? 'text-success' : 'text-muted-foreground'}`} />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <p className="font-semibold text-sm">{company.name}</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="font-semibold text-sm group-hover:text-violet-400 transition-colors">{company.name}</p>
               {company.is_active ? (
-                <span className="text-xs px-1.5 py-0.5 rounded-full bg-success/10 text-success font-medium">Active</span>
+                <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-success/10 text-success font-medium">
+                  <ShieldCheck className="w-3 h-3" /> Active
+                </span>
               ) : (
-                <span className="text-xs px-1.5 py-0.5 rounded-full bg-muted/40 text-muted-foreground font-medium">Inactive</span>
+                <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-muted/40 text-muted-foreground font-medium">
+                  <ShieldAlert className="w-3 h-3" /> Inactive
+                </span>
+              )}
+              {!company.has_admin && (
+                <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-warning/10 text-warning font-medium">
+                  <UserX className="w-3 h-3" /> No admin
+                </span>
               )}
             </div>
             <div className="flex items-center gap-3 mt-0.5 flex-wrap">
@@ -313,7 +325,7 @@ function CompanyRow({
           </div>
         </div>
 
-        {/* Right: actions */}
+        {/* Right: actions + chevron */}
         <div className="flex items-center gap-2">
           <button
             onClick={handleToggle}
@@ -329,6 +341,7 @@ function CompanyRow({
               : <><CheckCircle2 className="w-3.5 h-3.5" /> Reactivate</>
             }
           </button>
+          <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-violet-400 transition-colors" />
         </div>
       </div>
 
@@ -336,7 +349,10 @@ function CompanyRow({
       {company.is_active && (
         <div className="mt-3 pt-3 border-t border-border/40">
           {bootstrapResult ? (
-            <div className={`flex items-center gap-2 text-xs ${bootstrapResult.invite_sent ? 'text-success' : 'text-warning'}`}>
+            <div
+              className={`flex items-center gap-2 text-xs ${bootstrapResult.invite_sent ? 'text-success' : 'text-warning'}`}
+              onClick={e => e.stopPropagation()}
+            >
               {bootstrapResult.invite_sent
                 ? <><CheckCircle2 className="w-3.5 h-3.5" /> Invite sent to {bootstrapResult.email}</>
                 : <><AlertTriangle className="w-3.5 h-3.5" /> Admin created but email delivery failed — retry to resend</>
@@ -359,6 +375,7 @@ export default function Companies() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -375,7 +392,10 @@ export default function Companies() {
 
   useEffect(() => { load(); }, []);
 
-  const handleCreated = (c: Company) => setCompanies(prev => [c, ...prev]);
+  const handleCreated = (c: Company) => {
+    setCompanies(prev => [c, ...prev]);
+    setCreating(false);
+  };
 
   const handleToggle = (id: string, active: boolean) =>
     setCompanies(prev => prev.map(c => c.id === id ? { ...c, is_active: active } : c));
@@ -395,7 +415,13 @@ export default function Companies() {
             <RefreshCw className="w-3.5 h-3.5" />
             Refresh
           </button>
-          <CreateCompanyForm onCreated={handleCreated} />
+          <button
+            onClick={() => setCreating(v => !v)}
+            className="btn-primary flex items-center gap-2 text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            New Company
+          </button>
         </div>
       </div>
 
@@ -406,10 +432,15 @@ export default function Companies() {
         <StatCard label="Inactive" value={inactive} icon={XCircle} tone="danger" />
       </div>
 
-      {/* Error */}
+      {/* Inline create form */}
+      <AnimatePresence>
+        {creating && (
+          <CreateCompanyForm onCreated={handleCreated} onClose={() => setCreating(false)} />
+        )}
+      </AnimatePresence>
+
       {error && <ErrorBanner message={error} />}
 
-      {/* List */}
       {loading ? (
         <div className="space-y-3">
           {[1, 2, 3].map(i => <SkeletonCard key={i} />)}

@@ -126,12 +126,22 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
     role:         initial.role         ?? defaultRole,
     phone_number: initial.phone_number ?? '',
   });
-  const [step,       setStep]       = useState<'form' | 'review'>('form');
-  const [saving,     setSaving]     = useState(false);
-  const [error,      setError]      = useState('');
-  const [phoneError, setPhoneError] = useState('');
+  const [step,        setStep]        = useState<'form' | 'review'>('form');
+  const [saving,      setSaving]      = useState(false);
+  const [error,       setError]       = useState('');
+  const [phoneError,  setPhoneError]  = useState('');
+  const [discordError, setDiscordError] = useState('');
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleDiscordChange = (v: string) => {
+    set('discord_id', v);
+    if (v && !/^\d{17,20}$/.test(v.trim())) {
+      setDiscordError('Must be a numeric snowflake ID (17-20 digits)');
+    } else {
+      setDiscordError('');
+    }
+  };
 
   const handlePhoneChange = (v: string) => {
     set('phone_number', formatUSPhone(v));
@@ -142,6 +152,10 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
     e.preventDefault();
     if (form.phone_number && !isValidUSPhone(form.phone_number)) {
       setPhoneError('Enter a valid 10-digit US phone number.');
+      return;
+    }
+    if (form.discord_id.trim() && !/^\d{17,20}$/.test(form.discord_id.trim())) {
+      setDiscordError('Must be a numeric snowflake ID (17-20 digits)');
       return;
     }
     if (isCreate) { setStep('review'); return; }
@@ -242,11 +256,13 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                 <div className="flex items-stretch rounded-xl border border-border bg-input overflow-hidden focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/50 transition-all">
                   <input
                     value={form.discord_id}
-                    onChange={e => set('discord_id', e.target.value)}
+                    onChange={e => handleDiscordChange(e.target.value)}
                     className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                    placeholder="Numeric user ID (e.g. 123456789012345678)"
+                    placeholder="Numeric snowflake (e.g. 123456789012345678)"
                   />
                 </div>
+                {discordError && <p className="text-xs text-danger mt-1">{discordError}</p>}
+                {!form.discord_id && <p className="text-xs text-muted-foreground mt-1">Leave blank if unknown — employee can link via registration.</p>}
               </div>
             )}
 
@@ -738,7 +754,9 @@ function PeopleTab() {
                       {emp.email ?? <span className="text-subtle italic">—</span>}
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell font-mono text-xs text-muted-foreground">
-                      {emp.discord_id}
+                      {emp.discord_id
+                        ? emp.discord_id
+                        : <span className="text-warning italic">not set</span>}
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
                       {emp.phone_number ?? <span className="text-subtle italic">—</span>}

@@ -101,6 +101,10 @@ export default function Register() {
       setFieldError('Discord ID is required.');
       return;
     }
+    if (!/^\d{17,20}$/.test(discordId.trim())) {
+      setFieldError('Discord ID must be a numeric snowflake (17-20 digits). Enable Developer Mode in Discord, then right-click your profile → Copy User ID.');
+      return;
+    }
     if (!isValidUSPhone(phone)) {
       setFieldError('Enter a valid 10-digit US phone number.');
       return;
@@ -292,6 +296,9 @@ export default function Register() {
                       className="flex-1 px-3 py-2.5 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
                     />
                   </div>
+                  {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
+                    <p className="text-xs text-danger">Must be a numeric snowflake ID (17-20 digits only).</p>
+                  )}
                   <p className="text-xs text-subtle">Your numeric Discord user ID — used for dispatch notifications.</p>
                 </div>
 
