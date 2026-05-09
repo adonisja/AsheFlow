@@ -107,6 +107,66 @@ class ResolvedConfig:
     driver_checkin_count: int | None
 
 
+# ---------------------------------------------------------------------------
+# Discord guild config — separate from ResolvedConfig (optional integration)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DiscordGuildConfig:
+    """Discord integration settings for a company.  All fields can be None if
+    the company hasn't configured Discord yet — callers must handle None."""
+    guild_id:            int | None
+    drivers_channel_id:  int | None
+    trainers_channel_id: int | None
+    general_channel_id:  int | None
+    invite_channel_id:   int | None
+    role_admin:          int | None
+    role_manager:        int | None
+    role_asheflow:       int | None
+    role_bot:            int | None
+    role_dispatch:       int | None
+    role_driver:         int | None
+    role_captain:        int | None
+    role_walker:         int | None
+
+    @property
+    def is_configured(self) -> bool:
+        """True if at least a guild_id is set (minimum viable config)."""
+        return self.guild_id is not None
+
+
+def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
+    """Return Discord integration settings for a company.
+
+    Never raises — always returns a DiscordGuildConfig.
+    Callers should check .is_configured before attempting Discord operations.
+    """
+    row = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
+    if row is None:
+        return DiscordGuildConfig(
+            guild_id=None, drivers_channel_id=None, trainers_channel_id=None,
+            general_channel_id=None, invite_channel_id=None,
+            role_admin=None, role_manager=None, role_asheflow=None,
+            role_bot=None, role_dispatch=None, role_driver=None,
+            role_captain=None, role_walker=None,
+        )
+    return DiscordGuildConfig(
+        guild_id            = row.discord_guild_id,
+        drivers_channel_id  = row.discord_drivers_channel_id,
+        trainers_channel_id = row.discord_trainers_channel_id,
+        general_channel_id  = row.discord_general_channel_id,
+        invite_channel_id   = row.discord_invite_channel_id,
+        role_admin          = row.discord_role_admin,
+        role_manager        = row.discord_role_manager,
+        role_asheflow       = row.discord_role_asheflow,
+        role_bot            = row.discord_role_bot,
+        role_dispatch       = row.discord_role_dispatch,
+        role_driver         = row.discord_role_driver,
+        role_captain        = row.discord_role_captain,
+        role_walker         = row.discord_role_walker,
+    )
+
+
 def get_company_config(db: Session, company_id: UUID) -> ResolvedConfig:
     """Return the fully-resolved config for a company.
 

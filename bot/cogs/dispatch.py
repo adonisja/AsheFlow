@@ -15,13 +15,12 @@ Phase 2 — Finalization (triggered by dispatch clicking "Finalize" ~09:10):
 """
 
 import logging
-from datetime import date as date_type
 
 import discord
 from discord.ext import commands
 
-from config import settings
 from services.api_client import api
+from services.guild_config import GuildConfig, get_guild_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +36,6 @@ ROLE_LABELS = {
     "walker":  "🚶 Walker",
 }
 
-# Discord server roles that always have read access to ALL truck channels.
-# These are server-level role IDs (not app roles).
-ALWAYS_ALLOWED_ROLE_IDS: list[int] = [
-    settings.discord_role_admin,
-    settings.discord_role_manager,
-    settings.discord_role_asheflow,
-    settings.discord_role_bot,
-    settings.discord_role_dispatch,
-]
-
-# Discord server roles that should be locked out of truck channels
-# (they have their own dedicated channels).
-# We don't add them to overwrites — @everyone deny handles it.
-
 
 # ---------------------------------------------------------------------------
 # Confirmation button view — sent in Phase 1 DMs
@@ -59,18 +44,25 @@ ALWAYS_ALLOWED_ROLE_IDS: list[int] = [
 class ConfirmationView(discord.ui.View):
     """Persistent two-button view: Confirm / Decline."""
 
-    def __init__(self, dispatch_date: str, employee_id: str, employee_name: str) -> None:
+    def __init__(
+        self,
+        dispatch_date: str,
+        employee_id: str,
+        employee_name: str,
+        company_id: str,
+    ) -> None:
         super().__init__(timeout=None)
         self.dispatch_date = dispatch_date
         self.employee_id = employee_id
         self.employee_name = employee_name
+        self.company_id = company_id
 
     @discord.ui.button(label="Confirm ✓", style=discord.ButtonStyle.success, custom_id="confirm_yes")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def confirm(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await self._record(interaction, "confirmed")
 
     @discord.ui.button(label="Decline ✗", style=discord.ButtonStyle.danger, custom_id="confirm_no")
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    async def decline(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await self._record(interaction, "declined")
 
     async def _record(self, interaction: discord.Interaction, status: str) -> None:
@@ -94,14 +86,16 @@ class ConfirmationView(discord.ui.View):
         )
 
         if status == "declined":
-            guild = interaction.client.get_guild(settings.discord_guild_id)
-            if guild:
-                channel = guild.get_channel(settings.discord_drivers_channel_id)
-                if channel:
-                    await channel.send(
-                        f"⚠️ **{self.employee_name}** has **declined** their assignment for "
-                        f"`{self.dispatch_date}`. Dispatch — please review and reassign."
-                    )
+            cfg = await get_guild_config(self.company_id)
+            if cfg and cfg.is_configured and cfg.drivers_channel_id:
+                guild = interaction.client.get_guild(cfg.guild_id)
+                if guild:
+                    channel = guild.get_channel(cfg.drivers_channel_id)
+                    if channel:
+                        await channel.send(
+                            f"⚠️ **{self.employee_name}** has **declined** their assignment for "
+                            f"`{self.dispatch_date}`. Dispatch — please review and reassign."
+                        )
 
 
 # ---------------------------------------------------------------------------
@@ -122,35 +116,9 @@ async def _fetch_trainee_phases(trainees: list[dict]) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date: str) -> discord.Embed:
-    """Return a Discord embed crew card matching the reference terminal-chic layout.
-
-    Structure:
-      `         Truck Name         `   ← wide centered pill, no divider above
-      ---------------------------------  ← single divider
-      📋 Crew Leadership (field name)
-      Driver: `Name`
-
-      Trainers:
-      `Name padded      ` `Name padded      `
-
-      ---------------------------------
-      Walkers:
-      `Name padded      ` `Name padded      `
-      ...empty right pill when count is odd
-
-      ---------------------------------
-      Trainees:
-      `Name padded      ` `Name padded      `
-
-      ---------------------------------
-      Dispatch date: YYYY-MM-DD (footer)
-
-    COL=16 pads names to a fixed width so both columns are always equal.
-    The truck name pill is padded to HEADER_WIDTH so it spans ~75% of the card.
-    """
     SEP = "------------------------------------------"
-    COL = 16          # characters per name column (right-padded with spaces)
-    HEADER_WIDTH = 34  # total chars inside truck name pill for wide centered look
+    COL = 16
+    HEADER_WIDTH = 34
 
     embed = discord.Embed(color=0x5865F2)
 
@@ -159,7 +127,6 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
         by_role.setdefault(member.get("role", "walker"), []).append(member["name"])
 
     def pills_paired(names: list[str]) -> str:
-        """Two equal-width pills per row. Odd name gets an empty right pill."""
         lines = []
         for i in range(0, len(names), 2):
             pair = names[i:i + 2]
@@ -168,15 +135,9 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
             lines.append(f"{left} {right}")
         return "\n".join(lines)
 
-    # ── Truck name: wide centered pill, single divider below ──────────────────
     padded_name = f"{truck_name:^{HEADER_WIDTH}}"
-    embed.add_field(
-        name="​",
-        value=f"`{padded_name}`\n{SEP}",
-        inline=False,
-    )
+    embed.add_field(name="​", value=f"`{padded_name}`\n{SEP}", inline=False)
 
-    # ── Crew Leadership ───────────────────────────────────────────────────────
     drivers  = by_role.get("driver",  [])
     trainers = by_role.get("trainer", [])
 
@@ -185,56 +146,34 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
         leadership_lines.append(f"**Driver:** `{drivers[0]}`")
     if trainers:
         if leadership_lines:
-            leadership_lines.append("")   # blank line between driver and trainers
+            leadership_lines.append("")
         leadership_lines.append("**Trainers:**")
         leadership_lines.append(pills_paired(trainers))
 
     if leadership_lines:
-        embed.add_field(
-            name="📋 Crew Leadership",
-            value="\n".join(leadership_lines),
-            inline=False,
-        )
+        embed.add_field(name="📋 Crew Leadership", value="\n".join(leadership_lines), inline=False)
 
-    # ── Walkers ───────────────────────────────────────────────────────────────
     walkers = by_role.get("walker", [])
     if walkers:
-        embed.add_field(
-            name="​",
-            value=f"{SEP}\n**Walkers:**\n{pills_paired(walkers)}",
-            inline=False,
-        )
+        embed.add_field(name="​", value=f"{SEP}\n**Walkers:**\n{pills_paired(walkers)}", inline=False)
 
-    # ── Trainees ──────────────────────────────────────────────────────────────
     trainees = by_role.get("trainee", [])
     if trainees:
-        embed.add_field(
-            name="​",
-            value=f"{SEP}\n**Trainees:**\n{pills_paired(trainees)}",
-            inline=False,
-        )
+        embed.add_field(name="​", value=f"{SEP}\n**Trainees:**\n{pills_paired(trainees)}", inline=False)
 
     embed.set_footer(text=f"{SEP}\nDispatch date: {dispatch_date}")
     return embed
 
 
 # ---------------------------------------------------------------------------
-# Helper: build the #drivers-chat finalization post (drivers only)
+# Helper: build the #drivers-chat finalization post
 # ---------------------------------------------------------------------------
 
 def _build_drivers_chat_message(trucks_data: list[dict], dispatch_date: str) -> str:
-    """Plain-text finalization post for #drivers-chat.
-
-    Lists truck + assigned driver only. Full crew details are in each truck's
-    channel. Emoji are outside the code block to keep alignment intact.
-    """
-    COL = 16  # truck name column width (pure ASCII inside code block)
+    COL = 16
     SEP = "-" * 38
 
-    inner: list[str] = [
-        f"Finalized Dispatch  {dispatch_date}",
-        SEP,
-    ]
+    inner: list[str] = [f"Finalized Dispatch  {dispatch_date}", SEP]
     for entry in trucks_data:
         truck_name = entry["truck_name"]
         crew = entry["crew"]
@@ -259,10 +198,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # PHASE 1 — Initial publish
     # ------------------------------------------------------------------
 
-    async def publish_assignments(self, dispatch_date: str) -> None:
+    async def publish_assignments(self, dispatch_date: str, company_id: str) -> None:
         """Send initial DMs. Drivers get truck name; all others get attendance-only."""
-        guild = self.bot.get_guild(settings.discord_guild_id)
-        drivers_channel = guild.get_channel(settings.discord_drivers_channel_id) if guild else None
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            logger.info("publish_assignments: Discord not configured for company %s — skipping.", company_id)
+            return
+
+        guild = self.bot.get_guild(cfg.guild_id)
+        drivers_channel = guild.get_channel(cfg.drivers_channel_id) if guild and cfg.drivers_channel_id else None
 
         async def report_error(msg: str) -> None:
             logger.error(msg)
@@ -270,10 +214,10 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 await drivers_channel.send(f"⚠️ **Dispatch bot error:** {msg}")
 
         if not guild:
-            await report_error(f"Guild {settings.discord_guild_id} not found.")
+            await report_error(f"Guild {cfg.guild_id} not found.")
             return
         if not drivers_channel:
-            await report_error(f"#drivers-chat channel {settings.discord_drivers_channel_id} not found.")
+            await report_error(f"#drivers-chat channel {cfg.drivers_channel_id} not found.")
             return
 
         try:
@@ -290,7 +234,6 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             await drivers_channel.send(f"No dispatch found for `{dispatch_date}`. Run dispatch first.")
             return
 
-        # ── Channel header in #drivers-chat ──────────────────────────────
         header = discord.Embed(
             title=f"📋 Dispatch Published — {dispatch_date}",
             description=(
@@ -301,7 +244,6 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
         await drivers_channel.send(embed=header)
 
-        # ── DMs ──────────────────────────────────────────────────────────
         dm_failures: list[str] = []
 
         for truck_id, crew in assigned_crews.items():
@@ -332,6 +274,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     dispatch_date=dispatch_date,
                     employee_id=member["employee_id"],
                     employee_name=member["name"],
+                    company_id=company_id,
                 )
 
                 try:
@@ -350,7 +293,6 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         logger.info("Dispatch published for %s. DM failures: %s", dispatch_date, dm_failures)
 
     def _build_driver_dm(self, truck_name: str, dispatch_date: str) -> discord.Embed:
-        """Driver DM: includes truck name and their role. Deadline 08:20."""
         return discord.Embed(
             title=f"🚛 Your Assignment — {dispatch_date}",
             description=(
@@ -363,10 +305,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
 
     async def _build_crew_dm(self, member: dict, crew: list[dict], dispatch_date: str) -> discord.Embed:
-        """Crew DM: attendance confirmation only — no truck details. Deadline 09:00."""
         role = member.get("role", "walker")
 
-        # Trainer: include trainee pairing and phase
         pairing_note = ""
         if role == "trainer":
             trainees_on_crew = [m for m in crew if m["role"] == "trainee"]
@@ -400,22 +340,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # PHASE 2 — Finalization
     # ------------------------------------------------------------------
 
-    async def finalize_assignments(self, dispatch_date: str) -> None:
-        """Post finalized assignments to truck channels and #drivers-chat.
+    async def finalize_assignments(self, dispatch_date: str, company_id: str) -> None:
+        """Post finalized assignments to truck channels and #drivers-chat."""
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            logger.info("finalize_assignments: Discord not configured for company %s — skipping.", company_id)
+            return
 
-        For each truck:
-        1. Fetch confirmed crew from API.
-        2. Clear all existing member-level permission overwrites on the channel.
-        3. Grant view access to: confirmed crew members + permanently privileged roles.
-        4. Deny @everyone view access.
-        5. Post crew embed to truck channel.
-        6. DM each confirmed crew member with their final truck + full crew details.
-
-        Then post master list to #drivers-chat.
-        All errors are reported to #drivers-chat so dispatch sees them.
-        """
-        guild = self.bot.get_guild(settings.discord_guild_id)
-        drivers_channel = guild.get_channel(settings.discord_drivers_channel_id) if guild else None
+        guild = self.bot.get_guild(cfg.guild_id)
+        drivers_channel = guild.get_channel(cfg.drivers_channel_id) if guild and cfg.drivers_channel_id else None
 
         async def report_error(msg: str) -> None:
             logger.error(msg)
@@ -423,10 +356,10 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 await drivers_channel.send(f"⚠️ **Finalization error:** {msg}")
 
         if not guild:
-            await report_error(f"Guild {settings.discord_guild_id} not found.")
+            await report_error(f"Guild {cfg.guild_id} not found.")
             return
         if not drivers_channel:
-            await report_error(f"#drivers-chat {settings.discord_drivers_channel_id} not found.")
+            await report_error(f"#drivers-chat {cfg.drivers_channel_id} not found.")
             return
 
         try:
@@ -445,7 +378,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             await drivers_channel.send(f"No dispatch found for `{dispatch_date}` — nothing to finalize.")
             return
 
-        trucks_summary: list[dict] = []   # for #drivers-chat master embed
+        trucks_summary: list[dict] = []
         channel_errors: list[str]  = []
 
         for truck_id, full_crew in assigned_crews.items():
@@ -453,7 +386,6 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             truck_name = truck_info.get("name", f"Truck {truck_id[:8]}")
             channel_id = truck_info.get("discord_channel_id")
 
-            # Filter to confirmed crew only
             confirmed_crew = [
                 m for m in full_crew
                 if confirmations.get(m["employee_id"], "pending") == "confirmed"
@@ -470,24 +402,19 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 channel_errors.append(f"{truck_name}: channel {channel_id} not found in guild")
                 continue
 
-            # ── Set channel permissions ───────────────────────────────────
             try:
-                await self._set_truck_channel_permissions(
-                    guild, truck_channel, confirmed_crew
-                )
+                await self._set_truck_channel_permissions(guild, truck_channel, confirmed_crew, cfg)
             except discord.Forbidden:
                 channel_errors.append(f"{truck_name}: missing Manage Channel permission")
             except Exception as e:
                 channel_errors.append(f"{truck_name}: permission error — {e}")
 
-            # ── Post crew card to truck channel (never purge — keep full log) ──
             crew_embed = _build_truck_channel_embed(truck_name, confirmed_crew, dispatch_date)
             try:
                 await truck_channel.send(embed=crew_embed)
             except Exception as e:
                 channel_errors.append(f"{truck_name}: could not post crew card — {e}")
 
-            # ── DM confirmed crew with full details ───────────────────────
             confirmed_trainers = [m for m in confirmed_crew if m["role"] == "trainer"]
             confirmed_trainees = [m for m in confirmed_crew if m["role"] == "trainee"]
 
@@ -503,7 +430,6 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         if m["employee_id"] != member["employee_id"]
                     )
 
-                    # Build role-specific pairing note from confirmed crew only
                     role = member.get("role", "walker")
                     pairing_note = ""
                     if role == "trainer":
@@ -536,12 +462,10 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     )
                     await discord_user.send(embed=final_embed)
                 except Exception:
-                    pass  # Non-fatal — channel embed is the primary delivery
+                    pass
 
-        # ── Master list in #drivers-chat (truck + driver only) ───────────
         await drivers_channel.send(_build_drivers_chat_message(trucks_summary, dispatch_date))
 
-        # ── Report any channel errors to dispatch ─────────────────────────
         if channel_errors:
             error_lines = "\n".join(f"• {e}" for e in channel_errors)
             await drivers_channel.send(
@@ -555,34 +479,27 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         guild: discord.Guild,
         channel: discord.TextChannel,
         confirmed_crew: list[dict],
+        cfg: GuildConfig,
     ) -> None:
-        """Replace all member-level overwrites on a truck channel.
-
-        Deny @everyone, allow permanently privileged roles, allow confirmed crew members.
-        """
-        # Start fresh — remove all existing member-level overwrites
+        """Replace all member-level overwrites on a truck channel."""
         for target in list(channel.overwrites):
             if isinstance(target, discord.Member):
                 await channel.set_permissions(target, overwrite=None)
 
-        # Deny @everyone
-        await channel.set_permissions(
-            guild.default_role,
-            view_channel=False,
-        )
+        await channel.set_permissions(guild.default_role, view_channel=False)
 
-        # Always-allowed roles (admin, manager, asheflow app, bot, dispatch)
-        for role_id in ALWAYS_ALLOWED_ROLE_IDS:
+        for role_id in cfg.always_allowed_role_ids():
             role = guild.get_role(role_id)
             if role:
                 await channel.set_permissions(role, view_channel=True, send_messages=True)
 
-        # Confirmed crew members — grant by Discord snowflake ID.
-        # Skip entries where discord_id is a username string (not yet migrated).
         for member in confirmed_crew:
             discord_id = member.get("discord_id")
             if not discord_id or not discord_id.isdigit():
-                logger.warning("Skipping channel perm for %s — discord_id '%s' is not a snowflake.", member.get("name"), discord_id)
+                logger.warning(
+                    "Skipping channel perm for %s — discord_id '%s' is not a snowflake.",
+                    member.get("name"), discord_id,
+                )
                 continue
             try:
                 guild_member = await guild.fetch_member(int(discord_id))

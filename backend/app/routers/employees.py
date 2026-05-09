@@ -248,33 +248,33 @@ def _assert_not_protected(caller_groups: set, target_role: str) -> None:
 
 @router.get("/", response_model=list[EmployeeResponse])
 def get_all_employees(
-    current_user: dict = Depends(RoleChecker(list(PRIVILEGED_ROLES | FIELD_ROLES))),
+    caller: Employee = Depends(get_caller_employee),
     pg: Pagination = Depends(),
     include_inactive: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Return employees. Active-only by default; pass ?include_inactive=true for admin/management.
+    """Return employees scoped to the caller's company.
 
-    Management/admin/dispatch receive the full record including phone, email,
-    and cognito_sub. Field staff receive a redacted response with those fields
-    removed.
+    Active-only by default; pass ?include_inactive=true for admin/management.
+    Management/admin/dispatch receive the full record; field staff receive a
+    redacted response with phone, email, and cognito_sub removed.
     """
-    caller_groups = set(current_user.get("cognito_groups", []))
+    is_privileged = caller.role in PRIVILEGED_ROLES
 
-    q = db.query(Employee)
+    q = db.query(Employee).filter(Employee.company_id == caller.company_id)
     if include_inactive:
-        if not (caller_groups & {"management", "admin"}):
+        if caller.role not in {"management", "admin"}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
     else:
         q = q.filter(Employee.is_active == True)
 
     # Management callers cannot see management or admin accounts
-    if "management" in caller_groups and "admin" not in caller_groups:
+    if caller.role == "management":
         q = q.filter(Employee.role.notin_(PROTECTED_ROLES))
 
     employees = pg.apply(q).all()
 
-    if caller_groups & PRIVILEGED_ROLES:
+    if is_privileged:
         return [EmployeeResponse.model_validate(e) for e in employees]
     return [EmployeePublicResponse.model_validate(e) for e in employees]
 

@@ -55,20 +55,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // Use it as the display name fallback; /employees/me first name takes priority.
       const displayName = currentUser.username ?? undefined;
 
-      // Resolve DB first name before setting user so greeting is correct on first render
+      // 2. Decode the JWT to get their Cognito groups using our utility
+      const userGroups = await getUserGroups();
+      console.log('[checkAuth] groups:', userGroups);
+      setGroups(userGroups);
+
+      // Resolve DB first name — skip for super_admin (no Employee row)
       let firstName = displayName;
-      try {
-        const res = await axiosClient.get<{ name: string }>('/employees/me');
-        firstName = res.data?.name?.split(' ')[0] ?? displayName;
-      } catch {
-        // keep Cognito username as fallback
+      if (!userGroups.includes('super_admin')) {
+        try {
+          const res = await axiosClient.get<{ name: string }>('/employees/me');
+          firstName = res.data?.name?.split(' ')[0] ?? displayName;
+        } catch {
+          // keep Cognito username as fallback
+        }
       }
 
       setUser({ ...currentUser, displayName, firstName });
-
-      // 2. Decode the JWT to get their Cognito groups using our utility
-      const userGroups = await getUserGroups();
-      setGroups(userGroups);
 
       // 3. For admins, check if the company has completed setup
       if (userGroups.includes('admin')) {

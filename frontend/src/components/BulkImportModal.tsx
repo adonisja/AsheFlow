@@ -80,7 +80,7 @@ function validateRow(row: ImportRow): ImportRow['_errors'] {
   if (!row.name.trim())       errors.name       = 'Required';
   if (!row.email.trim())      errors.email      = 'Required';
   else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.email = 'Invalid email';
-  if (!row.discord_id.trim()) errors.discord_id = 'Required';
+  if (row.discord_id.trim() && !/^\d{17,20}$/.test(row.discord_id.trim())) errors.discord_id = 'Must be a numeric snowflake ID (17-20 digits)';
   if (!ROLES.includes(row.role as RoleStr)) errors.role = 'Invalid role';
   return errors;
 }
@@ -246,7 +246,7 @@ function UploadStep({ onParsed, onClose }: {
         <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground">
           <span><span className="text-foreground font-medium">name</span> — full name (required)</span>
           <span><span className="text-foreground font-medium">email</span> — work email (required)</span>
-          <span><span className="text-foreground font-medium">discord_id</span> — Discord username (required)</span>
+          <span><span className="text-foreground font-medium">discord_id</span> — Discord snowflake ID (17-20 digit number, optional)</span>
           <span><span className="text-foreground font-medium">role</span> — driver / walker / etc. (required)</span>
           <span><span className="text-foreground font-medium">phone_number</span> — optional</span>
         </div>
@@ -308,7 +308,7 @@ function PreviewStep({ rows, onChange, onSubmit, onBack, submitting }: {
               <th className="px-3 py-2 w-8">#</th>
               <th className="px-3 py-2 min-w-[160px]">Name *</th>
               <th className="px-3 py-2 min-w-[190px]">Email *</th>
-              <th className="px-3 py-2 min-w-[150px]">Discord ID *</th>
+              <th className="px-3 py-2 min-w-[150px]">Discord Snowflake</th>
               <th className="px-3 py-2 min-w-[130px]">Role *</th>
               <th className="px-3 py-2 min-w-[140px]">Phone</th>
               <th className="px-3 py-2 w-8"></th>
@@ -513,7 +513,7 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
       const payload = rows.map(r => ({
         name:         r.name,
         email:        r.email,
-        discord_id:   r.discord_id,
+        discord_id:   r.discord_id.trim() || null,
         role:         r.role,
         phone_number: r.phone_number || null,
       }));
