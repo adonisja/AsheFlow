@@ -40,6 +40,7 @@ from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
 from app.models.notification import Notification
 from app.models.time_off_request import TimeOffRequest
+from app.models.company import Company, CompanyConfig
 
 # Collect only the Table objects for models we actually need in tests.
 # Any model imported above registers its Table in Base.metadata.
@@ -49,6 +50,7 @@ from app.models.time_off_request import TimeOffRequest
 # PostgreSQL-specific JSONB columns that SQLite cannot compile. This targeted
 # list gives SQLite exactly the schema the dispatch services touch, nothing more.
 DISPATCH_TABLES = [
+    Company.__table__,
     Employee.__table__,
     Truck.__table__,
     TruckAssignment.__table__,
@@ -61,6 +63,7 @@ DISPATCH_TABLES = [
     TrainingTask.__table__,
     Notification.__table__,
     TimeOffRequest.__table__,
+    CompanyConfig.__table__,
 ]
 
 
@@ -99,6 +102,20 @@ def db():
     meta.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
+
+    # Seed Company + CompanyConfig so get_company_config doesn't raise.
+    session.add(Company(
+        id=SEED_COMPANY_ID,
+        name="Test Company",
+        slug="test-company",
+        is_active=True,
+    ))
+    session.flush()
+    session.add(CompanyConfig(
+        id=uuid.UUID("b0000000-0000-0000-0000-000000000001"),
+        company_id=SEED_COMPANY_ID,
+    ))
+    session.commit()
 
     yield session  # <-- test runs here
 
