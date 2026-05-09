@@ -89,21 +89,6 @@ def run_dispatch(db: Session, target_date: date = None, total_employees: int = N
             ),
         })
 
-    # --- Trainer / walker warnings only fire when headcount was explicitly capped ---
-    # In auto mode (no total_employees), all available staff are distributed evenly
-    # so there are no unfilled slots — just fewer per truck.
-    if total_employees is not None and total_employees > 0:
-        num_trainers = len(available_pool["trainers"])
-        num_walkers  = len(available_pool["walkers"])
-        if num_walkers < num_trucks * cfg.min_walkers_per_truck:
-            missing = num_trucks * cfg.min_walkers_per_truck - num_walkers
-            staffing_warnings.append({
-                "type": "understaffed_walkers",
-                "message": (
-                    f"Only {num_walkers} walkers available for {num_trucks} trucks. "
-                    f"{missing} walker slot(s) will go unfilled."
-                ),
-            })
 
     base_weights = get_base_weights(truck_ids)
     assigned_crews = {truck_id: [] for truck_id in truck_ids}
