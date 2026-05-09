@@ -2657,4 +2657,147 @@ def create_assignment(db, truck_id, company_id: UUID):
     row = TruckAssignment(company_id=company_id, ...)
 ```
 
+## 2026-05-09 Discord: One Bot Token, Many Guilds
+
+A Discord bot can be a member of multiple guilds simultaneously using a single token. There is no `DISCORD_GUILD_ID` environment variable needed at startup — the bot joins guilds via OAuth invite and then receives events from all of them.
+
+The pattern for multi-tenant Discord:
+
+1. Store guild/channel/role IDs per company in the DB (not in `.env`)
+2. On each webhook call from the backend, receive `company_id`, fetch config from DB with a short TTL cache
+3. Maintain a `guild_id → company_id` reverse map so `on_member_join` events can identify which tenant a guild belongs to without an extra API call
+4. Make every operation a graceful no-op if the company has no Discord config — don't raise, just log and return
+
+```python
+cfg = await get_guild_config(company_id)
+if not cfg or not cfg.is_configured:
+    return  # company has no Discord server yet — skip silently
+guild = bot.get_guild(cfg.guild_id)
+```
+
+## 2026-05-09 Pydantic Settings: `extra = "ignore"` for Env File Transitions
+
+When removing env vars from a Pydantic `BaseSettings` model while the `.env` file still has those variables (e.g. during a migration to DB-backed config), the default `extra = "forbid"` causes a startup crash: `Extra inputs are not permitted`.
+
+Fix: add `extra = "ignore"` to the inner `Config` class. This silently drops any `.env` key not declared in the model.
+
+```python
+class Settings(BaseSettings):
+    bot_token: str
+    # ... only what the bot still needs
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"  # stale DISCORD_* vars are silently dropped
+```
+
+## 2026-05-09 React Router: `AnimatePresence mode="wait"` Blocks Navigation
+
+`AnimatePresence mode="wait"` in framer-motion holds the incoming page's render until the outgoing page's exit animation fully completes. In a layout where the incoming route needs to start fetching data immediately, this causes a visible freeze.
+
+- Use `mode="wait"` only when sequential cross-page animations are intentional UX
+- Use `mode="popLayout"` or no mode when speed matters and animations are decorative
+- In an admin shell layout (sidebar + `<Outlet />`), page transitions add no value — `<Outlet />` alone is correct
+
+Symptom of this bug: clicking a nav link appears to do nothing for 300-500ms before the new page starts rendering.
+
+## 2026-05-09 Debugging: Grep Call Sites When Removing Imports
+
+When removing an import from a file, always check that no call site remains in the component body. An unused import is caught at compile/lint time; a `ReferenceError` on a stale call site only surfaces at runtime when that branch executes.
+
+```bash
+# Before saving after removing `useLocation` from imports:
+grep -n "useLocation" SuperAdminLayout.tsx
+```
+
+If any line other than the import line appears, remove it. This applies to any named import: hooks, utilities, component refs.
+
+## 2026-05-09 Multi-Tenant: `RoleChecker` vs `get_caller_employee`
+
+These two FastAPI dependencies serve different purposes and are NOT interchangeable in a multi-tenant system:
+
+| Dependency | What it validates | Provides `company_id`? |
+|---|---|---|
+| `RoleChecker(["admin", "management"])` | JWT contains the right Cognito group claim | No |
+| `get_caller_employee` | JWT is valid + DB employee row exists | Yes (`caller.company_id`) |
+
+Use `RoleChecker` alone only for endpoints that are intentionally company-agnostic (super admin routes, public lookups). Use `get_caller_employee` for any endpoint that returns or writes company-owned data.
+
+A route that uses `RoleChecker` but queries company-owned data will silently return all companies' data:
+
+```python
+# Bug — looks correct but has no company scope
+def get_all_employees(
+    current_user: dict = Depends(RoleChecker(["admin"])),
+    db: Session = Depends(get_db),
+):
+    return db.query(Employee).all()  # no company_id filter → all tenants
+
+# Fix
+def get_all_employees(
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    return db.query(Employee).filter(Employee.company_id == caller.company_id).all()
+```
+
+**Audit rule:** After a multi-tenant migration, grep for `RoleChecker` in routers. Every hit that also queries company-owned tables needs a `company_id` filter added.
+
+## 2026-05-09 Multi-Tenant: End-to-End Isolation Testing Pattern
+
+Unit tests on individual endpoints don't catch cross-tenant leaks — the route code looks correct in isolation. The only reliable check is a live login as a user from each tenant, then asserting that list endpoints return only that tenant's data.
+
+Minimal isolation test script pattern:
+
+```python
+# 1. Get a token for tenant B's admin
+resp = cognito.initiate_auth(AuthFlow='USER_PASSWORD_AUTH',
+    AuthParameters={'USERNAME': username, 'PASSWORD': password}, ...)
+token = resp['AuthenticationResult']['AccessToken']
+headers = {'Authorization': f'Bearer {token}'}
+
+# 2. Assert list endpoints are scoped
+r = requests.get(f'{base}/employees', headers=headers)
+assert len(r.json()) == 1  # only tenant B's admin
+
+# 3. Assert cross-tenant reads are blocked
+r = requests.get(f'{base}/employees/{tenant_a_employee_id}', headers=headers)
+assert r.status_code in (403, 404)
+
+# 4. Assert creates are scoped
+r = requests.post(f'{base}/trucks', headers=headers, json={...})
+assert r.status_code == 201
+# Then verify from a tenant A token that this truck is NOT visible
+```
+
+For a fresh company in testing, you may need to:
+- Set `is_configured = True` (or seed required config fields) so `require_configured` doesn't block all requests
+- Use `admin_set_user_password(Permanent=True)` to set a known password for the test user without triggering a challenge flow
+
 The router always has `caller.company_id` (from `get_caller_employee`) and should forward it explicitly to every service call that writes rows.
+
+## 2026-05-09 Multi-Tenant: Audit Every Query in a Delete-Then-Search Pattern
+
+When a code path deletes a row and then searches for an alternative (the "bump" pattern), both the delete and the search must be company-scoped. It's easy to catch the delete — it's explicit. The search is easy to miss because it looks like a harmless read.
+
+```python
+# Bump pattern — both parts must be scoped:
+db.delete(existing_member)          # ← scoped via FK from the original query
+db.flush()
+
+candidates = db.query(TruckAssignment).filter(
+    TruckAssignment.date == date,
+    TruckAssignment.company_id == caller.company_id,  # ← must be here too
+).all()
+```
+
+If the search is unscoped, the system considers other companies' resources as valid fallbacks — a cross-tenant allocation. The affected employee ends up on another tenant's truck with no indication that anything went wrong.
+
+## 2026-05-09 Debugging: "Data Loss" vs "Unavoidable Edge Case with Poor Visibility"
+
+Not all missing rows are bugs. Before calling something data loss, ask:
+1. **Was the deletion intentional?** If yes, is there a path that should recreate the row?
+2. **Is the no-recovery case genuinely impossible to handle?** If a trainee is bumped and every truck is full, there is no valid slot — deleting the row is the only option.
+3. **Is the edge case communicated?** Notifications to oversight staff + the affected employee = correct. A silent 200 with no indication a trainee was lost = bug.
+
+The fix for "unavoidable data loss" is usually better visibility and correct scoping of the decision, not preventing the deletion itself.
