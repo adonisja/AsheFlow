@@ -49,10 +49,6 @@ class CompanyConfig(Base):
     # ── Account lifecycle ─────────────────────────────────────────────────────
     invite_expiry_days = Column(Integer, nullable=True)    # default 7
 
-    # ── Crew requirements per truck ───────────────────────────────────────────
-    min_trainers_per_truck = Column(Integer, nullable=True)   # default 2
-    min_walkers_per_truck  = Column(Integer, nullable=True)   # default 3
-
     # ── Training rules ────────────────────────────────────────────────────────
     graduation_assignments          = Column(Integer, nullable=True)   # default 5
     debt_escalation_threshold       = Column(Integer, nullable=True)   # default 3
@@ -74,6 +70,10 @@ class CompanyConfig(Base):
 
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
+
+    # True once the admin has completed the initial setup form.
+    # Every protected endpoint checks this via require_configured.
+    is_configured = Column(Boolean, nullable=False, default=False)
 
     company = relationship("Company", back_populates="config")
 

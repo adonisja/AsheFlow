@@ -11,6 +11,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
+from app.services.company_config import _REQUIRED_FIELDS
 from app.core.config import settings
 from app.database import get_db
 from app.models.company import Company, CompanyConfig
@@ -76,8 +77,7 @@ class CompanyConfigResponse(BaseModel):
     checkin_close: Optional[str]
     rating_window_hours: Optional[int]
     invite_expiry_days: Optional[int]
-    min_trainers_per_truck: Optional[int]
-    min_walkers_per_truck: Optional[int]
+    is_configured: bool
     graduation_assignments: Optional[int]
     debt_escalation_threshold: Optional[int]
     phase4_pass_score: Optional[float]
@@ -110,8 +110,7 @@ class CompanyConfigResponse(BaseModel):
             checkin_close=cls._fmt_time(obj.checkin_close),
             rating_window_hours=obj.rating_window_hours,
             invite_expiry_days=obj.invite_expiry_days,
-            min_trainers_per_truck=obj.min_trainers_per_truck,
-            min_walkers_per_truck=obj.min_walkers_per_truck,
+            is_configured=obj.is_configured,
             graduation_assignments=obj.graduation_assignments,
             debt_escalation_threshold=obj.debt_escalation_threshold,
             phase4_pass_score=obj.phase4_pass_score,
@@ -401,8 +400,6 @@ class CompanyConfigUpdate(BaseModel):
     # Operational
     rating_window_hours:             Optional[int]   = Field(None, ge=1, le=48)
     invite_expiry_days:              Optional[int]   = Field(None, ge=1, le=90)
-    min_trainers_per_truck:          Optional[int]   = Field(None, ge=0, le=20)
-    min_walkers_per_truck:           Optional[int]   = Field(None, ge=0, le=20)
 
     # Training
     graduation_assignments:          Optional[int]   = Field(None, ge=1, le=30)
@@ -428,7 +425,12 @@ class CompanyConfigUpdate(BaseModel):
 
 
 def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, allow_super_admin_fields: bool = False) -> None:
-    """Apply a CompanyConfigUpdate to a CompanyConfig ORM object in place."""
+    """Apply a CompanyConfigUpdate to a CompanyConfig ORM object in place.
+
+    After writing all fields, automatically sets is_configured=True once
+    every required field is non-null.  is_configured can never go back to
+    False through this path — super admin would have to do it directly.
+    """
     data = payload.model_dump(exclude_unset=True)
 
     for field, value in data.items():
@@ -440,6 +442,11 @@ def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, al
         if field in _TIME_FIELDS and value is not None:
             value = _parse_time(value, field)
         setattr(config, field, value)
+
+    if not config.is_configured:
+        all_set = all(getattr(config, f) is not None for f in _REQUIRED_FIELDS)
+        if all_set:
+            config.is_configured = True
 
 
 # ---------------------------------------------------------------------------
