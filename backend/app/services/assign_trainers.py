@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.models.employee_relationship import EmployeeRelationship
 from app.services.calculate_weights import calculate_weights
+from app.services.company_config import ResolvedConfig
 
 
 def assign_trainers(
@@ -11,6 +12,7 @@ def assign_trainers(
     assigned_crews: dict,
     base_weights: dict,
     db: Session,
+    cfg: ResolvedConfig = None,
 ) -> list:
     """Assign trainers to trucks with guaranteed even distribution.
 
@@ -85,6 +87,7 @@ def assign_trainers(
                 assigned_crews=assigned_crews,
                 banned_truck_ids=[t for t in assigned_crews if t not in eligible],
                 db=db,
+                cfg=cfg,
             )
         else:
             # Every minimum truck is banned — fall back to any unbanned truck.
@@ -106,6 +109,7 @@ def assign_trainers(
                     assigned_crews=assigned_crews,
                     banned_truck_ids=raw_banned,
                     db=db,
+                    cfg=cfg,
                 )
             else:
                 # Fully banned everywhere — uniform fallback so dispatch still completes.

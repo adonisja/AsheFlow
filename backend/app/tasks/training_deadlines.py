@@ -9,6 +9,7 @@ from app.models.training import TrainingRecord
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.services.record_trainer_mark import record_trainer_mark
+from app.services.company_config import get_company_config
 
 
 @celery_app.task(name="app.tasks.training_deadlines.check_training_submissions")
@@ -59,7 +60,11 @@ def check_training_submissions() -> dict:
             record.is_locked = True
 
             # Issue trainer mark if warranted
-            mark = record_trainer_mark(db, str(record.id), reason="phase_not_closed")
+            cfg = get_company_config(db, record.company_id)
+            mark = record_trainer_mark(
+                db, str(record.id), reason="phase_not_closed",
+                underperforming_threshold=cfg.underperforming_trainer_threshold,
+            )
             if mark:
                 marks_issued += 1
 

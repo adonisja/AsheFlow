@@ -7,8 +7,6 @@ from app.models.notification import Notification
 from app.models.trainer_mark import TrainerMark
 from app.models.training import TrainingRecord, TrainingTask
 
-# How many distinct trainees a trainer must have marks against before
-# the underperforming trainer notification fires to management.
 UNDERPERFORMING_MARK_THRESHOLD = 3
 
 
@@ -16,6 +14,7 @@ def record_trainer_mark(
     db: Session,
     training_record_id: str,
     reason: str,
+    underperforming_threshold: int = UNDERPERFORMING_MARK_THRESHOLD,
 ) -> TrainerMark | None:
     """
     Issue a TrainerMark when a phase fails to close by midnight.
@@ -71,7 +70,7 @@ def record_trainer_mark(
         .count()
     )
 
-    if distinct_trainees >= UNDERPERFORMING_MARK_THRESHOLD:
+    if distinct_trainees >= underperforming_threshold:
         trainer = db.query(Employee).filter(Employee.id == record.trainer_id).first()
         trainer_name = trainer.name if trainer else "Unknown trainer"
 

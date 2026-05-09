@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.models.employee_relationship import EmployeeRelationship
 from app.services.calculate_weights import calculate_weights
 from app.services.ban_override import check_ban_override
+from app.services.company_config import ResolvedConfig
 
 
 def assign_walkers(
@@ -13,6 +14,7 @@ def assign_walkers(
     base_weights: dict,
     db: Session,
     extra_banned_truck_ids: list = None,
+    cfg: ResolvedConfig = None,
 ) -> list:
     """Assign walkers to trucks with guaranteed even distribution.
 
@@ -129,6 +131,7 @@ def assign_walkers(
                 assigned_crews=assigned_crews,
                 banned_truck_ids=banned_for_weights,
                 db=db,
+                cfg=cfg,
             )
         else:
             # Every minimum-count truck is banned — fall back to any unbanned truck.
@@ -141,6 +144,7 @@ def assign_walkers(
                     assigned_crews=assigned_crews,
                     banned_truck_ids=hard_banned,
                     db=db,
+                    cfg=cfg,
                 )
             else:
                 weights = {t: 1 for t in assigned_crews}

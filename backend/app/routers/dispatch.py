@@ -21,6 +21,7 @@ from app.models.package_manifest import PackageManifest
 from app.services.run_dispatch import run_dispatch
 from app.services.available_pool import get_unavailable_staff
 from app.services.training_injection import inject_curriculum
+from app.services.company_config import get_company_config
 from app.models.training import TrainingRecord
 from app.core.redis import set_confirmation, get_all_confirmations, seed_pending
 from app.services.constants import (
@@ -693,7 +694,8 @@ async def publish_dispatch(
     # Inject training curriculum for today's trainee-trainer pairings.
     # Runs here so manual-only dispatches (no auto-assign) still get training records.
     logger.info("inject_curriculum called date=%s truck_count=%d", dispatch_date, len(assigned_crews))
-    inject_curriculum(db, dispatch_date, assigned_crews)
+    cfg = get_company_config(db, caller.company_id)
+    inject_curriculum(db, dispatch_date, assigned_crews, cfg=cfg)
 
     # Notify the bot via internal webhook
     bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")

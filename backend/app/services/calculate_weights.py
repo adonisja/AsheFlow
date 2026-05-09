@@ -6,7 +6,7 @@ from app.services.fans_list import get_fans
 from app.services.resolve_conflict import resolve_conflict
 from app.services.tridirectional import perform_tridirectional_check
 from app.services.bidirectional import perform_bidirectional_check
-from app.services.constants import ROLE_BOOST, MUTUAL_BONUS
+from app.services.company_config import ResolvedConfig
 
 def calculate_weights(
     employee_id: UUID,
@@ -14,7 +14,8 @@ def calculate_weights(
     base_weights: dict,        # {truck_id: base_weight} from get_base_weights
     assigned_crews: dict,      # {truck_id: [{"id": employee_id, "role": "driver"}, ...]} — who's already on each truck
     banned_truck_ids: list,    # trucks where a ban conflict exists
-    db: Session
+    db: Session,
+    cfg: ResolvedConfig = None,
 ) -> dict:                      # {truck_id: final_weight}
     """Compute per-truck selection weights for a candidate employee.
 
@@ -37,6 +38,16 @@ def calculate_weights(
         A dict mapping each truck_id to its final selection weight.
     """
     
+    role_boost = {
+        "driver":  cfg.dispatch_weight_driver  if cfg else 0.70,
+        "trainer": cfg.dispatch_weight_trainer if cfg else 0.50,
+        "walker":  cfg.dispatch_weight_walker  if cfg else 0.30,
+    }
+    mutual_bonus = {
+        "bidirectional":  cfg.dispatch_mutual_bonus        if cfg else 0.10,
+        "tridirectional": cfg.dispatch_tridirectional_bonus if cfg else 0.20,
+    }
+
     # work on a copy so the caller's base_weights dict is never modified
     base_weights_copy = base_weights.copy()
 
@@ -85,20 +96,20 @@ def calculate_weights(
 
             if truck_id:
                 # a clear winner — concentrate the full boost on that truck
-                base_weights_copy[truck_id] += (base_weights_copy[truck_id] * ROLE_BOOST[role])
+                base_weights_copy[truck_id] += (base_weights_copy[truck_id] * role_boost[role])
                 boosted_truck_id = truck_id
 
             else:
                 # no clear winner — spread the boost proportionally so no truck is unfairly favored
                 length = len(eligible_trucks)
-                split = ROLE_BOOST[role] / length
+                split = role_boost[role] / length
                 for t_id in eligible_trucks:
                     base_weights_copy[t_id] += base_weights_copy[t_id] * split
 
         elif len(eligible_trucks) == 1:
             # unambiguous — apply the full role boost directly
             t = eligible_trucks[0]
-            base_weights_copy[t] += (base_weights_copy[t] * ROLE_BOOST[role])
+            base_weights_copy[t] += (base_weights_copy[t] * role_boost[role])
             boosted_truck_id = t
 
         if boosted_truck_id:
@@ -111,15 +122,15 @@ def calculate_weights(
                 trainer_id = next((c["id"] for c in assigned_crews[boosted_truck_id] if c["role"] == "trainer"), None)
 
                 if driver_id and trainer_id and perform_tridirectional_check(driver_id, trainer_id, employee_id, db):
-                    base_weights_copy[boosted_truck_id] += MUTUAL_BONUS["tridirectional"]
+                    base_weights_copy[boosted_truck_id] += mutual_bonus["tridirectional"]
                 elif perform_bidirectional_check(employee_id, fan_id, db):
                     # mutual fav between candidate and the fan earns a bidirectional bonus
-                    base_weights_copy[boosted_truck_id] += MUTUAL_BONUS["bidirectional"]
+                    base_weights_copy[boosted_truck_id] += mutual_bonus["bidirectional"]
 
             else:
                 # drivers and trainers are only eligible for the bidirectional bonus
                 if perform_bidirectional_check(employee_id, fan_id, db):
-                    base_weights_copy[boosted_truck_id] += MUTUAL_BONUS["bidirectional"]
+                    base_weights_copy[boosted_truck_id] += mutual_bonus["bidirectional"]
 
     return base_weights_copy
 
