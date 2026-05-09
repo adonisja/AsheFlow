@@ -2,9 +2,20 @@ from pydantic import BaseModel, field_validator
 from typing import Optional, Literal, List
 from uuid import UUID
 from datetime import datetime
+import re
 
 VALID_ROLES = ("driver", "walker", "trainer", "trainee", "dispatch", "management", "admin")
 RoleStr = Literal["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"]
+
+_SNOWFLAKE_RE = re.compile(r'^\d{17,20}$')
+
+
+def _validate_discord_id(v: Optional[str]) -> Optional[str]:
+    if v is None or v == "":
+        return None
+    if not _SNOWFLAKE_RE.match(v):
+        raise ValueError("discord_id must be a numeric Discord snowflake (17-20 digits)")
+    return v
 
 
 class EmployeeCreate(BaseModel):
@@ -14,6 +25,11 @@ class EmployeeCreate(BaseModel):
     role: RoleStr
     phone_number: Optional[str] = None
 
+    @field_validator("discord_id", mode="before")
+    @classmethod
+    def validate_discord_id(cls, v):
+        return _validate_discord_id(v)
+
 
 class EmployeeUpdate(BaseModel):
     name:         Optional[str]     = None
@@ -22,6 +38,11 @@ class EmployeeUpdate(BaseModel):
     role:         Optional[RoleStr] = None
     is_active:    Optional[bool]    = None
     phone_number: Optional[str]     = None
+
+    @field_validator("discord_id", mode="before")
+    @classmethod
+    def validate_discord_id(cls, v):
+        return _validate_discord_id(v)
 
 
 class EmployeeResponse(BaseModel):
@@ -45,9 +66,14 @@ class BulkImportRow(BaseModel):
     """One row from a bulk import payload — same fields as EmployeeCreate."""
     name: str
     email: str
-    discord_id: str
+    discord_id: Optional[str] = None
     role: RoleStr
     phone_number: Optional[str] = None
+
+    @field_validator("discord_id", mode="before")
+    @classmethod
+    def validate_discord_id(cls, v):
+        return _validate_discord_id(v)
 
 
 class BulkImportResult(BaseModel):

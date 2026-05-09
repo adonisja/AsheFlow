@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Settings, Clock, BookOpen, Truck, BarChart2,
-  Star, CheckSquare, Save, RefreshCw, CheckCircle2, AlertTriangle,
+  Settings, Clock, BookOpen, Truck,
+  Star, CheckSquare, Save, RefreshCw, CheckCircle2, AlertTriangle, RotateCcw,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -336,6 +336,29 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     setSaved(false);
   };
 
+  const SETUP_DEFAULTS: Record<string, string> = {
+    rating_window_hours: '6',
+    graduation_assignments: '5',
+    debt_escalation_threshold: '3',
+    phase4_pass_score: '90.0',
+    underperforming_trainer_threshold: '3',
+    max_training_phase: '4',
+    dispatch_weight_driver: '0.70',
+    dispatch_weight_trainer: '0.50',
+    dispatch_weight_walker: '0.30',
+    dispatch_mutual_bonus: '0.10',
+    dispatch_tridirectional_bonus: '0.20',
+    dispatch_consecutive_penalty: '0.05',
+    dispatch_weight_cap: '0.85',
+    flag_threshold: '1.0',
+    driver_checkin_count: '4',
+  };
+
+  const fillDefaults = () => {
+    setFormValues(prev => ({ ...prev, ...SETUP_DEFAULTS }));
+    setSaved(false);
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -441,35 +464,49 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
             </motion.div>
           ))}
 
-          <div className="flex items-center justify-end gap-3 pt-2">
-            {saved && !isOnboarding && (
-              <motion.span
-                initial={{ opacity: 0, x: 8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0 }}
-                className="flex items-center gap-1.5 text-sm text-success"
+          <div className="flex items-center justify-between gap-3 pt-2">
+            {isOnboarding ? (
+              <button
+                type="button"
+                onClick={fillDefaults}
+                className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors font-medium"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                Saved
-              </motion.span>
+                <RotateCcw className="w-3.5 h-3.5" />
+                Fill with recommended defaults
+              </button>
+            ) : (
+              <span />
             )}
-            <button
-              type="submit"
-              disabled={saving}
-              className="btn-primary flex items-center gap-2 text-sm"
-            >
-              {isOnboarding ? (
-                <>
+            <div className="flex items-center gap-3">
+              {saved && !isOnboarding && (
+                <motion.span
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="flex items-center gap-1.5 text-sm text-success"
+                >
                   <CheckCircle2 className="w-4 h-4" />
-                  {saving ? 'Completing Setup…' : 'Complete Setup'}
-                </>
-              ) : (
-                <>
-                  <Save className="w-4 h-4" />
-                  {saving ? 'Saving…' : 'Save Changes'}
-                </>
+                  Saved
+                </motion.span>
               )}
-            </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="btn-primary flex items-center gap-2 text-sm"
+              >
+                {isOnboarding ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    {saving ? 'Completing Setup…' : 'Complete Setup'}
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    {saving ? 'Saving…' : 'Save Changes'}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
       )}

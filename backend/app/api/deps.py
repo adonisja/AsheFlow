@@ -145,7 +145,7 @@ def _send_discord_invite(employee) -> None:
             secret  = os.environ.get("INTERNAL_SECRET") or ""
             resp = requests.post(
                 f"{bot_url}/internal/invite",
-                json={"name": employee.name},
+                json={"name": employee.name, "company_id": str(employee.company_id)},
                 headers={"X-Internal-Secret": secret},
                 timeout=10,
             )
@@ -257,16 +257,30 @@ _PRIVILEGED_ROLES = frozenset(OVERSIGHT_ROLES)
 
 
 def require_configured(
-    caller=Depends(get_caller_employee),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
     """Dependency that blocks any request if the caller's company has not
     completed initial setup.  Add to APIRouter(dependencies=[...]) for
     every router except the companies config router and registration router.
+
+    Super admins have no Employee row and are never company-scoped — they
+    bypass this check entirely.
     """
+    if "super_admin" in current_user.get("cognito_groups", []):
+        return
+
+    # Resolve the Employee row to get company_id
+    employee, _ = _resolve_employee_from_cognito(current_user, db)
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No employee record found for your account. Contact your manager.",
+        )
+
     from app.models.company import CompanyConfig
     row = db.query(CompanyConfig).filter(
-        CompanyConfig.company_id == caller.company_id
+        CompanyConfig.company_id == employee.company_id
     ).first()
     if row is None or not row.is_configured:
         raise HTTPException(
