@@ -281,48 +281,58 @@ async def manual_assignment(
             db.delete(existing_trainee_assignment)
             db.flush()
 
-            # Find another truck with a trainer but NO trainee
-            # First get all trucks for this date
+            # Find a fallback truck within this company for the bumped trainee.
+            # Priority 1: a truck that has a trainer and no current trainee.
+            # Priority 2: any truck that has no current trainee (trainer may arrive later).
+            # Both loops exclude the destination truck (the one we're assigning into).
             all_truck_assignments = db.query(TruckAssignment).filter(
-                TruckAssignment.date == assignment_in.date
+                TruckAssignment.date == assignment_in.date,
+                TruckAssignment.company_id == caller.company_id,
             ).all()
 
             fallback_assignment_id = None
             for ta in all_truck_assignments:
                 if ta.id == truck_assignment.id:
                     continue
-                
-                members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
+                members = db.query(AssignmentMember).filter(
+                    AssignmentMember.assignment_id == ta.id
+                ).all()
                 has_trainer = any(m.role == ROLE_TRAINER for m in members)
                 has_trainee = any(m.role == ROLE_TRAINEE for m in members)
-
                 if has_trainer and not has_trainee:
                     fallback_assignment_id = ta.id
                     break
-            
-            # If no truck with trainer and without trainee, just find any truck without a trainee, or just any truck.
+
             if not fallback_assignment_id:
                 for ta in all_truck_assignments:
                     if ta.id == truck_assignment.id:
                         continue
-                    members = db.query(AssignmentMember).filter(AssignmentMember.assignment_id == ta.id).all()
+                    members = db.query(AssignmentMember).filter(
+                        AssignmentMember.assignment_id == ta.id
+                    ).all()
                     has_trainee = any(m.role == ROLE_TRAINEE for m in members)
                     if not has_trainee:
                         fallback_assignment_id = ta.id
                         break
-            
+
             if fallback_assignment_id:
-                bumped_member = AssignmentMember(
+                db.add(AssignmentMember(
                     assignment_id=fallback_assignment_id,
                     employee_id=bumped_trainee_id,
-                    role="trainee"
-                )
-                db.add(bumped_member)
+                    role=ROLE_TRAINEE,
+                ))
             else:
-                # No fallback slot found — trainee is unassigned. Notify dispatch/admin.
-                bumped_emp = db.query(Employee).filter(Employee.id == bumped_trainee_id).first()
+                # No fallback slot — trainee cannot be placed. Notify oversight staff
+                # and the trainee directly. The trainee has no assignment for this date.
+                bumped_emp = db.query(Employee).filter(
+                    Employee.id == bumped_trainee_id,
+                    Employee.company_id == caller.company_id,
+                ).first()
                 bumped_name = bumped_emp.name if bumped_emp else str(bumped_trainee_id)
-                incoming_emp = db.query(Employee).filter(Employee.id == assignment_in.employee_id).first()
+                incoming_emp = db.query(Employee).filter(
+                    Employee.id == assignment_in.employee_id,
+                    Employee.company_id == caller.company_id,
+                ).first()
                 incoming_name = incoming_emp.name if incoming_emp else str(assignment_in.employee_id)
                 alert_staff = (
                     db.query(Employee)
@@ -338,13 +348,12 @@ async def manual_assignment(
                         employee_id=staff.id,
                         type="trainee_unassigned",
                         message=(
-                            f"⚠️ **Trainee unassigned:** {bumped_name} was bumped from their truck "
+                            f"⚠️ Trainee unassigned: {bumped_name} was bumped from their truck "
                             f"to make room for {incoming_name} but no free trainer slot was found. "
                             f"Manual reassignment required for {assignment_in.date}."
                         ),
                         dispatch_date=assignment_in.date,
                     ))
-                # Also notify the displaced trainee directly
                 if bumped_emp:
                     db.add(Notification(
                         employee_id=bumped_trainee_id,
@@ -704,7 +713,7 @@ async def publish_dispatch(
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{bot_url}/internal/publish",
-                json={"date": str(dispatch_date)},
+                json={"date": str(dispatch_date), "company_id": str(caller.company_id)},
                 headers={"X-Internal-Secret": secret},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
@@ -1123,7 +1132,7 @@ async def finalize_dispatch(
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{bot_url}/internal/finalize",
-                json={"date": str(dispatch_date)},
+                json={"date": str(dispatch_date), "company_id": str(caller.company_id)},
                 headers={"X-Internal-Secret": secret},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:

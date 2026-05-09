@@ -29,19 +29,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import settings
 from services.api_client import api
+from services.guild_config import get_guild_config, get_company_id_for_guild
 
 logger = logging.getLogger(__name__)
-
-# Roles that always get view + send on ALL channels
-PRIVILEGED_ROLE_IDS = [
-    settings.discord_role_admin,
-    settings.discord_role_manager,
-    settings.discord_role_asheflow,
-    settings.discord_role_bot,
-    settings.discord_role_dispatch,
-]
 
 
 class SetupCog(commands.Cog, name="Setup"):
@@ -62,10 +53,27 @@ class SetupCog(commands.Cog, name="Setup"):
             await interaction.followup.send("Must be run inside the server.", ephemeral=True)
             return
 
+        company_id = get_company_id_for_guild(guild.id)
+        if company_id is None:
+            await interaction.followup.send(
+                "This server is not linked to an AsheFlow company. "
+                "Configure Discord settings in the super admin panel first.",
+                ephemeral=True,
+            )
+            return
+
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            await interaction.followup.send(
+                "Discord integration is not configured for this company.", ephemeral=True
+            )
+            return
+
+        privileged_role_ids = cfg.privileged_role_ids()
+
         errors: list[str] = []
         applied: list[str] = []
 
-        # ── Helper ────────────────────────────────────────────────────────
         async def lock_channel(
             channel: discord.TextChannel,
             allowed_role_ids: list[int],
@@ -73,7 +81,7 @@ class SetupCog(commands.Cog, name="Setup"):
             """Deny @everyone, grant privileged roles + allowed_role_ids."""
             try:
                 await channel.set_permissions(guild.default_role, view_channel=False)
-                for role_id in PRIVILEGED_ROLE_IDS + allowed_role_ids:
+                for role_id in privileged_role_ids + allowed_role_ids:
                     role = guild.get_role(role_id)
                     if role:
                         await channel.set_permissions(
@@ -86,21 +94,28 @@ class SetupCog(commands.Cog, name="Setup"):
                 errors.append(f"#{channel.name}: {e}")
 
         # ── #drivers-chat ─────────────────────────────────────────────────
-        drivers_channel = guild.get_channel(settings.discord_drivers_channel_id)
-        if drivers_channel:
-            await lock_channel(drivers_channel, [settings.discord_role_driver])
+        if cfg.drivers_channel_id:
+            drivers_channel = guild.get_channel(cfg.drivers_channel_id)
+            if drivers_channel:
+                extra = [cfg.role_driver] if cfg.role_driver else []
+                await lock_channel(drivers_channel, extra)
+            else:
+                errors.append(f"#drivers-chat ({cfg.drivers_channel_id}): not found")
         else:
-            errors.append(f"#drivers-chat ({settings.discord_drivers_channel_id}): not found")
+            errors.append("drivers_channel_id not configured")
 
         # ── #trainers-chat ────────────────────────────────────────────────
-        trainers_channel = guild.get_channel(settings.discord_trainers_channel_id)
-        if trainers_channel:
-            await lock_channel(trainers_channel, [settings.discord_role_captain])
+        if cfg.trainers_channel_id:
+            trainers_channel = guild.get_channel(cfg.trainers_channel_id)
+            if trainers_channel:
+                extra = [cfg.role_captain] if cfg.role_captain else []
+                await lock_channel(trainers_channel, extra)
+            else:
+                errors.append(f"#trainers-chat ({cfg.trainers_channel_id}): not found")
         else:
-            errors.append(f"#trainers-chat ({settings.discord_trainers_channel_id}): not found")
+            errors.append("trainers_channel_id not configured")
 
         # ── Truck channels ────────────────────────────────────────────────
-        # Fetch truck list from API to get channel IDs (avoids hardcoding here)
         try:
             trucks = await api.get_trucks()
         except Exception as e:
@@ -117,8 +132,6 @@ class SetupCog(commands.Cog, name="Setup"):
             if not truck_channel:
                 errors.append(f"{truck_name}: channel {channel_id} not found in guild")
                 continue
-            # Truck channels: privileged roles only at baseline.
-            # Crew members are granted access per-day at finalization.
             await lock_channel(truck_channel, [])
 
         # ── Report ────────────────────────────────────────────────────────
@@ -133,9 +146,7 @@ class SetupCog(commands.Cog, name="Setup"):
 
         logger.info(
             "setup-channels run by %s. Applied: %s. Errors: %s",
-            interaction.user,
-            applied,
-            errors,
+            interaction.user, applied, errors,
         )
 
 

@@ -27,6 +27,12 @@ import CompanySettings from './pages/CompanySettings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
+import CompanyDetail from './pages/superadmin/CompanyDetail';
+import { useParams } from 'react-router-dom';
+function CompanyDetailWithKey() {
+  const { companyId } = useParams<{ companyId: string }>();
+  return <CompanyDetail key={companyId} />;
+}
 import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
 import WorkerView from './components/dashboard/WorkerView';
@@ -73,7 +79,9 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 };
 
 function RoleRedirect() {
-  const { groups, isConfigured } = useAuth();
+  const { groups, isConfigured, isLoading } = useAuth();
+  console.log('[RoleRedirect] isLoading:', isLoading, 'groups:', groups);
+  if (isLoading) return null;
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
   if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
@@ -362,6 +370,7 @@ function App() {
             }
           >
             <Route path="/superadmin/companies" element={<Companies />} />
+            <Route path="/superadmin/companies/:companyId" element={<CompanyDetailWithKey />} />
             <Route path="/superadmin" element={<Navigate to="/superadmin/companies" replace />} />
           </Route>
 

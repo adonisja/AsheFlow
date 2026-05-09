@@ -59,6 +59,7 @@ class CompanyResponse(BaseModel):
     timezone: str
     is_active: bool
     created_at: datetime
+    has_admin: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -66,6 +67,42 @@ class CompanyResponse(BaseModel):
 class CompanyDetailResponse(CompanyResponse):
     """Extended response that includes the company's config row."""
     config: Optional["CompanyConfigResponse"]
+
+
+class CompanyUpdate(BaseModel):
+    """Partial update for company identity fields."""
+    name: Optional[str] = Field(None, min_length=2, max_length=255)
+    slug: Optional[str] = Field(None, min_length=2, max_length=100)
+    amazon_dsp_code: Optional[str] = Field(None, max_length=20)
+    timezone: Optional[str] = Field(None, max_length=64)
+
+    @field_validator("slug")
+    @classmethod
+    def slug_format(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not _SLUG_RE.match(v):
+            raise ValueError("Slug must contain only lowercase letters, numbers, and hyphens.")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def name_strip(cls, v: str) -> str:
+        return v.strip()
+
+
+class AdminSummary(BaseModel):
+    employee_id: UUID
+    name: str
+    email: Optional[str]
+    account_status: str
+
+    model_config = {"from_attributes": True}
+
+
+class EmployeeSummaryResponse(BaseModel):
+    total: int
+    by_role: dict[str, int]
+    admins: list[AdminSummary]
 
 
 class CompanyConfigResponse(BaseModel):
@@ -177,11 +214,20 @@ def list_companies(
     db: Session = Depends(get_db),
 ):
     """List all tenant companies. Super admin only."""
-    return (
-        db.query(Company)
-        .order_by(Company.created_at.desc())
+    companies = db.query(Company).order_by(Company.created_at.desc()).all()
+    admin_company_ids = {
+        row.company_id
+        for row in db.query(Employee.company_id)
+        .filter(Employee.role == "admin", Employee.is_active == True)
+        .distinct()
         .all()
-    )
+    }
+    result = []
+    for c in companies:
+        resp = CompanyResponse.model_validate(c)
+        resp.has_admin = c.id in admin_company_ids
+        result.append(resp)
+    return result
 
 
 @router.get("/{company_id}", response_model=CompanyDetailResponse)
@@ -207,6 +253,70 @@ def get_company(
         is_active=company.is_active,
         created_at=company.created_at,
         config=config_resp,
+    )
+
+
+@router.patch("/{company_id}", response_model=CompanyResponse)
+def update_company(
+    company_id: UUID,
+    payload: CompanyUpdate,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Update company identity fields. Super admin only."""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    data = payload.model_dump(exclude_unset=True)
+
+    if "slug" in data and data["slug"] != company.slug:
+        if db.query(Company).filter(Company.slug == data["slug"]).first():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A company with slug '{data['slug']}' already exists.",
+            )
+
+    for field, value in data.items():
+        setattr(company, field, value)
+
+    db.commit()
+    db.refresh(company)
+    return company
+
+
+@router.get("/{company_id}/employees/summary", response_model=EmployeeSummaryResponse)
+def get_employee_summary(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Return headcount by role and a list of admin employees for a company."""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    employees = db.query(Employee).filter(Employee.company_id == company_id).all()
+
+    by_role: dict[str, int] = {}
+    for emp in employees:
+        by_role[emp.role] = by_role.get(emp.role, 0) + 1
+
+    admins = [
+        AdminSummary(
+            employee_id=emp.id,
+            name=emp.name,
+            email=emp.email,
+            account_status=emp.account_status,
+        )
+        for emp in employees
+        if emp.role == "admin"
+    ]
+
+    return EmployeeSummaryResponse(
+        total=len(employees),
+        by_role=by_role,
+        admins=admins,
     )
 
 
@@ -514,3 +624,74 @@ def update_my_company_config(
     db.commit()
     db.refresh(config)
     return CompanyConfigResponse.from_orm_obj(config)
+
+
+# ---------------------------------------------------------------------------
+# Discord config — super admin only read/write
+# ---------------------------------------------------------------------------
+
+class DiscordConfigUpdate(BaseModel):
+    discord_guild_id:            Optional[int] = None
+    discord_drivers_channel_id:  Optional[int] = None
+    discord_trainers_channel_id: Optional[int] = None
+    discord_general_channel_id:  Optional[int] = None
+    discord_invite_channel_id:   Optional[int] = None
+    discord_role_admin:          Optional[int] = None
+    discord_role_manager:        Optional[int] = None
+    discord_role_asheflow:       Optional[int] = None
+    discord_role_bot:            Optional[int] = None
+    discord_role_dispatch:       Optional[int] = None
+    discord_role_driver:         Optional[int] = None
+    discord_role_captain:        Optional[int] = None
+    discord_role_walker:         Optional[int] = None
+
+
+class DiscordConfigResponse(BaseModel):
+    discord_guild_id:            Optional[int]
+    discord_drivers_channel_id:  Optional[int]
+    discord_trainers_channel_id: Optional[int]
+    discord_general_channel_id:  Optional[int]
+    discord_invite_channel_id:   Optional[int]
+    discord_role_admin:          Optional[int]
+    discord_role_manager:        Optional[int]
+    discord_role_asheflow:       Optional[int]
+    discord_role_bot:            Optional[int]
+    discord_role_dispatch:       Optional[int]
+    discord_role_driver:         Optional[int]
+    discord_role_captain:        Optional[int]
+    discord_role_walker:         Optional[int]
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/{company_id}/discord-config", response_model=DiscordConfigResponse)
+def get_company_discord_config(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Return Discord integration settings for a company. Super admin only."""
+    config = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Company config not found.")
+    return DiscordConfigResponse.model_validate(config)
+
+
+@router.patch("/{company_id}/discord-config", response_model=DiscordConfigResponse)
+def update_company_discord_config(
+    company_id: UUID,
+    payload: DiscordConfigUpdate,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Update Discord integration settings for a company. Super admin only."""
+    config = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Company config not found.")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(config, field, value)
+
+    db.commit()
+    db.refresh(config)
+    return DiscordConfigResponse.model_validate(config)

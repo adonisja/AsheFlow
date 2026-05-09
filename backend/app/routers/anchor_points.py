@@ -28,6 +28,7 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.anchor_point import AnchorPoint
 from app.models.employee import Employee
+from app.services.company_config import get_discord_config
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
@@ -87,14 +88,14 @@ def _notify(db: Session, employee_ids: List[UUID], notif_type: str, message: str
         db.add(Notification(company_id=company_id, employee_id=eid, type=notif_type, message=message))
 
 
-async def _post_embed_to_discord(channel_id: int, payload: dict) -> None:
+async def _post_embed_to_discord(channel_id: int, company_id: UUID, payload: dict) -> None:
     bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
     secret  = os.environ.get("INTERNAL_SECRET", "")
     try:
         async with aiohttp.ClientSession() as session:
             await session.post(
                 f"{bot_url}/internal/post-embed",
-                json={"channel_id": channel_id, **payload},
+                json={"channel_id": channel_id, "company_id": str(company_id), **payload},
                 headers={"X-Internal-Secret": secret},
                 timeout=aiohttp.ClientTimeout(total=5),
             )
@@ -102,14 +103,14 @@ async def _post_embed_to_discord(channel_id: int, payload: dict) -> None:
         pass
 
 
-async def _post_message_to_discord(channel_id: int, message: str) -> None:
+async def _post_message_to_discord(channel_id: int, company_id: UUID, message: str) -> None:
     bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
     secret  = os.environ.get("INTERNAL_SECRET", "")
     try:
         async with aiohttp.ClientSession() as session:
             await session.post(
                 f"{bot_url}/internal/post-to-channel",
-                json={"channel_id": channel_id, "message": message},
+                json={"channel_id": channel_id, "company_id": str(company_id), "message": message},
                 headers={"X-Internal-Secret": secret},
                 timeout=aiohttp.ClientTimeout(total=5),
             )
@@ -224,7 +225,7 @@ async def submit_anchor_point(
     db.refresh(new_ap)
 
     if truck and truck.discord_channel_id:
-        await _post_embed_to_discord(truck.discord_channel_id, {
+        await _post_embed_to_discord(truck.discord_channel_id, caller.company_id, {
             "title": title,
             "color": color,
             "fields": fields,
@@ -295,18 +296,19 @@ async def arrive_anchor_point(
     db.refresh(ap)
 
     if truck and truck.discord_channel_id:
-        await _post_embed_to_discord(truck.discord_channel_id, {
+        await _post_embed_to_discord(truck.discord_channel_id, caller.company_id, {
             "title": f"✅ Arrived at Anchor Point — {truck_name}",
             "color": 0x22C55E,  # green
             "fields": fields,
             "footer": "Arrival confirmed",
         })
 
-    # Also update #drivers-chat so dispatch sees the confirmed AP without opening each truck channel
-    drivers_channel_id = os.environ.get("DISCORD_DRIVERS_CHANNEL_ID")
-    if drivers_channel_id and drivers_channel_id.isdigit():
+    # Also update #drivers-chat so dispatch sees the confirmed AP without opening each truck channel.
+    discord_cfg = get_discord_config(db, caller.company_id)
+    if discord_cfg.is_configured and discord_cfg.drivers_channel_id:
         await _post_message_to_discord(
-            int(drivers_channel_id),
+            discord_cfg.drivers_channel_id,
+            caller.company_id,
             f"📍 **{truck_name}** — {caller.name} confirmed AP: **{ap.location}**",
         )
 

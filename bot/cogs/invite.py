@@ -9,7 +9,7 @@ import logging
 import discord
 from discord.ext import commands
 
-from config import settings
+from services.guild_config import get_guild_config
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,7 @@ class InviteCog(commands.Cog, name="Invite"):
         self.bot = bot
 
     async def send_dm(self, discord_id: str, message: str) -> None:
-        """Send a plain DM to a user by Discord ID.
-
-        Used for graduation notifications and other system events.
-        Failures are logged but do not raise.
-        """
+        """Send a plain DM to a user by Discord ID."""
         try:
             user = await self.bot.fetch_user(int(discord_id))
         except (discord.NotFound, discord.HTTPException, ValueError) as e:
@@ -38,19 +34,26 @@ class InviteCog(commands.Cog, name="Invite"):
         except discord.HTTPException as e:
             logger.error("Failed to DM user %s: %s", discord_id, e)
 
-    async def create_guild_invite(self, name: str) -> str | None:
-        """Create a single-use, 7-day guild invite and return the URL.
+    async def create_guild_invite(self, name: str, company_id: str) -> str | None:
+        """Create a single-use, 7-day guild invite for a company's guild and return the URL.
 
-        Returns the invite URL string, or None on failure.
-        The backend emails this link to the employee — Discord DMs cannot
-        be sent to users who don't already share a server with the bot.
+        Returns None if Discord is not configured for the company or invite creation fails.
         """
-        guild = self.bot.get_guild(settings.discord_guild_id)
-        if not guild:
-            logger.error("Guild %s not found — cannot create invite for %s.", settings.discord_guild_id, name)
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            logger.info("create_guild_invite: Discord not configured for company %s — skipping.", company_id)
             return None
 
-        invite_channel_id = getattr(settings, "discord_invite_channel_id", None) or settings.discord_drivers_channel_id
+        guild = self.bot.get_guild(cfg.guild_id)
+        if not guild:
+            logger.error("Guild %s not found — cannot create invite for %s.", cfg.guild_id, name)
+            return None
+
+        invite_channel_id = cfg.invite_channel_id or cfg.drivers_channel_id
+        if not invite_channel_id:
+            logger.error("No invite or drivers channel configured for company %s.", company_id)
+            return None
+
         channel = guild.get_channel(int(invite_channel_id))
         if not channel:
             logger.error("Invite channel %s not found — cannot create invite.", invite_channel_id)

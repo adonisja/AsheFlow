@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey, BigInteger
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from app.models.base import Base
@@ -70,6 +70,21 @@ class CompanyConfig(Base):
 
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
+
+    # ── Discord guild integration (optional — all nullable) ───────────────────
+    discord_guild_id            = Column(BigInteger, nullable=True)
+    discord_drivers_channel_id  = Column(BigInteger, nullable=True)
+    discord_trainers_channel_id = Column(BigInteger, nullable=True)
+    discord_general_channel_id  = Column(BigInteger, nullable=True)
+    discord_invite_channel_id   = Column(BigInteger, nullable=True)
+    discord_role_admin          = Column(BigInteger, nullable=True)
+    discord_role_manager        = Column(BigInteger, nullable=True)
+    discord_role_asheflow       = Column(BigInteger, nullable=True)
+    discord_role_bot            = Column(BigInteger, nullable=True)
+    discord_role_dispatch       = Column(BigInteger, nullable=True)
+    discord_role_driver         = Column(BigInteger, nullable=True)
+    discord_role_captain        = Column(BigInteger, nullable=True)
+    discord_role_walker         = Column(BigInteger, nullable=True)
 
     # True once the admin has completed the initial setup form.
     # Every protected endpoint checks this via require_configured.

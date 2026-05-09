@@ -108,7 +108,7 @@ async def deactivate_truck(
             async with aiohttp.ClientSession() as session:
                 await session.post(
                     f"{bot_url}/internal/lockdown-channel",
-                    json={"channel_id": channel_id},
+                    json={"channel_id": channel_id, "company_id": str(caller.company_id)},
                     headers={"X-Internal-Secret": secret},
                     timeout=aiohttp.ClientTimeout(total=5),
                 )
