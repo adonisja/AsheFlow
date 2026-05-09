@@ -17,6 +17,8 @@ interface AuthContextType {
   groups: string[];
   isAuthenticated: boolean;
   isLoading: boolean;
+  isConfigured: boolean;
+  refreshConfigured: () => Promise<void>;
   federatedError: string | null;
   clearFederatedError: () => void;
   checkAuth: () => Promise<void>;
@@ -28,7 +30,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [groups, setGroups] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isConfigured, setIsConfigured] = useState(true);
   const [federatedError, setFederatedError] = useState<string | null>(null);
+
+  const refreshConfigured = async () => {
+    try {
+      const res = await axiosClient.get<{ is_configured: boolean }>('/companies/my-config');
+      setIsConfigured(res.data.is_configured);
+    } catch {
+      // Non-admins will 403 here — treat as configured so gate doesn't block them
+      setIsConfigured(true);
+    }
+  };
 
   const clearFederatedError = () => setFederatedError(null);
 
@@ -52,15 +65,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       }
 
       setUser({ ...currentUser, displayName, firstName });
-      
+
       // 2. Decode the JWT to get their Cognito groups using our utility
       const userGroups = await getUserGroups();
       setGroups(userGroups);
-      
+
+      // 3. For admins, check if the company has completed setup
+      if (userGroups.includes('admin')) {
+        try {
+          const res = await axiosClient.get<{ is_configured: boolean }>('/companies/my-config');
+          setIsConfigured(res.data.is_configured);
+        } catch {
+          setIsConfigured(true);
+        }
+      } else {
+        setIsConfigured(true);
+      }
+
     } catch (error) {
       // If this throws, the user is simply not logged in.
       setUser(null);
       setGroups([]);
+      setIsConfigured(true);
     } finally {
       // We are done checking against AWS
       setIsLoading(false);
@@ -100,6 +126,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     groups,
     isAuthenticated: !!user,
     isLoading,
+    isConfigured,
+    refreshConfigured,
     federatedError,
     clearFederatedError,
     checkAuth,
