@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Login from './components/auth/Login';
 import Register from './pages/Register';
 import Layout from './components/layout/Layout';
@@ -34,7 +34,8 @@ import { Users, Calendar } from 'lucide-react';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
-  const { isAuthenticated, isLoading, groups } = useAuth();
+  const { isAuthenticated, isLoading, groups, isConfigured } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -48,6 +49,11 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
   }
 
   if (!isAuthenticated) return <Navigate to="/login" />;
+
+  // Unconfigured admin: redirect to setup for every route except /setup itself
+  if (groups.includes('admin') && !isConfigured && location.pathname !== '/setup') {
+    return <Navigate to="/setup" replace />;
+  }
 
   if (allowedRoles.length > 0) {
     const hasRole = groups.some(role => allowedRoles.includes(role));
@@ -67,9 +73,9 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 };
 
 function RoleRedirect() {
-  const { groups } = useAuth();
+  const { groups, isConfigured } = useAuth();
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
-  if (groups.includes('admin'))       return <Navigate to="/admin" replace />;
+  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
@@ -168,6 +174,16 @@ function App() {
           <Route path="/login"    element={<Login />} />
           <Route path="/register" element={<Register />} />
           
+          {/* Setup gate — full-screen, no navbar, shown to admins before company is configured */}
+          <Route
+            path="/setup"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <CompanySettings isOnboarding />
+              </ProtectedRoute>
+            }
+          />
+
           <Route element={<Layout />}>
             <Route
               path="/"
