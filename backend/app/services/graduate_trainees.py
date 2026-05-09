@@ -9,11 +9,12 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.notification import Notification
 from app.models.training import TrainingRecord, TrainingTask
+from app.services.company_config import ResolvedConfig
 
 logger = logging.getLogger(__name__)
 
 
-def graduate_eligible_trainees(db: Session, target_date):
+def graduate_eligible_trainees(db: Session, target_date, cfg: ResolvedConfig = None):
     """Check all active trainees for 5+ completed dispatch assignments.
 
     Graduates eligible trainees to walker by default. If reset_on_graduation
@@ -50,7 +51,8 @@ def graduate_eligible_trainees(db: Session, target_date):
             .count()
         )
 
-        if assignment_count < 5:
+        graduation_threshold = cfg.graduation_assignments if cfg else 5
+        if assignment_count < graduation_threshold:
             continue
 
         if trainee.reset_on_graduation:
