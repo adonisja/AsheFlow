@@ -1,0 +1,65 @@
+name: CI
+
+# WHEN TO RUN
+# on: push means "run this every time any code is pushed to any branch".
+# on: pull_request adds "also run when a PR is opened or updated".
+# Together they ensure: local pushes get checked AND PRs to master get checked.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    # GitHub provides Ubuntu Linux runners for free on public repos.
+    # This is the environment your code will execute in.
+    runs-on: ubuntu-latest
+
+    # NO services: block needed here.
+    # Why? Your conftest.py uses SQLite in-memory (sqlite:///:memory:).
+    # SQLite is built into Python — no external database process required.
+    # If the tests ever switch to real Postgres, you'd add a services: block here.
+
+    steps:
+      # Step 1: Download your repo's code onto the runner machine.
+      # Without this, the runner has no files to work with.
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Step 2: Install the specific Python version.
+      # Pinning to 3.12 matches your local .venv (pyvenv.cfg shows 3.12).
+      # Without this step, the runner uses whatever Python version it happens
+      # to have — which may not match and can cause subtle test failures.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Step 3: Install your dependencies.
+      # working-directory: backend means this step runs as if you cd'd into
+      # backend/ first. pip reads requirements.txt from that directory.
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      # Step 4: Run the test suite.
+      # -v        = verbose output (show each test name, not just a dot)
+      # --tb=short = on failure, show a short traceback (not the full wall of text)
+      # working-directory: backend is required because the test imports resolve
+      # relative to that directory (app.models, app.services, etc.)
+      - name: Run tests
+        working-directory: backend
+        run: python -m pytest tests/ -v --tb=short
+        env:
+          # The Settings class in config.py reads these from the environment.
+          # In tests, the SQLite fixture overrides DATABASE_URL at the session
+          # level, but Settings() still needs the variables to exist at import
+          # time or it raises a validation error before any test runs.
+          APP_ENV: test
+          DATABASE_URL: "sqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+          AWS_REGION: us-east-1
+          AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+          AWS_COGNITO_APP_CLIENT_ID: test-client-id
+          INTERNAL_SECRET: ci-test-secret-not-real
