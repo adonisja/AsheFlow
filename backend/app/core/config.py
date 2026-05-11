@@ -29,10 +29,16 @@ class Settings(BaseSettings):
 
     def __init__(self, **data):
         super().__init__(**data)
-        if self.app_env == "production" and self.internal_secret == "change-me-in-production":
+        if self.app_env != "development" and self.internal_secret == "change-me-in-production":
             raise RuntimeError(
                 "INTERNAL_SECRET must be set to a strong random value in production. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        
+        if "localhost" in self.cors_origins and self.app_env != "development":
+            raise RuntimeError(
+                "CORS_ORIGINS contains 'localhost' in a non-development environment. "
+                "Set CORS_ORIGINS to your actual production/staging domain(s) before deploying."
             )
     
     
