@@ -1,5 +1,6 @@
 # Copy .env.example → .env and fill in real values before starting.
 # Never commit .env — it contains secrets.
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -49,41 +50,18 @@ services:
       - TZ=America/New_York
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - ~/.aws:/root/.aws:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-  bot:
-    build:
-      context: ./bot
-      dockerfile: Dockerfile
-    container_name: asheflow_bot
-    env_file:
-      - ./bot/.env
-    environment:
-      - API_BASE_URL=http://backend:8000/api/v1
-      - INTERNAL_SECRET=${INTERNAL_SECRET:-change-me-in-production}
-      - TZ=America/New_York
-    ports:
-      - "8001:8001"
-    depends_on:
-      backend:
-        condition: service_started
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   celery_worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: asheflow_celery
+    container_name: asheflow_celery_worker
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-asheflow}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-asheflow_db}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
@@ -92,35 +70,13 @@ services:
       - TZ=America/New_York
     env_file:
       - ./backend/.env
-    volumes:
-      - ./backend:/app
-      - ~/.aws:/root/.aws:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # --beat runs the scheduler inside the same worker process.
-    # Fine for a single-worker setup; split into separate beat + worker
-    # containers if you scale workers horizontally in the future.
-    command: celery -A app.celery_app worker --beat --loglevel=info
+    command: celery -A app.celery_app worker --loglevel=info
     restart: unless-stopped
-
-  # frontend: (disabled until frontend phase begins)
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile.dev
-  #   container_name: asheflow_frontend
-  #   environment:
-  #     - REACT_APP_API_URL=http://localhost:8000
-  #   ports:
-  #     - "3000:3000"
-  #   volumes:
-  #     - ./frontend:/app
-  #     - /app/node_modules
-  #   depends_on:
-  #     - backend
-  #   command: npm start
 
 volumes:
   postgres_data:
