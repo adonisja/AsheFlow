@@ -1,9 +1,11 @@
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from app.models.employee import Employee
 from app.core.security import verify_cognito_token
 from app.database import get_db
 from app.services.constants import OVERSIGHT_ROLES
+from app.core.config import settings
 
 # This tells FastAPI an endpoint requires a "Bearer" token in the Authorization header.
 # It also adds the "Authorize" padlock button to our /docs Swagger UI automatically!
@@ -131,18 +133,18 @@ def _send_discord_invite(employee) -> None:
     """Get a guild invite URL from the bot and email it to the employee — best effort, non-blocking."""
     import threading
     import requests
-    import os
     from app.services.email import send_discord_invite_email
     from botocore.exceptions import ClientError
 
     def _fire():
+        
         log = __import__("logging").getLogger(__name__)
         if not employee.email:
             log.warning("No email on file for %s — skipping Discord invite email.", employee.name)
             return
         try:
-            bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
-            secret  = os.environ.get("INTERNAL_SECRET") or ""
+            bot_url = settings.bot_internal_url
+            secret  = settings.internal_secret
             resp = requests.post(
                 f"{bot_url}/internal/invite",
                 json={"name": employee.name, "company_id": str(employee.company_id)},
@@ -239,17 +241,33 @@ class RoleChecker:
     def __init__(self, allowed_roles: list[str]):
         self.allowed_roles = allowed_roles
 
-    def __call__(self, user: dict = Depends(get_current_user)) -> dict:
-        user_groups = user.get("cognito_groups", [])
-        
-        # Check if the user has at least one of the allowed roles
-        if not any(role in user_groups for role in self.allowed_roles):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Operation not permitted. Insufficient role permissions."
-            )
-        
-        # Return the user so the endpoint can still access their info
+    def __call__(self, user: dict = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+        from app.models.employee import Employee
+
+        sub   = user.get("id", "")
+        email = user.get("email", "")
+
+        employee = None
+        if sub:
+            employee = db.query(Employee).filter(Employee.cognito_sub == sub).first()
+        if not employee and email:
+            employee = db.query(Employee).filter(Employee.email == email).first()
+
+        if employee:
+            # DB role is authoritative — JWT claim may be stale after a role change
+            if employee.role not in self.allowed_roles:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Operation not permitted. Insufficient role permissions."
+                )
+        else:
+            # No employee row (super admin or platform account) — fall back to JWT groups
+            if not any(role in user.get("cognito_groups", []) for role in self.allowed_roles):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Operation not permitted. Insufficient role permissions."
+                )
+
         return user
 
 
