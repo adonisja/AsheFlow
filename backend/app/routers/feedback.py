@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import RoleChecker, Pagination, get_current_user, get_caller_employee_optional
+from app.api.deps import RoleChecker, Pagination, get_current_user, get_caller_employee_optional, get_caller_employee
 from app.database import get_db
 from app.models.feedback import Feedback
 from app.models.employee import Employee
@@ -71,6 +71,7 @@ def create_feedback(
 def get_all_feedback(
     pg: Pagination = Depends(),
     _: dict = Depends(allow_admin),
+    caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
 ):
     """Get all feedback (admin only). Joins employee name for display."""
@@ -79,13 +80,13 @@ def get_all_feedback(
 
     rows = pg.apply(
         db.query(Feedback).order_by(Feedback.created_at.desc())
-    ).all()
+    ).filter(Feedback.company_id == caller.company_id).all()
 
     # Build employee_id → name map for the fetched page
     emp_ids = [r.employee_id for r in rows if r.employee_id]
     name_map: dict = {}
     if emp_ids:
-        emps = db.query(Employee.id, Employee.name).filter(Employee.id.in_(emp_ids)).all()
+        emps = db.query(Employee.id, Employee.name).filter(Employee.id.in_(emp_ids), Employee.company_id == caller.company_id).all()
         name_map = {str(e.id): e.name for e in emps}
 
     results = []
@@ -101,6 +102,7 @@ def update_feedback_status(
     feedback_id: str,
     payload: FeedbackStatusUpdate,
     _: dict = Depends(allow_admin),
+    caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
 ):
     """Update feedback status (admin only). Valid transitions: new → in_progress → resolved."""
@@ -109,7 +111,7 @@ def update_feedback_status(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid status. Must be one of: {', '.join(sorted(_VALID_STATUSES))}",
         )
-    record = db.query(Feedback).filter(Feedback.id == feedback_id).first()
+    record = db.query(Feedback).filter(Feedback.id == feedback_id, Feedback.company_id == caller.company_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Feedback record not found.")
     record.status = payload.status

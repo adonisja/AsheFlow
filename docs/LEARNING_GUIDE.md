@@ -2801,3 +2801,488 @@ Not all missing rows are bugs. Before calling something data loss, ask:
 3. **Is the edge case communicated?** Notifications to oversight staff + the affected employee = correct. A silent 200 with no indication a trainee was lost = bug.
 
 The fix for "unavoidable data loss" is usually better visibility and correct scoping of the decision, not preventing the deletion itself.
+
+## 2026-05-10 SEC-8: CORS Wildcard Hardening — allow_methods and allow_headers (main.py, config.py)
+
+**The finding:** `allow_methods=["*"]` and `allow_headers=["*"]` in `main.py` accepted any HTTP method and any request header from any allowed origin. Acceptable in dev, a misconfiguration in production (OWASP A05:2021 / A02:2025 Security Misconfiguration).
+
+**The fix:** Added `get_cors_methods()` and `get_cors_headers()` to `Settings`, backed by `cors_allow_methods` and `cors_allow_headers` fields. In development they return `["*"]`; in all other environments they return explicit allow-lists:
+- Methods: `GET, POST, PATCH, DELETE`
+- Headers: `Authorization, Content-Type`
+
+**Critical mistakes made and why they matter:**
+
+*`APP_ENV = "production"` is a class attribute, not a Pydantic field.*
+A plain class-level assignment in a Pydantic model is never read from the environment — it's a hardcoded Python value. The correct form is a typed annotation: `app_env: str = "development"`. Pydantic then reads `APP_ENV` from the environment (case-insensitive), and `"development"` is the safe default.
+
+*`cors_allow_methods: str = ["GET","POST","PATCH","DELETE"]` — list assigned to a str field.*
+Type annotation and default must match. If the field is `str` (comma-separated), the default must be a `str`: `"GET,POST,PATCH,DELETE"`. Pydantic v2 may coerce or raise at startup if they conflict.
+
+*`allow_credentials=True` with `allow_origins=["*"]` is rejected by browsers.*
+CORS spec forbids credentials (cookies, Authorization headers) with a wildcard origin. If you return `["*"]` from `get_cors_origins()` in dev while `allow_credentials=True`, browsers will block all credentialed requests. The origins helper must always return explicit origins, never a wildcard.
+
+**The environment pattern:** All conditional behavior based on environment should flow through `self.app_env` — one Pydantic field, one source of truth, overridable via `APP_ENV` environment variable, testable in CI with `APP_ENV: test`.
+
+## 2026-05-10 SEC-7: EmailStr for Email Format Validation (employee.py)
+
+**The finding:** `email` fields on `EmployeeCreate`, `EmployeeUpdate`, `EmployeeResponse`, and `BulkImportRow` were typed as plain `str`. A caller could send `"not-an-email"` and Pydantic would accept it, pass it through the dependency chain, and eventually fail with an opaque Cognito 400 or store a malformed address in the database.
+
+**The fix:**
+```python
+# Before
+from pydantic import BaseModel, field_validator
+email: str
+
+# After
+from pydantic import BaseModel, field_validator, EmailStr
+email: EmailStr           # required field
+email: Optional[EmailStr] # optional field (EmployeeUpdate)
+```
+
+`pydantic[email]` is already in `requirements.txt` — `EmailStr` is available with no new dependency.
+
+**Why it matters:** Format errors should be caught at the schema boundary and returned as HTTP 422 with a clear message (`"value is not a valid email address"`), not discovered later as a Cognito 400 or a malformed row in the database. The earlier the rejection, the less code has to handle the bad state.
+
+**Response schemas too:** `EmployeeResponse.email` and `BulkImportResult.email` were also updated. Even data coming *out* of the database gets validated against RFC 5322 before serialization — if somehow a malformed address got into the DB, the response would surface it as a validation error rather than silently returning garbage.
+
+**`Optional[EmailStr]` on update schemas:** Works correctly — `None` (field omitted) is valid, but a provided value must be a properly formatted email. This is the correct pattern for any optional field with format constraints.
+
+## 2026-05-10 SEC-6: Adding Length Constraints to Free-Text Fields (truck.py)
+
+**The finding:** `TruckCreate.name` and `TruckUpdate.name` had no length constraints — any string length was accepted. Every other free-text field in the codebase used `Field()` with `min_length` and `max_length`. An unbounded string field in Postgres is stored as `TEXT` or `VARCHAR` without enforcement — a 10MB truck name would be accepted, stored, and potentially crash rendering downstream.
+
+**The fix:**
+```python
+# TruckCreate — required field
+name: str = Field(..., min_length=1, max_length=100)
+
+# TruckUpdate — optional field (PATCH semantics)
+name: Optional[str] = Field(None, min_length=1, max_length=100)
+```
+
+**Critical distinction — `...` vs `None` as the Field default:**
+- `Field(...)` — Ellipsis means required. The field must be present in the payload.
+- `Field(None)` — None means optional. The field may be omitted entirely.
+
+`Optional[str]` and `Field(...)` contradict each other. `Optional` declares that `None` is a valid value; `...` declares that a value is required. Pydantic resolves this by making the field required — which breaks PATCH semantics. An update schema where every field is optional must use `Field(None, ...)` not `Field(..., ...)`.
+
+**How to spot this in future:** Every Create schema field that is required uses `...`. Every Update schema field uses `None`. They are never mixed on the same field.
+
+## 2026-05-10 SEC-5: Replacing Unconstrained `str` Fields with `Literal` Allow Lists (feedback.py)
+
+**The finding:** `FeedbackBase.type`, `FeedbackResponse.status`, and `FeedbackStatusUpdate.status` were all typed as plain `str`. Pydantic accepted any string — `"<script>alert(1)</script>"`, `"'; DROP TABLE--"`, anything — without complaint. The router was doing manual validation with `if payload.status not in _VALID_STATUSES` after the fact, which is the wrong layer.
+
+**OWASP mapping:** A03:2021 Injection / A05:2021 Security Misconfiguration. Input that should be rejected at the boundary is instead accepted and passed into business logic.
+
+**The fix — `Literal` as a server-side allow list:**
+
+```python
+# Before — accepts any string silently
+type: str = Field(..., description="Type of feedback: bug, feature_request, general")
+status: str
+
+# After — Pydantic rejects anything not in the set at deserialization time
+from typing import Literal
+
+type: Literal["bug", "feature_request", "general"] = Field(...)
+status: Literal["new", "in_progress", "resolved"]
+```
+
+**Common mistake — one string vs. multiple arguments:**
+`Literal["bug, feature_request, general"]` is wrong — that's one valid value: the literal string `"bug, feature_request, general"` including commas and spaces. `Literal` is variadic; each valid value is a separate quoted argument separated by commas *outside* the quotes.
+
+**Why the fix works:** `Literal` turns Pydantic into a server-side allow-list enforcer. The moment JSON is deserialized, any value not in the set raises `ValidationError` and returns HTTP 422 — before the route handler, before the database, before any business logic runs. The router's manual `if payload.status not in _VALID_STATUSES` check becomes redundant (but harmless).
+
+**How to spot this in future:** Any `str` field whose docstring or description names a finite set of valid values is a candidate for `Literal`. The description is the allow-list — it just hasn't been enforced yet. Also: when applying `Literal` to a field that appears across a class hierarchy (`FeedbackBase`, `FeedbackResponse`, `FeedbackStatusUpdate` all had `status` or `type`), check every class — each needs its own correct value set, not a copy/paste of another class's values.
+
+## 2026-05-10 Secure App Development: OWASP Top 10 and What Changed in 2025
+
+The OWASP Top 10 is a ranked list of the most common web application security risks, updated every few years. Two editions matter right now:
+
+**2021 edition** (what most textbooks teach):
+1. Broken Access Control, 2. Cryptographic Failures, 3. Injection, 4. Insecure Design, 5. Security Misconfiguration, 6. Vulnerable & Outdated Components, 7. Identification & Auth Failures, 8. Software & Data Integrity Failures, 9. Logging & Monitoring Failures, 10. SSRF
+
+**2025 edition** (current):
+1. Broken Access Control (+ SSRF folded in), 2. Security Misconfiguration (↑3), 3. Software Supply Chain Failures (NEW), 4. Cryptographic Failures, 5. Injection, 6. Insecure Design, 7. Authentication Failures, 8. Software or Data Integrity Failures, 9. Security Logging & Alerting Failures, 10. Mishandling of Exceptional Conditions (NEW)
+
+Key shifts: supply-chain risk (npm packages, pip packages with CVEs) is now A03. SSRF is no longer standalone — it's considered an access control failure. Injection dropped because modern frameworks (SQLAlchemy ORM, Pydantic) make it much harder to accidentally introduce.
+
+## 2026-05-10 Secure App Development: Input Validation — Allow Lists vs. Block Lists
+
+**Block list (deny list):** reject known bad values, allow everything else. Default-allow.
+**Allow list (white list):** only accept known good values, reject everything else. Default-deny.
+
+Prefer allow lists. Block lists fail open — the moment an attacker uses a value you didn't think to block, it gets through. You cannot enumerate all bad values, but you can enumerate all good ones.
+
+In Pydantic v2, an allow list on a string field is expressed with `Literal`:
+
+```python
+# Block list thinking (bad — misses infinite variants):
+type: str  # "hope" the caller sends "bug", "feature_request", or "general"
+
+# Allow list thinking (correct — rejects everything not on the list):
+from typing import Literal
+type: Literal["bug", "feature_request", "general"]
+```
+
+When `type` is `Literal`, Pydantic raises `ValidationError` on any value not in the set — before the value ever reaches the router, the database, or any business logic.
+
+**Server-side vs. client-side validation:**
+- Client-side (JavaScript, HTML5 attributes): runs in the browser before the request is sent. Good for UX speed. Useless as a security boundary — anyone can disable JS or send a raw HTTP request with `curl`.
+- Server-side (Pydantic schemas, FastAPI): runs on the server after the request arrives. The only validation that counts for security. Always validate on the server. Anything the client sends is untrusted.
+
+## 2026-05-10 Secure App Development: What Tests Are and How to Build on Them
+
+A test suite has two layers:
+
+**Unit tests** — test one function in isolation. Control all inputs, assert on the output of that one function only. Fast, deterministic, no database required.
+
+**Integration tests** — test that multiple components wire together correctly. In this project, `test_run_dispatch.py` verifies that the full dispatch pipeline produces valid DB rows, not just in-memory output.
+
+**The pattern every test follows:**
+```
+ARRANGE — set up the minimum data the test needs
+ACT     — call the one thing you're testing
+ASSERT  — check exactly the one behavior that should have changed
+```
+
+**Testing for rejection, not just acceptance:**
+The dangerous bugs are silent acceptances — inputs that should be rejected but aren't. A test that catches a missing allow-list guard does the opposite of a happy-path test:
+
+```python
+import pytest
+from pydantic import ValidationError
+from app.schemas.feedback import FeedbackCreate
+
+def test_invalid_feedback_type_is_rejected():
+    # Before fix: this succeeds silently — the bug
+    # After fix: this raises ValidationError — the correct behavior
+    with pytest.raises(ValidationError):
+        FeedbackCreate(type="<script>alert(1)</script>", message="hello")
+```
+
+The `with pytest.raises(ValidationError):` block asserts that the exception *must* be raised. If it isn't — if Pydantic accepts the value — the test fails, catching the bug.
+
+**What the current test suite covers and what it doesn't:**
+- Covered: all dispatch service logic (weights, assignment, graduation, warnings, persistence)
+- Not covered: the API layer — HTTP status codes, role guards, tenant isolation, input validation on endpoints
+
+All of the OWASP security findings from the rectification plan live in the API layer and require `TestClient` tests to verify.
+
+## 2026-05-10 Secure App Development: GitHub Actions CI — What It Is and Why It Matters
+
+CI (Continuous Integration) means automatically running your test suite every time code is pushed. Without it, broken code can sit in `master` silently. With it, every push gets verified within ~60 seconds.
+
+**The workflow file** lives at `.github/workflows/ci.yml`. GitHub reads it automatically — no setup beyond the file existing. Structure:
+
+```yaml
+on: [push, pull_request]   # when to trigger
+jobs:
+  test:
+    runs-on: ubuntu-latest  # what machine GitHub provides
+    steps:                  # commands to run in order
+      - uses: actions/checkout@v4       # download the repo
+      - uses: actions/setup-python@v5   # install Python
+      - run: pip install -r requirements.txt
+      - run: python -m pytest tests/ -v --tb=short
+```
+
+**Why SQLite in CI instead of Postgres:** The test `conftest.py` uses `sqlite:///:memory:` — a database that lives only in RAM and disappears after the test run. SQLite is built into Python, so no external service container is needed. This makes CI faster and simpler. The trade-off: SQLite doesn't support PostgreSQL-specific types (JSONB), so models that use those can't be tested this way.
+
+**Secrets vs. hardcoded values:** Never put real credentials in `ci.yml` — the file is committed to the repo and visible to anyone with read access, permanently including git history. GitHub provides an encrypted secrets store (Settings → Secrets and variables → Actions). Reference them as `${{ secrets.MY_SECRET }}`. GitHub injects the value at runtime and redacts it from logs.
+
+**Fake env vars in CI:** The `Settings` class reads environment variables at import time. Tests need those variables to exist or `Settings()` raises a validation error before any test runs. Fake values like `us-east-1_TESTPOOL` satisfy the type check without granting real AWS access.
+
+**Failure notification:** GitHub emails you automatically when a workflow you triggered fails. No configuration needed. The push that broke the build gets a red ✗ on GitHub; you get an email. Future pushes that fix it get a green ✓.
+
+## 2026-05-10 Secure App Development: Environments and Why They Matter
+
+Secure development uses four environments in sequence: Dev → Test → Stage → Prod.
+
+- **Dev:** where you write and debug code. Risks here don't touch users.
+- **Test:** automated tests run here. Verifies the app against its spec.
+- **Stage:** mirrors production exactly. Final dry-run before release. Migration scripts, config changes, and install procedures are validated here first.
+- **Prod:** live. Real users. Changes only arrive here after passing all prior stages.
+
+This project currently collapses all four into one `docker-compose.yml`. A developer running `docker-compose up` locally uses the same topology as production would. The risk: a misconfigured env var in dev could silently point at a prod database if the stages aren't isolated by separate config files and network boundaries.
+
+**Provisioning vs. deprovisioning:**
+- Provisioning: moving an app to a production environment and configuring it — creating users, setting permissions, adjusting appearance.
+- Deprovisioning: removing access. Also applies to employees — when someone leaves, their Cognito account must be disabled and tokens revoked (`AdminDisableUser` + `AdminUserGlobalSignOut`). This project does this correctly in `employees.py` via `_cognito_revoke_access`.
+
+**Horizontal vs. vertical scaling:**
+- Vertical: add more CPU/RAM to one server. Simple, but hits a hardware ceiling.
+- Horizontal: add more server instances behind a load balancer. No ceiling, but each instance must be stateless. This project's in-process JWKS cache (`security.py`) is a stateful component that breaks horizontal scaling — one fix is moving it to Redis, which is already a dependency.
+
+## 2026-05-10 Secure App Development: Code Review — Static vs. Dynamic Analysis
+
+**Static analysis:** examines source code without running it. Catches style issues, deprecated APIs, dead code, common bug patterns. Tools: Ruff (linter), Mypy/Pyright (type checker), Bandit (security patterns). Runs fast — no server needed.
+
+**Dynamic analysis:** examines code while it runs, with test inputs. Catches runtime bugs — crashes, memory issues, unexpected behavior under real conditions. Tools: pytest, profilers, fuzzers.
+
+**Fuzzing:** feeds random and invalid data into the system to find edge cases developers never imagined. A fuzzer for a web API sends long strings, special characters, negative numbers, and malformed payloads to every input field. The goal: make the server return a 5xx instead of a clean 4xx, revealing that the input wasn't handled gracefully.
+
+## 2026-05-10 Secure App Development: SEC-1 — Multi-Tenant Isolation in Routers
+
+### The problem: `RoleChecker` is not a tenant guard
+
+FastAPI routes are protected in two separate layers:
+
+1. **Authentication + Role** — handled by `RoleChecker(["admin"])`, which verifies the JWT and confirms the caller is an admin. It returns a `dict` (the decoded JWT claims). It has no `company_id`.
+2. **Tenant scope** — handled by `get_caller_employee`, which looks up the caller's row in the `employees` table and returns an `Employee` object containing `company_id`.
+
+The critical mistake in `feedback.py` was that `GET /feedback/` and `PATCH /feedback/{id}/status` used `RoleChecker` for access control but did not add `get_caller_employee` as a dependency. The result: an admin at Company A could read and modify feedback records from Company B — the query had no `WHERE company_id = ?` clause.
+
+```python
+# BEFORE — admin check, no tenant scope
+_: dict = Depends(allow_admin),
+db: Session = Depends(get_db),
+
+# AFTER — admin check + tenant scope
+_: dict = Depends(allow_admin),
+caller: Employee = Depends(get_caller_employee),
+db: Session = Depends(get_db),
+```
+
+### The fix: filter every query by caller.company_id
+
+Three queries needed the filter added:
+
+```python
+# Feedback list
+db.query(Feedback)
+    .order_by(Feedback.created_at.desc())
+    .filter(Feedback.company_id == caller.company_id)
+
+# Employee name lookup (secondary query within the same endpoint)
+db.query(Employee.id, Employee.name).filter(
+    Employee.id.in_(emp_ids),
+    Employee.company_id == caller.company_id,
+)
+
+# Status update — find the record before mutating it
+db.query(Feedback).filter(
+    Feedback.id == feedback_id,
+    Feedback.company_id == caller.company_id,
+).first()
+```
+
+If the record doesn't exist *for this tenant*, the query returns `None` and the route raises 404. This is the correct behavior — it prevents an admin from patching a record in another tenant's space, and gives no information about whether that record even exists.
+
+### How to think about this going forward
+
+Every query in a multi-tenant system must ask: "Does this query scope to the caller's company?" A query that omits `company_id` is almost always a bug. The right checklist when writing a new endpoint:
+
+1. What authentication does this need? (JWT — `get_current_user`)
+2. What roles are allowed? (`RoleChecker`)
+3. Do I need the caller's `company_id`? (if yes, add `get_caller_employee`)
+4. Does every query filter on `company_id`?
+5. For mutations: does the "find the record" query include `company_id`? If not, you can mutate another tenant's data.
+
+OWASP 2021 A01 — Broken Access Control: "Access control enforces policy such that users cannot act outside of their intended permissions." Querying across tenant boundaries is a broken access control finding even if the caller is authenticated and even if they have the correct role — role is orthogonal to tenant scope.
+
+## 2026-05-10 Secure App Development: SEC-2 — Missing Role Guard on a Read Endpoint
+
+### The problem: authenticated ≠ authorized
+
+`GET /dispatch/unavailable-staff/{date}` had `get_caller_employee` in its signature (tenant scope — correct) but was missing `allow_dispatch_mgmt` (role enforcement). Any employee with a valid JWT — including trainees and walkers — could call it and receive contact information (name, Discord ID, phone number) for every colleague who had time off on a given date.
+
+Authentication (you have a valid token) is not the same as authorization (you are allowed to do this). The endpoint was authenticated but not authorized.
+
+### The fix: add the role dependency
+
+```python
+# BEFORE
+def get_unavailable_staff_for_date(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    roles: List[str] = Query(...),
+):
+
+# AFTER
+def get_unavailable_staff_for_date(
+    dispatch_date: date,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
+    roles: List[str] = Query(...),
+):
+```
+
+`allow_dispatch_mgmt = RoleChecker([ROLE_DISPATCH, ROLE_ADMIN])` was already defined at the top of the file — it just wasn't wired into this endpoint. The `_` variable name is the FastAPI convention for a dependency used only for its side effect (raising 403 if unauthorized) when you don't need the return value.
+
+### The bonus fix: missing company_id on a mutation query
+
+During this pass, a second issue was found and corrected in the same file: the "does dispatch already exist today?" check inside `run_dispatch` was querying `TruckAssignment` without a `company_id` filter. An admin at Company A could have accidentally blocked Company B's dispatch run if both tried to dispatch on the same date. The fix is the same pattern applied throughout — add `TruckAssignment.company_id == caller.company_id` to the filter.
+
+### How to think about read endpoints
+
+Read endpoints are just as dangerous as write endpoints when the data is sensitive. Contact information, schedules, time-off records, and availability data are all PII-adjacent. The threat model for a read endpoint: "who should NOT be able to see this, and what happens if they can?" For `unavailable-staff`, a disgruntled employee could use the endpoint to target colleagues who are out, or to probe organizational structure. Role guards on reads are not optional.
+
+## 2026-05-10 Secure App Development: SEC-3 — Dual Source of Truth for Roles
+
+### The design risk
+
+This system checks roles in two different places using two different sources:
+
+**`RoleChecker`** ([deps.py:243](backend/app/api/deps.py#L243)) reads from the **JWT**:
+```python
+user_groups = user.get("cognito_groups", [])
+```
+Cognito embeds group membership into the token at login time. The token is valid for its full TTL (typically 1 hour) regardless of what happens in Cognito afterward.
+
+**`assert_owns_or_privileged`** ([deps.py:304](backend/app/api/deps.py#L304)) reads from the **database**:
+```python
+caller.role not in _PRIVILEGED_ROLES
+```
+`caller` is an `Employee` ORM object fetched fresh on every request. It reflects the current state of the `Employee.role` column.
+
+### What happens on a demotion
+
+An admin is removed from the `admin` Cognito group and their `Employee.role` is updated to `driver`:
+
+| Dependency | Source | Sees after demotion |
+|---|---|---|
+| `RoleChecker` | JWT (minted at login) | `admin` — until the token expires |
+| `assert_owns_or_privileged` | `Employee.role` in DB | `driver` — immediately |
+
+For up to one hour after demotion, `RoleChecker`-guarded endpoints still accept the former admin. Endpoints guarded by `assert_owns_or_privileged` block them immediately.
+
+### What happens on a promotion
+
+A driver is added to the `admin` Cognito group but their `Employee.role` column is not updated:
+
+| Dependency | Source | Sees after promotion |
+|---|---|---|
+| `RoleChecker` | JWT (next login) | `admin` |
+| `assert_owns_or_privileged` | `Employee.role` in DB | `driver` |
+
+Less dangerous — the employee gets blocked on ownership checks — but confusing and a sign the two sources are drifting.
+
+### Why this is not fixed today
+
+The JWT TTL window (≤1 hour) is an accepted trade-off in token-based auth systems. The alternative — revocation lists or very short-lived tokens — adds significant infrastructure complexity. The risk is documented so that:
+1. Role changes must update **both** Cognito groups and `Employee.role` in the same operation.
+2. Emergency demotions (e.g., a terminated employee) must also call `AdminUserGlobalSignOut` in Cognito to invalidate existing tokens immediately — the project already has `_cognito_revoke_access` in `employees.py` for exactly this reason.
+3. Future developers adding new role checks must consciously choose which source to read from and document why.
+
+### The general principle
+
+When the same concept (role, permission, status) is stored in two places, they will eventually diverge. The system must either: (a) have one authoritative source and derive the other, or (b) document the window of inconsistency and have a procedure for emergency sync.
+
+### The fix: make RoleChecker DB-authoritative
+
+Rather than refactoring 17 call sites to pass the JWT dict into `assert_owns_or_privileged`, we made `RoleChecker` consistent with it — both now read `Employee.role` from the database as the authoritative source.
+
+The updated `RoleChecker.__call__` in [deps.py:243](backend/app/api/deps.py#L243):
+
+```python
+def __call__(self, user: dict = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    from app.models.employee import Employee
+
+    sub   = user.get("id", "")
+    email = user.get("email", "")
+
+    employee = None
+    if sub:
+        employee = db.query(Employee).filter(Employee.cognito_sub == sub).first()
+    if not employee and email:
+        employee = db.query(Employee).filter(Employee.email == email).first()
+
+    if employee:
+        # DB role is authoritative — JWT claim may be stale after a role change
+        if employee.role not in self.allowed_roles:
+            raise HTTPException(status_code=403, detail="Operation not permitted.")
+    else:
+        # No employee row (super admin or platform account) — fall back to JWT groups
+        if not any(role in user.get("cognito_groups", []) for role in self.allowed_roles):
+            raise HTTPException(status_code=403, detail="Operation not permitted.")
+
+    return user
+```
+
+**Why this approach over the alternative:** Making `assert_owns_or_privileged` read from the JWT instead would have required passing a second parameter to all 17 call sites and made more of the system JWT-dependent — the weaker source. Making `RoleChecker` DB-authoritative achieves consistency in one place with zero changes at call sites.
+
+**Super admin fallback:** Platform-level accounts have no `Employee` row. The `else` branch preserves the original JWT-group check for those callers. No super admin functionality is broken.
+
+**Performance:** `RoleChecker`-guarded endpoints that also use `get_caller_employee` already pay one DB query. `RoleChecker` now adds one more (sub lookup). The fast path (`cognito_sub` is indexed) makes this negligible. At enterprise scale this is one indexed read per request on admin-only endpoints — acceptable.
+
+**What this closes:** A demoted admin whose JWT still carries the old `cognito_groups` claim is now blocked immediately by `RoleChecker` — the DB says `driver`, the check fails. The JWT TTL window is eliminated for all role-guarded endpoints. `AdminUserGlobalSignOut` is still best practice for terminations (forces re-authentication entirely) but is no longer the only line of defense.
+
+## 2026-05-11 Secure App Development: SEC-4 — SSRF via Unvalidated Internal URL
+
+### The vulnerability
+
+SSRF (Server-Side Request Forgery) — OWASP 2021 A10 — occurs when a server makes an outbound HTTP request to a URL that an attacker can influence. In `_send_discord_invite`, the URL was read directly from the environment:
+
+```python
+bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+```
+
+If `BOT_INTERNAL_URL` is misconfigured or injected (e.g., via a compromised `.env` file, a misconfigured deployment, or a supply-chain attack), the server would make a POST request to any URL — including `http://169.254.169.254/latest/meta-data/`, the AWS Instance Metadata Service. That endpoint returns temporary IAM credentials, which an attacker can use to take over the entire AWS account.
+
+### Three problems with `os.environ.get` in application code
+
+1. **Hidden contract:** A developer cloning the repo has no idea `BOT_INTERNAL_URL` is required until the code hits that line at runtime and fails mid-request.
+2. **Untestable:** Unit tests must mock the global environment (`os.environ`) rather than passing a config object.
+3. **No type safety:** `os.environ` always returns a string or `None`. Pydantic can't validate, cast, or fail-fast on a value it doesn't know about.
+
+### The fix: move to Settings with a field_validator
+
+**[config.py](backend/app/core/config.py)** — added field and validator:
+
+```python
+_ALLOWED_BOT_HOSTS = {"bot", "localhost", "127.0.0.1"}
+
+class Settings(BaseSettings):
+    bot_internal_url: str = "http://bot:8001"
+
+    @field_validator("bot_internal_url")
+    @classmethod
+    def validate_bot_url(cls, v: str) -> str:
+        parsed = urlparse(v)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"BOT_INTERNAL_URL scheme must be http or https, got: {parsed.scheme!r}")
+        if parsed.hostname not in _ALLOWED_BOT_HOSTS:
+            raise ValueError(f"BOT_INTERNAL_URL hostname {parsed.hostname!r} is not in the allowed list")
+        return v
+```
+
+**[deps.py](backend/app/api/deps.py)** — replaced `os.environ.get` with settings:
+
+```python
+bot_url = settings.bot_internal_url
+secret  = settings.internal_secret
+```
+
+### Why hostname whitelisting over IP filtering
+
+IP filtering (block `169.254.0.0/16`, `10.0.0.0/8`, etc.) is fragile — an attacker can use DNS rebinding to resolve a whitelisted hostname to a blocked IP after the check passes. Hostname whitelisting rejects anything not in the allow-list outright. At startup, before any request is ever served.
+
+`_ALLOWED_BOT_HOSTS = {"bot", "localhost", "127.0.0.1"}` — `"bot"` is the Docker Compose service name; `"localhost"` and `"127.0.0.1"` cover local development. Any other hostname causes a `ValidationError` at startup — the app never boots.
+
+### The general rule
+
+Every outbound URL a server makes a request to must be: (1) defined in `Settings` so it's validated at startup, (2) restricted to a known-good allow-list of hosts, and (3) scheme-checked to prevent `file://` or `gopher://` abuse. Never read URLs from `os.environ` directly in application code.
+
+**Dead code** is code that never runs or whose result is never used. It wastes memory, can hide bugs, and is a target for attackers (dead code paths often skip validation because "nobody reaches them").
+
+## 2026-05-11 Secure App Development: SEC-9 — Dead Code Removal
+
+Seven one-shot dev scripts were committed to `backend/` and never removed:
+
+- `add_trainees.py`, `add_one_more_trainee.py` — seed trainee records directly into the DB
+- `add_trainee_fields.py`, `alter_db.py` — run raw `ALTER TABLE` SQL against the live engine
+- `create_dispatch.py`, `create_fake_dispatch.py` — manually create dispatch records
+- `seed.py` — hardcoded test user data with real-looking UUIDs
+
+**Why these are a security risk, not just clutter:**
+
+1. **No auth, no audit trail.** Every script calls `SessionLocal()` directly and writes to the database as a superuser. There is no JWT check, no role check, no company_id scope, and no audit log entry. Anyone who can run Python in the container can manipulate production data with zero trace.
+
+2. **Hardcoded identifiers.** `seed.py` contained hardcoded UUIDs and Discord IDs that map to real test accounts. Committed identifiers are permanent in git history — even after deletion, they're recoverable. (The deletion removes the attack surface going forward; the history is a separate concern for a secret-scanning tool like `git-secrets` or `trufflehog`.)
+
+3. **Schema migration bypass.** `alter_db.py` and `add_trainee_fields.py` run raw DDL directly against the engine, bypassing Alembic entirely. If run against production they would modify the schema with no migration record, no rollback path, and no review.
+
+**The rule:** one-shot scripts belong in a `scripts/` directory (already present in this repo) with a clear README, or they get deleted after use. Never leave them in the package root where they look like application code. Alembic handles schema changes; fixtures or management commands handle seed data.

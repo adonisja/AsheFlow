@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, EmailStr
 from typing import Optional, Literal, List
 from uuid import UUID
 from datetime import datetime
@@ -20,7 +20,7 @@ def _validate_discord_id(v: Optional[str]) -> Optional[str]:
 
 class EmployeeCreate(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     discord_id: Optional[str] = None
     role: RoleStr
     phone_number: Optional[str] = None
@@ -33,7 +33,7 @@ class EmployeeCreate(BaseModel):
 
 class EmployeeUpdate(BaseModel):
     name:         Optional[str]     = None
-    email:        Optional[str]     = None
+    email:        Optional[EmailStr]     = None
     discord_id:   Optional[str]     = None
     role:         Optional[RoleStr] = None
     is_active:    Optional[bool]    = None
@@ -49,7 +49,7 @@ class EmployeeResponse(BaseModel):
     """Full response — returned to management/admin/dispatch only."""
     id: UUID
     name: str
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
     discord_id: Optional[str] = None
     cognito_sub: Optional[str] = None
     username: Optional[str] = None
@@ -65,7 +65,7 @@ class EmployeeResponse(BaseModel):
 class BulkImportRow(BaseModel):
     """One row from a bulk import payload — same fields as EmployeeCreate."""
     name: str
-    email: str
+    email: EmailStr
     discord_id: Optional[str] = None
     role: RoleStr
     phone_number: Optional[str] = None
@@ -81,7 +81,7 @@ class BulkImportResult(BaseModel):
     row: int
     status: Literal["created", "skipped", "failed"]
     name: str
-    email: str
+    email: EmailStr
     reason: Optional[str] = None
 
 

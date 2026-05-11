@@ -44,6 +44,7 @@ def get_unavailable_staff_for_date(
     dispatch_date: date,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch_mgmt),
     roles: List[str] = Query(default=["driver", "trainer", "walker"]),
 ):
     """Return active field staff excluded from the available pool on a given date.
@@ -92,7 +93,8 @@ def get_daily_dispatch(
         members_query = db.query(AssignmentMember, Employee).join(
             Employee, AssignmentMember.employee_id == Employee.id
         ).filter(
-            AssignmentMember.assignment_id == assignment.id
+            AssignmentMember.assignment_id == assignment.id,
+            Employee.company_id == caller.company_id
         ).all()
         
         crew_list = []
