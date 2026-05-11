@@ -3286,3 +3286,105 @@ Seven one-shot dev scripts were committed to `backend/` and never removed:
 3. **Schema migration bypass.** `alter_db.py` and `add_trainee_fields.py` run raw DDL directly against the engine, bypassing Alembic entirely. If run against production they would modify the schema with no migration record, no rollback path, and no review.
 
 **The rule:** one-shot scripts belong in a `scripts/` directory (already present in this repo) with a clear README, or they get deleted after use. Never leave them in the package root where they look like application code. Alembic handles schema changes; fixtures or management commands handle seed data.
+
+## 2026-05-11 Secure App Development: ENV-1 — Multi-Environment Docker Compose Separation
+
+### What Docker Compose is and why one file is a problem
+
+Docker runs your application in **containers** — isolated processes that each have their own filesystem and network. `docker-compose.yml` is a recipe that tells Docker what containers to create, how to build them, and how they communicate.
+
+The original file had dev-only settings baked in at the top level:
+- `./backend:/app` — a **volume mount** that replaces the container's `/app` directory with your local source code on disk. This enables hot reload in dev. In production it's dangerous: anyone who can write to that directory on the server changes what the container runs, bypassing the entire build/review/deploy pipeline.
+- `--reload` on uvicorn — watches the filesystem and restarts on changes. In production: wastes CPU, makes the server non-deterministic, signals dev mode to attackers.
+- `celery worker --beat` — runs the Celery scheduler inside the same process as the worker. If the worker crashes and restarts, the scheduler restarts too, potentially double-firing scheduled jobs.
+
+### The three-file structure
+
+Docker Compose has a built-in merge system. When you run `docker-compose up` it automatically loads two files in order:
+1. `docker-compose.yml` — the base (environment-neutral service definitions)
+2. `docker-compose.override.yml` — dev patches, auto-loaded with no flags needed
+
+For production you name the files explicitly:
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+The override files only specify keys that change — everything else is inherited from the base. Docker Compose merges them.
+
+### `docker-compose.yml` (base)
+
+Defines all services, their images, ports, environment variables, and health-check dependencies. No volume mounts. No `--reload`. No `--beat`. Environment-neutral — safe to run anywhere.
+
+### `docker-compose.override.yml` (dev, auto-loaded)
+
+Patches three things on top of the base:
+- `./backend:/app` and `~/.aws` volume mounts on `backend` and `celery_worker` — enables hot reload
+- `--reload` on uvicorn — restarts on file save
+- `--beat` back on celery — scheduler bundled with worker (acceptable in dev)
+
+A developer runs `docker-compose up` with no flags and gets all of this automatically.
+
+### `docker-compose.prod.yml` (production, explicit)
+
+Patches for production:
+- `APP_ENV=production` on every Python service — triggers the `INTERNAL_SECRET` and `cors_origins` startup guards in `config.py`
+- `--workers 4` on uvicorn — multiple processes for concurrent requests (`--reload` and `--workers` are mutually exclusive)
+- No volume mounts — the image contains the code built at deploy time
+- **Splits celery into two separate services** (ENV-5):
+  - `celery_worker`: runs `celery worker` — processes tasks
+  - `celery_beat`: runs `celery beat` — fires scheduled jobs
+  - If the worker crashes, the beat schedule is unaffected. If beat crashes, workers keep processing — nothing is lost.
+
+### ENV-5: Why split celery beat from the worker
+
+`celery worker --beat` in one process means one crash affects both. In production with horizontal scaling (multiple worker containers), running `--beat` on every worker causes every worker to fire the same scheduled jobs simultaneously — N workers = N copies of every scheduled job running at once. Beat must run in exactly one container. Separating it into `celery_beat` makes that explicit and enforced.
+
+### YAML indentation rules
+
+YAML indentation is structural — wrong indentation means wrong meaning, not a syntax error you can see. Every property of a service must be indented exactly two spaces inside the service name. A property at the wrong level either becomes a top-level key (parse error) or is silently ignored. Always validate compose files with `docker-compose config` before deploying.
+
+## 2026-05-11 Secure App Development: ENV-2 and ENV-3 — Startup Guards for Non-Dev Environments
+
+### ENV-2: The "production only" trap
+
+The original `INTERNAL_SECRET` guard in `Settings.__init__` was:
+
+```python
+if self.app_env == "production" and self.internal_secret == "change-me-in-production":
+    raise RuntimeError(...)
+```
+
+This only fires when `app_env` is exactly the string `"production"`. A staging deployment running `APP_ENV=staging` with the default secret passes silently — the guard never triggers. Staging environments are the most common source of credential leaks because they're treated as "not production" but often have access to real data or real infrastructure.
+
+**Fix:** invert the condition — block any environment that is not explicitly development:
+
+```python
+if self.app_env != "development" and self.internal_secret == "change-me-in-production":
+    raise RuntimeError(...)
+```
+
+Now `staging`, `test`, `production`, or any unrecognized value all require a real secret. Only `"development"` is exempt.
+
+**The general principle:** security guards should allowlist the safe case (`== "development"`) rather than blocklist the dangerous case (`== "production"`). New environment names you haven't thought of yet are automatically blocked.
+
+### ENV-3: Localhost CORS origins in non-dev environments
+
+`Settings.cors_origins` defaults to seven localhost ports. A misconfigured staging deploy would boot successfully with those defaults and accept cross-origin requests from any localhost tab — including a developer's local attacker page.
+
+**Fix:** startup check in the same `__init__`:
+
+```python
+if "localhost" in self.cors_origins and self.app_env != "development":
+    raise RuntimeError(
+        "CORS_ORIGINS contains 'localhost' in a non-development environment. "
+        "Set CORS_ORIGINS to your actual production/staging domain(s) before deploying."
+    )
+```
+
+The app refuses to start if `CORS_ORIGINS` wasn't overridden for the environment. This is the correct pattern for any config value that has a safe dev default but a dangerous production default — fail loudly at startup, not silently at runtime.
+
+### The mistake made during implementation
+
+The first attempt wrote `"local_host"` (with an underscore) instead of `"localhost"`. The check compiled and ran without error — Python string containment doesn't care whether the substring exists. The guard was silently broken: it would never match, and no localhost origin would ever be caught. This is a class of bug that has no runtime signal — tests pass, the app starts, and you only discover it when a staging deploy with localhost origins causes a security incident.
+
+**Lesson:** string-match guards should be tested explicitly. A test that sets `app_env="staging"` and `cors_origins="http://localhost:3000"` and asserts `RuntimeError` is raised would have caught the typo immediately.

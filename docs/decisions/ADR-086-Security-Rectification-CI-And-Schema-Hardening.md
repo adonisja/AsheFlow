@@ -45,6 +45,17 @@ Also removed stray `import pytest` and `from pydantic import ValidationError` th
 
 **SEC-6:** Added `Field(min_length=1, max_length=100)` to `TruckCreate.name` and `TruckUpdate.name` in `backend/app/schemas/truck.py`. Used `Field(None, ...)` on `TruckUpdate.name` (optional PATCH field) and `Field(..., ...)` on `TruckCreate.name` (required POST field).
 
+**ENV-1 + ENV-5:** Introduced three-file Docker Compose structure to separate dev from production topology.
+- `docker-compose.yml` (base): environment-neutral service definitions — no volume mounts, no `--reload`, no `--beat`
+- `docker-compose.override.yml` (dev, auto-loaded): adds volume mounts, `--reload`, and `--beat` for local development
+- `docker-compose.prod.yml` (production, explicit): sets `APP_ENV=production`, runs uvicorn with `--workers 4`, and splits Celery into separate `celery_worker` (tasks) and `celery_beat` (scheduler) containers — prevents double-firing of scheduled jobs under horizontal scaling
+
+Usage: `docker-compose up` for dev (override auto-loaded); `docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d` for production.
+
+**ENV-2:** Changed `INTERNAL_SECRET` guard in `Settings.__init__` from `app_env == "production"` to `app_env != "development"`. The original condition silently skipped staging, test, and any unrecognised environment name. The new condition blocks all non-dev environments — only `"development"` is exempt.
+
+**ENV-3:** Added startup check in `Settings.__init__`: if `cors_origins` contains `"localhost"` and `app_env != "development"`, raise `RuntimeError`. Prevents a misconfigured staging deploy from booting with localhost CORS defaults. First attempt used `"local_host"` (underscore) — silently broken, never matched. Fixed to `"localhost"`.
+
 **SEC-9:** Deleted seven dead dev scripts from `backend/`: `add_trainees.py`, `add_one_more_trainee.py`, `add_trainee_fields.py`, `alter_db.py`, `create_dispatch.py`, `create_fake_dispatch.py`, `seed.py`. All bypassed authentication, role checks, company_id scoping, and audit logging. Two ran raw DDL directly against the engine, bypassing Alembic. `seed.py` contained hardcoded UUIDs mapping to real test accounts. None were imported or referenced anywhere in the application or test suite.
 
 **SEC-4:** Eliminated SSRF risk from `_send_discord_invite` in `backend/app/api/deps.py`. `BOT_INTERNAL_URL` was read via `os.environ.get` with no validation — any URL including `http://169.254.169.254` (AWS IMDS) was accepted. Fix: moved `bot_internal_url` into `Settings` as a proper Pydantic field with a `@field_validator` that enforces scheme (`http`/`https` only) and hostname against `_ALLOWED_BOT_HOSTS = {"bot", "localhost", "127.0.0.1"}`. A bad value now raises `ValidationError` at startup before any request is served. Also removed `import os` from `_send_discord_invite` (now unused) and replaced both `os.environ.get` calls with `settings.bot_internal_url` and `settings.internal_secret`.
@@ -63,6 +74,9 @@ Also removed stray `import pytest` and `from pydantic import ValidationError` th
 - `GET /feedback/` and `PATCH /feedback/{id}/status` are now correctly scoped to the caller's company. An admin at Company A cannot read or mutate Company B's feedback records.
 - `GET /dispatch/unavailable-staff/{date}` now requires dispatch or admin role. Trainees and walkers receive 403.
 - The double-dispatch guard in `run_dispatch` is now scoped per company — Company A's dispatch run no longer conflicts with Company B's.
+- ENV-1 + ENV-5: Three-file Compose structure in place. Dev gets hot reload and bundled beat automatically. Production gets multi-worker uvicorn, no source mounts, and split celery containers.
+- ENV-2: `INTERNAL_SECRET` guard now fires on any non-dev environment, not just the exact string `"production"`.
+- ENV-3: App refuses to start if `cors_origins` contains `"localhost"` in a non-dev environment.
 - SEC-9 dead code removed. Seven scripts with no auth, no audit trail, and direct DB access are gone from the repo surface.
 - SEC-4 SSRF risk eliminated. `BOT_INTERNAL_URL` is now validated at startup — bad hostname or scheme causes `ValidationError` before any request is served.
 - SEC-3 dual-source-of-truth eliminated. `RoleChecker` now checks `Employee.role` from the DB. A demoted admin is blocked immediately on all role-guarded endpoints — no JWT TTL window.

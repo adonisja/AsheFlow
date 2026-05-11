@@ -72,6 +72,16 @@ Bonus fix found in the same file: the double-dispatch guard in `run_dispatch` qu
 
 96 tests pass after both fixes.
 
+**ENV-1 + ENV-5 — Multi-environment Docker Compose separation**
+Created three-file Compose structure. Base file strips all dev-only settings (volume mounts, `--reload`, `--beat`). `docker-compose.override.yml` auto-loaded in dev adds them back. `docker-compose.prod.yml` sets `APP_ENV=production`, runs 4 uvicorn workers, and splits Celery into separate `celery_beat` and `celery_worker` containers (ENV-5). The split prevents double-firing of scheduled jobs when workers are scaled horizontally — beat runs in exactly one container.
+
+Two bugs found and fixed during base file editing: (1) `celery_worker` block had wrong indentation — all properties were at the same level as the service name instead of nested inside it; (2) `volumes:` declaration missing at the bottom of the file — named volumes for postgres and redis weren't declared.
+
+**ENV-2 + ENV-3 — Startup guards for non-dev environments**
+ENV-2: `INTERNAL_SECRET` guard changed from `== "production"` to `!= "development"`. Staging with `APP_ENV=staging` previously bypassed the check silently.
+ENV-3: Added `"localhost" in cors_origins and app_env != "development"` check. First attempt wrote `"local_host"` (underscore) — compiled and ran without error, but never matched. Silently broken. Fixed to `"localhost"`. Lesson: string-match guards need explicit tests asserting the `RuntimeError` is raised.
+96 tests pass.
+
 **SEC-9 — Dead code removal**
 Deleted 7 one-shot dev scripts from `backend/`: `add_trainees.py`, `add_one_more_trainee.py`, `add_trainee_fields.py`, `alter_db.py`, `create_dispatch.py`, `create_fake_dispatch.py`, `seed.py`. Verified no imports or references in app or tests before deleting. All bypassed auth, roles, company_id scoping, and audit logging. Two ran raw DDL against the engine, bypassing Alembic. `seed.py` had hardcoded UUIDs. 96 tests pass.
 
@@ -105,5 +115,11 @@ Decision: rather than refactoring 17 `assert_owns_or_privileged` call sites to u
 - `os.environ.get` in application code is an antipattern: hidden contract, untestable, no type safety. Every environment variable belongs in `Settings` where Pydantic validates it at startup.
 - SSRF hostname whitelisting is stronger than IP filtering — DNS rebinding can make a whitelisted hostname resolve to a blocked IP after the IP check passes. Reject unknown hostnames outright at startup, not at request time.
 - `@field_validator` raising `ValueError` inside Pydantic `Settings` causes a `ValidationError` at import time — the app never boots with a bad value. This is the correct place for security-critical config validation.
+- Docker Compose override files only need to specify the keys that change — everything else is inherited from the base. This avoids duplicating 100-line service definitions across environments.
+- Volume mounts in production are a security risk: they bypass the image build and let disk content override what was deployed. Remove them from the base file and only add them in the dev override.
+- `celery worker --beat` in one process is fine for dev; in production with multiple workers it causes every worker to fire the same scheduled jobs simultaneously. Beat must run in exactly one container.
+- YAML indentation errors can be structurally silent — a property at the wrong level may be ignored rather than raising a parse error. Always validate with `docker-compose config`.
+- Security guards should allowlist the safe case (`!= "development"`) not blocklist the dangerous one (`== "production"`). Unrecognised environment names are automatically blocked.
+- String-match guards that are silently broken (wrong substring) have no runtime signal. Always write a test that asserts the `RuntimeError` is raised with a non-dev config.
 - Dead scripts in the repo root are a security surface even if "nobody runs them" — they have no auth, no audit trail, and bypass all application-layer controls. Delete after use or move to `scripts/` with a README.
 - Before deleting any file, verify it's unreferenced: `grep -r filename app/ tests/`. Confirm zero results before proceeding.
