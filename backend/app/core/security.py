@@ -1,19 +1,36 @@
 import json
 from urllib.request import urlopen
 import jwt
+import redis as _redis_sync
 from fastapi import HTTPException, status
 from jwt.algorithms import RSAAlgorithm
 
 from app.core.config import settings
 
-# I'll construct the Cognito Issuer ULR dynamically using my .ev variables
 COGNITO_ISSUER = f"https://cognito-idp.{settings.aws_region}.amazonaws.com/{settings.aws_cognito_user_pool_id}"
 JWKS_URL = f"{COGNITO_ISSUER}/.well-known/jwks.json"
 
-# Cache for the public keys so we don't have to make a network request on every API call.
-# Keyed by kid → RSA key dict for O(1) lookup. Populated lazily and refreshed on key miss
-# (AWS rotates Cognito signing keys periodically; a miss means a new key was issued).
-_jwks_cache: dict[str, dict] = {}
+JWKS_REDIS_KEY = "jwks_cache"
+JWKS_TTL_SECONDS = 3600  # 1 hour — AWS rotates Cognito keys infrequently; balances freshness vs. Cognito load
+
+# SCALING NOTE: We use the synchronous Redis client here deliberately.
+# verify_cognito_token() is a sync function called inside a sync FastAPI dependency
+# (get_current_user in deps.py). Introducing async Redis would require making
+# get_current_user and verify_cognito_token async, which cascades through every
+# dependency in deps.py that calls get_current_user.
+#
+# Trade-off accepted: a sync Redis GET blocks the event loop for ~1ms (localhost)
+# to ~10ms (cross-region). At this project's traffic level that is immeasurable.
+#
+# IF this system ever scales to high concurrency (hundreds of simultaneous requests),
+# migrate to redis.asyncio and make get_current_user + verify_cognito_token async.
+# The Redis logic below stays identical — only the client import and await keywords change.
+def _get_redis() -> _redis_sync.Redis:
+    return _redis_sync.from_url(
+        settings.redis_url,
+        encoding="utf-8",
+        decode_responses=True,
+    )
 
 
 def _fetch_jwks() -> dict[str, dict]:
@@ -27,18 +44,26 @@ def _fetch_jwks() -> dict[str, dict]:
 
 
 def get_jwks() -> dict[str, dict]:
-    """Return the cached kid→key mapping, fetching on first call.
+    """Return the cached kid→key mapping from Redis, fetching from Cognito on miss.
+
+    All worker processes share the same Redis instance, so a cache populated by
+    worker 1 is immediately visible to workers 2, 3, and 4. The in-process dict
+    this replaced was per-replica — each worker fetched independently and held
+    stale keys after AWS key rotation until the process restarted.
 
     Returns:
-        Dict mapping each key ID (kid) to its RSA public key object.
+        Dict mapping each key ID (kid) to its RSA public key dict.
 
     Raises:
-        RuntimeError: If the JWKS endpoint cannot be reached.
+        RuntimeError: If the JWKS endpoint cannot be reached on a cache miss.
     """
-    global _jwks_cache
-    if not _jwks_cache:
-        _jwks_cache = _fetch_jwks()
-    return _jwks_cache
+    r = _get_redis()
+    cached = r.get(JWKS_REDIS_KEY)
+    if cached:
+        return json.loads(cached)
+    jwks = _fetch_jwks()
+    r.set(JWKS_REDIS_KEY, json.dumps(jwks), ex=JWKS_TTL_SECONDS)
+    return jwks
 
 
 def verify_cognito_token(token: str) -> dict:
@@ -67,24 +92,24 @@ def verify_cognito_token(token: str) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token header. Not a valid JWT.",
         )
-    
-    # Every key in AWS has a unique Key ID ('kid')
+
     kid = unverified_header.get("kid")
     if not kid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token header missing 'kid' (Key ID).",
         )
-    
-    # 2. Find the matching public key — try cache first, re-fetch once on miss
+
+    # 2. Find the matching public key — try Redis cache first, re-fetch once on miss
     #    (handles AWS key rotation without requiring a service restart)
     jwks = get_jwks()
     key_data = jwks.get(kid)
     if not key_data:
-        # kid not in cache — AWS may have rotated keys; force a re-fetch
-        global _jwks_cache
-        _jwks_cache = _fetch_jwks()
-        key_data = _jwks_cache.get(kid)
+        # kid not in cache — AWS may have rotated keys; force a re-fetch and update Redis
+        jwks = _fetch_jwks()
+        r = _get_redis()
+        r.set(JWKS_REDIS_KEY, json.dumps(jwks), ex=JWKS_TTL_SECONDS)
+        key_data = jwks.get(kid)
 
     if not key_data:
         raise HTTPException(
@@ -100,7 +125,6 @@ def verify_cognito_token(token: str) -> dict:
     try:
         public_key = RSAAlgorithm.from_jwk(json.dumps(key_data))
 
-        # Attempt decode treating this as an ID token (has 'aud')
         try:
             payload = jwt.decode(
                 token,
@@ -111,7 +135,6 @@ def verify_cognito_token(token: str) -> dict:
             )
         except (jwt.InvalidAudienceError, jwt.MissingRequiredClaimError):
             # Fall back to access token path — no 'aud', validate 'client_id' manually
-            # MissingRequiredClaimError fires when the token has no 'aud' at all (access tokens)
             payload = jwt.decode(
                 token,
                 public_key,

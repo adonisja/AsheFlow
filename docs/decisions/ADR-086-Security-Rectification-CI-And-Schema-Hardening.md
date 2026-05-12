@@ -45,6 +45,8 @@ Also removed stray `import pytest` and `from pydantic import ValidationError` th
 
 **SEC-6:** Added `Field(min_length=1, max_length=100)` to `TruckCreate.name` and `TruckUpdate.name` in `backend/app/schemas/truck.py`. Used `Field(None, ...)` on `TruckUpdate.name` (optional PATCH field) and `Field(..., ...)` on `TruckCreate.name` (required POST field).
 
+**ENV-4:** Moved JWKS cache from an in-process module-level dict (`_jwks_cache: dict`) to Redis (`jwks_cache` key, 1-hour TTL) in `backend/app/core/security.py`. The dict was per-replica — with `--workers 4`, each uvicorn process fetched JWKS independently and held stale keys after AWS rotation until restart, causing intermittent 401s. Redis is shared across all workers; a cache miss by one worker immediately fixes it for all. Used synchronous `redis.Redis` client (not `redis.asyncio`) to avoid cascading async refactor through `get_current_user` and `deps.py`. Scaling note preserved in code: migrate to async Redis if concurrency ever demands it.
+
 **ENV-1 + ENV-5:** Introduced three-file Docker Compose structure to separate dev from production topology.
 - `docker-compose.yml` (base): environment-neutral service definitions — no volume mounts, no `--reload`, no `--beat`
 - `docker-compose.override.yml` (dev, auto-loaded): adds volume mounts, `--reload`, and `--beat` for local development
@@ -74,6 +76,7 @@ Usage: `docker-compose up` for dev (override auto-loaded); `docker-compose -f do
 - `GET /feedback/` and `PATCH /feedback/{id}/status` are now correctly scoped to the caller's company. An admin at Company A cannot read or mutate Company B's feedback records.
 - `GET /dispatch/unavailable-staff/{date}` now requires dispatch or admin role. Trainees and walkers receive 403.
 - The double-dispatch guard in `run_dispatch` is now scoped per company — Company A's dispatch run no longer conflicts with Company B's.
+- ENV-4: JWKS cache is now shared across all worker processes via Redis. Intermittent 401s on AWS key rotation are eliminated.
 - ENV-1 + ENV-5: Three-file Compose structure in place. Dev gets hot reload and bundled beat automatically. Production gets multi-worker uvicorn, no source mounts, and split celery containers.
 - ENV-2: `INTERNAL_SECRET` guard now fires on any non-dev environment, not just the exact string `"production"`.
 - ENV-3: App refuses to start if `cors_origins` contains `"localhost"` in a non-dev environment.
