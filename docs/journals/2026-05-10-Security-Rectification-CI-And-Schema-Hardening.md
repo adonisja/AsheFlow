@@ -72,6 +72,11 @@ Bonus fix found in the same file: the double-dispatch guard in `run_dispatch` qu
 
 96 tests pass after both fixes.
 
+**ENV-4 — JWKS cache moved from in-process dict to Redis**
+`_jwks_cache` was a module-level dict in `security.py` — per-replica, never shared. With 4 uvicorn workers each worker fetched JWKS independently and held stale keys after AWS rotation until restart. Replaced with Redis key `jwks_cache` (1-hour TTL). All workers share one cache; a rotation miss force-fetches and writes back to Redis, fixing all workers simultaneously.
+
+Chose sync `redis.Redis` over `redis.asyncio` — `verify_cognito_token` is sync; async would cascade through `get_current_user` and all of `deps.py`. Trade-off accepted at this traffic level (~1ms blocking). Scaling note left in code with explicit migration path. 96 tests pass.
+
 **ENV-1 + ENV-5 — Multi-environment Docker Compose separation**
 Created three-file Compose structure. Base file strips all dev-only settings (volume mounts, `--reload`, `--beat`). `docker-compose.override.yml` auto-loaded in dev adds them back. `docker-compose.prod.yml` sets `APP_ENV=production`, runs 4 uvicorn workers, and splits Celery into separate `celery_beat` and `celery_worker` containers (ENV-5). The split prevents double-firing of scheduled jobs when workers are scaled horizontally — beat runs in exactly one container.
 
@@ -115,6 +120,8 @@ Decision: rather than refactoring 17 `assert_owns_or_privileged` call sites to u
 - `os.environ.get` in application code is an antipattern: hidden contract, untestable, no type safety. Every environment variable belongs in `Settings` where Pydantic validates it at startup.
 - SSRF hostname whitelisting is stronger than IP filtering — DNS rebinding can make a whitelisted hostname resolve to a blocked IP after the IP check passes. Reject unknown hostnames outright at startup, not at request time.
 - `@field_validator` raising `ValueError` inside Pydantic `Settings` causes a `ValidationError` at import time — the app never boots with a bad value. This is the correct place for security-critical config validation.
+- In-process caches (module-level dicts, `lru_cache`) break with multiple workers — they never share state across processes. Any cache that must be consistent across replicas belongs in Redis or a database.
+- Sync vs async Redis is a refactoring cost decision, not just a performance decision. When a sync function is deep in the call chain, making it async cascades upward through every caller. Accept sync at low scale; plan the migration path before you need it.
 - Docker Compose override files only need to specify the keys that change — everything else is inherited from the base. This avoids duplicating 100-line service definitions across environments.
 - Volume mounts in production are a security risk: they bypass the image build and let disk content override what was deployed. Remove them from the base file and only add them in the dev override.
 - `celery worker --beat` in one process is fine for dev; in production with multiple workers it causes every worker to fire the same scheduled jobs simultaneously. Beat must run in exactly one container.
