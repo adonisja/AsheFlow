@@ -3343,6 +3343,62 @@ Patches for production:
 
 YAML indentation is structural — wrong indentation means wrong meaning, not a syntax error you can see. Every property of a service must be indented exactly two spaces inside the service name. A property at the wrong level either becomes a top-level key (parse error) or is silently ignored. Always validate compose files with `docker-compose config` before deploying.
 
+## 2026-05-11 Secure App Development: ENV-4 — JWKS Cache Moved from In-Process Dict to Redis
+
+### The problem: per-replica in-process state
+
+`security.py` previously stored Cognito's public signing keys in a module-level Python dict:
+
+```python
+_jwks_cache: dict[str, dict] = {}
+```
+
+This dict lives in the memory of one specific server process. With `--workers 4` in production (four separate uvicorn processes), each worker has its own isolated copy. They never share state.
+
+Consequences:
+- Every worker fetches JWKS from Cognito independently on startup — 4 network calls instead of 1
+- When AWS rotates a signing key, each worker detects the miss and re-fetches at a different time — during that window, some workers have the old key, some have the new one, causing intermittent 401 errors depending on which worker handles a given request
+- The cache lives forever in memory — stale keys sit there until the process restarts
+
+### The fix: Redis as a shared cache
+
+Redis is already running as a shared service all workers connect to. Moving the JWKS cache there means all workers read from and write to the same place. Worker 1 populates the cache; workers 2, 3, and 4 immediately get a hit.
+
+```python
+JWKS_REDIS_KEY = "jwks_cache"
+JWKS_TTL_SECONDS = 3600  # auto-expires after 1 hour
+
+def get_jwks() -> dict[str, dict]:
+    r = _get_redis()
+    cached = r.get(JWKS_REDIS_KEY)
+    if cached:
+        return json.loads(cached)
+    jwks = _fetch_jwks()
+    r.set(JWKS_REDIS_KEY, json.dumps(jwks), ex=JWKS_TTL_SECONDS)
+    return jwks
+```
+
+The TTL is the key addition. The old dict cached forever. Redis automatically expires the key after 1 hour — the next request fetches fresh keys from Cognito. AWS key rotation is handled gracefully: on a `kid` miss, the code force-fetches from Cognito and writes back to Redis, immediately fixing the cache for all workers simultaneously.
+
+### Why sync Redis instead of async
+
+The `redis` package ships two clients: `redis.Redis` (sync) and `redis.asyncio.Redis` (async). The existing Redis usage in `redis.py` uses async because it serves async route handlers. `security.py` is different — `verify_cognito_token` is a sync function called inside a sync FastAPI dependency.
+
+| | Sync Redis | Async Redis |
+|---|---|---|
+| Event loop | Blocks for ~1-10ms per call | Never blocks |
+| Refactoring cost | Zero — function stays sync | Must make `verify_cognito_token` and `get_current_user` async, cascading through `deps.py` |
+| Correct at scale | No — blocks under high concurrency | Yes |
+| Correct at this project's scale | Yes — 1ms is immeasurable | Yes (but unnecessary complexity) |
+
+**Decision:** sync Redis now. The scaling note is preserved in the code:
+
+> IF this system ever scales to high concurrency (hundreds of simultaneous requests), migrate to `redis.asyncio` and make `get_current_user` + `verify_cognito_token` async. The Redis logic stays identical — only the client import and `await` keywords change.
+
+### The general rule
+
+In-process caches (module-level dicts, class variables, `functools.lru_cache`) break as soon as you run more than one process. Any state that must be consistent across workers belongs in a shared external store — Redis, a database, or a distributed cache. The question to ask when adding any cache: "what happens when two processes have different values here?"
+
 ## 2026-05-11 Secure App Development: ENV-2 and ENV-3 — Startup Guards for Non-Dev Environments
 
 ### ENV-2: The "production only" trap
