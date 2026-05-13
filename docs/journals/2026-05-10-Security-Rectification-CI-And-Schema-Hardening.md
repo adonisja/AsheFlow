@@ -72,6 +72,9 @@ Bonus fix found in the same file: the double-dispatch guard in `run_dispatch` qu
 
 96 tests pass after both fixes.
 
+**CI-3 — Property-based fuzz testing with Hypothesis**
+Added `tests/test_fuzz_schemas.py` with 9 property-based tests across FeedbackCreate, FeedbackStatusUpdate, TruckCreate, and EmployeeCreate. Hypothesis generates 200 random inputs per test including Unicode, empty strings, and very long strings — inputs a developer would never write manually. These tests verify the SEC-5 Literal allow-lists hold under adversarial input. Test count: 96 → 105. All pass.
+
 **CI-2 — pip-audit CVE scanning added to CI**
 Added `pip-audit -r requirements.txt` step to `ci.yml` between install and test. Bumped `aiohttp==3.9.3` → `3.13.5` — 3.9.x is end-of-life, the pinned version had a known CVE patched in 3.9.4, and aiohttp is used in the bot HTTP path. 96 tests pass.
 
@@ -123,6 +126,8 @@ Decision: rather than refactoring 17 `assert_owns_or_privileged` call sites to u
 - `os.environ.get` in application code is an antipattern: hidden contract, untestable, no type safety. Every environment variable belongs in `Settings` where Pydantic validates it at startup.
 - SSRF hostname whitelisting is stronger than IP filtering — DNS rebinding can make a whitelisted hostname resolve to a blocked IP after the IP check passes. Reject unknown hostnames outright at startup, not at request time.
 - `@field_validator` raising `ValueError` inside Pydantic `Settings` causes a `ValidationError` at import time — the app never boots with a bad value. This is the correct place for security-critical config validation.
+- Property-based tests verify invariants, not examples. "Any invalid type raises ValidationError" is a stronger guarantee than "these three specific bad inputs raise ValidationError."
+- Hypothesis finds edge cases developers don't think of: empty strings, null bytes, Unicode, strings that are almost-but-not-quite valid. Write properties, let the tool find the counterexamples.
 - Dependency pins are a commitment to a version's security posture at the time of pinning. CVEs are discovered continuously — automated scanning closes the gap between "CVE published" and "you know about it" from months to hours.
 - End-of-life library versions don't receive backport security patches. Staying on a supported minor version is a prerequisite for being able to apply fixes when they're released.
 - In-process caches (module-level dicts, `lru_cache`) break with multiple workers — they never share state across processes. Any cache that must be consistent across replicas belongs in Redis or a database.
