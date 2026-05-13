@@ -6,18 +6,33 @@
 #   - No --reload on uvicorn
 #   - Celery beat runs in a separate container from the worker (prevents double-firing on restarts)
 #   - APP_ENV=production enforces INTERNAL_SECRET and CORS_ORIGINS guards at startup
+#   - All services ship structured JSON logs to CloudWatch via the awslogs driver
+#     Requires: AWS credentials available on the host (IAM role or ~/.aws mount)
+#     Log groups are created automatically on first run if the IAM role has logs:CreateLogGroup
+
+# Reusable CloudWatch logging config — applied to every Python service.
+# CLOUDWATCH_LOG_GROUP must be set in .env (e.g. /asheflow/production).
+# AWS_DEFAULT_REGION must match the region where the log group lives.
+x-cloudwatch-logging: &cloudwatch-logging
+  driver: awslogs
+  options:
+    awslogs-group: ${CLOUDWATCH_LOG_GROUP:-/asheflow/production}
+    awslogs-region: ${AWS_REGION:-us-east-1}
+    awslogs-stream-prefix: asheflow
 
 services:
   backend:
     environment:
       - APP_ENV=production
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    logging: *cloudwatch-logging
 
   celery_worker:
     environment:
       - APP_ENV=production
     command: celery -A app.celery_app worker --loglevel=info
     restart: always
+    logging: *cloudwatch-logging
 
   celery_beat:
     build:
@@ -40,3 +55,4 @@ services:
         condition: service_healthy
     command: celery -A app.celery_app beat --loglevel=info
     restart: always
+    logging: *cloudwatch-logging
