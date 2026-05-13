@@ -3343,6 +3343,67 @@ Patches for production:
 
 YAML indentation is structural — wrong indentation means wrong meaning, not a syntax error you can see. Every property of a service must be indented exactly two spaces inside the service name. A property at the wrong level either becomes a top-level key (parse error) or is silently ignored. Always validate compose files with `docker-compose config` before deploying.
 
+## 2026-05-11 Secure App Development: CI-4 — Structured Log Shipping to CloudWatch
+
+### Why plain text logs are insufficient in production
+
+When a container restarts, its stdout is gone. With `docker-compose up`, uvicorn writes plain text to the terminal. In production with multiple workers and container restarts, there is no durable record of what happened. A 500 error that occurred at 2am on a Tuesday is unrecoverable.
+
+**CloudWatch Logs** is AWS's managed log aggregation service. Logs are shipped there continuously, stored durably (with a configurable retention policy), and queryable via CloudWatch Insights. Even if a container crashes and is replaced, the logs are already in CloudWatch.
+
+### Two changes required
+
+**1. Structured JSON logging in the application (`main.py`)**
+
+Plain text logs (`INFO: 127.0.0.1 - GET /health 200`) can be stored in CloudWatch but can't be queried efficiently. Structured JSON logs (`{"level":"INFO","message":"...","time":"..."}`) allow CloudWatch Insights to run queries like:
+
+```sql
+fields @timestamp, message
+| filter level = "ERROR"
+| sort @timestamp desc
+| limit 20
+```
+
+Added `_JsonFormatter` to `main.py` that emits one JSON object per log record:
+
+```python
+class _JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps({
+            "level":   record.levelname,
+            "logger":  record.name,
+            "message": record.getMessage(),
+            "time":    self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+        })
+```
+
+`_configure_logging()` installs this formatter on the root logger at startup — every `logging.getLogger(__name__)` call in the codebase automatically uses it.
+
+**2. CloudWatch log driver in `docker-compose.prod.yml`**
+
+Docker's `awslogs` log driver ships container stdout directly to CloudWatch without any additional agent. Added as a YAML anchor (`x-cloudwatch-logging`) shared across all three Python services (`backend`, `celery_worker`, `celery_beat`):
+
+```yaml
+x-cloudwatch-logging: &cloudwatch-logging
+  driver: awslogs
+  options:
+    awslogs-group: ${CLOUDWATCH_LOG_GROUP:-/asheflow/production}
+    awslogs-region: ${AWS_REGION:-us-east-1}
+    awslogs-stream-prefix: asheflow
+```
+
+Each service references it with `logging: *cloudwatch-logging`. The `*` is YAML anchor syntax — it pastes the full `&cloudwatch-logging` block in place, avoiding duplication.
+
+### Cost
+
+CloudWatch charges $0.50/GB ingested and $0.03/GB/month stored. At this project's scale the free tier (5 GB ingested, 5 GB stored per month) covers everything. Set a log retention policy (e.g. 30 days) in the AWS console to prevent unbounded storage growth.
+
+### Prerequisites for production
+
+- The EC2 instance or ECS task needs an IAM role with `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` permissions
+- `CLOUDWATCH_LOG_GROUP` set in `.env` (e.g. `/asheflow/production`)
+- `AWS_REGION` set to the region where the log group should live
+
 ## 2026-05-11 Secure App Development: CI-5 — Audit Log Coverage for Sensitive Endpoints
 
 ### What the audit log is and why gaps matter

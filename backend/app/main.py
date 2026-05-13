@@ -1,3 +1,5 @@
+import logging
+import json
 from fastapi import FastAPI, APIRouter, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine
@@ -6,6 +8,28 @@ from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
 from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, dispatch, schedule, time_off_requests, feedback, training, notifications, field_ops, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal
+
+
+class _JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log record for CloudWatch Insights queries."""
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps({
+            "level":   record.levelname,
+            "logger":  record.name,
+            "message": record.getMessage(),
+            "time":    self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+        })
+
+
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+
+
+_configure_logging()
 
 # Alembic is now managing the database schema.
 # We no longer need Base.metadata.create_all(bind=engine)
