@@ -72,6 +72,9 @@ Bonus fix found in the same file: the double-dispatch guard in `run_dispatch` qu
 
 96 tests pass after both fixes.
 
+**CI-4 — Structured log shipping to CloudWatch**
+Added `_JsonFormatter` to `main.py` — root logger now emits one JSON object per line. Added `awslogs` driver to all three Python services in `docker-compose.prod.yml` via a YAML anchor (`x-cloudwatch-logging`). Logs are shipped directly from container stdout to CloudWatch without an agent. Requires `CLOUDWATCH_LOG_GROUP` env var and IAM `logs:Put*` permissions. 105 tests pass.
+
 **CI-5 — Audit log coverage for employee lifecycle endpoints**
 `grep write_audit routers/` revealed promote, demote, deactivate, and reactivate had no audit rows. Role changes are the highest-priority gap — SEC-3 made `Employee.role` authoritative, so every role change must be traceable. Added `write_audit()` with before/after snapshots to all four endpoints, placed before `db.commit()` so the audit row is transactionally atomic with the state change. 105 tests pass.
 
@@ -129,6 +132,9 @@ Decision: rather than refactoring 17 `assert_owns_or_privileged` call sites to u
 - `os.environ.get` in application code is an antipattern: hidden contract, untestable, no type safety. Every environment variable belongs in `Settings` where Pydantic validates it at startup.
 - SSRF hostname whitelisting is stronger than IP filtering — DNS rebinding can make a whitelisted hostname resolve to a blocked IP after the IP check passes. Reject unknown hostnames outright at startup, not at request time.
 - `@field_validator` raising `ValueError` inside Pydantic `Settings` causes a `ValidationError` at import time — the app never boots with a bad value. This is the correct place for security-critical config validation.
+- Plain text logs can be stored but not efficiently queried. Structured JSON enables SQL-like queries across log fields — filter by level, logger, time range.
+- YAML anchors (`&name` / `*name`) eliminate duplication when the same config block applies to multiple services. Define once, reference everywhere.
+- Container stdout is ephemeral — logs are lost on restart unless shipped to an external store. CloudWatch is the AWS-native answer; the `awslogs` Docker driver requires no agent.
 - Audit rows must be placed before `db.commit()` — not after. If they're after, a failed commit produces a state change with no record. Transactional atomicity means either both land or neither does.
 - `grep -rn "db.commit()" routers/ | grep -v "write_audit"` is the audit coverage check. Any sensitive mutating endpoint without write_audit before its commit is a gap.
 - Property-based tests verify invariants, not examples. "Any invalid type raises ValidationError" is a stronger guarantee than "these three specific bad inputs raise ValidationError."
