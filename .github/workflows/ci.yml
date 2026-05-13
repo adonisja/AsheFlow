@@ -41,7 +41,17 @@ jobs:
       # backend/ first. pip reads requirements.txt from that directory.
       - name: Install dependencies
         working-directory: backend
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pip-audit
+
+      # Step 3b: Scan dependencies for known CVEs.
+      # pip-audit checks every pinned package against the Python Packaging
+      # Advisory Database (PyPA). If a vulnerability is found the step fails
+      # and the commit gets a red ✗ before any code runs.
+      # --require-hashes is omitted here because requirements.txt uses loose pins
+      # on some packages (fastapi, sqlalchemy) — add hashes when all deps are pinned.
+      - name: Audit dependencies for CVEs
+        working-directory: backend
+        run: pip-audit -r requirements.txt
 
       # Step 4: Run the test suite.
       # -v        = verbose output (show each test name, not just a dot)

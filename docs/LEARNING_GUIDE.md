@@ -3343,7 +3343,37 @@ Patches for production:
 
 YAML indentation is structural — wrong indentation means wrong meaning, not a syntax error you can see. Every property of a service must be indented exactly two spaces inside the service name. A property at the wrong level either becomes a top-level key (parse error) or is silently ignored. Always validate compose files with `docker-compose config` before deploying.
 
-## 2026-05-11 Secure App Development: ENV-4 — JWKS Cache Moved from In-Process Dict to Redis
+## 2026-05-11 Secure App Development: CI-2 — Dependency CVE Scanning with pip-audit
+
+### Why dependency scanning matters (OWASP 2021 A06 — Vulnerable and Outdated Components)
+
+Your application's attack surface is not just your code — it includes every library you depend on. `requirements.txt` pins specific versions. When a CVE is published against one of those versions, your app is vulnerable until you update. Without automated scanning, you may never know.
+
+`aiohttp==3.9.3` was pinned in this project. The 3.9.4 release patched a known vulnerability. The version sat there unnoticed because there was no automated check — a human would have to manually read release notes for every dependency on every push.
+
+### The fix: pip-audit in CI
+
+`pip-audit` checks every package in `requirements.txt` against the Python Packaging Advisory Database (PyPA). If any installed package has a known CVE, the step fails — the commit gets a red ✗ before tests even run.
+
+Added to `.github/workflows/ci.yml` as a step between install and test:
+
+```yaml
+- name: Audit dependencies for CVEs
+  working-directory: backend
+  run: pip-audit -r requirements.txt
+```
+
+`pip-audit` is installed alongside the project dependencies in the same `pip install` step — no separate install needed.
+
+### The aiohttp bump
+
+`aiohttp==3.9.3` was bumped to `3.13.5` (current stable). The 3.9.x series is end-of-life — any new CVEs discovered in it will not receive backport patches. Staying on a supported minor version means security patches are available when needed.
+
+**Why `aiohttp` specifically:** it's used in `dispatch.py` to make outbound HTTP calls. An SSRF or request-smuggling CVE in `aiohttp` would directly affect the bot communication path — the same attack surface we hardened in SEC-4.
+
+### The general rule
+
+Every dependency pin in `requirements.txt` is a commitment to that version's security posture at the moment you pinned it. CVEs are discovered continuously. Automated scanning on every push means the gap between "CVE published" and "you know about it" is measured in hours, not months.
 
 ### The problem: per-replica in-process state
 
