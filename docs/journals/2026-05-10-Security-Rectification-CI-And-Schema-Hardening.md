@@ -72,6 +72,9 @@ Bonus fix found in the same file: the double-dispatch guard in `run_dispatch` qu
 
 96 tests pass after both fixes.
 
+**CI-2 — pip-audit CVE scanning added to CI**
+Added `pip-audit -r requirements.txt` step to `ci.yml` between install and test. Bumped `aiohttp==3.9.3` → `3.13.5` — 3.9.x is end-of-life, the pinned version had a known CVE patched in 3.9.4, and aiohttp is used in the bot HTTP path. 96 tests pass.
+
 **ENV-4 — JWKS cache moved from in-process dict to Redis**
 `_jwks_cache` was a module-level dict in `security.py` — per-replica, never shared. With 4 uvicorn workers each worker fetched JWKS independently and held stale keys after AWS rotation until restart. Replaced with Redis key `jwks_cache` (1-hour TTL). All workers share one cache; a rotation miss force-fetches and writes back to Redis, fixing all workers simultaneously.
 
@@ -120,6 +123,8 @@ Decision: rather than refactoring 17 `assert_owns_or_privileged` call sites to u
 - `os.environ.get` in application code is an antipattern: hidden contract, untestable, no type safety. Every environment variable belongs in `Settings` where Pydantic validates it at startup.
 - SSRF hostname whitelisting is stronger than IP filtering — DNS rebinding can make a whitelisted hostname resolve to a blocked IP after the IP check passes. Reject unknown hostnames outright at startup, not at request time.
 - `@field_validator` raising `ValueError` inside Pydantic `Settings` causes a `ValidationError` at import time — the app never boots with a bad value. This is the correct place for security-critical config validation.
+- Dependency pins are a commitment to a version's security posture at the time of pinning. CVEs are discovered continuously — automated scanning closes the gap between "CVE published" and "you know about it" from months to hours.
+- End-of-life library versions don't receive backport security patches. Staying on a supported minor version is a prerequisite for being able to apply fixes when they're released.
 - In-process caches (module-level dicts, `lru_cache`) break with multiple workers — they never share state across processes. Any cache that must be consistent across replicas belongs in Redis or a database.
 - Sync vs async Redis is a refactoring cost decision, not just a performance decision. When a sync function is deep in the call chain, making it async cascades upward through every caller. Accept sync at low scale; plan the migration path before you need it.
 - Docker Compose override files only need to specify the keys that change — everything else is inherited from the base. This avoids duplicating 100-line service definitions across environments.

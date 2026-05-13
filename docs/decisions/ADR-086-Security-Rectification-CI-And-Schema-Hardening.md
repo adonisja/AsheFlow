@@ -45,6 +45,8 @@ Also removed stray `import pytest` and `from pydantic import ValidationError` th
 
 **SEC-6:** Added `Field(min_length=1, max_length=100)` to `TruckCreate.name` and `TruckUpdate.name` in `backend/app/schemas/truck.py`. Used `Field(None, ...)` on `TruckUpdate.name` (optional PATCH field) and `Field(..., ...)` on `TruckCreate.name` (required POST field).
 
+**CI-2:** Added `pip-audit -r requirements.txt` step to `.github/workflows/ci.yml`. Runs after dependency install, before tests. Fails the build on any known CVE in a pinned package. Also bumped `aiohttp==3.9.3` → `3.13.5` — the 3.9.x series is end-of-life and the pinned version had a known CVE patched in 3.9.4. `aiohttp` is used in `dispatch.py` for outbound HTTP — a request-smuggling or SSRF CVE there directly affects the bot communication path hardened in SEC-4.
+
 **ENV-4:** Moved JWKS cache from an in-process module-level dict (`_jwks_cache: dict`) to Redis (`jwks_cache` key, 1-hour TTL) in `backend/app/core/security.py`. The dict was per-replica — with `--workers 4`, each uvicorn process fetched JWKS independently and held stale keys after AWS rotation until restart, causing intermittent 401s. Redis is shared across all workers; a cache miss by one worker immediately fixes it for all. Used synchronous `redis.Redis` client (not `redis.asyncio`) to avoid cascading async refactor through `get_current_user` and `deps.py`. Scaling note preserved in code: migrate to async Redis if concurrency ever demands it.
 
 **ENV-1 + ENV-5:** Introduced three-file Docker Compose structure to separate dev from production topology.
@@ -76,6 +78,7 @@ Usage: `docker-compose up` for dev (override auto-loaded); `docker-compose -f do
 - `GET /feedback/` and `PATCH /feedback/{id}/status` are now correctly scoped to the caller's company. An admin at Company A cannot read or mutate Company B's feedback records.
 - `GET /dispatch/unavailable-staff/{date}` now requires dispatch or admin role. Trainees and walkers receive 403.
 - The double-dispatch guard in `run_dispatch` is now scoped per company — Company A's dispatch run no longer conflicts with Company B's.
+- CI-2: Every push now scans all pinned dependencies for CVEs. A vulnerable package fails the build before tests run.
 - ENV-4: JWKS cache is now shared across all worker processes via Redis. Intermittent 401s on AWS key rotation are eliminated.
 - ENV-1 + ENV-5: Three-file Compose structure in place. Dev gets hot reload and bundled beat automatically. Production gets multi-worker uvicorn, no source mounts, and split celery containers.
 - ENV-2: `INTERNAL_SECRET` guard now fires on any non-dev environment, not just the exact string `"production"`.
