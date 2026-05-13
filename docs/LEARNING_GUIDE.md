@@ -3343,6 +3343,59 @@ Patches for production:
 
 YAML indentation is structural — wrong indentation means wrong meaning, not a syntax error you can see. Every property of a service must be indented exactly two spaces inside the service name. A property at the wrong level either becomes a top-level key (parse error) or is silently ignored. Always validate compose files with `docker-compose config` before deploying.
 
+## 2026-05-11 Secure App Development: CI-5 — Audit Log Coverage for Sensitive Endpoints
+
+### What the audit log is and why gaps matter
+
+`write_audit()` in `app/services/audit.py` appends an immutable `AuditLog` row to the database inside the same transaction as the state change it records. It captures: who did it (`actor_id`), what company (`company_id`), what action (`action_type`), which record (`target_table` + `target_id`), and what changed (`before`/`after` snapshots).
+
+Without an audit row, there is no record of the action ever happening. If an admin demotes a trainer and that trainer later disputes it, there is no evidence. If an account is deactivated and the employee claims it was unauthorized, there is nothing to investigate.
+
+### The gaps found
+
+`grep write_audit backend/app/routers/` revealed that only five endpoints called `write_audit` out of dozens of mutating endpoints. The highest-severity gaps were all in `employees.py`:
+
+| Endpoint | Action | Gap |
+|---|---|---|
+| `POST /{id}/promote` | Walker → Trainer role change | No audit row |
+| `POST /{id}/demote` | Trainer → Walker role change | No audit row |
+| `PUT /{id}/deactivate` | Account deactivation + Cognito revocation | No audit row |
+| `PUT /{id}/reactivate` | Account reactivation + Cognito re-enable | No audit row |
+
+Role changes are the most critical missing entries — directly connected to SEC-3 (the dual-source-of-truth finding). `RoleChecker` now reads `Employee.role` from the DB as authoritative. A role change with no audit row means there is no record of when the role changed, who changed it, or what it was before.
+
+### The fix
+
+Added `write_audit()` to all four endpoints, placed just before `db.commit()` so the audit row is part of the same transaction as the state change:
+
+```python
+write_audit(
+    db,
+    actor_id=str(caller.id),
+    company_id=str(caller.company_id),
+    action_type="employee.promoted",   # or demoted / deactivated / reactivated
+    target_table="employees",
+    target_id=str(employee_id),
+    before={"role": old_role},
+    after={"role": "trainer"},
+)
+db.commit()
+```
+
+The `before`/`after` snapshots record the specific fields that changed — not the entire row. For role changes, that's `{"role": "walker"}` → `{"role": "trainer"}`. For activation changes, that's `{"is_active": True}` → `{"is_active": False}`.
+
+### The transactional guarantee
+
+`write_audit()` does **not** commit — it only calls `db.add()`. The caller commits. This means: if the commit fails for any reason, the audit row is also rolled back. You never get a state change without an audit row, and you never get an audit row without the state change. They're atomic.
+
+### How to audit for coverage going forward
+
+```bash
+grep -rn "db.commit()" backend/app/routers/ | grep -v "write_audit"
+```
+
+Any `db.commit()` in a mutating endpoint that is not preceded by `write_audit()` on a sensitive operation is a gap. Not every commit needs an audit row (read-only helpers, background tasks) — but every action that changes role, access, or account status does.
+
 ## 2026-05-11 Secure App Development: CI-3 — Property-Based Fuzz Testing with Hypothesis
 
 ### What property-based testing is and why it's different

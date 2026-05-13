@@ -72,6 +72,9 @@ Bonus fix found in the same file: the double-dispatch guard in `run_dispatch` qu
 
 96 tests pass after both fixes.
 
+**CI-5 — Audit log coverage for employee lifecycle endpoints**
+`grep write_audit routers/` revealed promote, demote, deactivate, and reactivate had no audit rows. Role changes are the highest-priority gap — SEC-3 made `Employee.role` authoritative, so every role change must be traceable. Added `write_audit()` with before/after snapshots to all four endpoints, placed before `db.commit()` so the audit row is transactionally atomic with the state change. 105 tests pass.
+
 **CI-3 — Property-based fuzz testing with Hypothesis**
 Added `tests/test_fuzz_schemas.py` with 9 property-based tests across FeedbackCreate, FeedbackStatusUpdate, TruckCreate, and EmployeeCreate. Hypothesis generates 200 random inputs per test including Unicode, empty strings, and very long strings — inputs a developer would never write manually. These tests verify the SEC-5 Literal allow-lists hold under adversarial input. Test count: 96 → 105. All pass.
 
@@ -126,6 +129,8 @@ Decision: rather than refactoring 17 `assert_owns_or_privileged` call sites to u
 - `os.environ.get` in application code is an antipattern: hidden contract, untestable, no type safety. Every environment variable belongs in `Settings` where Pydantic validates it at startup.
 - SSRF hostname whitelisting is stronger than IP filtering — DNS rebinding can make a whitelisted hostname resolve to a blocked IP after the IP check passes. Reject unknown hostnames outright at startup, not at request time.
 - `@field_validator` raising `ValueError` inside Pydantic `Settings` causes a `ValidationError` at import time — the app never boots with a bad value. This is the correct place for security-critical config validation.
+- Audit rows must be placed before `db.commit()` — not after. If they're after, a failed commit produces a state change with no record. Transactional atomicity means either both land or neither does.
+- `grep -rn "db.commit()" routers/ | grep -v "write_audit"` is the audit coverage check. Any sensitive mutating endpoint without write_audit before its commit is a gap.
 - Property-based tests verify invariants, not examples. "Any invalid type raises ValidationError" is a stronger guarantee than "these three specific bad inputs raise ValidationError."
 - Hypothesis finds edge cases developers don't think of: empty strings, null bytes, Unicode, strings that are almost-but-not-quite valid. Write properties, let the tool find the counterexamples.
 - Dependency pins are a commitment to a version's security posture at the time of pinning. CVEs are discovered continuously — automated scanning closes the gap between "CVE published" and "you know about it" from months to hours.
