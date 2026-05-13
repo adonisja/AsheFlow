@@ -463,6 +463,16 @@ def deactivate_employee(
     _assert_not_protected(caller_groups, db_employee.role)
 
     db_employee.is_active = False
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="employee.deactivated",
+        target_table="employees",
+        target_id=str(employee_id),
+        before={"is_active": True},
+        after={"is_active": False},
+    )
     db.commit()
     db.refresh(db_employee)
 
@@ -491,6 +501,16 @@ def reactivate_employee(
     _assert_not_protected(caller_groups, db_employee.role)
 
     db_employee.is_active = True
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="employee.reactivated",
+        target_table="employees",
+        target_id=str(employee_id),
+        before={"is_active": False},
+        after={"is_active": True},
+    )
     db.commit()
     db.refresh(db_employee)
 
@@ -621,6 +641,16 @@ def promote_employee(
         type="role_change",
         message=f"Congratulations! You have been promoted from {old_role} to trainer by {caller.name}.",
     ))
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="employee.promoted",
+        target_table="employees",
+        target_id=str(employee_id),
+        before={"role": old_role},
+        after={"role": "trainer"},
+    )
     db.commit()
     db.refresh(db_employee)
     return db_employee
@@ -678,6 +708,16 @@ def demote_employee(
         type="role_change",
         message=f"Your role has been updated from {old_role} to walker by {caller.name}.",
     ))
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="employee.demoted",
+        target_table="employees",
+        target_id=str(employee_id),
+        before={"role": old_role},
+        after={"role": "walker"},
+    )
     db.commit()
     db.refresh(db_employee)
     return db_employee
