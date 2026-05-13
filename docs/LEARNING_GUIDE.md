@@ -3343,6 +3343,59 @@ Patches for production:
 
 YAML indentation is structural — wrong indentation means wrong meaning, not a syntax error you can see. Every property of a service must be indented exactly two spaces inside the service name. A property at the wrong level either becomes a top-level key (parse error) or is silently ignored. Always validate compose files with `docker-compose config` before deploying.
 
+## 2026-05-11 Secure App Development: CI-3 — Property-Based Fuzz Testing with Hypothesis
+
+### What property-based testing is and why it's different
+
+A normal unit test says: "given this specific input, expect this specific output." You write the examples you thought of. The problem: you only test inputs you imagined. Real attackers send inputs you didn't imagine — empty strings, 10,000-character strings, null bytes, Unicode right-to-left override characters, inputs that look almost valid.
+
+**Property-based testing** inverts this. Instead of writing examples, you write a *property* — a statement that must always be true — and let Hypothesis generate hundreds of random inputs to try to violate it.
+
+Example property: "any string that is not `bug`, `feature_request`, or `general` must raise a `ValidationError`."
+
+Hypothesis generates 200 random strings (by default), including edge cases it has learned from past failures: empty string, single space, string with null byte, very long string, Unicode. If any of them passes through without raising `ValidationError`, the test fails and reports the exact input that broke it.
+
+### What was added
+
+`tests/test_fuzz_schemas.py` — 9 property-based tests across four schemas:
+
+**`FeedbackCreate`:**
+- Any string outside `{"bug", "feature_request", "general"}` → `ValidationError` (200 examples)
+- Every member of the allow-list → accepted
+- Any message over 2000 characters → `ValidationError`
+
+**`FeedbackStatusUpdate`:**
+- Any string outside `{"new", "in_progress", "resolved"}` → `ValidationError` (200 examples)
+- Every valid status → accepted
+
+**`TruckCreate`:**
+- Name over 100 characters → `ValidationError`
+- Empty name → `ValidationError`
+- Any string 1–100 characters → accepted
+
+**`EmployeeCreate`:**
+- Strings without a valid email structure → `ValidationError` (200 examples)
+
+### How Hypothesis strategies work
+
+```python
+@given(st.text().filter(lambda s: s not in VALID_FEEDBACK_TYPES))
+def test_invalid_type_always_rejected(self, invalid_type: str):
+    with pytest.raises(ValidationError):
+        FeedbackCreate(type=invalid_type, message="hello")
+```
+
+- `st.text()` — generates arbitrary Unicode strings
+- `.filter(...)` — excludes the three valid values so we only test invalid ones
+- `@given(...)` — tells Hypothesis to call this test function repeatedly with generated values
+- `@h_settings(max_examples=200)` — run 200 examples instead of the default 100
+
+Hypothesis also maintains a database of past failures. If a test ever fails on input `"admin'; DROP TABLE"`, that exact input is replayed on every future run to prevent regressions.
+
+### The connection to SEC-5
+
+The `Literal` allow-lists we added in SEC-5 are what make these tests pass. Before SEC-5, `FeedbackCreate.type` was `str` — any of the 200 generated strings would have been accepted, and every one of these tests would have failed. The fuzz tests are the verification layer that proves the SEC-5 fix holds under adversarial input.
+
 ## 2026-05-11 Secure App Development: CI-2 — Dependency CVE Scanning with pip-audit
 
 ### Why dependency scanning matters (OWASP 2021 A06 — Vulnerable and Outdated Components)
