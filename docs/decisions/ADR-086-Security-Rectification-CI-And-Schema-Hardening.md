@@ -45,6 +45,8 @@ Also removed stray `import pytest` and `from pydantic import ValidationError` th
 
 **SEC-6:** Added `Field(min_length=1, max_length=100)` to `TruckCreate.name` and `TruckUpdate.name` in `backend/app/schemas/truck.py`. Used `Field(None, ...)` on `TruckUpdate.name` (optional PATCH field) and `Field(..., ...)` on `TruckCreate.name` (required POST field).
 
+**CI-5:** Added `write_audit()` to four employee lifecycle endpoints that had no audit trail: `promote_employee` (`employee.promoted`), `demote_employee` (`employee.demoted`), `deactivate_employee` (`employee.deactivated`), `reactivate_employee` (`employee.reactivated`). Each call captures `actor_id`, `company_id`, `target_id`, and `before`/`after` role or activation snapshots. Placed before `db.commit()` in each endpoint to ensure the audit row is part of the same transaction as the state change. Role changes are the most critical gap — directly tied to SEC-3, where `RoleChecker` now uses `Employee.role` as the authoritative source.
+
 **CI-3:** Added `tests/test_fuzz_schemas.py` — 9 property-based tests using Hypothesis across `FeedbackCreate`, `FeedbackStatusUpdate`, `TruckCreate`, and `EmployeeCreate`. Each test states a property that must hold for all inputs (e.g. "any string outside the allow-list raises ValidationError") and Hypothesis generates 100–200 random examples per run including edge cases. These tests verify that the SEC-5 `Literal` allow-lists hold under adversarial input, not just the specific bad values a developer thought of. Total test count: 96 → 105.
 
 **CI-2:** Added `pip-audit -r requirements.txt` step to `.github/workflows/ci.yml`. Runs after dependency install, before tests. Fails the build on any known CVE in a pinned package. Also bumped `aiohttp==3.9.3` → `3.13.5` — the 3.9.x series is end-of-life and the pinned version had a known CVE patched in 3.9.4. `aiohttp` is used in `dispatch.py` for outbound HTTP — a request-smuggling or SSRF CVE there directly affects the bot communication path hardened in SEC-4.
@@ -80,6 +82,7 @@ Usage: `docker-compose up` for dev (override auto-loaded); `docker-compose -f do
 - `GET /feedback/` and `PATCH /feedback/{id}/status` are now correctly scoped to the caller's company. An admin at Company A cannot read or mutate Company B's feedback records.
 - `GET /dispatch/unavailable-staff/{date}` now requires dispatch or admin role. Trainees and walkers receive 403.
 - The double-dispatch guard in `run_dispatch` is now scoped per company — Company A's dispatch run no longer conflicts with Company B's.
+- CI-5: Role changes (promote/demote) and account lifecycle changes (deactivate/reactivate) now produce immutable audit rows in the same transaction as the state change.
 - CI-3: Property-based fuzz tests added. Hypothesis generates 200 adversarial inputs per schema test on every CI run.
 - CI-2: Every push now scans all pinned dependencies for CVEs. A vulnerable package fails the build before tests run.
 - ENV-4: JWKS cache is now shared across all worker processes via Redis. Intermittent 401s on AWS key rotation are eliminated.
