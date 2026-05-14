@@ -3718,3 +3718,57 @@ The Discord bot authenticates to the backend API using a dedicated Cognito accou
 - Use `--message-action SUPPRESS` on `admin-create-user` to prevent Cognito from sending a welcome email to a non-existent address.
 - The bot's Cognito account should have the minimum role needed — dispatch role is sufficient; it does not need admin.
 - Store the bot's credentials in `bot/.env`, never in code or git history.
+
+### Alembic revision IDs must be 32 characters or fewer
+
+The `alembic_version` table stores the current migration version in a `VARCHAR(32)` column. Alembic does not enforce a length limit when you write a revision ID — it only fails at runtime when it tries to write the ID to the database.
+
+The failure mode is subtle: the schema change in the migration applies successfully, but the version write fails, leaving the database in an inconsistent state where the schema is ahead of what `alembic_version` records.
+
+**Rule:** keep revision IDs short and descriptive. `add_expired_tor` is better than `20260409_add_expired_status_to_time_off_requests`. Date prefixes add length without adding information that isn't already in the migration's `Create Date` field.
+
+When you change a revision ID, you must update it in every migration file that references it as a `down_revision` — not just the file where it's defined. Always `grep -r` for the old ID before committing.
+
+### Always push before deploying
+
+A server `git pull` that says "Already up to date" when you expect new code means the commits exist locally but were never pushed to the remote. The server clones from GitHub, not from your local machine.
+
+The correct deploy sequence is always:
+1. Commit locally
+2. `git push origin master`
+3. `git pull origin master` on the server
+
+Skipping step 2 means the server runs stale code with no error — it just silently runs whatever was there before.
+
+### Docker awslogs driver: use `awslogs-stream` not `awslogs-stream-prefix`
+
+`awslogs-stream-prefix` is not supported by all builds of the Docker awslogs driver, including the build on Ubuntu 26.04. The error `unknown log opt 'awslogs-stream-prefix'` appears at container start time and prevents the container from starting.
+
+Use `awslogs-stream` instead:
+
+```yaml
+logging:
+  driver: awslogs
+  options:
+    awslogs-group: /asheflow/production
+    awslogs-region: us-east-2
+    awslogs-stream: asheflow   # not awslogs-stream-prefix
+```
+
+The CloudWatch log group must also exist before containers start — create it with:
+
+```bash
+aws logs create-log-group --log-group-name /asheflow/production --region us-east-2
+```
+
+### Use one AWS region everywhere
+
+Mixing regions across config files, IAM policies, log groups, and env vars causes silent failures. A request hitting the wrong region finds no resources and returns a generic error that doesn't mention the region mismatch.
+
+For AsheFlow everything lives in `us-east-2`:
+- Cognito user pool: `us-east-2`
+- SES: `us-east-2`
+- CloudWatch log group: `us-east-2`
+- EC2 instance: `us-east-2`
+
+The `docker-compose.prod.yml` YAML anchor originally defaulted to `us-east-1`. The default was wrong from day one — it only became visible when CloudWatch logging was actually exercised. Always set explicit values rather than relying on defaults for region configuration.
