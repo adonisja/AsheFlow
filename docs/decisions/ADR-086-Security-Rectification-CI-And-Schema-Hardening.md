@@ -91,7 +91,7 @@ Usage: `docker-compose up` for dev (override auto-loaded); `docker-compose -f do
 - ENV-4: JWKS cache is now shared across all worker processes via Redis. Intermittent 401s on AWS key rotation are eliminated.
 - ENV-1 + ENV-5: Three-file Compose structure in place. Dev gets hot reload and bundled beat automatically. Production gets multi-worker uvicorn, no source mounts, and split celery containers.
 - ENV-2: `INTERNAL_SECRET` guard now fires on any non-dev environment, not just the exact string `"production"`.
-- ENV-3: App refuses to start if `cors_origins` contains `"localhost"` in a non-dev environment.
+- ENV-3: App refuses to start if `cors_origins` contains `"localhost"` in a non-dev or non-test environment. The guard exempts both `"development"` and `"test"` — the latter is required for CI (`APP_ENV=test` in GitHub Actions).
 - SEC-9 dead code removed. Seven scripts with no auth, no audit trail, and direct DB access are gone from the repo surface.
 - SEC-4 SSRF risk eliminated. `BOT_INTERNAL_URL` is now validated at startup — bad hostname or scheme causes `ValidationError` before any request is served.
 - SEC-3 dual-source-of-truth eliminated. `RoleChecker` now checks `Employee.role` from the DB. A demoted admin is blocked immediately on all role-guarded endpoints — no JWT TTL window.
