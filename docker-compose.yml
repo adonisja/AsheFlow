@@ -78,6 +78,19 @@ services:
     command: celery -A app.celery_app worker --loglevel=info
     restart: unless-stopped
 
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: asheflow_bot
+    env_file:
+      - ./bot/.env
+    environment:
+      - TZ=America/New_York
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
