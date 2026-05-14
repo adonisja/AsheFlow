@@ -3640,4 +3640,20 @@ The app refuses to start if `CORS_ORIGINS` wasn't overridden for the environment
 
 The first attempt wrote `"local_host"` (with an underscore) instead of `"localhost"`. The check compiled and ran without error — Python string containment doesn't care whether the substring exists. The guard was silently broken: it would never match, and no localhost origin would ever be caught. This is a class of bug that has no runtime signal — tests pass, the app starts, and you only discover it when a staging deploy with localhost origins causes a security incident.
 
+### Post-rectification fix: CI environment was blocked
+
+After completing the rectification, ENV-3 introduced a blocker: the GitHub Actions CI pipeline runs with `APP_ENV=test`, and `cors_origins` defaults to seven localhost ports when `CORS_ORIGINS` is not set in the CI env block. The guard condition `app_env != "development"` matched `"test"`, causing `RuntimeError` at `Settings()` import time — every test in CI would fail before any test code ran.
+
+**Fix:** extended the exemption to include `"test"`:
+
+```python
+if "localhost" in self.cors_origins and self.app_env not in {"development", "test"}:
+```
+
+**Why a set instead of adding `== "test"` as a second condition:** A set makes the intent explicit — these are the environments where localhost CORS is acceptable by design. If a new environment like `"local_docker"` is ever added, the set is the natural place to extend it. A chain of `or` conditions is harder to scan and easier to mis-extend.
+
+**Why not fix it by adding `CORS_ORIGINS` to the CI env block:** That would work, but it introduces a value that needs to be maintained alongside the guard — two places to update when policy changes. The guard exempting `"test"` is self-documenting: CI is explicitly not a deployment environment, so the localhost restriction doesn't apply.
+
+**The key lesson:** When writing a startup guard that allowlists environments, always enumerate every environment where the guard should not fire: `{"development", "test"}`. Anything not in the set is protected. If you write `!= "development"`, you are implicitly claiming that every other name you will ever use is a production-like environment — a claim that breaks the first time you add a test or CI environment.
+
 **Lesson:** string-match guards should be tested explicitly. A test that sets `app_env="staging"` and `cors_origins="http://localhost:3000"` and asserts `RuntimeError` is raised would have caught the typo immediately.

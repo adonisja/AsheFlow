@@ -43,7 +43,7 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-asheflow}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-asheflow_db}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
-      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - APP_ENV=${APP_ENV:-development}
       - BOT_INTERNAL_URL=http://bot:8001
       - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
       - DISCORD_DRIVERS_CHANNEL_ID=${DISCORD_DRIVERS_CHANNEL_ID:-}

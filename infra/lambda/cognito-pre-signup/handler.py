@@ -44,8 +44,6 @@ def handler(event, context):
 
 
 def _extract_email(event):
-    for attr in event.get("request", {}).get("userAttributes", {}).items():
-        pass
     attrs = event.get("request", {}).get("userAttributes", {})
     return attrs.get("email", "").lower().strip() or None
 

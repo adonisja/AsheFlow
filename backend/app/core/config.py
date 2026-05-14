@@ -35,7 +35,7 @@ class Settings(BaseSettings):
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
         
-        if "localhost" in self.cors_origins and self.app_env != "development":
+        if "localhost" in self.cors_origins and self.app_env not in {"development", "test"}:
             raise RuntimeError(
                 "CORS_ORIGINS contains 'localhost' in a non-development environment. "
                 "Set CORS_ORIGINS to your actual production/staging domain(s) before deploying."
