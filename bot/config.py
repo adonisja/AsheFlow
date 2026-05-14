@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     aws_cognito_client_id: str
     aws_region: str = "us-east-1"
 
-    confirmation_window_hours: int = 2
     internal_secret: str = "change-me-in-production"
 
     class Config:
