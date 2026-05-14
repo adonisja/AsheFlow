@@ -91,14 +91,51 @@ aws cognito-idp admin-set-user-password --user-pool-id us-east-2_SvVO2ofAb --use
 
 ---
 
-## What Still Needs to Be Done (on the new instance)
+## Problems Encountered and Fixed
 
-1. `cd AsheFlow` and recreate all three `.env` files
-2. Start postgres + redis, run `alembic upgrade head`
-3. Start all services with `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
-4. Install Nginx + Certbot, configure reverse proxy for `api.asheflow.com`
-5. Add Route 53 A record: `api.asheflow.com` → `3.141.169.13`
-6. Build frontend with `.env.production`, upload to S3, set up CloudFront for `asheflow.com`
+**Problem 1 — `docker-compose-plugin` not in Ubuntu 26.04 default repos**
+`sudo apt install docker-compose-plugin` returned "unable to locate package." Fix: added Docker's official apt repository with GPG key verification, then installed `docker-ce docker-ce-cli containerd.io docker-compose-plugin` from there.
+
+**Problem 2 — First EC2 instance terminated**
+The first instance (`107.23.166.19`) was terminated between sessions. Launched a second instance (`3.141.169.13`) with the IAM role attached at launch this time.
+
+**Problem 3 — `Settings()` crashed with `Extra inputs are not permitted`**
+Alembic migration failed because the backend container was built from the old `python:3.11-slim` Dockerfile. The `3.11` image had an older version of the code (before `app_env` and `bot_internal_url` were added to `Settings`). Fix: the Dockerfile fix commit hadn't been pushed to GitHub. Pushed it, pulled on the server, rebuilt with `--no-cache`.
+
+**Problem 4 — Alembic revision ID too long for `VARCHAR(32)`**
+Migration `20260409_add_expired_status_to_time_off_requests` (50 chars) exceeded the `alembic_version` table's `version_num VARCHAR(32)` column. The schema change applied successfully but the version write failed. Fix: shortened the revision ID to `add_expired_tor` in the migration file and all two dependent files that referenced it as `down_revision`.
+
+**Problem 5 — `awslogs-stream-prefix` not supported**
+Docker's awslogs driver on Ubuntu 26.04 does not support the `awslogs-stream-prefix` option despite Docker 29.3.1 being installed. Error: `unknown log opt 'awslogs-stream-prefix' for awslogs log driver`. Diagnosed by testing options directly with `docker run --log-driver=awslogs`. Fix: replaced `awslogs-stream-prefix` with `awslogs-stream` in `docker-compose.prod.yml`.
+
+**Problem 6 — CloudWatch log group didn't exist**
+The awslogs driver requires the log group to exist before containers start. Created it manually: `aws logs create-log-group --log-group-name /asheflow/production --region us-east-2`.
+
+**Problem 7 — Default region was `us-east-1` in `docker-compose.prod.yml`**
+The YAML anchor used `${AWS_REGION:-us-east-1}` but all AWS infrastructure is in `us-east-2`. Fixed the default and added `AWS_REGION=us-east-2` to `.env` on the server.
+
+**Problem 8 — `confirmation_window_hours` was a dead config value**
+`bot/config.py` had `confirmation_window_hours: int = 2` but it was never referenced anywhere in the bot code. No enforcement logic existed. Removed from config entirely. When the feature is built, it will be added to the `company_configs` table as a per-company setting.
+
+## Final State
+
+All 5 containers running:
+- `asheflow_backend` — FastAPI on port 8000, 4 uvicorn workers
+- `asheflow_celery_worker` — processes async tasks
+- `asheflow_celery_beat` — fires scheduled jobs (separate from worker to prevent double-firing)
+- `asheflow_postgres` — PostgreSQL, healthy
+- `asheflow_redis` — Redis, healthy
+
+Health check confirmed: `curl http://localhost:8000/health` → `{"status":"ok"}`
+
+All container logs shipping to CloudWatch log group `/asheflow/production` in `us-east-2`.
+
+## What Still Needs to Be Done
+
+1. Install Nginx + Certbot, configure reverse proxy for `api.asheflow.com`
+2. Add Route 53 A record: `api.asheflow.com` → `3.141.169.13`
+3. Start the Discord bot container
+4. Build frontend with `.env.production`, upload to S3, set up CloudFront for `asheflow.com`
 
 ## Key Takeaways
 
@@ -109,3 +146,9 @@ aws cognito-idp admin-set-user-password --user-pool-id us-east-2_SvVO2ofAb --use
 - `INTERNAL_SECRET` is the shared secret between the backend and the bot. If they don't match, every bot → backend call returns 403. Both files must have the same value.
 - A fine-grained GitHub token scoped to one repo with read-only access is the correct credential for a server that only needs to clone and pull — it cannot push, cannot access other repos, and can be revoked without affecting anything else.
 - `--permanent` on `admin-set-user-password` is required to skip the forced-change flow that would block the bot from authenticating on first login.
+- Alembic revision IDs must be 32 characters or fewer — the `alembic_version` table has a `VARCHAR(32)` column. Date-prefixed IDs like `20260409_add_expired_status_to_time_off_requests` exceed this. Use short descriptive IDs.
+- Always push local commits to GitHub before deploying. A server `git pull` that says "already up to date" when you expect new code means the commits exist locally but were never pushed.
+- `awslogs-stream-prefix` is not supported by all builds of the Docker awslogs driver. Use `awslogs-stream` instead — it is universally supported and achieves the same result.
+- The CloudWatch log group must exist before containers start with the awslogs driver. Create it with `aws logs create-log-group` before the first `docker compose up`.
+- Always use the same AWS region consistently across all config files, IAM policies, log groups, and env vars. Mixing `us-east-1` and `us-east-2` causes silent failures where requests hit the wrong region and find nothing.
+- Dead config values are a maintenance liability even when harmless. `confirmation_window_hours` was defined but never used — it would have sat in `.env` files and config classes indefinitely, confusing future developers. Remove dead config as soon as it's identified.
