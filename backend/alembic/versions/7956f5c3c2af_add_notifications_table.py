@@ -1,7 +1,7 @@
 """add_notifications_table
 
 Revision ID: 7956f5c3c2af
-Revises: 20260409_add_expired_status_to_time_off_requests
+Revises: add_expired_tor
 Create Date: 2026-04-10 01:09:58.922001
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '7956f5c3c2af'
-down_revision: Union[str, Sequence[str], None] = '20260409_add_expired_status_to_time_off_requests'
+down_revision: Union[str, Sequence[str], None] = 'add_expired_tor'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

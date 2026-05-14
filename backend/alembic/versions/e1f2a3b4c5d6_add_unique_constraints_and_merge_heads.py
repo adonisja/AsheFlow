@@ -2,14 +2,14 @@
 
 Merges the two independent heads:
   - d4e5f6a1b2c3 (add_dispatch_date_to_notifications)
-  - 20260409_add_expired_status_to_time_off_requests
+  - add_expired_tor
 
 Unique constraints added:
   - assignment_members (assignment_id, employee_id) — prevents double-assignment
   - fuel_mileage_logs  (driver_id, date)            — prevents duplicate daily log
 
 Revision ID: e1f2a3b4c5d6
-Revises: d4e5f6a1b2c3, 20260409_add_expired_status_to_time_off_requests
+Revises: d4e5f6a1b2c3, add_expired_tor
 Create Date: 2026-04-22
 """
 
@@ -18,7 +18,7 @@ from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision = 'e1f2a3b4c5d6'
-down_revision = ('d4e5f6a1b2c3', '20260409_add_expired_status_to_time_off_requests')
+down_revision = ('d4e5f6a1b2c3', 'add_expired_tor')
 branch_labels = None
 depends_on = None
 
