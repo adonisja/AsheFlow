@@ -3772,3 +3772,51 @@ For AsheFlow everything lives in `us-east-2`:
 - EC2 instance: `us-east-2`
 
 The `docker-compose.prod.yml` YAML anchor originally defaulted to `us-east-1`. The default was wrong from day one — it only became visible when CloudWatch logging was actually exercised. Always set explicit values rather than relying on defaults for region configuration.
+
+### Nginx as a reverse proxy with SSL
+
+The FastAPI app listens on port 8000 internally. Nginx sits in front of it and handles the public-facing concerns: HTTP→HTTPS redirect, SSL termination, and forwarding requests to the app. Port 8000 is never opened in the security group — only ports 80 and 443.
+
+The minimal Nginx config for a FastAPI backend:
+
+```nginx
+server {
+    listen 80;
+    server_name api.asheflow.com;
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    server_name api.asheflow.com;
+    # ssl_certificate lines added automatically by certbot
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+`proxy_set_header X-Forwarded-Proto $scheme` is important — FastAPI uses it to know whether the original request was HTTP or HTTPS. Without it, redirect logic and security checks that inspect the protocol see `http` even when the client connected over HTTPS.
+
+Certbot with the `--nginx` flag auto-discovers the `server_name`, issues the certificate, and rewrites the Nginx config to add the SSL blocks. Running `sudo certbot --nginx -d api.asheflow.com` is all that's needed.
+
+Let's Encrypt certificates expire after 90 days. Certbot installs a systemd timer that auto-renews them — no manual action required.
+
+### Services missing from docker-compose.yml cause orphan containers
+
+If a container was started in a previous session but its service definition was removed from (or never added to) `docker-compose.yml`, Docker Compose shows a warning: `Found orphan containers`. The container keeps running but is no longer managed by Compose — `docker compose down` won't stop it, and `docker compose ps` won't show it.
+
+The fix is to add the service to `docker-compose.yml` properly. Once defined, Compose manages its full lifecycle.
+
+The bot had a `Dockerfile` but was never added to `docker-compose.yml`. It ran as an orphan from a previous manual `docker run`. Adding it as a proper service with `restart: unless-stopped` means it will restart automatically if it crashes or if the server reboots.
+
+### EC2 IAM role credentials are available inside containers automatically
+
+When an EC2 instance has an IAM role attached, any process running on that instance — including processes inside Docker containers — can call `http://169.254.169.254/latest/meta-data/iam/security-credentials/` to get temporary AWS credentials. The AWS SDK (boto3, etc.) does this automatically.
+
+This is why `botocore.credentials: Found credentials from IAM Role: asheflow-ec2-role` appears in the bot logs without any explicit credential configuration. No `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` env vars are needed inside the containers — the role provides them transparently.

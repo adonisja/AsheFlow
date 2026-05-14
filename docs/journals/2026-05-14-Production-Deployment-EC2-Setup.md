@@ -130,12 +130,38 @@ Health check confirmed: `curl http://localhost:8000/health` → `{"status":"ok"}
 
 All container logs shipping to CloudWatch log group `/asheflow/production` in `us-east-2`.
 
+## Additional Steps Completed
+
+**Nginx + SSL for `api.asheflow.com`:**
+1. Installed `nginx certbot python3-certbot-nginx` on the server
+2. Created `/etc/nginx/sites-available/asheflow` — proxies all traffic from port 80/443 to `127.0.0.1:8000`
+3. Enabled with `sudo ln -s /etc/nginx/sites-available/asheflow /etc/nginx/sites-enabled/`
+4. Added Route 53 A record: `api` → `3.141.169.13`, TTL 300
+5. Confirmed HTTP reachable: `curl http://api.asheflow.com/health` → `{"status":"ok"}`
+6. Ran `sudo certbot --nginx -d api.asheflow.com` — issued Let's Encrypt certificate, Nginx config auto-updated with SSL blocks
+7. Confirmed HTTPS reachable: `curl https://api.asheflow.com/health` → `{"status":"ok"}`
+
+**Discord bot:**
+The bot was not in `docker-compose.yml` — it had a `Dockerfile` but was being run as an orphan container from a previous session. Added as a proper service with `env_file: ./bot/.env`, `depends_on: backend`, and `restart: unless-stopped`. Also bumped `bot/Dockerfile` from `python:3.11-slim` to `python:3.12-slim`.
+
+Bot startup confirmed via `docker logs asheflow_bot`:
+- Cognito token refreshed (authenticated as `asheflow.bot`)
+- IAM role credentials found automatically from EC2 metadata
+- Connected to Discord Gateway
+- Logged in as `AsheFlow Dispatch#9457`
+- Synced 1 slash command to guild
+
+**Final running state — all 6 containers:**
+- `asheflow_backend` — FastAPI at `https://api.asheflow.com`, 4 workers
+- `asheflow_bot` — Discord bot online
+- `asheflow_celery_worker` — task queue
+- `asheflow_celery_beat` — scheduled jobs
+- `asheflow_postgres` — healthy
+- `asheflow_redis` — healthy
+
 ## What Still Needs to Be Done
 
-1. Install Nginx + Certbot, configure reverse proxy for `api.asheflow.com`
-2. Add Route 53 A record: `api.asheflow.com` → `3.141.169.13`
-3. Start the Discord bot container
-4. Build frontend with `.env.production`, upload to S3, set up CloudFront for `asheflow.com`
+1. Build frontend with `.env.production`, upload to S3, set up CloudFront for `asheflow.com`
 
 ## Key Takeaways
 
