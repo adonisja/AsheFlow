@@ -17,8 +17,8 @@ x-cloudwatch-logging: &cloudwatch-logging
   driver: awslogs
   options:
     awslogs-group: ${CLOUDWATCH_LOG_GROUP:-/asheflow/production}
-    awslogs-region: ${AWS_REGION:-us-east-1}
-    awslogs-stream-prefix: asheflow
+    awslogs-region: ${AWS_REGION:-us-east-2}
+    awslogs-stream: asheflow
 
 services:
   backend:
