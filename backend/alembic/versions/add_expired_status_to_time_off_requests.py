@@ -1,11 +1,11 @@
 """Add 'expired' status to time_off_requests
 
-Revision ID: 20260409_add_expired_status_to_time_off_requests
+Revision ID: add_expired_tor
 Revises: f996344de217
 Create Date: 2026-04-09
 """
 
-revision = '20260409_add_expired_status_to_time_off_requests'
+revision = 'add_expired_tor'
 down_revision = 'cec73d660c0a'
 branch_labels = None
 depends_on = None
