@@ -3657,3 +3657,64 @@ if "localhost" in self.cors_origins and self.app_env not in {"development", "tes
 **The key lesson:** When writing a startup guard that allowlists environments, always enumerate every environment where the guard should not fire: `{"development", "test"}`. Anything not in the set is protected. If you write `!= "development"`, you are implicitly claiming that every other name you will ever use is a production-like environment — a claim that breaks the first time you add a test or CI environment.
 
 **Lesson:** string-match guards should be tested explicitly. A test that sets `app_env="staging"` and `cors_origins="http://localhost:3000"` and asserts `RuntimeError` is raised would have caught the typo immediately.
+
+## 2026-05-14 Production Deployment: EC2, Docker, and Environment Config
+
+### EC2 instance sizing
+
+A t3.micro (1 GB RAM) is not enough for a full multi-service Docker Compose stack. The AsheFlow stack — FastAPI (4 workers) + PostgreSQL + Redis + Celery worker + Celery beat + Discord bot + Docker/OS overhead — consumes 800 MB–1.2 GB at rest. t3.micro has no headroom for traffic spikes and will hit swap constantly. t3.small (2 GB RAM, ~$15/mo) is the minimum viable size for this stack.
+
+General rule: add up the idle RSS of every process you plan to run, multiply by 1.5 for headroom, and pick the next instance size above that.
+
+### Security groups are the EC2 firewall
+
+A security group is a stateful firewall that controls which ports are reachable from the internet. The correct rules for a web backend are:
+
+- Port 22 (SSH) — your IP only. Never `0.0.0.0/0` — open SSH to the world invites brute-force attacks within minutes.
+- Port 80 (HTTP) — anywhere. Nginx listens here and redirects to HTTPS.
+- Port 443 (HTTPS) — anywhere. Nginx terminates SSL here and proxies to the app.
+- Port 8000 (FastAPI) — **do not open**. Nginx reaches it on `127.0.0.1:8000` internally. There is no reason for the public internet to reach the app server directly.
+
+The principle: open the minimum set of ports required for the service to function. Every open port is an attack surface.
+
+### IAM roles grant EC2 permission to call other AWS services
+
+By default an EC2 instance has zero AWS permissions — it cannot call SES, CloudWatch, S3, or anything else. An IAM role is a permission slip attached to the instance at launch time. The instance automatically receives temporary credentials that rotate every hour.
+
+For AsheFlow the role needs:
+- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` — for the Docker `awslogs` driver to ship container logs to CloudWatch
+- `ses:SendEmail` — for the backend to send invite and registration emails
+
+Without the CloudWatch permissions, Docker fails to start any container that has `logging: driver: awslogs` in its Compose config — the entire stack refuses to come up.
+
+### Two .env files serve different purposes
+
+Docker Compose reads the root `.env` file automatically to substitute variables in `docker-compose.yml`. The backend's pydantic `Settings` class reads `backend/.env` directly via `env_file = ".env"` in its Config. They are not the same file and serve different masters:
+
+- Root `.env` — variables Docker Compose needs to configure the infrastructure layer: `POSTGRES_PASSWORD`, `POSTGRES_USER`, `POSTGRES_DB`, `REDIS_URL`, `DISCORD_BOT_TOKEN`
+- `backend/.env` — variables the FastAPI application needs at runtime: `APP_ENV`, `AWS_COGNITO_USER_POOL_ID`, `CORS_ORIGINS`, `INTERNAL_SECRET`, `BOT_INTERNAL_URL`
+
+A missing variable in root `.env` causes `docker compose up` to fail with a substitution error. A missing variable in `backend/.env` causes `Settings()` to raise a `ValidationError` at import time, crashing the container immediately after it starts.
+
+### INTERNAL_SECRET must match in every service that uses it
+
+`INTERNAL_SECRET` is the shared secret used to authenticate bot → backend webhook calls. The backend checks the `X-Internal-Secret` header on internal endpoints. If `backend/.env` and `bot/.env` have different values, every bot call returns 403. This is easy to get wrong when copying values between files — always verify both files have the same value before starting services.
+
+### GitHub fine-grained tokens for server deployments
+
+A server that only needs to clone a repo should use a fine-grained Personal Access Token scoped to that one repository with **Contents: Read-only** permission. This is the least-privilege approach:
+
+- Classic tokens grant access to all repos the account can see
+- Fine-grained tokens scope to specific repos and specific permissions
+- If the token is compromised, the blast radius is limited to one repo, read-only
+
+Tokens should have a 90-day expiry. When they expire, generate a new one and update the server. This is preferable to a non-expiring token that can be forgotten and abused indefinitely.
+
+### Cognito service accounts for bots
+
+The Discord bot authenticates to the backend API using a dedicated Cognito account (`asheflow.bot`). This is a service account — a non-human identity used exclusively by automated processes. Key points:
+
+- Use `admin-set-user-password` with `--permanent` to skip the forced-change-on-first-login flow. Without `--permanent`, the account is in `FORCE_CHANGE_PASSWORD` state and any login attempt returns an auth challenge the bot doesn't know how to handle.
+- Use `--message-action SUPPRESS` on `admin-create-user` to prevent Cognito from sending a welcome email to a non-existent address.
+- The bot's Cognito account should have the minimum role needed — dispatch role is sufficient; it does not need admin.
+- Store the bot's credentials in `bot/.env`, never in code or git history.
