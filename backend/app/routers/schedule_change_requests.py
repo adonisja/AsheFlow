@@ -23,6 +23,8 @@ VALID_TYPES = {"add_day", "drop_day", "full_rework"}
 # changes are a field-staff concern; dispatch operates on the published schedule.
 allow_submitter = RoleChecker(["driver", "walker", "trainer", "trainee"])
 allow_reviewer  = RoleChecker(["management", "admin"])
+# Dispatch can read the list for situational awareness but cannot approve/reject
+allow_read      = RoleChecker(["management", "admin", "dispatch"])
 allow_any_auth  = RoleChecker(["driver", "walker", "trainer", "trainee", "management", "admin"])
 
 
@@ -186,7 +188,7 @@ def get_my_schedule_change_requests(
 @router.get("/", response_model=List[dict])
 def get_all_schedule_change_requests(
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_reviewer),
+    _: dict = Depends(allow_read),
     filter_status: Optional[str] = Query(None, alias="status", description="Filter by status: pending, approved, rejected. Omit for all."),
     db: Session = Depends(get_db),
 ):
