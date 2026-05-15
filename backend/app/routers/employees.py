@@ -339,7 +339,7 @@ def update_employee(
     employee_id: UUID,
     employee: EmployeeUpdate,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Update an existing employee's fields.
@@ -448,7 +448,7 @@ def update_employee(
 def deactivate_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Set an employee's active status to False."""
@@ -486,7 +486,7 @@ def deactivate_employee(
 def reactivate_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Set an employee's active status back to True."""
@@ -593,7 +593,7 @@ def delete_employee(
 def promote_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Promote a walker to trainer.
@@ -660,7 +660,7 @@ def promote_employee(
 def demote_employee(
     employee_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    current_user: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Demote a trainer back to walker.

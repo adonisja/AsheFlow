@@ -111,7 +111,7 @@ def _get_valid_token(token_str: str, db: Session) -> InviteToken:
 def send_invite(
     body: InviteRequest,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["management", "admin"])),
+    _: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Generate an invite token for a pending employee and email them the registration link.
@@ -167,7 +167,7 @@ def send_invite(
 def resend_credentials(
     body: InviteRequest,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["management", "admin"])),
+    _: dict = Depends(RoleChecker(["management", "admin", "dispatch"])),
     db: Session = Depends(get_db),
 ):
     """Re-send the credentials email to a registered-but-not-yet-signed-in employee.

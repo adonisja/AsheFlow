@@ -15,7 +15,7 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
-allow_mgmt = RoleChecker(["management", "admin"])
+allow_mgmt = RoleChecker(["management", "admin", "dispatch"])
 
 @router.get("/{employee_id}")
 def get_employee_schedule(
