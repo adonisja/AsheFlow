@@ -320,7 +320,7 @@ const Navbar = () => {
         <NavLink to="/dispatch-home" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Dispatch</NavLink>
       )}
       {(isDispatch || isAdmin) && (
-        <NavLink to="/dispatch" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
+        <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
       )}
       {(isDispatch || isAdmin) && (
         <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
