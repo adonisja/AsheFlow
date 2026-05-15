@@ -317,10 +317,10 @@ const Navbar = () => {
       <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
 
       {(isDispatch || isAdmin) && (
-        <NavLink to="/dispatch-home" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Dispatch</NavLink>
+        <NavLink to="/dispatch-home" end className={linkClass}><Home className="w-3.5 h-3.5" /> Overview</NavLink>
       )}
       {(isDispatch || isAdmin) && (
-        <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
+        <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Dispatch</NavLink>
       )}
       {(isDispatch || isAdmin) && (
         <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
@@ -434,8 +434,8 @@ function MobileLinks({
       {canAccessFieldOps && <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>}
       {groups.includes('driver') && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Point</NavLink>}
       <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-      {(isDispatch || isAdmin) && <NavLink to="/dispatch-home" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Dispatch</NavLink>}
-      {(isDispatch || isAdmin) && <NavLink to="/dispatch" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>}
+      {(isDispatch || isAdmin) && <NavLink to="/dispatch-home" end onClick={onNav} className={cls}><Home className="w-4 h-4" /> Overview</NavLink>}
+      {(isDispatch || isAdmin) && <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Dispatch</NavLink>}
       {(isDispatch || isAdmin) && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>}
       {isMgmt && <>
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
