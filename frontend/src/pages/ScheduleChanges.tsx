@@ -144,7 +144,7 @@ const ScheduleChanges = () => {
   const isPrivileged = isAdmin || groups.includes('management') || groups.includes('dispatch');
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
-  const [myId, setMyId] = useState<string>(user?.userId || user?.username || '');
+  const [myId, setMyId] = useState<string>('');
   const [offDays, setOffDays] = useState<string[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
@@ -156,6 +156,12 @@ const ScheduleChanges = () => {
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isPrivileged) {
+      axiosClient.get('/employees/me').then(res => setMyId(res.data.id)).catch(() => {});
+    }
+  }, [isPrivileged]);
 
   useEffect(() => {
     if (isPrivileged) {
