@@ -100,7 +100,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     checkAuth();
 
     const unsubscribe = Hub.listen('auth', ({ payload }) => {
-      switch (payload.event) {
+      const event = payload.event as string;
+      switch (event) {
         case 'signedIn':
           checkAuth();
           break;
@@ -111,7 +112,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         case 'signIn_failure': {
           // Fired when a federated flow is rejected — e.g. pre-signup Lambda blocks the user.
           // Extract the human-readable message from the error description if present.
-          const raw = (payload.data as any)?.error?.message ?? (payload.data as any)?.message ?? '';
+          const raw = (payload as any)?.data?.error?.message ?? (payload as any)?.data?.message ?? '';
           const friendly = raw.includes('No AsheFlow account')
             ? 'No AsheFlow account found for this email. Ask your dispatcher to create your account first.'
             : raw || 'Sign in failed. Please try again.';
