@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { signIn, signInWithRedirect, confirmSignIn } from 'aws-amplify/auth';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { Truck, Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
+import logoFull from '../../assets/logo-full.svg';
 
 export default function Login() {
   const [username,               setUsername]               = useState('');
@@ -67,23 +68,18 @@ export default function Login() {
   return (
     <div
       className="flex min-h-screen items-center justify-center px-4 relative overflow-hidden"
-      style={{ background: 'linear-gradient(135deg, hsl(243 75% 97%), hsl(220 20% 97%), hsl(252 85% 97%))' }}
+      style={{ background: 'linear-gradient(135deg, hsl(225 70% 97%), hsl(220 20% 97%), hsl(35 80% 97%))' }}
     >
       {/* Decorative blobs */}
       <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full opacity-20"
-           style={{ background: 'radial-gradient(circle, hsl(243 75% 59% / 0.3), transparent 70%)' }} />
+           style={{ background: 'radial-gradient(circle, hsl(225 70% 55% / 0.3), transparent 70%)' }} />
       <div className="absolute bottom-[-20%] right-[-10%] w-[400px] h-[400px] rounded-full opacity-15"
-           style={{ background: 'radial-gradient(circle, hsl(262 83% 58% / 0.3), transparent 70%)' }} />
+           style={{ background: 'radial-gradient(circle, hsl(35 80% 38% / 0.2), transparent 70%)' }} />
 
       <div className="w-full max-w-sm animate-slide-up relative z-10">
         {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-10">
-          <div className="flex items-center justify-center w-11 h-11 rounded-xl gradient-primary shadow-lg shadow-primary/30">
-            <Truck className="h-5 w-5 text-primary-foreground" />
-          </div>
-          <span className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-primary to-violet">
-            AsheFlow
-          </span>
+        <div className="flex items-center justify-center mb-10">
+          <img src={logoFull} alt="AsheFlow" className="h-10 w-auto" />
         </div>
 
         <div className="card-elevated p-8 backdrop-blur-sm bg-card/90">
