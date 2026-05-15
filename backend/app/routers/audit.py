@@ -12,7 +12,7 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
-allow_mgmt = RoleChecker(["management", "admin", "dispatch"])
+allow_mgmt = RoleChecker(["management", "admin"])
 
 
 @router.get("/")
