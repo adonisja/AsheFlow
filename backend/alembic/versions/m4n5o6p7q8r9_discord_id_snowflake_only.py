@@ -35,6 +35,11 @@ def upgrade() -> None:
         """
     )
 
+    # Drop the NOT NULL constraint that the initial schema applied.
+    # The ORM has always declared discord_id nullable=True; the constraint
+    # was never explicitly removed by a prior migration.
+    op.alter_column("employees", "discord_id", nullable=True, existing_type=sa.String())
+
     # Resize the column. Existing numeric values fit easily in 20 chars.
     op.alter_column(
         "employees",
