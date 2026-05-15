@@ -15,7 +15,8 @@ from app.models.employee import Employee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
-allow_mgmt = RoleChecker(["management", "admin", "dispatch"])
+allow_mgmt          = RoleChecker(["management", "admin"])
+allow_available     = RoleChecker(["management", "admin", "dispatch"])
 
 @router.get("/{employee_id}")
 def get_employee_schedule(
@@ -143,7 +144,7 @@ def get_employee_schedule(
 def get_available_employees(
     target_date: date,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_mgmt),
+    _: dict = Depends(allow_available),
     db: Session = Depends(get_db),
 ):
     day_name = target_date.strftime("%A")
