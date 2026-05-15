@@ -311,7 +311,7 @@ const Preferences = () => {
 
   const { confirmState, confirm, cancelConfirm } = useConfirm();
 
-  const [myId, setMyId] = useState<string>(user?.userId || user?.username || '');
+  const [myId, setMyId] = useState<string>('');
   const [employees, setEmployees] = useState<any[]>([]);
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
   const [targetFavId, setTargetFavId] = useState('');
@@ -325,19 +325,20 @@ const Preferences = () => {
 
   useEffect(() => {
     if (isAdmin) return;
+    axiosClient.get('/employees/me').then(res => setMyId(res.data.id)).catch(() => {});
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin) return;
     axiosClient.get('/employees/')
       .then(res => {
         const sorted = res.data.sort((a: any, b: any) =>
           (a.first_name || a.name || '').localeCompare(b.first_name || b.name || '')
         );
         setEmployees(sorted);
-        if (user && !myId) {
-          const self = sorted.find((e: any) => e.id === user.userId || e.id === user.username);
-          if (self) setMyId(self.id);
-        }
       })
       .catch(() => setLoadError('Failed to load employee data.'));
-  }, [isAdmin, user]);
+  }, [isAdmin]);
 
   const loadPreferences = async (id: string) => {
     try {
