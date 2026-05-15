@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 48" fill="none" role="img" aria-label="AsheFlow">
+  <g>
+    <line x1="4" y1="13" x2="17" y2="22" stroke="hsl(35 80% 38%)" stroke-width="2.6" stroke-linecap="round"></line>
+    <line x1="4" y1="24" x2="17" y2="24" stroke="hsl(35 80% 38%)" stroke-width="2.6" stroke-linecap="round"></line>
+    <line x1="4" y1="35" x2="17" y2="26" stroke="hsl(35 80% 38%)" stroke-width="2.6" stroke-linecap="round"></line>
+    <circle cx="5" cy="13" r="2.2" fill="hsl(35 80% 38%)"></circle>
+    <circle cx="5" cy="24" r="2.2" fill="hsl(35 80% 38%)"></circle>
+    <circle cx="5" cy="35" r="2.2" fill="hsl(35 80% 38%)"></circle>
+    <rect x="16" y="16" width="16" height="16" rx="3.5" fill="hsl(225 70% 55%)"></rect>
+    <rect x="20.5" y="20.5" width="7" height="7" rx="1.2" fill="white" opacity="0.95"></rect>
+    <line x1="32" y1="24" x2="41" y2="24" stroke="hsl(225 70% 55%)" stroke-width="3" stroke-linecap="round"></line>
+    <polyline points="38 19.5 43 24 38 28.5" stroke="hsl(225 70% 55%)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"></polyline>
+  </g>
+  <text x="58" y="31" font-family="Sora, Inter, system-ui, sans-serif" font-size="20" font-weight="600" letter-spacing="-0.5" fill="hsl(224 35% 10%)">AsheFlow</text>
+</svg>

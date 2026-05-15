@@ -8,9 +8,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        sans:    ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
         display: ['Sora', 'Inter', 'system-ui', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        mono:    ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
       colors: {
         border: 'hsl(var(--border))',
@@ -53,7 +53,8 @@ export default {
         danger:  { DEFAULT: 'hsl(var(--danger))',  foreground: 'hsl(var(--danger-foreground))' },
         info:    { DEFAULT: 'hsl(var(--info))',    foreground: 'hsl(var(--info-foreground))' },
         teal:    { DEFAULT: 'hsl(var(--teal))',    foreground: 'hsl(var(--teal-foreground))' },
-        violet:  { DEFAULT: 'hsl(var(--violet))',  foreground: 'hsl(var(--violet-foreground))' },
+        slate:   { DEFAULT: 'hsl(var(--slate))',   foreground: 'hsl(var(--slate-foreground))' },
+        neutral: { DEFAULT: 'hsl(var(--neutral))', foreground: 'hsl(var(--neutral-foreground))' },
       },
       borderRadius: {
         '2xl': '1rem',
