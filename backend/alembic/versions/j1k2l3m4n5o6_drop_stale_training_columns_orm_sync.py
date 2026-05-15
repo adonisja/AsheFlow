@@ -17,6 +17,7 @@ ORM models were not updated at the time — no DDL needed):
 """
 
 from alembic import op
+from sqlalchemy import inspect, text
 
 revision = "j1k2l3m4n5o6"
 down_revision = "i6f7g8h9i0j1"
@@ -24,9 +25,25 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    result = conn.execute(
+        text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = :t AND column_name = :c"
+        ),
+        {"t": table, "c": column},
+    )
+    return result.fetchone() is not None
+
+
 def upgrade() -> None:
-    op.drop_column("training_records", "trainee_comments")
-    op.drop_column("training_records", "trainer_rating")
+    conn = op.get_bind()
+    # These columns existed in old dev databases but were never formally added
+    # via a migration. On fresh installs they won't exist — guard with IF EXISTS.
+    if _column_exists(conn, "training_records", "trainee_comments"):
+        op.drop_column("training_records", "trainee_comments")
+    if _column_exists(conn, "training_records", "trainer_rating"):
+        op.drop_column("training_records", "trainer_rating")
 
 
 def downgrade() -> None:
