@@ -3820,3 +3820,367 @@ The bot had a `Dockerfile` but was never added to `docker-compose.yml`. It ran a
 When an EC2 instance has an IAM role attached, any process running on that instance — including processes inside Docker containers — can call `http://169.254.169.254/latest/meta-data/iam/security-credentials/` to get temporary AWS credentials. The AWS SDK (boto3, etc.) does this automatically.
 
 This is why `botocore.credentials: Found credentials from IAM Role: asheflow-ec2-role` appears in the bot logs without any explicit credential configuration. No `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` env vars are needed inside the containers — the role provides them transparently.
+
+## 2026-05-14 Frontend Design System: Chart Accessibility
+
+### Color alone is not enough to differentiate chart series
+
+The AsheFlow design system uses three extended colors for multi-series charts:
+
+- **Gold** (35 80% 38%) — Drivers / series #1
+- **Teal** (172 50% 38%) — Walkers / series #2
+- **Slate Blue** (215 40% 50%) — Trainers / series #3
+
+These are perceptually distinct for most users, but Teal and Slate Blue can be difficult to distinguish for users with **deuteranopia** (green-blue color vision deficiency), which affects approximately 1% of people.
+
+**WCAG 1.4.1 (Use of Color, Level A)** requires that color is not the *only* visual means of conveying information. For charts, this means each series must have a secondary differentiator in addition to color.
+
+**Required when implementing chart components:**
+
+- Use different **line dash patterns** (solid, dashed, dotted) per series, OR
+- Use different **marker shapes** at data points (circle, square, triangle) per series, OR
+- Both
+
+The legend must also reflect whichever secondary differentiator is used — not just a color swatch.
+
+This does not affect the color token definitions themselves. The colors are approved. The enforcement happens at the chart component level.
+
+### Dark theme surfaces: always use a border, not just background contrast
+
+The dark surface system uses four layered tokens, each separated by ~3 lightness points:
+
+| Token | HSL | Role |
+|---|---|---|
+| Background | 224 24% 6% | Page wash |
+| Surface | 224 22% 9% | Card |
+| Surface Muted | 224 20% 12% | Subtle fill / input background |
+| Accent | 224 22% 16% | Hover state / active nav |
+
+On standard displays the card lift (6% → 9% lightness) is visible. On **OLED displays**, the contrast between these near-black values can collapse entirely, making card boundaries disappear.
+
+**Required when implementing dark theme card components:**
+
+- Always include a **1px border** on cards using white at 10–20% opacity (e.g. `rgba(255,255,255,0.12)`) as a boundary fallback
+- Never rely solely on background lightness difference to define card edges in dark theme
+- This applies to: cards, modals, dropdowns, input fields — any surface that sits above the page background
+
+### Light theme: Surface Muted is a receding surface, not a card background
+
+The light surface layering order by lightness is:
+
+| Token | HSL | Lightness | Role |
+|---|---|---|---|
+| Surface | 0 0% 100% | 100% | Card — highest layer |
+| Background | 220 25% 98% | 98% | Page wash |
+| Surface Muted | 220 20% 96% | 96% | Subtle fill — lowest layer |
+| Accent | 243 100% 97% | 97% | Hover / active nav |
+
+Surface Muted sits *below* Background in perceived depth. It is intended for things that should visually recede: input backgrounds, table row alternates, disabled areas.
+
+**Never use Surface Muted as a card background.** A card on Surface Muted will appear to sit below the page, which is the opposite of the intended card-lift effect. Cards must always use the Surface (white) token.
+
+### Light theme: Accent surface hue shift is intentional
+
+The Accent surface (243 100% 97%) uses hue 243 — a more violet-blue — while all other light surfaces use hue 220. This shift is deliberate: it gives hover states and active nav highlights a distinct interactive character that cannot be confused with a plain lighter surface. Do not "fix" this hue discrepancy when implementing — it is load-bearing.
+
+### Shadows are light-theme only — dark theme uses surface layering instead
+
+The three shadow tokens (Soft / Medium / Large) are defined for light theme only:
+
+| Token | Role |
+|---|---|
+| Soft | Card default |
+| Medium | Card hover |
+| Large | Modal / popover |
+
+On dark backgrounds, drop shadows are nearly invisible — there is no light surface beneath the element to cast against. **Do not apply these shadow tokens on dark theme.**
+
+On dark theme, elevation is communicated via two mechanisms already defined in the system:
+1. **Surface lightness layering** — Background (6%) → Surface (9%) → Surface Muted (12%) → Accent (16%)
+2. **1px border** at `rgba(255,255,255,0.12)` on all elevated surfaces
+
+When implementing components that use shadows on light theme, wrap the shadow token in a theme conditional so it is zeroed out (`box-shadow: none`) on dark theme, and the border provides the boundary instead.
+
+### Glow shadows: dark theme intensity inverts — tune per theme
+
+The four glow tokens (primary, gold, success, danger) are colored halos used for emphasis — focused inputs, selected cards, critical alerts, destructive confirmations.
+
+On light theme, glows are soft and subtle against the near-white background. On dark theme, the same spread and opacity values produce a much more aggressive halo because the colored glow has high contrast against the near-black surface. **Do not use the same glow values across both themes.** Dark theme glows need reduced spread or opacity to avoid feeling alarming.
+
+Implement glow tokens with theme conditionals, e.g.:
+- Light: `box-shadow: 0 0 0 4px rgba(var(--color-primary), 0.25)`
+- Dark: `box-shadow: 0 0 0 3px rgba(var(--color-primary), 0.40)` (tighter spread, slightly higher opacity for definition without bleed)
+
+### Glow shadows cannot replace focus rings (WCAG 2.4.11)
+
+Glow shadows may supplement a focus indicator but cannot be the only one. **WCAG 2.4.11 (Focus Appearance, Level AA)** requires:
+- Focus indicator has at least **3:1 contrast** against adjacent colors
+- Focus indicator encloses the component with a minimum area
+
+A colored glow alone does not reliably meet the minimum area or contrast requirements across all backgrounds. Always pair a glow with a solid `outline` (e.g. `outline: 2px solid currentColor; outline-offset: 2px`) on focusable elements. The glow is decorative; the outline is the accessible focus indicator.
+
+### Iconography: test 12px Lucide icons on 1x (non-retina) displays
+
+The icon system uses Lucide React at 1.5 stroke weight across three sizes: 16px / 14px / 12px. At 16px and 14px the 1.5 stroke is clean and modern. At **12px on a non-retina (1x) display**, 1.5px strokes can render thin and fragile — sub-pixel rendering at small sizes on standard screens may cause icons to look lighter or less defined than intended.
+
+**Required before finalizing the 12px size:** Test on a 1x display (not just a MacBook retina screen). If strokes look too thin, either bump the small size to 14px or increase stroke weight to 2.0 for the 12px variant only.
+
+### Iconography: verify RefreshCw vs RefreshCcw
+
+Lucide has two refresh icons: `RefreshCw` (clockwise) and `RefreshCcw` (counter-clockwise). The design uses `RefreshCw`. Clockwise is the standard convention for "reload/refresh" so this is likely correct — but confirm the imported icon name matches exactly when implementing. Importing the wrong variant produces a subtly mirrored icon that most users won't notice but that will diverge from the design spec.
+
+### Motion: spring easing must only be applied to transform and opacity
+
+The spring easing curve is cubic-bezier(.34, 1.56, .64, 1). The Y value of 1.56 means the animation **overshoots** past its target value before settling — this produces the tactile bounce/spring effect intended for button press and interactive feedback.
+
+Two constraints that must be enforced at implementation time:
+
+1. **Never use spring on elements inside an `overflow: hidden` parent.** The overshoot portion of the animation will be clipped, making the motion look abrupt rather than springy — the opposite of the intended effect.
+
+2. **Only apply spring to `transform` and `opacity`.** Animating layout-affecting properties (`width`, `height`, `margin`, `padding`) with an overshooting curve causes reflow on every frame, which is expensive and can cause layout thrashing. `transform` and `opacity` are composited by the GPU and do not trigger reflow.
+
+The other two curves (out-soft, linear) have no overshoot and can be applied to any animatable property.
+
+### StatCard: use fixed min-height to equalize cards, never adjust font size
+
+The three stat cards (Assigned, Confirmed, Pending) have the same anatomy except Pending has a hint text line ("Confirmations open"). This makes Pending naturally taller than the other two.
+
+**Do not shrink the font size on Pending to force equal height.** Font size is semantic — the value and label must be the same scale across all three cards. Shrinking Pending makes it look subordinate, which is wrong since Pending is the most actionable state.
+
+**Correct fix:** Set a `min-height` on all stat cards equal to the natural height of the Pending card (which includes the hint line). Assigned and Confirmed cards get extra bottom padding to fill the space. All cards are the same height, all text stays the same size.
+
+```css
+.stat-card {
+  min-height: /* Pending card's natural height */;
+  display: flex;
+  align-items: center;
+}
+```
+
+The hint text slot should always be present in the DOM on all cards — empty on Assigned/Confirmed, populated on Pending — so the layout doesn't shift when data changes.
+
+### Role badge color mapping (approved)
+
+All role badges use font-weight 500 — no semantic bold. Negative states (Declined, Deactivated) communicate severity through color alone, not weight.
+
+Approved role color assignments:
+
+| Role | Color token | Rationale |
+|---|---|---|
+| driver | Slate Blue | Primary operational role |
+| walker | Teal | Secondary operational role |
+| trainer | Gold | Training accent — performance/coaching context |
+| trainee | Orange/peach tint | In-training state, distinct from active roles |
+| admin | Neutral | Access level, not an operational role — must not share a color with any crew role |
+
+Admin uses Neutral specifically because it is an access level (permissions), not a job function. Giving it a crew color (Gold, Teal, Slate Blue) would imply it belongs in the operational hierarchy, which it does not.
+
+### Typography: load only the Sora weights actually used
+
+The display typeface is **Sora** (Google Fonts). Only load the weights used in the type scale — loading all weights (100–800) adds unnecessary page weight.
+
+Required weights based on the approved type system:
+- **700** — display headings (confirmed)
+- **600** — if used for subheadings or UI labels (confirm when full type scale is approved)
+
+In the `<link>` preconnect or `@import`:
+```
+https://fonts.googleapis.com/css2?family=Sora:wght@600;700&display=swap
+```
+
+Use `display=swap` to prevent invisible text during font load (FOIT). This shows system font fallback until Sora loads, which is better than a blank page.
+
+### Top Nav: needs responsive overflow strategy for 8 items
+
+The approved top nav has 8 items: Home / Dispatch / Schedule / Roster / Fleet / Field Ops / Incidents / Analytics. At viewport widths below ~1024px these will overflow horizontally or wrap.
+
+Required at implementation: define a breakpoint strategy — either collapse all nav items behind a hamburger/drawer at a set breakpoint, or keep primary items visible (Home, Dispatch, Schedule) and move lower-priority items (Incidents, Analytics) into a "More" overflow menu. Do not let items wrap to a second nav row.
+
+### Typography: load only JetBrains Mono weight 400
+
+The mono typeface is **JetBrains Mono** used for dates, truck IDs, and timestamps (e.g. `2026-05-14 · TRK-04 · 06:32`). Load only weight 400 (regular). Bold and italic mono variants are not in the approved type system — do not load them.
+
+The full approved font stack — load all three families in a single request:
+```
+https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400&display=swap
+```
+
+**Inter** is the body and section typeface (400 for body/subtle, 600 for section headings). It pairs with Sora because both are geometric sans-serifs, but Inter is optimized for screen readability at small sizes (14px body text). Load only 400 and 600 — bold Inter (700+) is not in the approved type scale.
+
+JetBrains Mono was chosen specifically because it clearly distinguishes 0/O and 1/l/I — critical for truck IDs and timestamps where a misread character (TRK-04 vs TRK-D4) has operational consequences.
+
+### Typography: test 10px role labels on 1x displays
+
+The role label style (10px / 700 / 0.14em tracking) is at the border of WCAG AA minimum readable size. The weight and tracking compensate, but **test on a non-retina (1x) display** before finalizing. If the text renders too thin or small, bump to 11px to match the eyebrow style. Do not go below 10px for any text in the system.
+
+---
+
+## 2026-05-14 Frontend Design System: Implementation
+
+### Design system token update (v3 → v4)
+
+The existing `frontend/src/index.css` design system was replaced with the values approved during the Claude Design session. Key changes:
+
+**Color tokens corrected:**
+- Primary: `243 75% 59%` (violet-indigo) → `225 70% 55%` (blue-indigo, AA 4.9:1)
+- Gold: `41 78% 55%` (old amber) → `35 80% 38%` (warm amber, AA 4.7:1)
+- `--neutral` and `--slate` added for admin role and driver role badges
+- `--violet` removed — replaced by `--slate` in the extended palette
+
+**Font import optimised:**
+
+Before (loading all weights):
+```
+Inter:wght@300;400;500;600;700;800 + Sora:wght@500;600;700;800
+```
+After (only weights used in the type scale):
+```
+Inter:wght@400;600 + Sora:wght@600;700 + JetBrains+Mono:wght@400
+```
+
+**Accessibility fixes applied from learning guide flags:**
+- Focus ring: replaced glow-only with `outline: 2px solid hsl(var(--ring))` (WCAG 2.4.11 compliant). Glow is supplementary only.
+- Dark theme cards: `box-shadow: none` + `border-color: rgba(255,255,255,0.12)` — prevents OLED contrast collapse
+- Spring easing removed from layout/color transitions — only applied to `transform` properties
+- Skeleton shimmer changed from `ease-out-soft` to `linear` — prevents jarring loop
+- `stat-card` class with `min-height: 88px` equalizes cards with and without hint text
+- Glow tokens have dark-theme variants with reduced spread to prevent overpower
+- All buttons given `min-height: 44px` for WCAG 2.5.5 touch target compliance
+
+**Tailwind config updated:**
+- `fontFamily.mono` now leads with `JetBrains Mono`
+- `slate` and `neutral` color tokens registered
+- `violet` color token removed
+
+### Design system components
+
+New file: `frontend/src/components/design-system/primitives.tsx`
+
+Typed React components implementing the approved design system:
+
+| Component | Purpose |
+|---|---|
+| `Avatar` | Initials avatar with role-based color (driver=slate, walker=teal, trainer=gold, trainee=warning) |
+| `Badge` | Toned pill badge — 8 tone variants |
+| `StatusBadge` | Assignment status (confirmed/pending/declined/assigned) |
+| `RoleBadge` | Employee role — uses approved color mapping, admin=neutral |
+| `StatCard` | KPI card with icon chip, label, value, hint — min-height equalized |
+| `SectionHeader` | Page header with eyebrow, title, description, actions |
+| `Card` | Surface card with correct border for OLED fallback |
+| `Kbd` | Keyboard chip — platform-aware: renders ⌘ on Mac, Ctrl on Windows/Linux |
+| `Eyebrow` | Section eyebrow label |
+| `IconButton` | Icon-only button with optional notification badge |
+
+### Logo assets
+
+Copied from Claude Design handoff bundle into `frontend/src/assets/`:
+- `logo-full.svg` / `logo-full-light.svg` — full lockup (mark + wordmark)
+- `logo-mark.svg` / `logo-mark-light.svg` — mark only
+- `logo-wordmark.svg` — wordmark only
+- `favicon.svg` — browser tab icon
+
+### Build errors fixed
+
+Two TypeScript errors blocked the production build:
+
+**1. `signIn_failure` not in Amplify's typed Hub event union**
+`AuthContext.tsx` used a `switch (payload.event)` where `'signIn_failure'` is not in Amplify v6's typed union, causing `TS2678`. Fix: cast `payload.event as string` before the switch so TypeScript does not narrow the union, then access payload data via `(payload as any)`.
+
+**2. `ErrorBanner` missing `className` prop**
+`ErrorBanner.tsx` did not accept a `className` prop but `Companies.tsx` passed one, causing `TS2322`. Fix: added `className?: string` to the Props interface and applied it conditionally to the wrapper div.
+
+## 2026-05-14 Frontend Deployment: S3 + CloudFront
+
+### Architecture
+
+```
+User → CloudFront (HTTPS) → S3 bucket (static files)
+         asheflow.com
+         www.asheflow.com
+```
+
+CloudFront handles SSL termination, compression, and global CDN edge caching. S3 hosts the static files. The two layers are never exposed to users separately.
+
+### S3 bucket setup
+
+Bucket name: `asheflow-frontend` (us-east-2)
+
+- Static website hosting enabled with `IndexDocument: index.html` and `ErrorDocument: index.html`
+- The error document pointing to `index.html` is the SPA fallback — any unknown path (e.g. `/dispatch/today`) returns the app, which handles routing client-side
+- Public read bucket policy applied — required for CloudFront to fetch files as an anonymous origin
+
+**Cache-control strategy:**
+- `index.html` — `no-cache,no-store,must-revalidate` — browser always revalidates. This ensures users get the new `index.html` immediately after a deploy, which references the new hashed asset filenames.
+- All other files (`assets/*.js`, `assets/*.css`, etc.) — `public,max-age=31536000,immutable` — cached for 1 year. Vite appends a content hash to filenames (`index-DqGqjQI5.js`) so new deploys produce new filenames. The old cached files are never stale because the new `index.html` points to new filenames.
+
+This two-tier cache strategy means: zero stale app delivery, near-zero origin requests for repeat visitors.
+
+### ACM certificate
+
+CloudFront requires an SSL certificate in **us-east-1** regardless of where the S3 bucket lives. This is a hard AWS requirement — CloudFront's certificate lookup is always global/us-east-1.
+
+Certificate ARN: `arn:aws:acm:us-east-1:586794453404:certificate/f19b4975-549e-4835-b15f-8046ae9144a5`
+
+Validated via DNS: two CNAME records added to Route 53 hosted zone `Z05950531EYSU1BYQZRAG`. ACM checks for these records and issues the certificate automatically. Validation took ~2 minutes.
+
+Covers: `asheflow.com` + `www.asheflow.com` (SAN).
+
+### CloudFront distribution
+
+Distribution ID: `E22NJCS9JDU8FG`
+CloudFront domain: `d1ezk0tgu5lkoi.cloudfront.net`
+
+Key settings:
+- `ViewerProtocolPolicy: redirect-to-https` — HTTP requests are automatically redirected to HTTPS
+- `CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6` — AWS Managed CachingOptimized policy. Respects the `cache-control` headers set during upload.
+- `Compress: true` — CloudFront serves gzip/brotli automatically
+- `PriceClass_100` — US, Canada, Europe edge locations only (lowest cost tier)
+- Custom error response: 404 → `/index.html` with HTTP 200 — required for SPA client-side routing. Without this, deep-linking to any route other than `/` would return a real 404 from S3.
+- `DefaultRootObject: index.html` — requests to `/` serve `index.html`
+
+### DNS wiring
+
+Two Route 53 A records updated to CloudFront Alias records:
+- `asheflow.com` → `d1ezk0tgu5lkoi.cloudfront.net` (Alias)
+- `www.asheflow.com` → `d1ezk0tgu5lkoi.cloudfront.net` (Alias)
+
+CloudFront's hosted zone ID for Alias records is always `Z2FDTNDATAQYW2` — this is a fixed AWS constant, not specific to this distribution.
+
+### How to redeploy the frontend
+
+Every time the frontend code changes:
+
+```bash
+# 1. Build
+cd frontend
+npm run build
+
+# 2. Upload — assets first (immutable cache), then index.html (no-cache)
+aws s3 sync dist/ s3://asheflow-frontend/ \
+  --region us-east-2 --delete \
+  --cache-control "public,max-age=31536000,immutable" \
+  --exclude "index.html"
+
+aws s3 cp dist/index.html s3://asheflow-frontend/index.html \
+  --region us-east-2 \
+  --cache-control "no-cache,no-store,must-revalidate"
+
+# 3. Invalidate CloudFront cache for index.html
+aws cloudfront create-invalidation \
+  --distribution-id E22NJCS9JDU8FG \
+  --paths "/index.html"
+```
+
+Step 3 (invalidation) is only needed for `index.html` because it is the only file with a non-immutable cache. Asset files have content-hashed names — new deploys produce new names, so old cached copies are automatically abandoned.
+
+### Final production state
+
+| Service | URL | Stack |
+|---|---|---|
+| Frontend | `https://asheflow.com` | CloudFront + S3 |
+| API | `https://api.asheflow.com` | EC2 + Nginx + FastAPI |
+| Bot | — | Discord Gateway (Docker) |
+| Celery worker | — | Docker on EC2 |
+| Celery beat | — | Docker on EC2 |
+| PostgreSQL | — | Docker on EC2 |
+| Redis | — | Docker on EC2 |

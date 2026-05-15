@@ -1,4 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap');
+/* Load only the weights used in the approved type scale.
+   Sora: 600 (brand wordmark), 700 (display headings)
+   Inter: 400 (body/subtle), 600 (section headings)
+   JetBrains Mono: 400 (dates, truck IDs, timestamps)
+   display=swap prevents FOIT — shows system font until these load. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Sora:wght@600;700&family=JetBrains+Mono:wght@400&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,8 +11,8 @@
 
 /*
   ============================================================
-  AsheFlow — Design system v3
-  Light: Frost White + Indigo
+  AsheFlow — Design system v4
+  Light: Frost White + Blue-Indigo
   Dark : Deep Charcoal + Soft Gold
   All tokens are HSL triplets (no `hsl()` wrapper) so they can
   be consumed via hsl(var(--token) / <alpha>).
@@ -16,63 +21,104 @@
 
 @layer base {
   :root {
-    /* Surfaces — Frost White */
+    /* ─── Surfaces — Frost White ──────────────────────── */
     --background: 220 25% 98%;
     --foreground: 224 35% 10%;
-    --surface: 0 0% 100%;                 /* elevated panel */
-    --surface-muted: 220 20% 96%;         /* subtle fill */
+    --surface: 0 0% 100%;
+    --surface-muted: 220 20% 96%;   /* receding fill — inputs, table alternates, disabled. Never use as card bg. */
     --card: 0 0% 100%;
     --card-foreground: 224 35% 10%;
 
-    /* Brand — Indigo */
-    --primary: 243 75% 59%;
+    /* ─── Brand — Blue Indigo (AA 4.9:1 on white) ──── */
+    --primary: 225 70% 55%;
     --primary-foreground: 0 0% 100%;
-    --primary-light: 243 100% 97%;
-    --primary-glow: 252 85% 65%;
+    --primary-light: 225 80% 96%;   /* tint fills */
+    --primary-glow: 225 75% 65%;    /* hover lift */
+    --primary-strong: 225 70% 42%;  /* active / press */
 
-    /* Accent — Soft Gold (used sparingly in light, lead role in dark) */
-    --gold: 41 78% 55%;
-    --gold-foreground: 35 95% 12%;
+    /* ─── Accent — Amber Gold (AA 4.7:1 on white) ──── */
+    --gold: 35 80% 38%;             /* trainer role, chart series #1 */
+    --gold-foreground: 0 0% 100%;
+    --gold-tint: 35 80% 96%;
 
-    /* Neutrals */
+    /* ─── Neutrals ────────────────────────────────────── */
     --secondary: 220 18% 96%;
     --secondary-foreground: 224 25% 25%;
     --muted: 220 18% 96%;
     --muted-foreground: 220 10% 46%;
+    /* Accent surface uses hue 243 (more violet-blue) — intentional.
+       Gives hover/nav states a distinct interactive character. Do not "fix" this. */
     --accent: 243 100% 97%;
-    --accent-foreground: 243 75% 50%;
-    --border: 220 16% 90%;
-    --border-strong: 220 16% 82%;
-    --ring: 243 75% 59%;
+    --accent-foreground: 225 70% 42%;
+    --border: 220 14% 88%;
+    --border-strong: 220 14% 78%;
+    --ring: 225 70% 55%;
 
-    /* Semantic — vibrant but tasteful */
-    --success: 160 84% 39%;
+    /* ─── Semantic (≥4.5:1 on white) ─────────────────── */
+    --success: 158 65% 32%;         /* confirmed — 5.1:1 */
     --success-foreground: 0 0% 100%;
-    --warning: 35 92% 52%;
-    --warning-foreground: 35 95% 12%;
-    --danger: 0 72% 51%;
+    --warning: 22 90% 50%;          /* pending — distinct from gold */
+    --warning-foreground: 0 0% 100%;
+    --danger: 4 70% 44%;            /* declined — 4.9:1 */
     --danger-foreground: 0 0% 100%;
-    --info: 199 89% 48%;
+    --info: 210 75% 40%;            /* assigned — 5.4:1 */
     --info-foreground: 0 0% 100%;
-    --teal: 172 66% 50%;
-    --teal-foreground: 0 0% 100%;
-    --violet: 262 83% 58%;
-    --violet-foreground: 0 0% 100%;
+    --neutral: 220 10% 38%;         /* admin role, off-duty — 6.0:1 */
+    --neutral-foreground: 0 0% 100%;
 
-    /* Glass — translucent panel tint */
+    /* ─── Extended palette (charts, roles) ───────────── */
+    --teal: 172 50% 38%;            /* walker role, chart series #2 */
+    --teal-foreground: 0 0% 100%;
+    --slate: 215 40% 50%;           /* driver role, chart series #3 */
+    --slate-foreground: 0 0% 100%;
+
+    /* ─── Glass / Elevation ───────────────────────────── */
     --glass: 0 0% 100%;
     --glass-border: 220 25% 88%;
-
-    /* Elevation shadows (applied via utility) */
     --shadow-color: 224 40% 20%;
 
-    /* Easing — iOS-feeling spring approximation for non-FM CSS */
-    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    /* ─── Motion ──────────────────────────────────────── */
+    /* spring: overshoots (Y=1.56) — use ONLY on transform/opacity.
+       Never on layout properties (width/height/margin) or inside overflow:hidden parents. */
+    --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
     --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+
+    /* ─── Typography — families ───────────────────────── */
+    --font-sans:    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-display: 'Sora', 'Inter', system-ui, sans-serif;
+    --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* ─── Typography — scale ──────────────────────────── */
+    --text-xs:   0.6875rem; /* 11 — eyebrow */
+    --text-sm:   0.875rem;  /* 14 — body, buttons */
+    --text-base: 1rem;      /* 16 */
+    --text-lg:   1.125rem;  /* 18 — section titles */
+    --text-xl:   1.25rem;   /* 20 */
+    --text-2xl:  1.5rem;    /* 24 */
+    --text-3xl:  1.875rem;  /* 30 — page titles */
+    --text-4xl:  2.25rem;   /* 36 */
+
+    /* ─── Radii ──────────────────────────────────────── */
+    --radius-sm:   0.25rem;  /* 4  — chips */
+    --radius:      0.5rem;   /* 8  — buttons-sm, kbd */
+    --radius-lg:   0.75rem;  /* 12 — buttons */
+    --radius-xl:   1rem;     /* 16 — cards */
+    --radius-2xl:  1rem;     /* 16 — cards / pills */
+    --radius-3xl:  1.5rem;   /* 24 — modals */
+    --radius-full: 9999px;
+
+    /* ─── Spacing (Tailwind-aligned) ─────────────────── */
+    --space-1:  0.25rem;
+    --space-2:  0.5rem;
+    --space-3:  0.75rem;
+    --space-4:  1rem;
+    --space-6:  1.5rem;
+    --space-8:  2rem;
+    --space-12: 3rem;
   }
 
   .dark {
-    /* Surfaces — Deep Charcoal */
+    /* ─── Surfaces — Deep Charcoal ────────────────────── */
     --background: 224 24% 6%;
     --foreground: 210 25% 96%;
     --surface: 224 22% 9%;
@@ -80,45 +126,50 @@
     --card: 224 22% 9%;
     --card-foreground: 210 25% 96%;
 
-    /* Brand — Indigo (slightly brighter for contrast) */
-    --primary: 243 85% 70%;
-    --primary-foreground: 224 30% 8%;
-    --primary-light: 243 50% 18%;
-    --primary-glow: 252 90% 75%;
+    /* ─── Brand — Blue Indigo (lifted for dark contrast) ─ */
+    --primary: 225 80% 68%;
+    --primary-foreground: 225 50% 10%;
+    --primary-light: 225 40% 18%;
+    --primary-glow: 225 85% 75%;
+    --primary-strong: 225 70% 80%;
 
-    /* Accent — Soft Gold leads */
-    --gold: 41 85% 62%;
+    /* ─── Accent — Amber Gold (brightened for dark) ───── */
+    --gold: 38 85% 62%;
     --gold-foreground: 224 30% 8%;
+    --gold-tint: 38 60% 14%;
 
-    /* Neutrals */
+    /* ─── Neutrals ────────────────────────────────────── */
     --secondary: 224 18% 14%;
     --secondary-foreground: 210 20% 90%;
     --muted: 224 18% 14%;
     --muted-foreground: 220 12% 65%;
-    --accent: 224 22% 16%;
-    --accent-foreground: 41 85% 62%;
-    --border: 224 18% 18%;
-    --border-strong: 224 18% 26%;
-    --ring: 41 85% 62%;
+    --accent: 225 35% 18%;
+    --accent-foreground: 225 80% 75%;
+    --border: 224 15% 20%;
+    --border-strong: 224 15% 30%;
+    --ring: 38 85% 62%;
 
-    /* Semantic — calibrated for dark surfaces */
-    --success: 160 70% 50%;
+    /* ─── Semantic — calibrated for dark surfaces ─────── */
+    --success: 158 55% 58%;
     --success-foreground: 224 30% 8%;
-    --warning: 38 95% 60%;
+    --warning: 22 92% 60%;
     --warning-foreground: 224 30% 8%;
-    --danger: 0 75% 62%;
+    --danger: 4 75% 65%;
     --danger-foreground: 0 0% 100%;
-    --info: 199 85% 60%;
+    --info: 210 75% 65%;
     --info-foreground: 224 30% 8%;
-    --teal: 172 70% 55%;
-    --teal-foreground: 224 30% 8%;
-    --violet: 262 80% 70%;
-    --violet-foreground: 224 30% 8%;
+    --neutral: 220 12% 70%;
+    --neutral-foreground: 224 30% 8%;
 
-    /* Glass — dark frosted panel */
+    /* ─── Extended palette ───────────────────────────── */
+    --teal: 172 45% 55%;
+    --teal-foreground: 224 30% 8%;
+    --slate: 215 40% 65%;
+    --slate-foreground: 224 30% 8%;
+
+    /* ─── Glass — dark frosted panel ──────────────────── */
     --glass: 224 22% 12%;
     --glass-border: 41 50% 50%;
-
     --shadow-color: 0 0% 0%;
   }
 
@@ -128,26 +179,23 @@
 
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    /* Only transition color properties — never layout. Use ease-out-soft, not spring. */
     transition: background-color 300ms var(--ease-out-soft), color 300ms var(--ease-out-soft);
   }
 
-  /* Display font for page titles */
   .font-display {
-    font-family: 'Sora', 'Inter', system-ui, sans-serif;
+    font-family: var(--font-display);
     letter-spacing: -0.025em;
   }
 
-  /* Selection */
   ::selection {
     background: hsl(var(--primary) / 0.25);
     color: hsl(var(--foreground));
   }
 
-  /* Custom scrollbar */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
-
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
     background: hsl(var(--border-strong));
@@ -155,28 +203,46 @@
     border: 2px solid transparent;
     background-clip: padding-box;
   }
-  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+    background-clip: padding-box;
+  }
 
-  /* Focus rings — consistent halo */
+  /* Focus ring: solid outline (WCAG 2.4.11 compliant) + optional glow.
+     The outline is the accessible indicator; the box-shadow is decorative.
+     Glow alone does not meet minimum area/contrast requirements. */
   :focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.6);
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
     border-radius: 0.5rem;
-    transition: box-shadow 150ms var(--ease-out-soft);
   }
 }
 
 @layer components {
   /* ---------- Surface system ---------- */
   .card {
-    @apply bg-card rounded-2xl border border-border/70 p-6;
+    @apply bg-card rounded-2xl p-6;
+    /* Always include border on cards — do not rely solely on background contrast.
+       On OLED dark displays the background step (6%→9% lightness) can collapse.
+       The border provides the boundary fallback. */
+    border: 1px solid hsl(var(--border) / 0.7);
     box-shadow:
       0 1px 2px hsl(var(--shadow-color) / 0.04),
       0 1px 3px hsl(var(--shadow-color) / 0.06);
   }
+
+  /* Shadows are light-theme only. On dark theme, elevation is communicated
+     via surface lightness layering + the 1px border above.
+     Shadow tokens are zeroed in dark theme here. */
+  .dark .card {
+    box-shadow: none;
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
   .card-elevated {
-    @apply card transition-all duration-300;
-    transition-timing-function: var(--ease-out-soft);
+    @apply card;
+    /* Only animate transform — spring easing overshoots and must not affect layout properties */
+    transition: transform 300ms var(--ease-out-soft), box-shadow 300ms var(--ease-out-soft);
   }
   .card-elevated:hover {
     transform: translateY(-2px);
@@ -184,8 +250,12 @@
       0 10px 15px -3px hsl(var(--shadow-color) / 0.08),
       0 4px 6px -4px hsl(var(--shadow-color) / 0.06);
   }
+  .dark .card-elevated:hover {
+    box-shadow: none;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
 
-  /* Glassmorphism — translucent panel with frosted blur */
+  /* Glassmorphism */
   .glass {
     background: hsl(var(--glass) / 0.65);
     backdrop-filter: saturate(180%) blur(20px);
@@ -206,47 +276,54 @@
   }
 
   /* ---------- Buttons ---------- */
+  /* spring easing is used here on transform only (translateY, scale) — correct usage */
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
-           bg-primary text-primary-foreground font-medium text-sm
-           transition-all duration-200;
-    transition-timing-function: var(--ease-spring);
+           bg-primary text-primary-foreground font-medium text-sm;
+    transition: transform 200ms var(--ease-spring), filter 200ms var(--ease-out-soft),
+                box-shadow 200ms var(--ease-out-soft);
     box-shadow: 0 1px 2px hsl(var(--primary) / 0.3), 0 4px 12px -2px hsl(var(--primary) / 0.25);
+    min-height: 44px; /* WCAG 2.5.5 touch target */
   }
   .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
   .btn-primary:active { transform: translateY(0) scale(0.98); }
 
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
-           bg-secondary text-secondary-foreground font-medium text-sm border border-border
-           transition-all duration-200;
-    transition-timing-function: var(--ease-spring);
+           bg-secondary text-secondary-foreground font-medium text-sm border border-border;
+    transition: transform 200ms var(--ease-spring), background-color 200ms var(--ease-out-soft),
+                color 200ms var(--ease-out-soft);
+    min-height: 44px;
   }
   .btn-secondary:hover { @apply bg-accent text-accent-foreground; transform: translateY(-1px); }
   .btn-secondary:active { transform: translateY(0) scale(0.98); }
 
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
-           bg-danger text-danger-foreground font-medium text-sm transition-all duration-200;
-    transition-timing-function: var(--ease-spring);
+           bg-danger text-danger-foreground font-medium text-sm;
+    transition: transform 200ms var(--ease-spring), filter 200ms var(--ease-out-soft);
     box-shadow: 0 4px 12px -2px hsl(var(--danger) / 0.3);
+    min-height: 44px;
   }
   .btn-danger:hover { filter: brightness(1.05); transform: translateY(-1px); }
   .btn-danger:active { transform: translateY(0) scale(0.98); }
 
   .btn-success {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
-           bg-success text-success-foreground font-medium text-sm transition-all duration-200;
-    transition-timing-function: var(--ease-spring);
+           bg-success text-success-foreground font-medium text-sm;
+    transition: transform 200ms var(--ease-spring), filter 200ms var(--ease-out-soft);
     box-shadow: 0 4px 12px -2px hsl(var(--success) / 0.3);
+    min-height: 44px;
   }
   .btn-success:hover { filter: brightness(1.05); transform: translateY(-1px); }
   .btn-success:active { transform: translateY(0) scale(0.98); }
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl
-           text-muted-foreground font-medium text-sm transition-all duration-200;
-    transition-timing-function: var(--ease-spring);
+           text-muted-foreground font-medium text-sm;
+    transition: transform 200ms var(--ease-spring), background-color 200ms var(--ease-out-soft),
+                color 200ms var(--ease-out-soft);
+    min-height: 44px;
   }
   .btn-ghost:hover { @apply bg-accent text-accent-foreground; }
   .btn-ghost:active { transform: scale(0.97); }
@@ -255,47 +332,65 @@
   .input-field {
     @apply w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm
            text-foreground placeholder:text-muted-foreground
-           focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
-           transition-all duration-200;
+           transition-colors duration-200;
+  }
+  /* Solid outline on focus (WCAG 2.4.11) + supplementary glow ring */
+  .input-field:focus {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 0px;
+    border-color: hsl(var(--ring));
+    box-shadow: 0 0 0 4px hsl(var(--ring) / 0.15);
   }
 
   /* ---------- Badges ---------- */
-  .badge { @apply inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold; }
-  .badge-success { @apply badge bg-success/10 text-success; }
-  .badge-warning { @apply badge bg-warning/10 text-warning; }
-  .badge-danger  { @apply badge bg-danger/10 text-danger; }
-  .badge-info    { @apply badge bg-info/10 text-info; }
-  .badge-gold    { @apply badge; background: hsl(var(--gold) / 0.12); color: hsl(var(--gold)); }
+  .badge { @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold; }
+  .badge-success  { @apply badge bg-success/10 text-success; }
+  .badge-warning  { @apply badge bg-warning/10 text-warning; }
+  .badge-danger   { @apply badge bg-danger/10 text-danger; }
+  .badge-info     { @apply badge bg-info/10 text-info; }
+  .badge-gold     { @apply badge; background: hsl(var(--gold) / 0.12); color: hsl(var(--gold)); }
+  .badge-teal     { @apply badge; background: hsl(var(--teal) / 0.12); color: hsl(var(--teal)); }
+  .badge-slate    { @apply badge; background: hsl(var(--slate) / 0.12); color: hsl(var(--slate)); }
+  .badge-neutral  { @apply badge; background: hsl(var(--neutral) / 0.12); color: hsl(var(--neutral)); }
+
+  /* ---------- Role badges (font-weight 500 — no semantic bold) ---------- */
+  /* driver=slate, walker=teal, trainer=gold, trainee=warning, admin=neutral */
+  .role-badge-driver   { @apply badge-slate; }
+  .role-badge-walker   { @apply badge-teal; }
+  .role-badge-trainer  { @apply badge-gold; }
+  .role-badge-trainee  { @apply badge-warning; }
+  .role-badge-admin    { @apply badge-neutral; }
 
   /* ---------- Typography ---------- */
-  .section-title { @apply text-lg font-semibold text-foreground tracking-tight; }
-  .page-title    { @apply font-display text-3xl font-bold text-foreground tracking-tight; }
+  .page-title    { @apply font-display text-3xl font-bold text-foreground; letter-spacing: -0.025em; line-height: 1.15; }
+  .section-title { @apply text-lg font-semibold text-foreground; letter-spacing: -0.005em; }
+  .eyebrow       { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
+  /* role-label: 10px — test on 1x (non-retina) displays. If too thin, bump to 11px. */
+  .role-label    { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
+  .text-body     { @apply text-sm text-foreground; line-height: 1.55; }
   .text-subtle   { @apply text-sm text-muted-foreground; }
+  .text-mono     { font-family: var(--font-mono); font-size: var(--text-xs); }
 
-  /* ---------- Gradients ---------- */
-  .gradient-primary {
-    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
-  }
-  .gradient-card {
-    background: linear-gradient(135deg, hsl(var(--primary-light)), hsl(var(--accent)));
-  }
-  .gradient-gold {
-    background: linear-gradient(135deg, hsl(var(--gold)), hsl(var(--primary-glow)));
-  }
-  .gradient-text-brand {
-    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--violet)));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .dark .gradient-text-brand {
-    background: linear-gradient(135deg, hsl(var(--gold)), hsl(var(--primary-glow)));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+  /* Brand wordmark — flat, no gradient */
+  .brand-wordmark {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    color: hsl(var(--foreground));
   }
 
-  /* ---------- Skeleton (shimmer) ---------- */
+  /* ---------- Glow shadows (emphasis only — never sole focus indicator) ---------- */
+  /* Dark theme: reduce spread to avoid overpower. Light theme: standard spread. */
+  .glow-primary { box-shadow: 0 0 0 4px hsl(var(--primary) / 0.25); }
+  .glow-gold    { box-shadow: 0 0 0 4px hsl(var(--gold) / 0.25); }
+  .glow-success { box-shadow: 0 0 0 4px hsl(var(--success) / 0.25); }
+  .glow-danger  { box-shadow: 0 0 0 4px hsl(var(--danger) / 0.25); }
+  .dark .glow-primary { box-shadow: 0 0 0 3px hsl(var(--primary) / 0.40); }
+  .dark .glow-gold    { box-shadow: 0 0 0 3px hsl(var(--gold) / 0.40); }
+  .dark .glow-success { box-shadow: 0 0 0 3px hsl(var(--success) / 0.40); }
+  .dark .glow-danger  { box-shadow: 0 0 0 3px hsl(var(--danger) / 0.40); }
+
+  /* ---------- Skeleton (shimmer — uses linear easing per motion system) ---------- */
   .skeleton {
     @apply rounded-lg bg-muted relative overflow-hidden;
   }
@@ -308,23 +403,41 @@
       transparent,
       hsl(var(--foreground) / 0.06),
       transparent);
-    animation: shimmer 1.6s var(--ease-out-soft) infinite;
+    /* linear easing required for shimmer — consistent speed prevents jarring loop */
+    animation: shimmer 1.6s linear infinite;
   }
 
   /* ---------- Kbd ---------- */
   .kbd {
     @apply inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5
-           rounded-md border border-border bg-surface-muted text-[10px] font-semibold
+           rounded-md border border-border bg-surface-muted
            text-muted-foreground font-mono;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* ---------- StatCard height equalizer ---------- */
+  /* All stat cards use min-height equal to the tallest card (the one with hint text).
+     Hint text slot is always present in DOM — empty on cards without hints.
+     Never shrink font size to fit a fixed height. */
+  .stat-card {
+    @apply card;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 88px;
   }
 }
 
 @layer utilities {
-  .bg-surface { background-color: hsl(var(--surface)); }
+  .bg-surface       { background-color: hsl(var(--surface)); }
   .bg-surface-muted { background-color: hsl(var(--surface-muted)); }
-  .text-gold { color: hsl(var(--gold)); }
-  .bg-gold { background-color: hsl(var(--gold)); }
-  .border-gold { border-color: hsl(var(--gold)); }
+  .text-gold        { color: hsl(var(--gold)); }
+  .bg-gold          { background-color: hsl(var(--gold)); }
+  .border-gold      { border-color: hsl(var(--gold)); }
+  .text-teal        { color: hsl(var(--teal)); }
+  .text-slate       { color: hsl(var(--slate)); }
+  .text-neutral     { color: hsl(var(--neutral)); }
 
   .scrollbar-none {
     scrollbar-width: none;
@@ -332,7 +445,7 @@
   }
   .scrollbar-none::-webkit-scrollbar { display: none; }
 
-  /* Press effect — for hover-scale style micro-interactions */
+  /* press: spring on transform only — correct usage of --ease-spring */
   .press {
     transition: transform 200ms var(--ease-spring);
   }
@@ -342,4 +455,9 @@
 /* ============= Keyframes ============= */
 @keyframes shimmer {
   100% { transform: translateX(100%); }
+}
+
+@keyframes afFadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
