@@ -4,14 +4,14 @@ uvicorn
 psycopg2-binary
 pydantic[email]
 pydantic-settings==2.2.1
-pyjwt==2.8.0
-cryptography==42.0.5
+pyjwt==2.12.1
+cryptography==46.0.7
 alembic
 boto3
 redis[asyncio]==5.0.1
 aiohttp==3.13.5
 celery[redis]==5.3.6
-requests==2.31.0
+requests==2.33.0
 pytest
 pytest-mock
 hypothesis
