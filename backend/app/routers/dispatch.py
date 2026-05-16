@@ -706,7 +706,7 @@ async def publish_dispatch(
     # Runs here so manual-only dispatches (no auto-assign) still get training records.
     logger.info("inject_curriculum called date=%s truck_count=%d", dispatch_date, len(assigned_crews))
     cfg = get_company_config(db, caller.company_id)
-    inject_curriculum(db, dispatch_date, assigned_crews, cfg=cfg)
+    inject_curriculum(db, dispatch_date, assigned_crews, cfg=cfg, company_id=caller.company_id)
 
     # Notify the bot via internal webhook
     bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")

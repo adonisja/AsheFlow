@@ -4184,3 +4184,59 @@ Step 3 (invalidation) is only needed for `index.html` because it is the only fil
 | Celery beat | — | Docker on EC2 |
 | PostgreSQL | — | Docker on EC2 |
 | Redis | — | Docker on EC2 |
+
+---
+
+## 2026-05-16 — Test Suite Overhaul, Production Bug Fix, CI Pipeline
+
+### Tests catch bugs that code review misses
+
+Writing `test_training_injection.py` immediately found a production bug that had been present since the multi-tenant migration: `inject_curriculum` never set `company_id` on `TrainingRecord` or `TrainingTask` rows. PostgreSQL enforces NOT NULL — this would have crashed every dispatch with trainees with a `500` error. SQLite in tests is more lenient, which is why it went undetected. The fix was to thread `company_id` through the function signature and pass it to every model constructor.
+
+**Lesson:** When you add a NOT NULL column to a table, grep every service that inserts into that table and verify it sets the new column. A migration alone is not enough.
+
+### conftest helpers must mirror the model's constraints
+
+`make_off_day` and `make_time_off_request` were missing `company_id=employee.company_id`. This caused `IntegrityError` on every test that used them, making tests fail for reasons unrelated to what they were testing. Helper functions in `conftest.py` must always set every NOT NULL column — treat them like production insert code.
+
+### pip-audit as a CI gate
+
+`pip-audit` runs before the test job. If a dependency has a known CVE, the pipeline stops before wasting time on tests. Three packages had accumulated 8 CVEs since they were first pinned: `pyjwt`, `cryptography`, `requests`. Always pin to a specific version AND audit regularly — a package that was safe when you pinned it may have CVEs published later.
+
+```bash
+pip install pip-audit
+pip-audit -r requirements.txt
+```
+
+### GitHub Actions: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24
+
+GitHub deprecated Node.js 20 on Actions runners. The fix is one environment variable at the job level — no need to wait for updated action versions:
+
+```yaml
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+```
+
+### CI pipeline structure: audit → test → deploy
+
+Jobs with `needs:` run sequentially and block on failure. The right order is:
+
+1. `audit` — fail fast on CVEs before spending any compute
+2. `test` — run the suite only if deps are clean
+3. `deploy-prod` — deploy only if tests pass, only on `master` push
+
+Use `if: github.ref == 'refs/heads/master' && github.event_name == 'push'` to prevent deploy from firing on PRs or other branches.
+
+### GitHub Environments and secrets
+
+Sensitive values (server IPs, SSH keys) are stored as GitHub Environment secrets, not hardcoded in the workflow. The workflow reads them via `${{ secrets.NAME }}`. Create environments under repo Settings → Environments, add secrets there, and reference the environment name in the job with `environment: prod`.
+
+### Dev → Staging → Prod promotion model
+
+| Stage | Where | How to progress |
+|---|---|---|
+| Dev | localhost | push branch, run tests locally |
+| Prod (current) | EC2 | merge PR to master — CI auto-deploys |
+| Staging (planned) | second EC2 | PR from master → staging branch |
+
+Until a staging server is provisioned, code goes from localhost directly to prod via master. This is a known gap — staging is planned for 2026-05-19.

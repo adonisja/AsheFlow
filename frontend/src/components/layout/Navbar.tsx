@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, Link } from 'react-router-dom';
 import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../../contexts/AuthContext';
 import axiosClient from '../../api/axiosClient';
@@ -26,8 +26,10 @@ import {
   Info,
   Search,
   BarChart2,
+  UserCircle2,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
+import Avatar from '../ui/Avatar';
 
 // ---------------------------------------------------------------------------
 // Notification bell
@@ -156,7 +158,9 @@ function NotificationDropdown({
 function TitleBar() {
   const { user, groups, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [bellOpen, setBellOpen] = useState(false);
+  const [bellOpen,    setBellOpen]    = useState(false);
+  const [avatarOpen,  setAvatarOpen]  = useState(false);
+  const avatarRef = useRef<HTMLDivElement>(null);
   const { notifications, markRead, markAllRead } = useNotifications(isAuthenticated, groups);
 
   const handleSignOut = async () => {
@@ -167,6 +171,18 @@ function TitleBar() {
       console.error('Error signing out: ', error);
     }
   };
+
+  // Close avatar dropdown on outside click
+  useEffect(() => {
+    if (!avatarOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (avatarRef.current && !avatarRef.current.contains(e.target as Node)) {
+        setAvatarOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [avatarOpen]);
 
   return (
     <div className="w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -224,21 +240,47 @@ function TitleBar() {
             )}
           </div>
 
-          {/* Username */}
-          <span className="hidden md:inline-block text-xs text-muted-foreground font-medium px-2 border-l border-border">
-            {user?.displayName || user?.username}
-          </span>
+          {/* Avatar dropdown */}
+          <div className="relative ml-1" ref={avatarRef}>
+            <button
+              onClick={() => setAvatarOpen(o => !o)}
+              className="flex items-center rounded-full focus:outline-none focus:ring-2 focus:ring-primary/40 press"
+              title="Account"
+            >
+              <Avatar size={32} />
+            </button>
 
-          {/* Sign out */}
-          <button
-            onClick={handleSignOut}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg
-                       text-muted-foreground hover:text-danger hover:bg-danger/5
-                       transition-colors press"
-            title="Sign out"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-          </button>
+            {avatarOpen && (
+              <div className="absolute right-0 top-10 z-50 w-56 rounded-xl border border-border bg-card shadow-lg py-1 animate-slide-up">
+                {/* Identity */}
+                <div className="px-4 py-3 border-b border-border flex items-center gap-3">
+                  <Avatar size={36} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground truncate">{user?.displayName || user?.username}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{groups[0]?.replace('_', ' ') ?? ''}</p>
+                  </div>
+                </div>
+                {/* Actions */}
+                <div className="py-1">
+                  <Link
+                    to="/account"
+                    onClick={() => setAvatarOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2 text-sm text-foreground hover:bg-accent transition-colors"
+                  >
+                    <UserCircle2 className="w-4 h-4 text-muted-foreground" />
+                    My Account
+                  </Link>
+                  <button
+                    onClick={() => { setAvatarOpen(false); handleSignOut(); }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-danger hover:bg-danger/5 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sign out
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

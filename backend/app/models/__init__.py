@@ -26,3 +26,4 @@ from app.models.driver_check_in import DriverCheckIn
 from app.models.rts_clearance import RTSReport, StationHandoff
 from app.models.company import Company, CompanyConfig, CompanyZone
 from app.models.invite_token import InviteToken
+from app.models.shift_session import ShiftSession
