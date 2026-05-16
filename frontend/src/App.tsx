@@ -24,6 +24,7 @@ import TrainingCurriculum from './pages/TrainingCurriculum';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
+import Account from './pages/Account';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
@@ -248,6 +249,14 @@ function App() {
               }
             />
             <Route
+              path="/account"
+              element={
+                <ProtectedRoute>
+                  <Account />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/trainer-dashboard"
               element={
                 <ProtectedRoute allowedRoles={['trainer', 'admin']}>
@@ -371,6 +380,7 @@ function App() {
           >
             <Route path="/superadmin/companies" element={<Companies />} />
             <Route path="/superadmin/companies/:companyId" element={<CompanyDetailWithKey />} />
+            <Route path="/superadmin/account" element={<Account />} />
             <Route path="/superadmin" element={<Navigate to="/superadmin/companies" replace />} />
           </Route>
 

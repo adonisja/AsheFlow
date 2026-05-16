@@ -576,6 +576,7 @@ const Preferences = () => {
               <p className="text-sm text-subtle">Dispatch preferences (favorites & blocks) become available after graduating from the training program.</p>
             </div>
           )}
+
         </div>
       )}
     </div>

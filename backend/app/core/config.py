@@ -1,5 +1,5 @@
 from typing import List
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from urllib.parse import urlparse
 
@@ -92,8 +92,7 @@ class Settings(BaseSettings):
             return ["*"]
         return [h.strip() for h in self.cors_allow_headers.split(",") if h.strip()]
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 

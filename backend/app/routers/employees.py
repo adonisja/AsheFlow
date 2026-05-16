@@ -129,6 +129,15 @@ def create_employee(
         db.commit()
         db.refresh(db_employee)
 
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.create",
+        target_table="employees",
+        target_id=str(db_employee.id),
+        detail={"name": db_employee.name, "role": db_employee.role, "email": db_employee.email},
+    )
     return db_employee
 
 
@@ -224,6 +233,15 @@ def bulk_import_employees(
             except ClientError as e:
                 logger.error("Invite email failed for %s: %s", row.email, e)
 
+        write_audit(
+            db=db,
+            company_id=caller.company_id,
+            actor_id=caller.id,
+            action_type="employee.bulk_create",
+            target_table="employees",
+            target_id=str(db_employee.id),
+            detail={"name": row.name, "role": row.role, "email": str(row.email), "row": i},
+        )
         results.append(BulkImportResult(
             row=i, status="created", name=row.name, email=row.email,
         ))
@@ -441,6 +459,15 @@ def update_employee(
                 db_employee.id, old_group, new_group, e,
             )
 
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.update",
+        target_table="employees",
+        target_id=str(db_employee.id),
+        detail={k: str(v) if v is not None else None for k, v in updates.items()},
+    )
     return db_employee
 
 

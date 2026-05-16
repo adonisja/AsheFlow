@@ -17,8 +17,7 @@ class FeedbackResponse(FeedbackBase):
     created_at: datetime
     sender_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class FeedbackStatusUpdate(BaseModel):
