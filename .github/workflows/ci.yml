@@ -71,6 +71,7 @@ jobs:
 
   # ── 3. DEPLOY TO PROD ──────────────────────────────────────────────────────
   # Triggers on master pushes only, after audit + test pass.
+  # Uses AWS SSM SendCommand — no port 22 needed, no SSH key in secrets.
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
@@ -78,17 +79,58 @@ jobs:
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
     steps:
-      - name: Deploy backend to PROD EC2
-        uses: appleboy/ssh-action@v1.2.2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
-          host: ${{ secrets.PROD_EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.PROD_EC2_SSH_KEY }}
-          script: |
-            cd /home/ubuntu/AsheFlow
-            git pull origin master
-            docker compose build backend
-            docker compose up -d backend
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: Deploy via SSM
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --region us-east-2 \
+            --instance-ids i-095bf2ed310c86741 \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "cd /home/ubuntu/AsheFlow",
+              "git pull origin master",
+              "docker compose build backend",
+              "docker compose up -d backend"
+            ]' \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          # Poll until the command finishes (max ~3 minutes)
+          for i in $(seq 1 18); do
+            sleep 10
+            STATUS=$(aws ssm get-command-invocation \
+              --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id i-095bf2ed310c86741 \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+            echo "[$i] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Deploy succeeded."
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              aws ssm get-command-invocation \
+                --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id i-095bf2ed310c86741 \
+                --query "StandardErrorContent" \
+                --output text
+              echo "Deploy failed with status: $STATUS"
+              exit 1
+            fi
+          done
+          echo "Deploy timed out waiting for SSM command."
+          exit 1
 
   # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
   # TODO: uncomment when staging EC2 is provisioned and secrets are added:
