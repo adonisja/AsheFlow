@@ -2,34 +2,31 @@ name: CI
 
 # PIPELINE GATES
 # ─────────────────────────────────────────────────────────────────────────────
-# Every push to any branch runs the test + audit jobs (fast feedback).
-# Deploys are gated by branch:
-#   • master  → auto-deploy to DEV  (always on green)
-#   • staging → auto-deploy to STAGING (after tests pass)
-#   • prod    → auto-deploy to PROD (after tests pass on prod branch)
+# Every push to any branch runs audit + test (fast feedback).
+# Deploy to prod triggers only on master after both jobs pass.
 #
-# Promotion flow: feature/* → master (dev) → staging → prod
-# Never push directly to staging or prod — always promote via PR.
+# Current environment map:
+#   localhost  → dev  (no CI deploy — run locally)
+#   3.141.169.13 (EC2) → prod  (auto-deploy on green master)
+#
+# Future: add a staging EC2, create a staging branch, uncomment deploy-staging.
 on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [master, staging, prod]
+    branches: [master]
 
 jobs:
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
-  # Runs first — fastest way to catch a bad dep before burning runner minutes.
   audit:
     name: Dependency CVE audit
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       - uses: actions/setup-python@v5
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           python-version: "3.12"
 
@@ -41,19 +38,16 @@ jobs:
         run: pip-audit -r requirements.txt
 
   # ── 2. BACKEND TESTS ───────────────────────────────────────────────────────
-  # SQLite in-memory — no external services needed.
   test:
     name: Backend tests
     runs-on: ubuntu-latest
     needs: audit
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       - uses: actions/setup-python@v5
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           python-version: "3.12"
           cache: "pip"
@@ -75,56 +69,13 @@ jobs:
           AWS_COGNITO_APP_CLIENT_ID: test-client-id
           INTERNAL_SECRET: ci-test-secret-not-real
 
-  # ── 3. DEPLOY TO DEV ───────────────────────────────────────────────────────
-  # Triggers only on pushes to master. SSH into EC2, pull, rebuild container.
-  deploy-dev:
-    name: Deploy → DEV
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    environment: dev
-    steps:
-      - name: Deploy backend to DEV EC2
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.DEV_EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.DEV_EC2_SSH_KEY }}
-          script: |
-            cd /home/ubuntu/AsheFlow
-            git pull origin master
-            docker compose build backend
-            docker compose up -d backend
-
-  # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
-  # Triggers only on pushes to the staging branch (promoted via PR from master).
-  deploy-staging:
-    name: Deploy → STAGING
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
-    environment: staging
-    steps:
-      - name: Deploy backend to STAGING EC2
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.STAGING_EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.STAGING_EC2_SSH_KEY }}
-          script: |
-            cd /home/ubuntu/AsheFlow
-            git pull origin staging
-            docker compose build backend
-            docker compose up -d backend
-
-  # ── 5. DEPLOY TO PROD ──────────────────────────────────────────────────────
-  # Triggers only on pushes to the prod branch. Requires manual approval via
-  # GitHub Environment protection rules — add a required reviewer in repo Settings.
+  # ── 3. DEPLOY TO PROD ──────────────────────────────────────────────────────
+  # Triggers on master pushes only, after audit + test pass.
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/prod' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
     steps:
       - name: Deploy backend to PROD EC2
@@ -135,6 +86,29 @@ jobs:
           key: ${{ secrets.PROD_EC2_SSH_KEY }}
           script: |
             cd /home/ubuntu/AsheFlow
-            git pull origin prod
+            git pull origin master
             docker compose build backend
             docker compose up -d backend
+
+  # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
+  # TODO: uncomment when staging EC2 is provisioned and secrets are added:
+  #       STAGING_EC2_HOST, STAGING_EC2_SSH_KEY
+  #
+  # deploy-staging:
+  #   name: Deploy → STAGING
+  #   runs-on: ubuntu-latest
+  #   needs: test
+  #   if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+  #   environment: staging
+  #   steps:
+  #     - name: Deploy backend to STAGING EC2
+  #       uses: appleboy/ssh-action@v1.2.2
+  #       with:
+  #         host: ${{ secrets.STAGING_EC2_HOST }}
+  #         username: ubuntu
+  #         key: ${{ secrets.STAGING_EC2_SSH_KEY }}
+  #         script: |
+  #           cd /home/ubuntu/AsheFlow
+  #           git pull origin staging
+  #           docker compose build backend
+  #           docker compose up -d backend

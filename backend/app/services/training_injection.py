@@ -1,6 +1,7 @@
 import logging
 from datetime import date, datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
+from uuid import UUID
 from sqlalchemy.orm import Session
 from app.models.training import TrainingRecord, TrainingTask, TrainingCurriculum
 from app.models.employee import Employee
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 MAX_CURRICULUM_PHASE = 4
 
 
-def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, List[Dict]], cfg: ResolvedConfig = None) -> None:
+def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, List[Dict]], cfg: ResolvedConfig = None, company_id: Optional[UUID] = None) -> None:
     """
     Hook called at dispatch publish time to auto-generate daily training records
     for all trainees assigned today.
@@ -139,6 +140,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
             current_day_number=current_phase,
             phase_closed=False,
             extended=False,
+            company_id=company_id,
         )
         db.add(new_record)
         db.flush()
@@ -172,6 +174,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
                 record_type="coverage",
                 debt_age=new_debt_age,
                 is_escalated=new_debt_age >= (cfg.debt_escalation_threshold if cfg else 3),
+                company_id=company_id,
             )
             db.add(debt_task)
 
@@ -187,6 +190,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
                     record_type="demonstration",
                     is_mandatory=True,
                     is_training_debt=False,
+                    company_id=company_id,
                 )
                 db.add(new_task)
         else:
@@ -203,6 +207,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
                     record_type="coverage",
                     is_mandatory=ct.is_mandatory,
                     is_training_debt=False,
+                    company_id=company_id,
                 )
                 db.add(new_task)
 

@@ -15,7 +15,7 @@ KEY CONCEPTS:
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 SEED_COMPANY_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
 
@@ -41,6 +41,7 @@ from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
 from app.models.notification import Notification
 from app.models.time_off_request import TimeOffRequest
 from app.models.company import Company, CompanyConfig
+from app.models.shift_session import ShiftSession
 
 # Collect only the Table objects for models we actually need in tests.
 # Any model imported above registers its Table in Base.metadata.
@@ -64,6 +65,7 @@ DISPATCH_TABLES = [
     Notification.__table__,
     TimeOffRequest.__table__,
     CompanyConfig.__table__,
+    ShiftSession.__table__,
 ]
 
 
@@ -225,6 +227,7 @@ def make_off_day(db, employee: Employee, day_of_week: str, status: str = "approv
     """Insert a recurring off-day for an employee."""
     off = EmployeeOffDay(
         id=uuid.uuid4(),
+        company_id=employee.company_id,
         employee_id=employee.id,
         day_of_week=day_of_week,
         status=status,
@@ -233,3 +236,73 @@ def make_off_day(db, employee: Employee, day_of_week: str, status: str = "approv
     db.commit()
     db.refresh(off)
     return off
+
+
+def make_time_off_request(db, employee: Employee, target_date: date, status: str = "approved") -> TimeOffRequest:
+    """Insert an approved PTO request for an employee on a specific date."""
+    tor = TimeOffRequest(
+        id=uuid.uuid4(),
+        company_id=employee.company_id,
+        employee_id=employee.id,
+        date=target_date,
+        status=status,
+    )
+    db.add(tor)
+    db.commit()
+    db.refresh(tor)
+    return tor
+
+
+def make_curriculum(db, day_number: int, topic_title: str, is_mandatory: bool = True,
+                    category: str = "app_setup", record_type: str = "coverage") -> TrainingCurriculum:
+    """Insert a curriculum item for a given phase (day_number)."""
+    item = TrainingCurriculum(
+        id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
+        day_number=day_number,
+        topic_title=topic_title,
+        description=f"Description for {topic_title}",
+        is_mandatory=is_mandatory,
+        category=category,
+        record_type=record_type,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def make_training_record(db, trainee: Employee, trainer: Employee, record_date: date,
+                         phase: int = 1, phase_closed: bool = False) -> TrainingRecord:
+    """Insert a TrainingRecord for a trainee on a given date."""
+    rec = TrainingRecord(
+        id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
+        trainee_id=trainee.id,
+        trainer_id=trainer.id,
+        record_date=record_date,
+        current_day_number=phase,
+        phase_closed=phase_closed,
+        extended=False,
+        is_locked=False,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
+def make_shift_session(db, driver: Employee, current_gate: int = 1,
+                       completed_at=None) -> ShiftSession:
+    """Insert a ShiftSession for a driver."""
+    session = ShiftSession(
+        id=uuid.uuid4(),
+        company_id=SEED_COMPANY_ID,
+        driver_id=driver.id,
+        current_gate=current_gate,
+        completed_at=completed_at,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
