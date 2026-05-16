@@ -4240,3 +4240,19 @@ Sensitive values (server IPs, SSH keys) are stored as GitHub Environment secrets
 | Staging (planned) | second EC2 | PR from master → staging branch |
 
 Until a staging server is provisioned, code goes from localhost directly to prod via master. This is a known gap — staging is planned for 2026-05-19.
+
+### Stale frontend builds cause silent mixed content bugs
+
+A `.env.production` fix does nothing unless you rebuild and redeploy. Vite bakes env vars into the JS bundle at build time — there is no runtime resolution. If you change `VITE_API_URL` or any other env var, you must:
+
+```bash
+npm run build                          # rebuilds with current .env.production
+aws s3 sync dist/ s3://your-bucket/ …  # uploads new assets
+aws cloudfront create-invalidation …   # busts index.html cache
+```
+
+Skipping any step leaves the old bundle on S3/CloudFront. Users get the stale version until their browser cache expires (up to 1 year for immutable assets).
+
+**Symptom to watch for:** Mixed content errors that only affect one role or one page — this usually means one view uses an endpoint that was baked in with the wrong protocol before a `.env.production` correction was deployed.
+
+**Long-term fix:** Add the frontend build + S3 sync to CI so it runs automatically on every master merge, same as the backend deploy.
