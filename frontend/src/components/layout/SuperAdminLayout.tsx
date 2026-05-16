@@ -1,10 +1,12 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Shield, Building2, ChevronLeft } from 'lucide-react';
+import { Shield, Building2, LogOut, UserCircle2 } from 'lucide-react';
+import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
 
 const NAV = [
-  { to: '/superadmin/companies', label: 'Companies', icon: Building2 },
+  { to: '/superadmin/companies', label: 'Companies',  icon: Building2  },
+  { to: '/superadmin/account',   label: 'My Account', icon: UserCircle2 },
 ];
 
 export default function SuperAdminLayout() {
@@ -57,11 +59,11 @@ export default function SuperAdminLayout() {
           <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
             <button
-              onClick={() => navigate('/')}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              onClick={async () => { try { await signOut(); } finally { navigate('/login'); } }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-danger hover:bg-danger/5 transition-colors"
             >
-              <ChevronLeft className="w-3.5 h-3.5" />
-              Exit
+              <LogOut className="w-3.5 h-3.5" />
+              Sign out
             </button>
           </div>
         </div>

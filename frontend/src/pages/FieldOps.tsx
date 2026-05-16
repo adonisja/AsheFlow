@@ -1399,6 +1399,246 @@ function DriverInspectionHistoryPanel({ employeeId }: { employeeId: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Gate progress bar
+// ---------------------------------------------------------------------------
+const GATE_LABELS = ['Pre-Shift', 'Station Loading', 'Route', 'Return', 'End of Day'];
+
+function GateProgressBar({ currentGate }: { currentGate: number }) {
+  return (
+    <div className="card py-3 px-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Shift Progress</span>
+        <span className="text-xs font-medium text-foreground">{GATE_LABELS[currentGate - 1]}</span>
+      </div>
+      <div className="flex gap-1">
+        {GATE_LABELS.map((label, i) => (
+          <div
+            key={label}
+            title={label}
+            className={`h-1.5 flex-1 rounded-full transition-colors ${
+              i + 1 < currentGate  ? 'bg-success' :
+              i + 1 === currentGate ? 'bg-primary' :
+              'bg-border'
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Driver gated view
+// ---------------------------------------------------------------------------
+type ShiftSession = {
+  id: string;
+  current_gate: number;
+  started_at: string;
+  gate_1_completed_at: string | null;
+  gate_2_completed_at: string | null;
+  gate_3_completed_at: string | null;
+  gate_4_completed_at: string | null;
+  completed_at: string | null;
+};
+
+function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
+  const [session,       setSession]       = useState<ShiftSession | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [advancing,     setAdvancing]     = useState(false);
+  const [skipOpen,      setSkipOpen]      = useState(false);
+  const [error,         setError]         = useState('');
+
+  const loadSession = useCallback(async () => {
+    try {
+      const res = await axiosClient.get<ShiftSession | null>('/shift-sessions/me/active');
+      setSession(res.data ?? null);
+    } catch {
+      setSession(null);
+    } finally {
+      setSessionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSession(); }, [loadSession]);
+
+  const startShift = async () => {
+    setAdvancing(true);
+    setError('');
+    try {
+      const res = await axiosClient.post<ShiftSession>('/shift-sessions/');
+      setSession(res.data);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to start shift.');
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
+  const advanceGate = async () => {
+    if (!session) return;
+    setAdvancing(true);
+    setError('');
+    try {
+      const res = await axiosClient.patch<ShiftSession>('/shift-sessions/me/active/advance');
+      setSession(res.data);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to advance gate.');
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
+  const skipToGate = async (gate: number) => {
+    setAdvancing(true);
+    setError('');
+    try {
+      const res = await axiosClient.patch<ShiftSession>(`/shift-sessions/me/active/skip-to/${gate}`);
+      setSession(res.data);
+      setSkipOpen(false);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to skip gate.');
+    } finally {
+      setAdvancing(false);
+    }
+  };
+
+  if (sessionLoading) {
+    return <div className="card text-center py-10 text-subtle text-sm">Loading shift status…</div>;
+  }
+
+  // No active session — prompt to start shift
+  if (!session) {
+    return (
+      <div className="card text-center py-10 space-y-4">
+        <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto">
+          <LogIn className="w-7 h-7 text-primary" />
+        </div>
+        <div>
+          <h2 className="text-lg font-bold text-foreground">Ready to start your shift?</h2>
+          <p className="text-sm text-subtle mt-1">Tap below to begin. You'll be guided through each step.</p>
+        </div>
+        {error && <p className="text-sm text-danger">{error}</p>}
+        <button onClick={startShift} disabled={advancing} className="btn-primary px-6 py-2.5 flex items-center gap-2 mx-auto">
+          {advancing && <span className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
+          Start Shift
+        </button>
+      </div>
+    );
+  }
+
+  // Shift complete
+  if (session.completed_at) {
+    return (
+      <div className="card text-center py-10 space-y-3">
+        <CheckCircle2 className="w-12 h-12 text-success mx-auto" />
+        <h2 className="text-lg font-bold text-foreground">Shift Complete</h2>
+        <p className="text-sm text-subtle">Great work. See you next shift.</p>
+        <DriverInspectionHistoryPanel employeeId={employeeId} />
+      </div>
+    );
+  }
+
+  const gate = session.current_gate;
+
+  const completeGateButton = (label: string) => (
+    <div className="pt-2">
+      {error && <p className="text-sm text-danger mb-2">{error}</p>}
+      <button
+        onClick={advanceGate}
+        disabled={advancing}
+        className="btn-primary w-full py-2.5 flex items-center justify-center gap-2"
+      >
+        {advancing && <span className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
+        {label}
+      </button>
+    </div>
+  );
+
+  const skipButton = () => (
+    <div className="pt-1 text-center">
+      <button
+        onClick={() => setSkipOpen(o => !o)}
+        className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+      >
+        Blocked? Skip to next gate
+      </button>
+      {skipOpen && (
+        <div className="mt-2 flex flex-wrap gap-2 justify-center">
+          {GATE_LABELS.slice(gate).map((label, i) => (
+            <button
+              key={label}
+              onClick={() => skipToGate(gate + 1 + i)}
+              disabled={advancing}
+              className="text-xs px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-accent transition-colors"
+            >
+              Skip to {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <GateProgressBar currentGate={gate} />
+
+      {/* Gate 1 — Pre-shift */}
+      {gate === 1 && (
+        <div className="space-y-4">
+          <CheckInPanel employeeId={employeeId} />
+          <InspectionPanel employeeId={employeeId} />
+          <FuelMileagePanel employeeId={employeeId} />
+          {completeGateButton('Ready — Heading to Station →')}
+          {skipButton()}
+        </div>
+      )}
+
+      {/* Gate 2 — Station loading */}
+      {gate === 2 && (
+        <div className="space-y-4">
+          <DeparturePanel employeeId={employeeId} />
+          {completeGateButton('Departed — On Route →')}
+          {skipButton()}
+        </div>
+      )}
+
+      {/* Gate 3 — Route */}
+      {gate === 3 && (
+        <div className="space-y-4">
+          <AnchorPointPanel employeeId={employeeId} />
+          <CheckInPanel employeeId={employeeId} />
+          <WalkerRatingPanel employeeId={employeeId} />
+          {completeGateButton('RTS Approved — Returning to Station →')}
+          {skipButton()}
+        </div>
+      )}
+
+      {/* Gate 4 — Return to station */}
+      {gate === 4 && (
+        <div className="space-y-4">
+          <ReturnPanel employeeId={employeeId} />
+          {completeGateButton('Handed Off — Finishing Up →')}
+          {skipButton()}
+        </div>
+      )}
+
+      {/* Gate 5 — EOD */}
+      {gate === 5 && (
+        <div className="space-y-4">
+          <FuelMileagePanel employeeId={employeeId} />
+          <InspectionPanel employeeId={employeeId} />
+          {completeGateButton('Sign Out — End Shift')}
+          {skipButton()}
+        </div>
+      )}
+
+      <DriverInspectionHistoryPanel employeeId={employeeId} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 export default function FieldOps() {
   const { groups, user } = useAuth();
   const isOversight = groups.some(r => ['admin', 'management', 'dispatch'].includes(r));
@@ -1407,7 +1647,6 @@ export default function FieldOps() {
 
   const [employeeId, setEmployeeId] = useState('');
 
-  // Resolve the logged-in user's employee DB record (only needed for field staff view)
   useEffect(() => {
     if (isOversight || !user) return;
     axiosClient.get('/employees/me')
@@ -1415,9 +1654,7 @@ export default function FieldOps() {
       .catch(() => {});
   }, [user, isOversight]);
 
-  if (isOversight) {
-    return <AdminFieldOpsView />;
-  }
+  if (isOversight) return <AdminFieldOpsView />;
 
   if (!employeeId) {
     return (
@@ -1431,14 +1668,7 @@ export default function FieldOps() {
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
-      {isDriver && <CheckInPanel employeeId={employeeId} />}
-      {isDriver && <InspectionPanel employeeId={employeeId} />}
-      {isDriver && <FuelMileagePanel employeeId={employeeId} />}
-      {isDriver && <DeparturePanel employeeId={employeeId} />}
-      {isDriver && <ReturnPanel employeeId={employeeId} />}
-      {isDriver && <AnchorPointPanel employeeId={employeeId} />}
-      {isDriver && <WalkerRatingPanel employeeId={employeeId} />}
-      {isDriver && <DriverInspectionHistoryPanel employeeId={employeeId} />}
+      {isDriver && <DriverFieldOpsView employeeId={employeeId} />}
       {isWalker && <WalkerSelfPerformancePanel employeeId={employeeId} />}
     </div>
   );
