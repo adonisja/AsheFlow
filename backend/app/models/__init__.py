@@ -27,3 +27,4 @@ from app.models.rts_clearance import RTSReport, StationHandoff
 from app.models.company import Company, CompanyConfig, CompanyZone
 from app.models.invite_token import InviteToken
 from app.models.shift_session import ShiftSession
+from app.models.walker_route import WalkerRoute, WalkerTrip, LocationDifficultyFlag, MisroutedPackageFlag
