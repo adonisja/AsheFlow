@@ -39,6 +39,7 @@ env/
 .env.local
 .env.*.local
 *.env
+frontend/.env.production
 
 # Database
 *.db
@@ -100,10 +101,29 @@ fix_walkers.py
 bot/.env
 backend/.env
 interview_prep.md
+interview_prep_accenture_tdp.md
+resume_accenture_tdp.md
+rectification_report.md
 
 # Celery runtime state
 celerybeat-schedule
 celerybeat.pid
+
+# Proprietary business logic — not included in public repository
+backend/app/services/calculate_weights.py
+backend/app/services/run_dispatch.py
+backend/app/services/assign_drivers.py
+backend/app/services/assign_trainers.py
+backend/app/services/assign_trainees.py
+backend/app/services/assign_walkers.py
+backend/app/services/rebalance_crews.py
+backend/app/services/resolve_conflict.py
+backend/app/services/ban_override.py
+backend/app/services/route_sort.py
+backend/app/services/score_phase4.py
+backend/app/routers/dispatch.py
+backend/app/routers/training.py
+backend/app/routers/field_ops.py
 
 # Auth tokens and credentials (never commit these)
 .claude/token.json
