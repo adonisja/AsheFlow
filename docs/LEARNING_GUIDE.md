@@ -1,3 +1,224 @@
+## 2026-05-24 Alembic Migrations: `default` vs `server_default` and Type Delivery
+
+### The difference between `default` and `server_default`
+
+Both set a column's default value, but they operate at different layers:
+
+| | `default` | `server_default` |
+|---|---|---|
+| Where it runs | Python / ORM layer | Database layer |
+| When it fires | Before the INSERT is sent | At INSERT time inside PostgreSQL |
+| Bypassed by raw SQL? | Yes — raw SQL skips the ORM | No — database always applies it |
+| Type | Python value (True, 0, uuid4) | String of raw SQL or `sa.text()` |
+
+```python
+# Python-side — ORM sets this before sending INSERT
+is_active = Column(Boolean, default=True)
+
+# Database-side — PostgreSQL sets this at INSERT time
+is_active = Column(Boolean, server_default="true")
+```
+
+`server_default` is preferred for production columns because:
+- It applies even when rows are inserted via raw SQL (migrations, scripts, manual fixes)
+- The database is the single source of truth — no dependency on the ORM being used
+- Consistent with how `created_at` timestamps work across the codebase
+
+### Why `server_default` takes a string, not a Python value
+
+`server_default` is a **raw SQL fragment** pasted directly into the `CREATE TABLE` statement. SQLAlchemy needs it as a string because it doesn't know how to serialize arbitrary Python values into SQL syntax.
+
+When you write:
+```python
+server_default="true"
+```
+
+PostgreSQL receives:
+```sql
+is_active BOOLEAN DEFAULT true
+```
+
+`true` there is a PostgreSQL boolean literal — not a Python string. The string in your migration file is just the delivery mechanism. The column stores and returns real booleans.
+
+If you passed `server_default=True` (Python bool), SQLAlchemy would raise an error — it can't serialize a Python bool into a SQL fragment automatically.
+
+**Common `server_default` values by type:**
+
+| Column type | server_default value |
+|---|---|
+| Boolean | `"true"` or `"false"` |
+| Integer | `"0"` or `"1"` |
+| Timestamp | `sa.func.now()` |
+| Text/String | `"'pending'"` (note the inner quotes — it's SQL string syntax) |
+| Array | `"{}"` |
+
+### Alembic migration file structure
+
+Every migration file follows this pattern:
+
+```python
+"""short description of what this migration does
+
+Revision ID: abc123
+Revises: xyz789
+Create Date: 2026-05-24
+"""
+import uuid
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID, JSONB  # import dialect types you need
+
+revision = 'abc123'
+down_revision = 'xyz789'   # the migration this builds on top of
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "table_name",
+        sa.Column("id", UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
+        sa.Column("fk_col", UUID(as_uuid=True), sa.ForeignKey("other_table.id", ondelete="CASCADE"), nullable=False),
+        # ForeignKey is a separate argument to sa.Column(), NOT nested inside UUID()
+    )
+    op.create_index("ix_table_name_col", "table_name", ["col"])
+
+
+def downgrade() -> None:
+    op.drop_table("table_name")  # reverse order if multiple tables
+```
+
+**Key syntax rules:**
+- `ForeignKey` is an argument to `sa.Column()`, not nested inside the type: `sa.Column("x", UUID(as_uuid=True), sa.ForeignKey(...))`  not `sa.Column("x", UUID(as_uuid=True, sa.ForeignKey(...)))`
+- Index naming convention: `ix_<table_name>_<column_name>`
+- `downgrade()` drops tables in reverse creation order (child tables before parent tables)
+- `ondelete="CASCADE"` vs `ondelete="SET NULL"` — CASCADE deletes children when parent is deleted; SET NULL nullifies the FK instead (requires `nullable=True` on the column)
+
+---
+
+## 2026-05-19 Geographic Data: Coordinates and Point-in-Polygon
+
+### Coordinates
+
+Every point on Earth is identified by two numbers:
+
+- **Latitude** — how far north or south you are. Measured in degrees from the equator (0°). Increases as you go north. New York is ~40.7° N. Walking uptown = latitude increases.
+- **Longitude** — how far east or west you are. Measured in degrees from the prime meridian (runs through London). West of London is negative. New York is ~-74°. Walking east = longitude becomes less negative.
+
+A delivery stop becomes a coordinate pair:
+```
+(40.758, -73.997)  ← approximately 42nd St & 9th Ave, Manhattan
+```
+
+In Manhattan's grid: latitude tracks north-south (streets), longitude tracks east-west (avenues).
+
+### Polygons
+
+A geographic zone boundary is stored as a **polygon** — an ordered list of corner points connected by straight lines. The last point connects back to the first to close the shape.
+
+```python
+truck_zone = [
+    {"lat": 40.771, "lng": -74.002},  # top-left
+    {"lat": 40.771, "lng": -73.993},  # top-right
+    {"lat": 40.746, "lng": -73.993},  # bottom-right
+    {"lat": 40.746, "lng": -74.002},  # bottom-left
+]
+```
+
+More vertices = more precise boundary. A simple rectangle needs 4 points. An irregular urban zone may need 12–20.
+
+Stored in PostgreSQL as **JSONB** (list of `{lat, lng}` dicts). No geometry extension needed for the ray casting approach.
+
+### Point-in-Polygon: Ray Casting Algorithm
+
+**The question:** is a delivery coordinate inside a truck's zone polygon?
+
+**The algorithm:**
+1. Draw an imaginary ray from the point going east (increasing longitude)
+2. Count how many polygon edges that ray crosses
+3. **Odd crossings = inside. Even crossings = outside.**
+
+**Why it works:** any straight line starting inside a closed shape must cross the boundary an odd number of times to exit. Starting outside, you cross in and back out — always even.
+
+**Visual examples:**
+
+```
+Inside (1 crossing):
+    ___________
+   |           |
+   |  • ——————————>
+   |___________|
+                ↑ 1 crossing = odd = INSIDE
+
+Outside (2 crossings):
+    ___________
+   |           |
+• ———————————————————>
+   |___________|
+    ↑         ↑
+  enter      exit   = 2 crossings = even = OUTSIDE
+
+Outside (0 crossings):
+    ___________
+   |           |
+   |___________|
+
+• ————————————————>   (ray misses entirely)
+                    = 0 crossings = even = OUTSIDE
+```
+
+### The Implementation
+
+```python
+def point_in_polygon(lat: float, lng: float, polygon: list[dict]) -> bool:
+    n = len(polygon)
+    crossings = 0
+    for i in range(n):
+        current_point = polygon[i]
+        next_point = polygon[(i + 1) % n]      # % n wraps last → first
+        # Does this edge straddle our latitude?
+        if (current_point["lat"] > lat) != (next_point["lat"] > lat):
+            # Find the longitude where this edge crosses our latitude
+            cross_lng = (
+                current_point["lng"]
+                + (lat - current_point["lat"])
+                / (next_point["lat"] - current_point["lat"])
+                * (next_point["lng"] - current_point["lng"])
+            )
+            if cross_lng > lng:     # crossing is to the east = counts
+                crossings += 1
+    return crossings % 2 == 1
+```
+
+**Key details:**
+
+- `(i + 1) % n` — modulo wraps the last index back to 0, closing the polygon automatically
+- `(current["lat"] > lat) != (next["lat"] > lat)` — True only when one endpoint is above our latitude and the other is below (straddles it). If both above or both below, the ray can't cross this edge.
+- `cross_lng` formula — linear interpolation: finds how far along the edge (as a 0–1 fraction) our latitude sits, then scales that to find the corresponding longitude
+- `cross_lng > lng` — only count the crossing if it's east of (to the right of) our point
+
+### How It's Used in AsheFlow (Tier 1 Verification)
+
+Every tote has a destination coordinate from the Cortex manifest. Every truck has a zone polygon stored in `TruckZone.polygon` (JSONB). Tier 1 verification runs `point_in_polygon` for each tote against its assigned truck's zone. If the tote's destination falls outside that zone, it's a Tier 1 misroute — flagged before the trucks leave the station.
+
+### Three-Level Geographic Hierarchy
+
+```
+DSP Zone (company-wide)
+  └── Truck Zones  — semi-fixed polygons, defined by management via map drawing UI
+        └── Walker Clusters — fully dynamic, recomputed daily from today's package coordinates
+```
+
+- **DSP Zone** — derived as union of all truck zones, not stored separately
+- **Truck Zones** — stored in `TruckZone` table as JSONB polygon; drawn in UI using Leaflet map library
+- **Walker Clusters** — ephemeral; computed at sort time from coordinates, never persisted
+
+### Overlap and Gaps
+
+Real-world truck zones often overlap or have gaps between them. A point in an overlap zone could legitimately belong to either truck — Tier 1 verification surfaces it for dispatch to resolve. A point in a gap belongs to no truck — flagged as a data quality issue.
+
+---
+
 ## 2026-05-08 Multi-Tenant: Super Admin Dependency Pattern
 
 When a platform-level identity needs API access but has no row in the `employees` table, do not force one. Create a separate dependency that stops at the JWT:

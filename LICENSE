@@ -1,0 +1,61 @@
+Business Source License 1.1
+
+Parameters
+
+  Licensor:             Akkeem Tyrell
+  Licensed Work:        AsheFlow
+                        The Licensed Work is (c) 2024-2026 Akkeem Tyrell
+  Additional Use Grant: You may use the Licensed Work for personal, educational,
+                        or internal evaluation purposes only, provided that such
+                        use does not include offering the Licensed Work or a
+                        derivative of it as a commercial product or service.
+  Change Date:          2030-05-24
+  Change License:       Apache License, Version 2.0
+
+-------------------------------------------------------------------------------
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under
+the terms of the Change License, and these terms do not apply to that version
+of the Licensed Work anymore.
+
+License Grant. Subject to the terms and conditions of this License, the
+Licensor hereby grants you a non-exclusive, worldwide, non-sublicensable,
+non-transferable license to:
+  - Use the Licensed Work for non-commercial, non-production purposes only.
+  - View and study the source code for personal learning or evaluation.
+
+Restrictions. Without a separate commercial license agreement signed by the
+Licensor, you may not:
+  - Offer the Licensed Work or a derivative of it as a hosted or managed service
+    to third parties.
+  - Use the Licensed Work or a derivative of it to provide services to third
+    parties in exchange for payment.
+  - Sublicense, sell, rent, lease, transfer, or otherwise make the Licensed Work
+    available to third parties for commercial purposes.
+  - Use the Licensed Work or any portion of it to train machine learning models,
+    artificial intelligence systems, or similar technologies, or include it in
+    any dataset used for such purposes.
+
+Notice. You must retain this License notice in all copies or substantial
+portions of the Licensed Work.
+
+Disclaimer. THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF, OR
+IN CONNECTION WITH THE LICENSED WORK OR THE USE OR OTHER DEALINGS IN THE
+LICENSED WORK.
+
+For commercial licensing inquiries, please contact: akkeem.tyrell@student.mec.cuny.edu
+
+Full BSL 1.1 license text: https://mariadb.com/bsl11/
