@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://asheflow.com"><strong>🌐 Live App</strong></a> ·
   <a href="https://api.asheflow.com/api/v1/docs"><strong>📖 API Docs</strong></a> ·
-  <a href="docs/decisions/"><strong>📐 ADRs</strong></a> ·
+  <a href="docs/ARCHITECTURE.md"><strong>📐 Architecture</strong></a> ·
   <a href="docs/LEARNING_GUIDE.md"><strong>📚 Learning Guide</strong></a>
 </p>
 
@@ -326,10 +326,8 @@ AsheFlow/
 │       ├── hooks/               # useConfirm, useDebounce, etc.
 │       └── pages/               # 23 route pages
 ├── docs/
-│   ├── decisions/               # 91 ADRs
-│   ├── journals/                # Per-session development logs
 │   ├── LEARNING_GUIDE.md        # Accumulated design lessons
-│   └── ARCHITECTURE.md
+│   └── ARCHITECTURE.md          # Full system architecture
 └── docker-compose.yml
 ```
 
@@ -356,15 +354,17 @@ AsheFlow/
 
 ## Key Design Decisions
 
-See [`docs/decisions/`](docs/decisions/) for full ADRs (91 total). Highlights:
+Architectural decisions are documented internally (91 ADRs). Key areas covered:
 
-- **[ADR-002/003](docs/decisions/ADR-002-Dispatch-Algorithm-Design.md)** — weighted dispatch algorithm design and implementation
-- **[ADR-039](docs/decisions/ADR-039-Discord-Bot-Phase1-Dispatch-Confirmation.md)** — Discord bot architecture and two-phase dispatch flow
-- **[ADR-063/064](docs/decisions/ADR-063-Multi-Tenant-Company-Tables.md)** — multi-tenant data model and company_id isolation strategy
-- **[ADR-080](docs/decisions/ADR-080-Multi-Tenant-Provisioning-SuperAdmin.md)** — super admin panel and tenant provisioning flow
-- **[ADR-082](docs/decisions/ADR-082-Discord-Multi-Guild-Per-Company.md)** — per-company Discord config, one bot serving multiple guilds
-- **[ADR-084](docs/decisions/ADR-084-Employee-List-Tenant-Scope-Fix.md)** — RoleChecker vs get_caller_employee and the tenant isolation audit rule
-- **[ADR-091](docs/decisions/ADR-091-Walker-Route-Distribution-Algorithm.md)** — two-tier package routing architecture and geographic clustering design
+- Weighted dispatch algorithm design and fill-order logic
+- Discord bot architecture and two-phase dispatch flow
+- Multi-tenant data model and `company_id` isolation strategy
+- Super admin panel and tenant provisioning flow
+- Per-company Discord config with one bot serving multiple guilds
+- `RoleChecker` vs `get_caller_employee` and the tenant isolation audit rule
+- Two-tier package routing architecture and geographic clustering design
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system architecture.
 
 ---
 

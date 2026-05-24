@@ -92,6 +92,10 @@ Thumbs.db
 .DS_Store
 
 
+# Proprietary design documentation
+docs/decisions/
+docs/journals/
+
 # Personal records and scratch files
 .claude/
 discussion.md
