@@ -1,363 +1,271 @@
-# AsheFlow Architecture Documentation
+# AsheFlow — Architecture
 
-## System Architecture Overview
+## Overview
 
-AsheFlow is built as a multi-tenant B2B SaaS platform with a microservices-oriented monolithic architecture, designed to scale horizontally as the business grows.
+AsheFlow is a multi-tenant B2B SaaS platform for Amazon DSP crew management and dispatch. It runs as a monolith (one FastAPI process) with a separate Celery worker process for background tasks and a standalone Discord bot service. All three share one PostgreSQL database and one Redis instance.
 
-## High-Level Architecture
+There is no mobile app, no GraphQL layer, no microservices split, and no API gateway. This is a deliberate choice — the platform serves a focused operational domain and the monolith keeps deployment, debugging, and feature development straightforward at this scale.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Client Applications                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Web App     │  │  Mobile App  │  │  Admin Panel │      │
-│  │  (React)     │  │(React Native)│  │   (React)    │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      API Gateway / Load Balancer             │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Backend Services (FastAPI)                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │     Auth     │  │   Crew Mgmt  │  │ Time Tracking│      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Logistics   │  │   Payroll    │  │  Reporting   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                ┌───────────┴───────────┐
-                ▼                       ▼
-┌─────────────────────────┐  ┌─────────────────────────┐
-│    PostgreSQL Database  │  │    Redis Cache/Queue    │
-└─────────────────────────┘  └─────────────────────────┘
-                ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Celery Workers                            │
-│  (Background tasks, payroll, notifications, reports)         │
-└─────────────────────────────────────────────────────────────┘
-```
+---
 
-## Multi-Tenancy Design
-
-### Strategy: Shared Database with Tenant Isolation
-
-Every table includes a `tenant_id` (company_id) column to ensure data isolation.
-
-**Key Benefits:**
-- Cost-effective for scaling
-- Easier maintenance
-- Simplified backups
-
-**Security Measures:**
-- Row-Level Security (RLS) in PostgreSQL
-- Middleware-level tenant validation
-- Tenant context in all queries
-
-### Data Model Structure
-
-```python
-# Every model inherits from TenantBase
-class TenantBase:
-    tenant_id: UUID
-    created_at: DateTime
-    updated_at: DateTime
-    is_active: Boolean
-```
-
-## Core Modules
-
-### 1. Authentication & Authorization
-
-**Technologies:**
-- OAuth2 with Password Flow (and Bearer tokens)
-- JWT tokens (Access + Refresh)
-- Password hashing with bcrypt
-
-**User Roles:**
-- `super_admin` - Platform administrator
-- `company_admin` - Company owner/manager
-- `manager` - Team/crew manager
-- `driver` - Delivery associate
-- `dispatcher` - Logistics coordinator
-
-**Permissions:**
-- Role-based access control (RBAC)
-- Resource-level permissions
-- Tenant-specific permissions
-
-### 2. Crew Management
-
-**Features:**
-- Employee profiles (personal info, emergency contacts)
-- Team/crew assignments
-- Vehicle assignments
-- Document management (licenses, certifications)
-- Performance tracking
-
-**Database Tables:**
-- `employees`
-- `teams`
-- `employee_documents`
-- `vehicle_assignments`
-
-### 3. Time Management
-
-**Features:**
-- Clock in/out (GPS-tracked)
-- Timesheet management
-- Break tracking
-- Overtime calculation
-- Schedule management
-- Leave requests and approvals
-
-**Database Tables:**
-- `time_entries`
-- `schedules`
-- `leave_requests`
-- `overtime_records`
-
-### 4. Logistics
-
-**Features:**
-- Route planning and optimization
-- Delivery assignments
-- Real-time tracking
-- Vehicle management
-- Delivery status updates
-- Proof of delivery
-
-**Database Tables:**
-- `routes`
-- `deliveries`
-- `vehicles`
-- `delivery_status_log`
-- `proof_of_delivery`
-
-### 5. Payroll
-
-**Features:**
-- Automated wage calculation
-- Deductions management
-- Tax calculations
-- Pay period management
-- Payment history
-- Export to accounting systems
-
-**Database Tables:**
-- `pay_periods`
-- `payroll_records`
-- `deductions`
-- `tax_configurations`
-
-### 6. Reporting & Analytics
-
-**Features:**
-- Dashboard metrics
-- Performance reports
-- Financial reports
-- Custom report builder
-- Export capabilities (PDF, Excel)
-- Scheduled reports
-
-## API Design
-
-### RESTful Principles
+## System Diagram
 
 ```
-/api/v1/
-  /auth/
-    POST   /register
-    POST   /login
-    POST   /refresh
-    POST   /logout
-  /companies/
-    GET    /
-    POST   /
-    GET    /{id}
-    PUT    /{id}
-    DELETE /{id}
-  /employees/
-    GET    /
-    POST   /
-    GET    /{id}
-    PUT    /{id}
-    DELETE /{id}
-  /time-entries/
-    GET    /
-    POST   /clock-in
-    POST   /clock-out
-    GET    /{id}
-  /deliveries/
-    GET    /
-    POST   /
-    GET    /{id}
-    PUT    /{id}/status
-  /payroll/
-    GET    /periods
-    POST   /calculate
-    GET    /{id}
+┌─────────────────────────────────────────────────────┐
+│                   CLIENT LAYER                       │
+│   Browser (React 19 + Tailwind)  │  Discord Server   │
+└──────────────┬──────────────────────────┬────────────┘
+               │ HTTPS / JWT              │ Bot DMs / Posts
+┌──────────────▼──────────────────────────▼────────────┐
+│                   AWS EDGE                            │
+│        CloudFront CDN  ·  Cognito (JWKS auth)        │
+└──────────────┬──────────────────────────┬────────────┘
+               │ REST /api/v1/            │ X-Internal-Secret
+┌──────────────▼──────────┐  ┌────────────▼────────────┐
+│    FastAPI Backend       │  │    discord.py Bot        │
+│    Uvicorn (4 workers)   │  │    Per-guild routing     │
+│    28 routers            │  │    Cognito svc account   │
+└──────────────┬───────────┘  └─────────────────────────┘
+               │
+    ┌──────────┼──────────┐
+    │          │           │
+┌───▼────┐ ┌──▼────┐ ┌────▼───────┐
+│Postgres│ │ Redis │ │   Celery   │
+│  15    │ │   7   │ │Worker+Beat │
+│60 migr.│ │broker │ │async tasks │
+└────────┘ └───────┘ └────────────┘
 ```
 
-### Response Format
+---
 
-```json
-{
-  "success": true,
-  "data": {},
-  "message": "Success message",
-  "meta": {
-    "page": 1,
-    "per_page": 20,
-    "total": 100
-  }
-}
+## Multi-Tenancy
+
+**Strategy: shared database, row-level isolation via `company_id`.**
+
+Every table with company-owned data has a `company_id` UUID column. No PostgreSQL RLS is used — isolation is enforced at the application layer.
+
+**How it works in practice:**
+
+1. Every authenticated request resolves to an `Employee` row via `get_caller_employee()` in `deps.py`.
+2. That employee's `company_id` is the only tenant identifier used in queries — it never comes from the request body or URL.
+3. The `require_configured` middleware blocks all API access for a company until its admin completes initial setup (`CompanyConfig.is_configured = True`).
+4. Super admins (`super_admin` Cognito group) have no `company_id` — they operate cross-tenant via dedicated `/admin/companies` endpoints.
+
+**Key invariant:** there is no way for a caller to query another company's data through normal API usage. The `company_id` filter is always derived from the verified JWT, never from user input.
+
+---
+
+## Authentication & Authorization
+
+**Provider:** AWS Cognito (User Pool, `USER_PASSWORD_AUTH` flow)
+
+**Token flow:**
+1. Frontend authenticates via AWS Amplify → receives Cognito ID token (JWT)
+2. ID token sent as `Authorization: Bearer <token>` on every request
+3. `verify_cognito_token()` in `security.py` validates the JWT signature against Cognito's JWKS
+4. JWKS public keys are cached in Redis (1-hour TTL) — shared across all Uvicorn worker processes; fetched fresh from Cognito on cache miss
+5. Validated token claims are passed to `get_caller_employee()` which resolves the Cognito `sub` to an `Employee` row via a 3-step lookup chain: `cognito_sub` → `username` → `discord_id`
+
+**Authorization:** `RoleChecker` dependency — declared per endpoint, raises 403 if the caller's role is not in the allowed list. Role strings are defined once in `services/constants.py` and imported everywhere.
+
+**Bot auth:** The Discord bot authenticates as a `dispatch`-role service account using Cognito `USER_PASSWORD_AUTH`. It auto-refreshes its JWT before expiry. Bot-to-backend calls for internal data (guild config) use a separate `X-Internal-Secret` header on `/internal/*` endpoints — these never go through Cognito.
+
+---
+
+## Backend
+
+**Framework:** FastAPI · **ORM:** SQLAlchemy 2.0 · **Validation:** Pydantic v2 · **Server:** Uvicorn
+
+### Request lifecycle
+
+```
+Request
+  → OAuth2PasswordBearer (extract token)
+  → verify_cognito_token() (JWKS validation)
+  → get_caller_employee() (DB lookup, company_id resolved)
+  → RoleChecker (role assertion)
+  → require_configured (company setup gate)
+  → Route handler
+  → Response
 ```
 
-## Database Schema Design
+### Key patterns
 
-### Core Principles
+- **`company_id` always from caller** — never from request body. Every write operation stamps `company_id` from `caller.company_id`.
+- **Pydantic v2 schemas** — all request bodies validated; response models defined separately from DB models.
+- **No cross-router imports** — routers import from `services/` and `models/` only, never from each other.
+- **Audit log** — destructive and sensitive actions are logged to the `AuditLog` table with actor, action, and target.
 
-1. **Multi-tenancy**: All tables have `tenant_id`
-2. **Soft deletes**: Use `is_active` or `deleted_at`
-3. **Audit trails**: `created_at`, `updated_at`, `created_by`, `updated_by`
-4. **UUID Primary Keys**: Better for distributed systems
-5. **Indexes**: On foreign keys and frequently queried columns
+### Celery tasks
 
-### Key Relationships
+Redis is the broker. Tasks run in a separate `celery_worker` container. `celery_beat` (prod only) handles periodic scheduling.
+
+Current tasks:
+- EOD shift reminders to drivers
+- Dispatch confirmation alerts (post-dispatch DMs via bot)
+- Training deadline escalation checks
+- Invite token expiry cleanup
+
+---
+
+## Frontend
+
+**Framework:** React 19 · **Language:** TypeScript · **Build:** Vite · **Styling:** Tailwind CSS 3
+
+### Auth flow
+
+AWS Amplify handles Cognito authentication client-side. On login, Amplify stores the JWT and injects it into every API call via the `axiosClient` interceptor (`src/api/axiosClient.ts`). `RoleGuard` components block route access client-side by role — the server always re-validates independently.
+
+### Key patterns
+
+- **`axiosClient` is the only permitted API import** — no direct `fetch` or `axios` calls outside this module.
+- **`useConfirm` + `ConfirmDialog`** — all destructive actions (delete, clear, override) go through this hook. No `window.confirm` anywhere in the codebase.
+- **`ThemeContext`** — dark/light mode, persisted to localStorage.
+- **Two-tier Navbar** — `TitleBar` (role label, user menu) + `NavStrip` (page links, role-scoped). Defined in `components/layout/Navbar.tsx`.
+- **Role-scoped dashboards** — each of the 8 roles lands on a purpose-built home page. The `/` route reads the caller's role and redirects accordingly.
+
+---
+
+## Discord Bot
+
+**Framework:** discord.py · **Auth:** Cognito service account (auto-refreshing JWT)
+
+The bot is a separate Docker service. It has no exposed port for external traffic — it only makes outbound calls to the FastAPI backend and listens for Discord events.
+
+**Multi-guild:** one bot process serves all company Discord servers. Per-company guild/channel/role IDs are stored in `company_configs` and fetched at runtime with a 5-minute TTL in-memory cache keyed by `guild_id → company_id`. A guild with no matching config in the DB gets a graceful no-op.
+
+**Capabilities:**
+- Dispatch DM confirmations (individual crew member notifications)
+- Crew channel posting (finalized assignments published to Discord)
+- Employee invite flow (new hire onboarding DM)
+- `/setup-channels` slash command for per-guild channel scaffolding
+
+---
+
+## Data Model
+
+**60 Alembic migrations · 32 SQLAlchemy models**
+
+### Core tables
 
 ```
-companies (tenants)
-  ├── employees
-  │     ├── time_entries
-  │     ├── deliveries
-  │     ├── payroll_records
-  │     └── employee_documents
-  ├── teams
-  ├── vehicles
-  ├── routes
-  └── pay_periods
+companies
+  └── company_configs          (1:1 — operational settings, Discord config)
+  └── company_zones            (DSP coverage area definitions)
+
+employees
+  ├── employee_off_days
+  ├── employee_relationships   (fav/ban list)
+  ├── time_off_requests
+  └── invite_tokens
+
+trucks
+  └── truck_assignments        (daily dispatch — one per truck per date)
+  │     └── assignment_members (crew members on each assignment)
+  └── truck_zones              (polygon-defined coverage zones per truck)
+
+training
+  ├── training_curriculum
+  ├── training_records
+  └── training_tasks
+
+field_ops
+  ├── check_ins
+  ├── departures
+  ├── walker_ratings
+  ├── vehicle_inspections
+  └── fuel_mileage_logs
+
+walker_routes
+  ├── walker_trips
+  ├── location_difficulty_flags
+  └── misrouted_package_flags
+
+communications
+  ├── notifications
+  ├── feedback
+  └── audit_logs
+
+scheduling
+  ├── schedule_change_requests
+  ├── assignment_change_requests
+  ├── dispatch_confirmations
+  └── shift_sessions
+
+station_ops
+  ├── anchor_points
+  ├── dock_assignments
+  ├── station_arrivals
+  ├── package_manifests
+  ├── rts_reports
+  └── station_handoffs
 ```
 
-## Security Architecture
+### Multi-tenancy invariant
 
-### Authentication Flow
+Every table in the groups above (except `companies` itself) has either:
+- A direct `company_id` column, or
+- A FK to a parent that carries `company_id` (e.g. `assignment_members → truck_assignments → company_id`)
 
-1. User logs in with email/password
-2. Backend validates credentials
-3. JWT access token (15 min) + refresh token (7 days) issued
-4. Client stores tokens securely
-5. Access token sent in Authorization header
-6. Token refreshed when expired
+---
 
-### Data Security
+## Infrastructure
 
-- **Encryption at rest**: Database-level encryption
-- **Encryption in transit**: HTTPS/TLS
-- **Password hashing**: Bcrypt with salt
-- **Secret management**: Environment variables/AWS Secrets Manager
-- **SQL injection prevention**: ORM parameterized queries
-- **XSS prevention**: Input sanitization
-- **CSRF protection**: Token-based validation
+**Environment:** AWS EC2 (production) · Docker Compose (dev + prod)
 
-### Tenant Isolation
+### Docker services
 
-```python
-# Middleware ensures tenant context
-async def tenant_middleware(request: Request, call_next):
-    tenant_id = get_tenant_from_token(request)
-    request.state.tenant_id = tenant_id
-    response = await call_next(request)
-    return response
+| Service | Image | Role |
+|---|---|---|
+| `postgres` | postgres:15-alpine | Primary database |
+| `redis` | redis:7-alpine | Celery broker + JWKS cache |
+| `backend` | python:3.12-slim | FastAPI + Uvicorn (4 workers in prod) |
+| `celery_worker` | python:3.12-slim | Async background task processor |
+| `celery_beat` | python:3.12-slim | Periodic task scheduler (prod only) |
+| `bot` | python:3.12-slim | Discord bot (no exposed port) |
 
-# All queries auto-filter by tenant
-query = db.query(Employee).filter(
-    Employee.tenant_id == request.state.tenant_id
-)
-```
+### CI/CD
 
-## Scalability Strategy
+GitHub Actions pipeline on every push:
 
-### Horizontal Scaling
+1. **Dependency CVE audit** — `pip-audit` against `requirements.txt`
+2. **Backend tests** — `pytest` with SQLite in-memory, 154 tests
+3. **Deploy to prod** (master only, after both pass) — AWS SSM `SendCommand` triggers `git pull + docker compose build + up` on the EC2 instance; no SSH key required
 
-- Stateless API servers
-- Load balancer distribution
-- Database read replicas
-- Redis caching layer
+### Secrets management
 
-### Performance Optimization
+- Zero hardcoded credentials in any committed file
+- All secrets injected via environment variables at runtime
+- CI secrets (EC2 instance ID, AWS credentials) stored in GitHub Actions secrets
+- Proprietary algorithm files excluded from the public repository via `.gitignore`
 
-- Database indexing
-- Query optimization
-- Caching strategies (Redis)
-- Pagination for large datasets
-- Async operations with Celery
-- CDN for static assets
+---
 
-### Monitoring & Observability
+## Security
 
-- Application metrics (Prometheus)
-- Log aggregation (ELK/CloudWatch)
-- Distributed tracing
-- Error tracking (Sentry)
-- Uptime monitoring
+| Concern | Approach |
+|---|---|
+| Auth | AWS Cognito JWTs; JWKS cached in Redis with 1-hr TTL and key-rotation retry |
+| Session security | Short-lived tokens; server-side revocation via Redis |
+| Tenant isolation | `company_id` always derived from verified JWT, never from request input |
+| Role enforcement | `RoleChecker` dependency on every endpoint; `super_admin` has no company scope |
+| Input validation | Pydantic v2 on all request bodies; string length limits on all user-facing fields |
+| Secrets | No hardcoded credentials; `.env` files gitignored; CI uses GitHub Actions secrets |
+| Dependencies | `pip-audit` CVE scan on every push |
+| Proprietary logic | Core algorithm files gitignored; not included in public repository |
 
-## Technology Stack Rationale
+---
 
-### Why FastAPI?
-- High performance (async)
-- Auto-generated documentation
-- Type hints and validation
-- Modern Python features
-- Great for APIs
+## Technology Choices
 
-### Why PostgreSQL?
-- ACID compliance
-- JSON support (JSONB)
-- Row-level security
-- Mature and reliable
-- Excellent for multi-tenancy
+**FastAPI** — async-native, auto-generated OpenAPI docs at `/docs`, Pydantic v2 integration, dependency injection pattern maps cleanly to auth + tenant scoping.
 
-### Why Redis?
-- Fast caching
-- Message broker for Celery
-- Session storage
-- Rate limiting
+**PostgreSQL 15** — JSONB for flexible schema fields (polygon coordinates, package manifests, Discord config), ACID guarantees for dispatch state, mature UUID support.
 
-### Why React?
-- Component reusability
-- Large ecosystem
-- React Native code sharing
-- Strong community support
+**Redis 7** — dual-purpose: Celery broker (task queue) and JWKS public key cache (shared across all Uvicorn worker processes).
 
-## Deployment Architecture
+**AWS Cognito** — handles password storage, email verification, invite flows, and JWT issuance. Removes the need to build and maintain credential infrastructure.
 
-### Development
-- Docker Compose locally
-- Hot reload for development
+**Discord bot** — the target users (delivery crews) live in Discord. Meeting them where they are eliminates the need for a separate notification app or SMS service.
 
-### Staging
-- AWS ECS/EKS or GCP Cloud Run
-- Managed database (RDS/Cloud SQL)
-- Managed Redis (ElastiCache)
-
-### Production
-- Multi-region deployment
-- Auto-scaling groups
-- Database backups
-- Disaster recovery plan
-- Blue-green deployments
-
-## Future Considerations
-
-- Microservices split (if needed at scale)
-- GraphQL API layer
-- ML for route optimization
-- Real-time notifications (WebSockets)
-- Mobile offline support
-- Multi-language support
+**Celery** — decouples time-sensitive API responses from slow background work (email sends, escalation checks, reminder scheduling) without introducing a separate message queue service beyond Redis.
