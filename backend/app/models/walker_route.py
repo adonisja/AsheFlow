@@ -38,14 +38,23 @@ class WalkerTrip(Base):
 
 
 class LocationDifficultyFlag(Base):
-    """Persisted difficulty rating for a street block, keyed by opaque block_key (no raw address)."""
+    """In-field difficulty flag raised by a walker during a route.
+
+    Captures unexpected difficulty encountered at a block mid-delivery.
+    This is ephemeral operational feedback — distinct from LocationProfile,
+    which is the verified, persistent building intelligence database.
+
+    block_key format: "W_38_St_400s_odd" (10-number range + odds/evens side)
+    difficulty_tier: standard | moderate | heavy
+    """
     __tablename__ = "location_difficulty_flags"
 
     id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id      = Column(UUID(as_uuid=True), nullable=False, index=True)
-    block_key       = Column(String(100), nullable=False, index=True)   # e.g. "38th_St_400_W"
+    block_key       = Column(String(100), nullable=False, index=True)   # e.g. "W_38_St_400s_odd"
     difficulty_tier = Column(String(20), nullable=False, default="standard")  # standard | moderate | heavy
     flagged_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    flagged_by_name = Column(String(100), nullable=True)
     flagged_at      = Column(DateTime(timezone=True), server_default=func.now())
     notes           = Column(Text, nullable=True)
 
@@ -63,4 +72,5 @@ class MisroutedPackageFlag(Base):
     suggested_walker_route_id = Column(UUID(as_uuid=True), nullable=True)  # null = needs captain review
     resolved                  = Column(Boolean, nullable=False, default=False)
     resolved_by               = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    resolved_by_name          = Column(String(100), nullable=True)
     resolved_at               = Column(DateTime(timezone=True), nullable=True)

@@ -40,8 +40,9 @@ class AnchorPoint(Base):
     notes        = Column(Text,               nullable=True)
     submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     arrived_at   = Column(DateTime(timezone=True), nullable=True)
-    confirmed_by = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
-    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    confirmed_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    confirmed_by_name = Column(String(100), nullable=True)
+    confirmed_at      = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         CheckConstraint(f"status IN ('preliminary','arrived','relocated')", name="ck_anchor_points_status"),
