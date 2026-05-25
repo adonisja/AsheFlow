@@ -22,5 +22,6 @@ class DockAssignment(Base):
     driver_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     date        = Column(Date, nullable=False, index=True)
     dock_zone   = Column(String(50), nullable=False)   # e.g. "A3", "Dock 7", "West Bay"
-    assigned_by = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
-    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
+    assigned_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    assigned_by_name = Column(String(100), nullable=True)
+    assigned_at      = Column(DateTime(timezone=True), server_default=func.now())

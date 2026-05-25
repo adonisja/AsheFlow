@@ -24,8 +24,10 @@ class PackageManifest(Base):
     tote_count      = Column(Integer, nullable=False, default=0)
     ov_count        = Column(Integer, nullable=False, default=0)   # oversized packages
     notes           = Column(Text, nullable=True)
-    submitted_by    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
-    submitted_at    = Column(DateTime(timezone=True), server_default=func.now())
+    submitted_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    submitted_by_name = Column(String(100), nullable=True)
+    submitted_at      = Column(DateTime(timezone=True), server_default=func.now())
     # Driver acknowledgement — stamped when the driver confirms the manifest
-    acknowledged_by = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
-    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    acknowledged_by_name = Column(String(100), nullable=True)
+    acknowledged_at      = Column(DateTime(timezone=True), nullable=True)
