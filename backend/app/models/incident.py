@@ -59,8 +59,10 @@ class Incident(Base):
 
     # Driver on the same truck — auto-resolved for non-driver reporters
     driver_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    driver_name = Column(String(100), nullable=True)
 
     resolved    = Column(Boolean, nullable=False, default=False)
     resolved_by = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    resolved_by_name = Column(String(100), nullable=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     created_at  = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

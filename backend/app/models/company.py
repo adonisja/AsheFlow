@@ -71,6 +71,18 @@ class CompanyConfig(Base):
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
 
+    # ── Tier 1 tote verification (DBSCAN + classification thresholds) ─────────
+    tier1_dbscan_eps           = Column(Float,   nullable=True)   # default 0.015 degrees (~1 mile)
+    tier1_dbscan_min_samples   = Column(Integer, nullable=True)   # default 30
+    tier1_small_tote_cutoff    = Column(Integer, nullable=True)   # default 10 packages
+    tier1_small_stray_max      = Column(Integer, nullable=True)   # default 1 (count)
+    tier1_small_uncertain_max  = Column(Integer, nullable=True)   # default 3 (count)
+    tier1_stray_pct            = Column(Float,   nullable=True)   # default 0.10
+    tier1_uncertain_pct        = Column(Float,   nullable=True)   # default 0.40
+
+    # ── Location profile verification ─────────────────────────────────────────
+    location_profile_lock_threshold = Column(Integer, nullable=True)   # default 3 agreements to lock
+
     # ── Discord guild integration (optional — all nullable) ───────────────────
     discord_guild_id            = Column(BigInteger, nullable=True)
     discord_drivers_channel_id  = Column(BigInteger, nullable=True)
