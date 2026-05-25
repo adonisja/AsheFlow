@@ -256,6 +256,51 @@ GitHub Actions pipeline on every push:
 
 ---
 
+## Two-Tier Package Routing
+
+A subsystem that runs after dispatch to verify package placement before trucks leave the station and generate walker sub-routes at the anchor point.
+
+### Tier 1 — Tote Verification (station, pre-departure)
+
+**Trigger:** Automatic after `run_dispatch` completes.
+
+**Goal:** Catch totes loaded onto the wrong truck before trucks leave.
+
+**How it works:**
+1. Cortex manifest (daily CSV) is parsed — provides lat/lng per package, tote ID, truck assignment
+2. DBSCAN clusters each truck's packages into 1–3 dense regions (anchor point zones) + an outlier set
+3. Concave hull (alpha shapes) drawn around each cluster → truck zone polygon. Convex hull fallback if concave produces invalid geometry
+4. For each tote: centroid + σ computed from its packages. Bounding box pre-filter against all truck zones. High-σ totes escalate to full `point_in_polygon` per package
+5. Packages failing all zones on their truck → checked against other trucks' zones to find correct placement
+6. Totes classified: clean / stray / uncertain / misaligned
+7. Non-clean totes trigger dispatch notifications with TBA numbers, correct truck if resolvable
+
+**Key invariant:** DBSCAN outliers are identified before zone polygons are drawn — the misaligned packages do not influence the zone boundaries that are used to detect them.
+
+**Coordinates are ephemeral** — lat/lng used in-memory only, never persisted. Output contains tote IDs, TBA numbers, and classification flags only.
+
+### Tier 2 — Walker Sub-Route Generation (anchor point)
+
+**Trigger:** At the anchor point, after trucks arrive.
+
+**Goal:** Cluster packages into per-walker route cards using geographic proximity.
+
+**How it works:** DBSCAN at block-level granularity (smaller `eps` than Tier 1) clusters packages within a single anchor region into walker-sized groups. Fairness-weighted assignment distributes routes based on cumulative difficulty score and `reduced_capability` flag.
+
+### Parameters (tunable per company in CompanyConfig)
+
+| Field | Default | Purpose |
+|---|---|---|
+| `tier1_dbscan_eps` | `0.015` | DBSCAN neighborhood radius in degrees (~1 mile) |
+| `tier1_dbscan_min_samples` | `30` | Minimum points to form a zone cluster |
+| `tier1_small_tote_cutoff` | `10` | Totes below this use count-based thresholds |
+| `tier1_small_stray_max` | `1` | Stray ceiling for small totes |
+| `tier1_small_uncertain_max` | `3` | Uncertain ceiling for small totes |
+| `tier1_stray_pct` | `0.10` | 10% — stray threshold for standard totes |
+| `tier1_uncertain_pct` | `0.40` | 40% — uncertain/misaligned boundary |
+
+---
+
 ## Technology Choices
 
 **FastAPI** — async-native, auto-generated OpenAPI docs at `/docs`, Pydantic v2 integration, dependency injection pattern maps cleanly to auth + tenant scoping.

@@ -1,3 +1,101 @@
+## 2026-05-24 — Tier 1 Tote Verification: DBSCAN, Alpha Shapes, and Geographic Clustering
+
+### The problem: a tote has no location of its own
+
+A tote is a container. Only the packages inside it have coordinates (lat/lng). To verify a tote belongs on a given truck, you have to derive a geographic representation from its packages. This introduces two sub-problems: how do you represent the tote's location, and how do you define the truck's zone to check against?
+
+### Truck zones are computed daily, not stored as fixed polygons
+
+The packages assigned to a truck each day define its actual delivery area. Using a fixed polygon stored from a previous day is inaccurate — volume and distribution change daily. Instead, we cluster that day's packages to derive zones dynamically.
+
+### Why DBSCAN, not K-means
+
+K-means partitions every point into a cluster — there is no concept of an outlier. If a misaligned package exists, K-means absorbs it into the nearest cluster, distorting the zone boundary. You can no longer detect it as misaligned because the zone was stretched to include it.
+
+DBSCAN (Density-Based Spatial Clustering of Applications with Noise) works differently:
+- It finds dense regions of points and labels them as clusters
+- Points that don't fit any dense region are labeled **noise** (outliers)
+- You draw zone polygons only around the clusters
+- The outlier set is your candidate misaligned packages — identified before the polygon is ever drawn
+
+This eliminates the circular dependency: you can't detect outliers after using them to define the boundary, but DBSCAN separates the two in a single pass.
+
+**Two parameters control what "dense" means:**
+
+| Parameter | What it controls | Default |
+|---|---|---|
+| `eps` | Radius in degrees within which neighbors are searched | `0.015` |
+| `min_samples` | Minimum points within `eps` to form a core point | `30` |
+
+`eps = 0.015` was calibrated against real zone data: Truck 2 (8th–11th Ave, W36–W42 St) spans ~0.018° lat × 0.012° lng. An eps of 0.008 fragmented that single legitimate zone into multiple clusters. 0.015 connects packages across the full zone width.
+
+`min_samples = 30` sits above the maximum tote size (22 packages) — a single stray tote can never accidentally form its own cluster.
+
+### Convex hull vs concave hull — which shape do you draw around a cluster?
+
+Once DBSCAN identifies a cluster, you need to draw a polygon around it.
+
+**Convex hull** — imagine stretching a rubber band around all the points and letting go. It snaps to the outermost points and forms a shape that is always "puffed out" — it never curves inward. For an L-shaped or irregular delivery zone, the hull fills in the corner gap with area the truck doesn't actually cover. Neighboring truck zones can bleed in, causing false passes.
+
+**Concave hull (alpha shapes)** — instead of a rubber band, imagine carefully tracing around the points with a pencil, following the actual shape of the cluster, curving inward where there are gaps. The result hugs the real delivery area much more closely — 10–30% less wasted coverage for irregular urban zones.
+
+The trade-off: concave hull can produce invalid polygons (self-intersecting lines) on sparse or irregular point sets. The solution is to validate the output and fall back to convex hull when it fails.
+
+```
+Primary path:   alphashape with optimizealpha() → validate → buffer(0) self-heal if needed
+Fallback path:  convex hull if concave still invalid after self-heal
+```
+
+### Tote location: centroid + standard deviation
+
+Rather than running point_in_polygon on every package in every tote (expensive), a two-stage approach is used:
+
+**Stage 1 — Bounding box pre-filter:**
+Compute the tote's centroid (mean lat/lng of all packages). Check if it falls within the bounding box of any of the truck's zones. If yes, the tote is likely fine. If no, proceed to Stage 2.
+
+**Stage 2 — Standard deviation check:**
+Compute σ_lat and σ_lng across all packages. If σ exceeds 30% of the polygon's own lat/lng span, the tote is geographically scattered — the centroid is not a trustworthy representative. Escalate to full point_in_polygon per package.
+
+**Why standard deviation, not raw spread:** σ captures the distribution of packages around the centroid, not just the extremes. A tote with one outlier far away has high σ. A tote uniformly spread across a zone has proportionally lower σ. This correctly identifies which totes need the expensive full check.
+
+### Tote classification thresholds
+
+After checking individual packages, each tote is classified:
+
+**Small tote (< 10 packages) — count-based:**
+Percentages are too sensitive at small sizes. 1 package out of 3 is 33% — that would over-classify as uncertain when it's just one package to pull.
+
+| Strays | Classification |
+|---|---|
+| 0 | Clean |
+| 1 | Stray — pull individually |
+| 2–3 | Uncertain — dispatch review |
+| 4+ | Misaligned — move whole tote |
+
+**Standard tote (≥ 10 packages) — percentage-based:**
+
+| % outside | Classification |
+|---|---|
+| 0% | Clean |
+| 1–10% | Stray — pull individually |
+| 11–40% | Uncertain — dispatch review |
+| >40% | Misaligned — move whole tote |
+
+The 10% stray boundary aligns with Six Sigma lean logistics baseline for incidental errors (<5% is ideal; 10% gives a practical working buffer).
+
+### The multi-zone false positive problem
+
+A truck can have multiple zones (multiple anchor points). A package that fails Zone A may pass Zone B — it belongs on this truck, just at a different anchor. Without this check, every such package would be a false positive misroute.
+
+**Resolution order:**
+1. Fails assigned zone → check all other zones on the same truck first
+2. Passes any same-truck zone → not a misroute, belongs here at a different anchor
+3. Fails all same-truck zones → search all other trucks' zones
+4. Matches another truck → misrouted, correct truck identified
+5. Matches nothing → unresolvable, manual dispatch review
+
+---
+
 ## 2026-05-24 Alembic Migrations: `default` vs `server_default` and Type Delivery
 
 ### The difference between `default` and `server_default`
