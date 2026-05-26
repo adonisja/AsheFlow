@@ -4574,4 +4574,107 @@ Skipping any step leaves the old bundle on S3/CloudFront. Users get the stale ve
 
 **Symptom to watch for:** Mixed content errors that only affect one role or one page — this usually means one view uses an endpoint that was baked in with the wrong protocol before a `.env.production` correction was deployed.
 
+---
+
+## 2026-05-25 — Location Intelligence: Two-Tier Data Architecture
+
+### The problem with tenant-scoped location data
+
+`LocationProfile` (ADR-093) stores building intelligence per company — building type, workload class, operational notes for each block. The problem: Amazon rotates DSP companies across delivery zones every few years. When a new company enters an area, all the location knowledge gathered by the previous company is gone. Every building is unknown again. The new company starts cold, walker distribution defaults to raw package count, and the system operates at low confidence until enough field reports accumulate.
+
+This creates a perverse situation: the platform grows richer with data over time, but that data is siloed inside each tenant and disappears when a company leaves a zone.
+
+### The two-tier solution
+
+Instead of only tenant-scoped records, the system uses two layers:
+
+**Tier B — `location_profiles`** (company-scoped, unchanged from ADR-093)
+Each company builds their own records through the walker submission → captain verification → lock flow. These records are authoritative for that company's current operations.
+
+**Tier A — `location_profile_library`** (platform-wide, AsheFlow-owned)
+A global database of verified building intelligence. No `company_id` — not tenant-scoped. Records are promoted here from company records once independently verified across multiple companies or approved by a super admin. Any tenant can read from it. Only AsheFlow super admins can write to it.
+
+### Shadowing — company records take priority
+
+When routing queries location intelligence for a block:
+1. Check `location_profiles` for the company's own locked record → use it if found
+2. Fall back to `location_profile_library` if no company record exists
+3. Fall back to package count proxy if neither exists (flag low confidence)
+
+The company record **shadows** the global record. This handles reality: buildings change. A company reporting different characteristics than the global library triggers a conflict review, not a silent override.
+
+### Why two tables instead of nullable `company_id`
+
+An alternative would be one `location_profiles` table where global records have `company_id = NULL`. This was rejected because the entire multi-tenant codebase treats `company_id` as a mandatory, non-nullable isolation guard. Introducing a `NULL` exception creates a category of records every query must handle specially — a missed filter could leak global records into tenant queries or silently exclude them. The two-table approach keeps the tenant isolation invariant intact and makes the global/company distinction explicit in the schema itself.
+
+### Promotion — how company data becomes global data
+
+**Automatic**: when the same `(block_key, building_type)` is locked in records from 2+ independent companies, the system promotes automatically. Two separate DSPs independently verifying the same building is treated as high-confidence signal.
+
+**Manual**: a super admin reviews and approves a nominated company record. This handles blocks where only one company has ever operated — the automatic threshold can never trigger, but the data quality may still warrant global sharing.
+
+A `nomination_status` field on `LocationProfile` tracks the pipeline:
+- `null` — not yet in the promotion pipeline
+- `"nominated"` — auto-nominated when the record is verified; queued for super admin review
+- `"promoted"` — a copy exists in `location_profile_library`
+- `"rejected"` — super admin declined; record stays locked and serves the company normally
+
+### The commercial angle
+
+The global library is a potential differentiator: companies entering a new zone get cold-start data that would otherwise take months to build. This creates an incentive structure where companies are motivated to verify their own records carefully (Amazon measures delivery accuracy) and that verified data feeds back into the platform's intelligence layer — benefiting everyone.
+
+### Key design principle reinforced
+
+This decision reinforces a pattern that appears throughout AsheFlow: **separate models for separate lifecycles**. `LocationProfile` and `LocationProfileLibrary` serve different purposes, have different access rules, and have different write lifecycles. Keeping them as separate models makes those distinctions enforced by the schema rather than just by convention.
+
+---
+
+## 2026-05-25 — Library Cold-Start Query and Mixed Block Key Handling
+
+### How the library is queried during sort
+
+A company in cold start has no records in `location_profiles`. During sort, `assign_clusters` needs workload scores for each cluster. The block_keys for each cluster are derived from package addresses on the fly — the same ephemeral derivation used everywhere in the sort pipeline.
+
+The library lookup is a **single bulk query per sort run**, not per cluster:
+
+```sql
+SELECT block_key, building_type, workload_class, operational_note
+FROM location_profile_library
+WHERE block_key = ANY(:block_keys)
+  AND library_status = 'active'
+```
+
+All block_keys across all clusters go in at once. The result is loaded into a Python dict keyed by `block_key` before scoring begins. This means zero per-cluster DB hits — the entire location intelligence lookup is one round trip regardless of how many clusters there are.
+
+The unique constraint on `(block_key, building_type)` already creates a composite index with `block_key` as the leading column. The `ANY(:block_keys)` query uses that index — no separate index needed.
+
+### Why a block_key can have multiple building_type entries
+
+A block_key spans a 10-number range on one side of the street — typically 3–5 addresses. Large buildings (mailrooms, freight docks) usually occupy the entire range. But smaller blocks can have mixed use: a ground-floor business and upper-floor apartments sharing the same 10-number range produce two distinct `building_type` entries for the same `block_key`.
+
+### Two separate resolutions for the same ambiguity
+
+The mixed block_key problem is resolved differently depending on who is asking:
+
+**For routing (assign_clusters):** collapse to a single workload weight using the highest `workload_class` across all entries. Conservative — a block with any `high_touch` entry is weighted as `high_touch`. It is better to over-staff an easy block than under-staff a demanding one.
+
+Priority order (highest to lowest):
+```
+high_touch > high_wait > standard > bulk_drop
+```
+
+**For the walker UI:** surface all tags and let the walker resolve at the door. The system does not collapse the ambiguity — it presents it:
+
+```
+W_36_St_410s_odd
+[mailroom]  [biz_security]
+→ Check your address. Follow the protocol for your specific building.
+```
+
+Protocol reminders per tag are derived from `building_type` at render time — never stored.
+
+### Provenance flag
+
+Library records surfaced in the walker UI are marked "from AsheFlow library" so walkers know the data may predate their company's presence in the zone. Once the company builds their own locked record for the block, it shadows the library entry and the provenance flag disappears automatically.
+
 **Long-term fix:** Add the frontend build + S3 sync to CI so it runs automatically on every master merge, same as the backend deploy.
