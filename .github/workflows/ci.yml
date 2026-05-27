@@ -132,7 +132,8 @@ jobs:
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git pull origin staging",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d backend"
+              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker",
+              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
             ]' \
             --query "Command.CommandId" \
             --output text)
@@ -249,7 +250,8 @@ jobs:
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git pull origin master",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d backend"
+              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker",
+              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
             ]' \
             --query "Command.CommandId" \
             --output text)
