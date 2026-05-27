@@ -102,17 +102,28 @@ jobs:
           aws ec2 wait instance-running --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
           echo "Staging EC2 is running."
 
-      # Write staging .env from secrets — no secrets stored on disk permanently
-      - name: Write staging backend .env via SSM
+      # Write staging .env — EC2 pulls secrets from SSM Parameter Store directly
+      - name: Write staging backend .env via SSM Parameter Store
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
             --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
             --document-name AWS-RunShellScript \
-            --parameters commands=["cat > /home/ubuntu/AsheFlow/.env << 'ENVEOF'\nAPP_ENV=production\nREDIS_URL=redis://redis:6379/0\nPOSTGRES_USER=asheflow\nPOSTGRES_DB=asheflow_db\nPOSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}\nSECRET_KEY=${{ secrets.SECRET_KEY }}\nINTERNAL_SECRET=${{ secrets.INTERNAL_SECRET }}\nDISCORD_BOT_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }}\nBOT_INTERNAL_URL=http://bot:8001\nAWS_REGION=us-east-2\nAWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb\nAWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d\nSES_FROM_EMAIL=AsheFlow <noreply@asheflow.com>\nAPP_BASE_URL=https://staging.asheflow.com\nCORS_ORIGINS=https://staging.asheflow.com\nENVEOF"] \
+            --parameters 'commands=[
+              "aws ssm get-parameters-by-path --region us-east-2 --path /asheflow/staging/ --with-decryption --query \"Parameters[*].[Name,Value]\" --output text | awk \"{sub(\\\"/asheflow/staging/\\\",\\\"\\\"); print $1\\\"=\\\"$2}\" > /home/ubuntu/AsheFlow/.env",
+              "echo BOT_INTERNAL_URL=http://bot:8001 >> /home/ubuntu/AsheFlow/.env",
+              "echo APP_ENV=production >> /home/ubuntu/AsheFlow/.env",
+              "echo REDIS_URL=redis://redis:6379/0 >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_DB=asheflow_db >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
+              "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+            ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 8
+          sleep 10
           STATUS=$(aws ssm get-command-invocation \
             --region us-east-2 \
             --command-id "$COMMAND_ID" \
@@ -221,17 +232,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-2
 
-      # Write prod .env from secrets — no secrets stored on disk permanently
-      - name: Write prod backend .env via SSM
+      # Write prod .env — EC2 pulls secrets from SSM Parameter Store directly
+      - name: Write prod backend .env via SSM Parameter Store
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
             --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
             --document-name AWS-RunShellScript \
-            --parameters commands=["cat > /home/ubuntu/AsheFlow/.env << 'ENVEOF'\nAPP_ENV=production\nREDIS_URL=redis://redis:6379/0\nPOSTGRES_USER=asheflow\nPOSTGRES_DB=asheflow_db\nPOSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}\nSECRET_KEY=${{ secrets.SECRET_KEY }}\nINTERNAL_SECRET=${{ secrets.INTERNAL_SECRET }}\nDISCORD_BOT_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }}\nBOT_INTERNAL_URL=http://bot:8001\nAWS_REGION=us-east-2\nAWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb\nAWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d\nSES_FROM_EMAIL=AsheFlow <noreply@asheflow.com>\nAPP_BASE_URL=https://asheflow.com\nCORS_ORIGINS=https://asheflow.com,https://www.asheflow.com\nENVEOF"] \
+            --parameters 'commands=[
+              "aws ssm get-parameters-by-path --region us-east-2 --path /asheflow/prod/ --with-decryption --query \"Parameters[*].[Name,Value]\" --output text | awk \"{sub(\\\"/asheflow/prod/\\\",\\\"\\\"); print $1\\\"=\\\"$2}\" > /home/ubuntu/AsheFlow/.env",
+              "echo BOT_INTERNAL_URL=http://bot:8001 >> /home/ubuntu/AsheFlow/.env",
+              "echo APP_ENV=production >> /home/ubuntu/AsheFlow/.env",
+              "echo REDIS_URL=redis://redis:6379/0 >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_DB=asheflow_db >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
+              "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+            ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 8
+          sleep 10
           STATUS=$(aws ssm get-command-invocation \
             --region us-east-2 \
             --command-id "$COMMAND_ID" \
