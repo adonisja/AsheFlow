@@ -30,6 +30,7 @@ type ImportRow = {
   discord_id: string;
   role: RoleStr;
   phone_number: string;
+  hr_system_id_adp: string;  // ADP associateOID — read-only in preview, empty string for non-ADP imports
   // client-only validation state
   _errors: Partial<Record<'name' | 'email' | 'discord_id' | 'role', string>>;
 };
@@ -49,26 +50,68 @@ type Step = 'upload' | 'preview' | 'results';
 // ---------------------------------------------------------------------------
 
 const ALIASES: Record<string, keyof ImportRow> = {
+  // Name
   name:          'name',
   full_name:     'name',
   fullname:      'name',
   employee_name: 'name',
-  email:         'email',
-  email_address: 'email',
+  // Email
+  email:               'email',
+  email_address:       'email',
+  work_email:          'email',
+  business_email:      'email',
+  home_email:          'email',
+  // Discord
   discord:       'discord_id',
   discord_id:    'discord_id',
   discord_user:  'discord_id',
   discordid:     'discord_id',
+  // Role
   role:          'role',
   position:      'role',
-  phone:         'phone_number',
-  phone_number:  'phone_number',
-  phonenumber:   'phone_number',
-  mobile:        'phone_number',
+  job_title:     'role',
+  title:         'role',
+  // Phone
+  phone:           'phone_number',
+  phone_number:    'phone_number',
+  phonenumber:     'phone_number',
+  mobile:          'phone_number',
+  business_phone:  'phone_number',
+  // ADP associateOID
+  'file_#':          'hr_system_id_adp',
+  file_number:       'hr_system_id_adp',
+  associate_id:      'hr_system_id_adp',
+  associateid:       'hr_system_id_adp',
+  associateoid:      'hr_system_id_adp',
+  hr_system_id_adp:  'hr_system_id_adp',
+};
+
+// ADP job title → AsheFlow role translation.
+// Unrecognized titles fall back to 'walker' and are flagged in the preview.
+const ADP_ROLE_MAP: Record<string, RoleStr> = {
+  'delivery associate':         'walker',
+  'delivery associate i':       'walker',
+  'delivery associate ii':      'walker',
+  'da':                         'walker',
+  'dispatcher':                 'dispatch',
+  'dispatch':                   'dispatch',
+  'delivery associate manager': 'management',
+  'dsp owner':                  'management',
+  'owner':                      'management',
+  'manager':                    'management',
+  'driver':                     'driver',
+  'lead driver':                'driver',
+  'trainer':                    'trainer',
+  'lead trainer':               'trainer',
+  'trainee':                    'trainee',
 };
 
 function normalizeKey(raw: string): keyof ImportRow | null {
   return ALIASES[raw.toLowerCase().trim().replace(/\s+/g, '_')] ?? null;
+}
+
+function translateRole(raw: string): RoleStr {
+  return ADP_ROLE_MAP[raw.toLowerCase().trim()] ?? 'walker';
 }
 
 // ---------------------------------------------------------------------------
@@ -92,17 +135,41 @@ function validateRow(row: ImportRow): ImportRow['_errors'] {
 function parseObjects(objs: Record<string, string>[]): ImportRow[] {
   return objs.map(obj => {
     const normalized: Partial<ImportRow> = {};
+    // Track raw first/last name columns for ADP split-name handling
+    let firstName = '';
+    let lastName  = '';
+
     for (const [k, v] of Object.entries(obj)) {
+      const key = k.toLowerCase().trim().replace(/\s+/g, '_');
+      if (key === 'first_name' || key === 'firstname') { firstName = String(v ?? '').trim(); continue; }
+      if (key === 'last_name'  || key === 'lastname')  { lastName  = String(v ?? '').trim(); continue; }
       const mapped = normalizeKey(k);
       if (mapped) (normalized as any)[mapped] = String(v ?? '').trim();
     }
+
+    // ADP exports First Name + Last Name separately — combine if name not already set
+    if (!normalized.name && (firstName || lastName)) {
+      normalized.name = [firstName, lastName].filter(Boolean).join(' ');
+    }
+
+    // Translate ADP job title → AsheFlow role if the raw value isn't already a valid role
+    let resolvedRole: RoleStr;
+    if (normalized.role && ROLES.includes(normalized.role as RoleStr)) {
+      resolvedRole = normalized.role as RoleStr;
+    } else if (normalized.role) {
+      resolvedRole = translateRole(normalized.role);
+    } else {
+      resolvedRole = 'walker';
+    }
+
     const row: ImportRow = {
-      name:         normalized.name         ?? '',
-      email:        normalized.email        ?? '',
-      discord_id:   normalized.discord_id   ?? '',
-      role:         (ROLES.includes(normalized.role as RoleStr) ? normalized.role : 'driver') as RoleStr,
-      phone_number: normalized.phone_number ?? '',
-      _errors:      {},
+      name:             normalized.name             ?? '',
+      email:            normalized.email            ?? '',
+      discord_id:       normalized.discord_id       ?? '',
+      role:             resolvedRole,
+      phone_number:     normalized.phone_number     ?? '',
+      hr_system_id_adp: normalized.hr_system_id_adp ?? '',
+      _errors:          {},
     };
     row._errors = validateRow(row);
     return row;
@@ -249,8 +316,9 @@ function UploadStep({ onParsed, onClose }: {
           <span><span className="text-foreground font-medium">discord_id</span> — Discord snowflake ID (17-20 digit number, optional)</span>
           <span><span className="text-foreground font-medium">role</span> — driver / walker / etc. (required)</span>
           <span><span className="text-foreground font-medium">phone_number</span> — optional</span>
+          <span><span className="text-foreground font-medium">Associate ID</span> — ADP associateOID (optional, auto-detected)</span>
         </div>
-        <p className="text-xs text-subtle mt-1">Column names are case-insensitive. Common aliases like "phone", "discord", "position" are recognized.</p>
+        <p className="text-xs text-subtle mt-1">ADP exports accepted directly. Split "First Name" / "Last Name" columns are merged automatically. Job titles like "Delivery Associate" are translated to AsheFlow roles.</p>
       </div>
 
       <div className="flex justify-end">
@@ -311,6 +379,7 @@ function PreviewStep({ rows, onChange, onSubmit, onBack, submitting }: {
               <th className="px-3 py-2 min-w-[150px]">Discord Snowflake</th>
               <th className="px-3 py-2 min-w-[130px]">Role *</th>
               <th className="px-3 py-2 min-w-[140px]">Phone</th>
+              <th className="px-3 py-2 min-w-[160px]">ADP Associate ID</th>
               <th className="px-3 py-2 w-8"></th>
             </tr>
           </thead>
@@ -352,6 +421,12 @@ function PreviewStep({ rows, onChange, onSubmit, onBack, submitting }: {
                       onChange={e => update(i, 'phone_number', e.target.value)}
                       className="w-full bg-transparent border-b border-border outline-none py-0.5 text-xs focus:border-primary"
                     />
+                  </td>
+                  <td className="px-3 py-1.5">
+                    {row.hr_system_id_adp
+                      ? <span className="text-muted-foreground font-mono">{row.hr_system_id_adp}</span>
+                      : <span className="text-subtle italic">—</span>
+                    }
                   </td>
                   <td className="px-3 py-1.5">
                     <button
@@ -511,11 +586,12 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
     setSubmitting(true);
     try {
       const payload = rows.map(r => ({
-        name:         r.name,
-        email:        r.email,
-        discord_id:   r.discord_id.trim() || null,
-        role:         r.role,
-        phone_number: r.phone_number || null,
+        name:             r.name,
+        email:            r.email,
+        discord_id:       r.discord_id.trim() || null,
+        role:             r.role,
+        phone_number:     r.phone_number || null,
+        hr_system_id_adp: r.hr_system_id_adp.trim() || null,
       }));
       const res = await axiosClient.post<ImportResult[]>('/employees/bulk', payload);
       setResults(res.data);
