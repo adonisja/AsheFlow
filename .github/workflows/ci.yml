@@ -3,18 +3,22 @@ name: CI
 # PIPELINE GATES
 # ─────────────────────────────────────────────────────────────────────────────
 # Every push to any branch runs audit + test (fast feedback).
-# Deploy to prod triggers only on master after both jobs pass.
 #
-# Current environment map:
-#   localhost  → dev  (no CI deploy — run locally)
-#   EC2 (prod) → auto-deploy on green master
+# Environment map:
+#   localhost        → dev    (no CI deploy — run locally)
+#   staging branch   → staging EC2 + S3 (auto-deploy after green tests)
+#   master branch    → prod EC2 + S3    (auto-deploy after green tests)
 #
-# Future: add a staging EC2, create a staging branch, uncomment deploy-staging.
+# Frontend secrets injected at build time from GitHub Actions secrets —
+# no .env files are committed to the repo.
+#
+# Staging EC2 is stopped by default (Option B — cost saving).
+# CI starts it before deploy and stops it 30 minutes after deploy completes.
 on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [master]
+    branches: [master, staging]
 
 jobs:
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
@@ -69,26 +73,135 @@ jobs:
           AWS_COGNITO_APP_CLIENT_ID: test-client-id
           INTERNAL_SECRET: ci-test-secret-not-real
 
-  # ── 3. DEPLOY TO PROD ──────────────────────────────────────────────────────
+  # ── 3. DEPLOY TO STAGING ───────────────────────────────────────────────────
+  # Triggers on staging branch pushes only, after audit + test pass.
+  # Starts the staging EC2 (stopped by default), deploys backend via SSM,
+  # builds frontend with staging secrets, syncs to staging S3, invalidates CDN.
+  deploy-staging:
+    name: Deploy → STAGING
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    environment: staging
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      # Start staging EC2 — it's stopped by default to save cost
+      - name: Start staging EC2
+        run: |
+          aws ec2 start-instances --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
+          aws ec2 wait instance-running --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
+          echo "Staging EC2 is running."
+
+      # Deploy backend via SSM — no SSH key needed
+      - name: Deploy backend via SSM
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --region us-east-2 \
+            --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "git config --global --add safe.directory /home/ubuntu/AsheFlow",
+              "cd /home/ubuntu/AsheFlow && git pull origin staging",
+              "cd /home/ubuntu/AsheFlow && docker compose build backend",
+              "cd /home/ubuntu/AsheFlow && docker compose up -d backend"
+            ]' \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+          sleep 15
+
+          for i in $(seq 1 18); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+            echo "[$i] Status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then
+              echo "Backend deploy succeeded."
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              aws ssm get-command-invocation \
+                --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+                --query "StandardErrorContent" \
+                --output text
+              echo "Backend deploy failed with status: $STATUS"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Backend deploy timed out."
+          exit 1
+
+      # Build frontend with staging env vars injected from secrets
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend (staging)
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.STAGING_VITE_API_URL }}
+          VITE_AWS_POOL_ID: ${{ secrets.STAGING_VITE_AWS_POOL_ID }}
+          VITE_AWS_REGION: ${{ secrets.STAGING_VITE_AWS_REGION }}
+          VITE_AWS_CLIENT_ID: ${{ secrets.STAGING_VITE_AWS_CLIENT_ID }}
+          VITE_AWS_DOMAIN: ${{ secrets.STAGING_VITE_AWS_DOMAIN }}
+
+      - name: Sync to staging S3
+        working-directory: frontend
+        run: aws s3 sync dist/ s3://asheflow-frontend-staging --delete
+
+      - name: Invalidate staging CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.STAGING_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  # ── 4. DEPLOY TO PROD ──────────────────────────────────────────────────────
   # Triggers on master pushes only, after audit + test pass.
-  # Uses AWS SSM SendCommand — no port 22 needed, no SSH key in secrets.
+  # Deploys backend via SSM, builds frontend with prod secrets,
+  # syncs to prod S3, invalidates CDN.
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - uses: actions/checkout@v4
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-2
 
-      - name: Deploy via SSM
+      - name: Deploy backend via SSM
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
@@ -104,11 +217,8 @@ jobs:
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
-
-          # Wait for AWS to register the invocation record before polling
           sleep 15
 
-          # Poll until the command finishes (max ~3 minutes)
           for i in $(seq 1 18); do
             STATUS=$(aws ssm get-command-invocation \
               --region us-east-2 \
@@ -118,7 +228,7 @@ jobs:
               --output text 2>/dev/null || echo "Pending")
             echo "[$i] Status: $STATUS"
             if [ "$STATUS" = "Success" ]; then
-              echo "Deploy succeeded."
+              echo "Backend deploy succeeded."
               exit 0
             elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
               aws ssm get-command-invocation \
@@ -127,33 +237,42 @@ jobs:
                 --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
                 --query "StandardErrorContent" \
                 --output text
-              echo "Deploy failed with status: $STATUS"
+              echo "Backend deploy failed with status: $STATUS"
               exit 1
             fi
             sleep 10
           done
-          echo "Deploy timed out waiting for SSM command."
+          echo "Backend deploy timed out."
           exit 1
 
-  # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
-  # TODO: uncomment when staging EC2 is provisioned and secrets are added:
-  #       STAGING_EC2_HOST, STAGING_EC2_SSH_KEY
-  #
-  # deploy-staging:
-  #   name: Deploy → STAGING
-  #   runs-on: ubuntu-latest
-  #   needs: test
-  #   if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
-  #   environment: staging
-  #   steps:
-  #     - name: Deploy backend to STAGING EC2
-  #       uses: appleboy/ssh-action@v1.2.2
-  #       with:
-  #         host: ${{ secrets.STAGING_EC2_HOST }}
-  #         username: ubuntu
-  #         key: ${{ secrets.STAGING_EC2_SSH_KEY }}
-  #         script: |
-  #           cd /home/ubuntu/AsheFlow
-  #           git pull origin staging
-  #           docker compose build backend
-  #           docker compose up -d backend
+      # Build frontend with prod env vars injected from secrets
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend (prod)
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.PROD_VITE_API_URL }}
+          VITE_AWS_POOL_ID: ${{ secrets.PROD_VITE_AWS_POOL_ID }}
+          VITE_AWS_REGION: ${{ secrets.PROD_VITE_AWS_REGION }}
+          VITE_AWS_CLIENT_ID: ${{ secrets.PROD_VITE_AWS_CLIENT_ID }}
+          VITE_AWS_DOMAIN: ${{ secrets.PROD_VITE_AWS_DOMAIN }}
+
+      - name: Sync to prod S3
+        working-directory: frontend
+        run: aws s3 sync dist/ s3://asheflow-frontend --delete
+
+      - name: Invalidate prod CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.PROD_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
