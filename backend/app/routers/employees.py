@@ -145,6 +145,7 @@ def create_employee(
 def bulk_import_employees(
     rows: List[BulkImportRow],
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
     db: Session = Depends(get_db),
 ):
     """Import multiple employees in one request.
@@ -187,11 +188,12 @@ def bulk_import_employees(
             continue
 
         db_employee = Employee(
-            **row.model_dump(),
+            **row.model_dump(exclude={"hr_system_id_adp"}, exclude_none=True),
             company_id=caller.company_id,
             is_active=False,
             account_status="pending_verification",
             invited_at=now,
+            **({"hr_system_id_adp": row.hr_system_id_adp} if row.hr_system_id_adp else {}),
         )
         db.add(db_employee)
         try:
