@@ -55,3 +55,14 @@ class Employee(Base):
     account_status       = Column(String(30),         nullable=False, default="pending_verification", index=True)
     invited_at           = Column(DateTime(timezone=True), nullable=True)
     reset_on_graduation  = Column(Boolean,            nullable=False, default=False)
+
+    # ── External HR system IDs ────────────────────────────────────────────────
+    # Each HR platform gets its own column: hr_system_id_<source>.
+    # This allows one employee to exist in multiple systems simultaneously.
+    # hr_system_id_adp: ADP associateOID. Backfilled with a generated UUID for
+    # pre-ADP employees; replaced with the real ADP ID on CSV import.
+    # hr_system_id_adp_verified: flips to true on first successful GET /hr/v2/workers
+    # round-trip confirming the stored ID resolves to a live ADP worker record.
+    # Timecard sync only runs for employees where this flag is true.
+    hr_system_id_adp          = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
+    hr_system_id_adp_verified = Column(Boolean, nullable=False, default=False)

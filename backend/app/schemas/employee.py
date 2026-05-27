@@ -69,6 +69,7 @@ class BulkImportRow(BaseModel):
     discord_id: Optional[str] = None
     role: RoleStr
     phone_number: Optional[str] = None
+    hr_system_id_adp: Optional[str] = None  # ADP associateOID; omitted for non-ADP imports
 
     @field_validator("discord_id", mode="before")
     @classmethod

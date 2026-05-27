@@ -4790,3 +4790,43 @@ The concern with external APIs at sort time was latency and failure risk. The so
 FastAPI background tasks die if the server process restarts mid-enrichment. Celery tasks survive restarts, have built-in retry logic for transient failures, and use Redis (already in the infrastructure) as the broker. For a critical pre-sort operation, Celery is the right choice.
 
 **Long-term fix:** Add the frontend build + S3 sync to CI so it runs automatically on every master merge, same as the backend deploy.
+
+---
+
+## 2026-05-27 — ADP Integration: Employee ID Storage and Verification Lifecycle
+
+### Why we need to store ADP's associateOID on each employee
+
+ADP's timecard write API (`Time Cards API`) requires the `associateOID` — ADP's internal UUID for a worker — to target the correct record. It does not accept names or emails. Without storing this ID in our system at import time, we have no way to push shift timestamps to the right ADP worker record during timecard sync.
+
+### The hr_system_id_* naming pattern
+
+External HR system IDs are stored as `hr_system_id_<source>` columns on the `employees` table — one column per HR platform. This is intentional:
+
+- A single `hr_system_id` + `hr_system_source` pair would only allow one HR system per employee
+- Separate columns (`hr_system_id_adp`, `hr_system_id_workday`, etc.) allow one employee to exist in multiple systems simultaneously — useful during platform migrations or if a company uses more than one HR tool
+- Each column is independently nullable/verifiable without affecting the others
+
+### Why NOT NULL — and what the backfill means
+
+`hr_system_id_adp` is `NOT NULL`. This forces the question of "does this employee have an ADP ID?" at import time, not at the moment a timecard sync is attempted. Discovering a gap when timecards need to be pushed is the worst possible time.
+
+Employees who existed before ADP integration was built are backfilled with generated UUIDs (placeholder values). These are not real ADP IDs — they are distinguishable from verified ADP IDs via the `hr_system_id_adp_verified` flag.
+
+### The verification flag and its lifecycle
+
+`hr_system_id_adp_verified` starts as `false` for all employees — including those whose ID was populated from an ADP CSV export. A populated ID is not the same as a confirmed working ID.
+
+The flag flips to `true` only after a live ADP Workers API round-trip (`GET /hr/v2/workers`) confirms that the stored `associateOID` resolves to an active ADP worker record. This is **eager verification** — it runs as a background Celery batch job when the company completes the ADP OAuth connection, before the first shift day. Dispatch sees a "X of Y employees ADP-verified" count and can resolve gaps before they matter.
+
+Timecard sync (`sync_adp_timecards.py`) skips employees where `hr_system_id_adp_verified = false` and surfaces them in a management warning. This is a management concern — ADP configuration and employee ID reconciliation is not dispatch's responsibility.
+
+### What changed in BulkImportModal for ADP CSV exports
+
+ADP exports are not formatted like a generic employee list. Three specific problems required handling:
+
+1. **Split name columns.** ADP exports `First Name` and `Last Name` as separate columns. `parseObjects()` now detects these and combines them into `name` when a pre-combined `name` column is absent.
+
+2. **ADP column aliases.** ADP uses column headers like `File #`, `Associate ID`, `Work Email`, `Business Phone`. These are added to the `ALIASES` map alongside our existing aliases.
+
+3. **Role translation.** ADP job titles (`Delivery Associate`, `Dispatcher`, `DSP Owner`) don't match our role values (`walker`, `dispatch`, `management`). A `ADP_ROLE_MAP` lookup table translates them. Unrecognized titles fall back to `walker` and are highlighted in the preview step for manual correction — they are never silently dropped.
