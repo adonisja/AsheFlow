@@ -4677,4 +4677,116 @@ Protocol reminders per tag are derived from `building_type` at render time — n
 
 Library records surfaced in the walker UI are marked "from AsheFlow library" so walkers know the data may predate their company's presence in the zone. Once the company builds their own locked record for the block, it shadows the library entry and the provenance flag disappears automatically.
 
+### Why block_key travels through the pipeline with each package
+
+`assign_clusters` needs to score each cluster by workload using `LocationProfile` data. The lookup key is `block_key`. But by the time packages reach `assign_clusters`, only `lat`, `lng`, and package identifiers (TBA, tote ID) are present — the street address has been discarded.
+
+Reverse geocoding `(lat, lng) → address` was considered but rejected: it requires an external API call per package, introduces latency and cost at sort time (which runs before the day starts), and creates a failure mode if the API is unavailable.
+
+The correct solution: derive `block_key` from the address string **before clustering**, in the sort orchestrator, using pure string parsing. The block_key is then attached to the package dict as a routing identifier. The street address is discarded after derivation. The block_key — which is not an address, just a derived key — travels with the package through clustering and scoring.
+
+```
+manifest arrives   → {tba, lat, lng, address}
+derive_block_key() → {tba, lat, lng, block_key}   ← address dropped here
+cluster_packages() → clusters, each package still carries block_key
+assign_clusters()  → scores clusters using block_key lookups
+```
+
+This keeps the address ephemeral while giving the pipeline the routing identifier it needs downstream. It also means `derive_block_key()` is a new service to build — a pure string parser that converts a structured NYC address into the `W_36_St_410s_odd` format.
+
+---
+
+## 2026-05-25 — Address Parsing: Deriving block_key from a Street Address
+
+### The two address patterns
+
+Real delivery addresses arrive in two structural forms:
+
+**Pattern A — Street (direction present):**
+```
+340 W 28TH ST APT 2J
+349 W 37th St Attn Lalpe Hair Extensions
+205 West 38th St Ground Floor
+40 West 39th Street Host
+```
+
+**Pattern B — Avenue (no direction):**
+```
+480 9th Avenue Host
+555 10th Avenue, Unit C
+```
+
+The distinguishing rule: if the token after the house number is a direction word (`W|West|E|East|N|North|S|South`), it is a street address. Otherwise it is an avenue address.
+
+### Normalization
+
+Every variant of the same concept maps to one canonical form:
+
+| Concept | Raw variants | Normalized |
+|---|---|---|
+| Direction | `W`, `West` | `W` |
+| Street type | `St`, `Street`, `ST` | `St` |
+| Street type | `Ave`, `Avenue`, `AV` | `Ave` |
+| Ordinal | `28TH`, `28th`, `1ST` | `28`, `1` |
+
+### House number → range and side
+
+```python
+range_base = (house_number // 10) * 10   # floor to nearest 10
+side = "odd" if house_number % 2 == 1 else "even"
+```
+
+`40` → `40s, even` (not `0s` — you floor to the number itself, not below it)
+`349` → `340s, odd`
+`480` → `480s, even`
+
+### Noise suffix stripping
+
+Everything after the street type token is irrelevant and discarded:
+`Attn`, `APT`, `Apt`, `Unit`, `Ground Floor`, `Host`, `Suite`, `#`, etc.
+
+A comma immediately after the street type is also stripped before noise detection.
+
+### Unparseable addresses — flagged to dispatch, never silently dropped
+
+A package whose address cannot be matched returns `None` for block_key. It still enters `cluster_packages` via lat/lng and clusters normally — DBSCAN uses coordinates, not block_keys. It is excluded from workload scoring only.
+
+Crucially, it is **never silently dropped**. The sort orchestrator collects all unparseable packages and surfaces them as a dispatch warning before the day starts: TBA numbers, tote IDs, and the raw address so dispatch can investigate. A missing house number is flagged at higher severity than an unrecognized street type — a package with no house number is potentially undeliverable.
+
+---
+
+## 2026-05-26 — Why Regex Alone Cannot Parse All NYC Addresses
+
+### The problem with pure regex for NYC
+
+A regex parser works well for a narrow, structured delivery zone (Manhattan west side, numbered streets and avenues). But as a multi-tenant system serving all of NYC, the address formats are too varied:
+
+- **Queens hyphenated numbers**: `104-24 114th St` — `int("104-24")` raises `ValueError`
+- **Named streets**: `500 Broadway`, `1 Madison Ave` — no numbered street component
+- **Brooklyn avenues**: `1230 Avenue U` — "Avenue" is not a type suffix, it's part of the name
+- **West End Ave**: `100 West End Ave` — "West" here is part of the street name, not a direction
+- **Fractional/alphanumeric**: `132 1/2 E 62nd St`, `20-F Greenpoint Ave`
+
+A regex that handles all of these without false positives would be extremely complex and fragile to maintain.
+
+### The solution: GeoClient at ingestion time, not sort time
+
+NYC's GeoClient API (NYC Department of City Planning) is a free official service that normalizes any NYC address string into a canonical form — handling all five boroughs, all edge cases, all historical variants.
+
+The concern with external APIs at sort time was latency and failure risk. The solution: move enrichment to **manifest ingestion time**:
+
+1. Dispatch uploads the manifest (1–1.5 hrs before sort, 3–4 hrs before walkers start)
+2. A Celery task runs GeoClient enrichment in the background immediately
+3. Dispatch gets an immediate "in progress" confirmation and continues other work
+4. When enrichment completes, dispatch gets a notification: sort-ready or packages flagged
+5. Sort time: all packages already have normalized addresses and block_keys — no API calls
+
+### The regex parser as fallback
+
+`derive_block_key.py` stays in place as a fallback for packages where GeoClient failed but the address is simple enough to parse. Best-effort derivation with a lower-confidence flag. No packages are silently lost.
+
+### Why Celery, not FastAPI background tasks
+
+FastAPI background tasks die if the server process restarts mid-enrichment. Celery tasks survive restarts, have built-in retry logic for transient failures, and use Redis (already in the infrastructure) as the broker. For a critical pre-sort operation, Celery is the right choice.
+
 **Long-term fix:** Add the frontend build + S3 sync to CI so it runs automatically on every master merge, same as the backend deploy.
