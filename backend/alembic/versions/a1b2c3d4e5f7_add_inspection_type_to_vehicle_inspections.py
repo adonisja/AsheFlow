@@ -24,8 +24,12 @@ def upgrade() -> None:
         sa.Column('inspection_type', sa.String(20), nullable=False, server_default='pre_trip'),
     )
 
-    # 2. Drop the old unique constraint
-    op.drop_constraint('uq_vehicle_inspections_driver_date', 'vehicle_inspections', type_='unique')
+    # 2. Drop the old unique constraint if it exists (may not exist on fresh databases)
+    op.execute("""
+        DO $$ BEGIN
+            ALTER TABLE vehicle_inspections DROP CONSTRAINT IF EXISTS uq_vehicle_inspections_driver_date;
+        END $$;
+    """)
 
     # 3. Create the new broader unique constraint
     op.create_unique_constraint(
