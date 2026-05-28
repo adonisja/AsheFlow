@@ -25,6 +25,7 @@ import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
+import LocationProfiles from './pages/LocationProfiles';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
@@ -365,6 +366,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
                   <AnchorPoints />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/location-profiles"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                  <LocationProfiles />
                 </ProtectedRoute>
               }
             />

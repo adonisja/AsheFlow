@@ -4830,3 +4830,86 @@ ADP exports are not formatted like a generic employee list. Three specific probl
 2. **ADP column aliases.** ADP uses column headers like `File #`, `Associate ID`, `Work Email`, `Business Phone`. These are added to the `ALIASES` map alongside our existing aliases.
 
 3. **Role translation.** ADP job titles (`Delivery Associate`, `Dispatcher`, `DSP Owner`) don't match our role values (`walker`, `dispatch`, `management`). A `ADP_ROLE_MAP` lookup table translates them. Unrecognized titles fall back to `walker` and are highlighted in the preview step for manual correction — they are never silently dropped.
+
+---
+
+## 2026-05-27 — The Sort Pipeline: Orchestrator Design and Zone Persistence
+
+### Why the sort pipeline is split into four pure functions
+
+The sort pipeline (`cluster_packages → assign_clusters → tier1_verify → persist_zones`) is built as four separate pure functions instead of one monolithic function. Each stage:
+
+- Takes explicit inputs, produces explicit outputs
+- Has no side effects except `persist_zones` (which writes to DB)
+- Can be tested independently with mock data
+- Can be replaced without touching the others
+
+This is especially important for `tier1_verify` — it runs a geometry check and produces a `VerificationResult`. The caller (the orchestrator) decides what to do with the result. Embedding that decision inside a single function would make it impossible to support the `force=True` override without deeply entangling business logic with geometry code.
+
+### Why enriched packages live in Redis, not re-derived at sort time
+
+Address enrichment (GeoClient API calls) takes 30–120 seconds for a full manifest. The sort pipeline needs to run fast — dispatch is waiting. The solution is to pre-compute enrichment during manifest upload (Celery task, async) and cache the result in Redis.
+
+When the sort runs, it reads the cached `manifest:{company_id}:{date}` key in milliseconds. The sort itself is pure in-memory computation: DBSCAN, centroid math, polygon containment checks. No external API calls.
+
+**Consequence:** sort requires enrichment to have completed first. If the Redis key is missing or expired (24h TTL), `run_sort` raises `SortError("no_manifest")` with a clear message. The frontend shows "enrich the manifest first."
+
+### Why tier-1 failure blocks zone persistence by default
+
+If any totes are flagged as misaligned, zones are not written. The `force=True` parameter lets dispatch explicitly override after reviewing.
+
+This might seem overly strict. The reason: if a misaligned tote is physically corrected (packages moved to the right truck), the package distribution changes, and the zone polygons may shift. Writing zones before the correction means routing runs on an incorrect zone layout. The 409 Conflict + review flow ensures dispatch has seen the flags before zones are committed.
+
+Forcing dispatch to actively choose `force=True` is a deliberate friction point. It creates an audit trail ("dispatch saw these flags and proceeded anyway") instead of silent acceptance.
+
+### Why zone_date is a required column, not inferred from created_at
+
+`TruckZone` originally had no date column. Re-sorts for the same day would stack up — you could not distinguish "today's zones" from "yesterday's zones" without looking at `created_at`, which is unreliable if sorts run near midnight or the server clock drifts.
+
+`zone_date DATE NOT NULL` makes the intent explicit. `persist_zones()` receives it as a parameter from the sort orchestrator. `GET /sort/{date}` uses it directly. Re-sorts are idempotent per date: the old zones are soft-deactivated, new ones are written.
+
+### Why old zones are deactivated, not deleted, on re-sort
+
+Deleting old zones destroys the audit trail. If a sort runs at 7am with flagged totes and is forced through, then re-runs at 8am after corrections, dispatch may want to see what changed — which totes moved, which zones shifted. Soft deactivation (`is_active = False`) preserves the history without serving stale zones to the routing algorithm.
+
+---
+
+## 2026-05-27 — Location Profile System: Crowdsourcing, Verification, and the Global Library
+
+### Why a two-tier system instead of one table with nullable company_id
+
+The simplest design would be one `location_profiles` table with `company_id NULL` for global records. We rejected this for a fundamental reason: the codebase has a hardened invariant that every company-scoped query filters by `company_id`. A nullable `company_id` breaks that invariant — queries that filter `company_id = X` silently miss the global records, and queries that try to include global records have to write special-case logic.
+
+Two tables keeps isolation intact: `location_profiles` (always has `company_id`), `location_profile_library` (never has `company_id`). The routing algorithm queries both explicitly and merges the results in the orchestrator. No invariant violations, no special-case query logic.
+
+### The locking flow: crowdsourced consensus, not authority
+
+A single captain cannot lock a profile. Building type status advances by accumulating agreements from multiple people: `pending → verified → locked`. The threshold (default 3 agreements) is company-tunable.
+
+This models operational reality. A captain bulk-entering building types before day 1 might be wrong — they haven't made the deliveries yet. A walker who delivers to the building five times a week and has verified the type three times is more reliable. The crowdsourced threshold captures confidence level rather than relying on role hierarchy.
+
+### Why editing an operational note un-verifies it
+
+The `note_verified` flag means "a captain has reviewed this note and attests it's accurate." If the note text changes, that attestation is no longer valid — the captain hasn't reviewed the new text. Un-verifying on edit prevents a verified flag from surviving changes it was never applied to. Re-verification is a quick action (one POST call) that restores the audit trail after review.
+
+### The nomination pipeline: why it's automatic on lock
+
+Once a profile is locked, it's automatically set to `nomination_status = "nominated"`. Super admins see it in the nominations queue.
+
+Why not require a captain to manually nominate? Because it would never happen. Captains are focused on daily operations. A profile that reaches locked status has already cleared the trust bar — nomination is a bureaucratic step, not a judgment call. Automating it ensures no valid profile sits idle in a company's database when it could be helping other DSPs entering the same delivery area.
+
+### How company records shadow the global library
+
+The routing algorithm (in `run_sort.py → _get_location_profiles()`) loads global library records first, then company records. When `assign_clusters` builds its `profiles_by_block` lookup, company records overwrite library records for the same `block_key`.
+
+This is the shadow: if the company has a locked record for `W_36_St_410s_odd` saying `biz_security` (high_touch), but the library says `elevator` (standard), the company's experience wins. Their field data is more recent and specific to their operation.
+
+If no company record exists, the library provides cold-start data. If neither exists, the routing algorithm falls back to raw package count and flags low confidence to dispatch.
+
+### The protocol_reminder pattern: derived, not stored
+
+The `BUILDING_TYPE_PROTOCOL` dict in `schemas/location_profile.py` maps `building_type → reminder string`. The reminder is appended to API responses by `from_orm_with_protocol()` at serialization time.
+
+**Why not store it?** Protocol reminders are fixed operational guidance. "Photo at front door" does not change based on company data. Storing it would require a migration every time the text is updated, and creates a risk that stored text diverges from the canonical definition. Deriving at serialization always serves the current guidance.
+
+**Why in the schema file, not the model?** Models represent database rows. Protocol reminders are not database concepts — they're presentation layer guidance. Putting the lookup table and derivation logic in the schema file keeps the model clean and the schema self-contained for response building.
