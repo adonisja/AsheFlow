@@ -27,6 +27,7 @@ export default function DispatchDashboard() {
   const [addingStaffId, setAddingStaffId] = useState<string | null>(null);
   // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
   const [confirmations, setConfirmations] = useState<Record<string, string>>({});
+  const [isPublished, setIsPublished] = useState(false);
   const [isPollingConfirmations, setIsPollingConfirmations] = useState(false);
   const [confirmationsStale, setConfirmationsStale] = useState(false);
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -88,7 +89,9 @@ export default function DispatchDashboard() {
   const fetchConfirmations = async () => {
     try {
       const res = await axiosClient.get(`/dispatch/${selectedDate}/confirmations`);
-      setConfirmations(res.data.confirmations || {});
+      const data = res.data.confirmations || {};
+      setConfirmations(data);
+      setIsPublished(Object.keys(data).length > 0);
     } catch {
       // No confirmations yet — not an error worth surfacing
     }
@@ -107,6 +110,7 @@ export default function DispatchDashboard() {
         setError(null);
         try {
           await axiosClient.post(`/dispatch/${selectedDate}/publish`);
+          setIsPublished(true);
           await fetchConfirmations();
           startConfirmationPolling(selectedDate);
         } catch (err: any) {
@@ -483,7 +487,7 @@ export default function DispatchDashboard() {
           </button>
           <button
             onClick={handleFinalize}
-            disabled={isFinalizing || isLoading || !dispatchData || Object.keys(confirmations).length === 0}
+            disabled={isFinalizing || isLoading || !dispatchData || !isPublished}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title="Post confirmed crew lists to each truck channel and #drivers-chat"
           >
