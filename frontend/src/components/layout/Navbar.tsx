@@ -27,6 +27,7 @@ import {
   Search,
   BarChart2,
   UserCircle2,
+  Building2,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -364,6 +365,9 @@ const Navbar = () => {
       {(isDispatch || isAdmin) && (
         <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
       )}
+      {(isDispatch || isMgmt || isAdmin) && (
+        <NavLink to="/location-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
+      )}
 
       {isMgmt && (
         <>
@@ -475,6 +479,7 @@ function MobileLinks({
       <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
       {(isDispatch || isAdmin) && <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>}
       {(isDispatch || isAdmin) && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>}
+      {(isDispatch || isMgmt || isAdmin) && <NavLink to="/location-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>}
       {isMgmt && <>
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
         <NavLink to="/trainee-management" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainees</NavLink>

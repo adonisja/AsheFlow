@@ -83,6 +83,9 @@ class CompanyConfig(Base):
     # ── Location profile verification ─────────────────────────────────────────
     location_profile_lock_threshold = Column(Integer, nullable=True)   # default 3 agreements to lock
 
+    # ── Manifest ingestion mode ───────────────────────────────────────────────
+    ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
+
     # ── Discord guild integration (optional — all nullable) ───────────────────
     discord_guild_id            = Column(BigInteger, nullable=True)
     discord_drivers_channel_id  = Column(BigInteger, nullable=True)
