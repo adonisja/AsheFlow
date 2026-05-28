@@ -98,6 +98,10 @@ Thumbs.db
 docs/decisions/
 docs/journals/
 
+# Claude working protocol — contains internal infrastructure details
+# Will move to private repo (AsheFlow-private)
+CLAUDE.md
+
 # Personal records and scratch files
 .claude/
 discussion.md
