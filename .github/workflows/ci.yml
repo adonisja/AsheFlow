@@ -138,9 +138,30 @@ jobs:
       # Deploy backend via SSM — no SSH key needed
       - name: Deploy backend via SSM
         run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --region us-east-2 \
-            --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+          poll() {
+            local CMD_ID=$1 INSTANCE=$2 MAX=$3
+            for i in $(seq 1 $MAX); do
+              STATUS=$(aws ssm get-command-invocation \
+                --region us-east-2 --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                --query "Status" --output text 2>/dev/null || echo "Pending")
+              echo "[$i/$MAX] $STATUS"
+              if [ "$STATUS" = "Success" ]; then return 0; fi
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardErrorContent" --output text
+                return 1
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for SSM command."
+            return 1
+          }
+
+          INSTANCE=${{ secrets.STAGING_EC2_INSTANCE_ID }}
+
+          # Step 1: pull, build, start containers
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
               "export HOME=/home/ubuntu",
@@ -148,40 +169,25 @@ jobs:
               "cd /home/ubuntu/AsheFlow && git pull origin staging",
               "touch /home/ubuntu/AsheFlow/bot/.env",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker",
+              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker"
+            ]' \
+            --query "Command.CommandId" --output text)
+          echo "Step 1 SSM: $CID"
+          sleep 15
+          poll "$CID" "$INSTANCE" 36 || exit 1
+
+          # Step 2: run migrations (separate command — longer polling window for first-run backfills)
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
               "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
             ]' \
-            --query "Command.CommandId" \
-            --output text)
-
-          echo "SSM Command ID: $COMMAND_ID"
+            --query "Command.CommandId" --output text)
+          echo "Step 2 SSM (migrations): $CID"
           sleep 15
+          poll "$CID" "$INSTANCE" 60 || exit 1
 
-          for i in $(seq 1 18); do
-            STATUS=$(aws ssm get-command-invocation \
-              --region us-east-2 \
-              --command-id "$COMMAND_ID" \
-              --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-              --query "Status" \
-              --output text 2>/dev/null || echo "Pending")
-            echo "[$i] Status: $STATUS"
-            if [ "$STATUS" = "Success" ]; then
-              echo "Backend deploy succeeded."
-              exit 0
-            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              aws ssm get-command-invocation \
-                --region us-east-2 \
-                --command-id "$COMMAND_ID" \
-                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-                --query "StandardErrorContent" \
-                --output text
-              echo "Backend deploy failed with status: $STATUS"
-              exit 1
-            fi
-            sleep 10
-          done
-          echo "Backend deploy timed out."
-          exit 1
+          echo "Backend deploy succeeded."
 
       # Build frontend with staging env vars injected from secrets
       - name: Setup Node
@@ -270,9 +276,30 @@ jobs:
 
       - name: Deploy backend via SSM
         run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --region us-east-2 \
-            --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+          poll() {
+            local CMD_ID=$1 INSTANCE=$2 MAX=$3
+            for i in $(seq 1 $MAX); do
+              STATUS=$(aws ssm get-command-invocation \
+                --region us-east-2 --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                --query "Status" --output text 2>/dev/null || echo "Pending")
+              echo "[$i/$MAX] $STATUS"
+              if [ "$STATUS" = "Success" ]; then return 0; fi
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardErrorContent" --output text
+                return 1
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for SSM command."
+            return 1
+          }
+
+          INSTANCE=${{ secrets.EC2_INSTANCE_ID }}
+
+          # Step 1: pull, build, start containers
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
               "export HOME=/home/ubuntu",
@@ -280,40 +307,25 @@ jobs:
               "cd /home/ubuntu/AsheFlow && git pull origin master",
               "touch /home/ubuntu/AsheFlow/bot/.env",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker",
+              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker"
+            ]' \
+            --query "Command.CommandId" --output text)
+          echo "Step 1 SSM: $CID"
+          sleep 15
+          poll "$CID" "$INSTANCE" 36 || exit 1
+
+          # Step 2: run migrations (separate command — longer polling window)
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
               "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
             ]' \
-            --query "Command.CommandId" \
-            --output text)
-
-          echo "SSM Command ID: $COMMAND_ID"
+            --query "Command.CommandId" --output text)
+          echo "Step 2 SSM (migrations): $CID"
           sleep 15
+          poll "$CID" "$INSTANCE" 60 || exit 1
 
-          for i in $(seq 1 18); do
-            STATUS=$(aws ssm get-command-invocation \
-              --region us-east-2 \
-              --command-id "$COMMAND_ID" \
-              --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
-              --query "Status" \
-              --output text 2>/dev/null || echo "Pending")
-            echo "[$i] Status: $STATUS"
-            if [ "$STATUS" = "Success" ]; then
-              echo "Backend deploy succeeded."
-              exit 0
-            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              aws ssm get-command-invocation \
-                --region us-east-2 \
-                --command-id "$COMMAND_ID" \
-                --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
-                --query "StandardErrorContent" \
-                --output text
-              echo "Backend deploy failed with status: $STATUS"
-              exit 1
-            fi
-            sleep 10
-          done
-          echo "Backend deploy timed out."
-          exit 1
+          echo "Backend deploy succeeded."
 
       # Build frontend with prod env vars injected from secrets
       - name: Setup Node
