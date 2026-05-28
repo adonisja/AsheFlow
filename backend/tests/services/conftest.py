@@ -1,7 +1,8 @@
 """
 Skip collection of tests whose proprietary service modules are not present.
 
-These services are excluded from the public repo (.gitignore). Tests run
+Proprietary services live in AsheFlow-private and are injected onto the EC2
+at deploy time — they are never present on the CI runner. Tests run fully
 locally where the files exist; CI skips them cleanly rather than erroring.
 """
 
