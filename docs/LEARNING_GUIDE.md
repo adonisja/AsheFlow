@@ -4906,6 +4906,63 @@ This is the shadow: if the company has a locked record for `W_36_St_410s_odd` sa
 
 If no company record exists, the library provides cold-start data. If neither exists, the routing algorithm falls back to raw package count and flags low confidence to dispatch.
 
+---
+
+## 2026-05-28 — NOT NULL migrations and constructor call audits
+
+### The gap migrations can't close
+
+When you add a NOT NULL column to a model via Alembic, the migration does three things:
+
+1. Adds the column as nullable
+2. Backfills existing rows with a default value
+3. Alters the column to NOT NULL
+
+This catches the DB layer. It does not catch Python-side omissions. Every
+`db.add(ModelName(...))` call that doesn't pass the new field will compile and
+run fine — until it hits the database at runtime and raises an IntegrityError.
+
+The error is non-obvious in local dev because FastAPI drops CORS headers on
+unhandled 500s. The browser reports a CORS error before you can see the real
+IntegrityError in the backend logs.
+
+### The audit pattern
+
+After adding a NOT NULL column, run:
+
+```python
+import re
+text = open('backend/app/routers/your_router.py').read()
+blocks = list(re.finditer(r'db\.add\(YourModel\(', text))
+for m in blocks:
+    chunk = text[m.start():m.start()+400]
+    if 'new_column' not in chunk.split('))')[0]:
+        line = text[:m.start()].count('\n') + 1
+        print(f'MISSING at line ~{line}')
+```
+
+Or grep across all routers:
+
+```bash
+grep -rn "db.add(ModelName(" backend/app/routers/ | grep -v "new_column"
+```
+
+Note: the grep only catches single-line matches. Use the Python regex approach
+for multi-line constructor calls where `new_column` appears on a later line.
+
+### The publish gate pattern
+
+A boolean action gate should be derived from whether the action itself succeeded,
+not from downstream side effects. In `DispatchDashboard`, "Post Final Crews" was
+gated on `confirmations.length > 0` — but confirmations are populated by a
+page-load fetch that returns data from any prior date's publish. The gate was
+effectively measuring "did a publish ever succeed for this date" rather than
+"did the current publish succeed".
+
+The fix is a dedicated `isPublished` state flag set only inside the `try` block
+of the publish call. Side effects (populating confirmations, starting polling)
+follow on success. The gate never fires on failure.
+
 ### The protocol_reminder pattern: derived, not stored
 
 The `BUILDING_TYPE_PROTOCOL` dict in `schemas/location_profile.py` maps `building_type → reminder string`. The reminder is appended to API responses by `from_orm_with_protocol()` at serialization time.
