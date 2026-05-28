@@ -93,6 +93,7 @@ def submit_continuation_request(
     # Notify the trainer — shows on their dashboard notification feed
     db.add(Notification(
         employee_id=payload.trainer_id,
+        company_id=caller.company_id,
         type="continuation_request",
         message=f"{trainee.name} has requested to continue training with you on their next assigned day.",
     ))
