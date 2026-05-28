@@ -4970,3 +4970,114 @@ The `BUILDING_TYPE_PROTOCOL` dict in `schemas/location_profile.py` maps `buildin
 **Why not store it?** Protocol reminders are fixed operational guidance. "Photo at front door" does not change based on company data. Storing it would require a migration every time the text is updated, and creates a risk that stored text diverges from the canonical definition. Deriving at serialization always serves the current guidance.
 
 **Why in the schema file, not the model?** Models represent database rows. Protocol reminders are not database concepts — they're presentation layer guidance. Putting the lookup table and derivation logic in the schema file keeps the model clean and the schema self-contained for response building.
+
+---
+
+### Black-box import pattern for proprietary code
+
+When part of a codebase is gitignored for competitive reasons, the public repo
+should expose as little information as possible about what's hidden. The naive
+approach — individual `try/except ImportError` blocks in `main.py` — leaks all
+proprietary module names into a public file.
+
+The black-box pattern solves this with a single entry point in the private repo:
+
+```python
+# main.py (public) — reveals nothing about what's inside
+try:
+    from asheflow_private.register import register_proprietary_routers as _register
+except ImportError:
+    _register = None
+
+if _register:
+    _register(router, dependencies)
+```
+
+```python
+# asheflow_private/register.py (private) — module names stay confidential
+def register_proprietary_routers(router, configured):
+    from app.routers import dispatch, training, field_ops, walker_routes
+    router.include_router(dispatch.router, dependencies=configured)
+    ...
+```
+
+If the private package isn't present the backend starts cleanly — proprietary
+routes are simply absent. Adding new proprietary routers only requires editing
+`register.py`; `main.py` never changes.
+
+---
+
+### Why FastAPI 500s appear as CORS errors
+
+FastAPI applies CORS middleware to responses it controls. When an unhandled
+exception bubbles past all middleware (a 500 that isn't caught by the route
+handler), FastAPI emits the 500 response before the CORS middleware gets a
+chance to add `Access-Control-Allow-Origin` headers.
+
+The browser receives a response with no CORS headers and reports a CORS error
+— even though the real problem is a 500. The actual error is in the backend
+logs, not in the browser console.
+
+**Consequence:** A `company_id=None` IntegrityError in a route handler will
+show as "CORS error" in the browser. Always check backend logs first before
+investigating CORS configuration.
+
+**Prevention:** Handle exceptions in route handlers with `try/except` and
+return a proper `HTTPException`. Never let IntegrityErrors, ValueError, or
+similar reach the unhandled exception boundary.
+
+---
+
+### Reverse proxy and TLS on EC2 (Caddy pattern)
+
+A FastAPI backend running in Docker on an EC2 listens on an internal port
+(8000). To be reachable via HTTPS, a TLS-terminating reverse proxy must sit
+in front of it and listen on ports 80 and 443.
+
+Caddy is the simplest option for this setup:
+- Auto-provisions and auto-renews Let's Encrypt certificates
+- HTTP-01 ACME challenge requires port 80 to be open and DNS to point to the server
+- Two-line `Caddyfile`: domain + `reverse_proxy backend:8000`
+- Certificate state is persisted in a named Docker volume — loss of the volume
+  means re-provisioning, which works but hits Let's Encrypt rate limits if done
+  repeatedly
+
+The backend port should **not** be exposed externally (remove it from the base
+`docker-compose.yml`). Only Caddy should accept inbound traffic on 443. Re-expose
+the backend port in `docker-compose.override.yml` for local dev only.
+
+An `API_DOMAIN` environment variable makes the same `Caddyfile` work for both
+staging and prod — only the value in `.env` differs.
+
+---
+
+### Cognito OAuth federation: how it connects to existing accounts
+
+Cognito supports identity federation (Discord, Google, etc.) alongside
+username/password auth on the same user pool. For AsheFlow, federation is
+a convenience feature — it doesn't create new accounts, it lets existing
+employees sign in with a social identity whose email matches their record.
+
+**How the linking works:**
+1. Employee signs in via Discord/Google through the Cognito hosted UI
+2. Cognito calls the identity provider, receives an email claim
+3. Cognito creates or finds a user pool entry for that email
+4. The backend receives an ID token; `_resolve_employee_from_cognito` looks up
+   `Employee.email == token.email`
+5. On first match, `cognito_sub` is stamped on the employee row for future
+   fast-path lookups
+
+**What Cognito requires for federation to work:**
+- Identity providers configured on the user pool (Discord as OIDC, Google as Google)
+- Hosted UI domain provisioned (`<prefix>.auth.<region>.amazoncognito.com`)
+- App client with `AllowedOAuthFlowsUserPoolClient: true`, `code` flow,
+  `openid email profile` scopes, and callback URLs registered for each environment
+- `VITE_AWS_DOMAIN` must be set to the hosted UI domain so Amplify knows where
+  to redirect
+
+**Why Amplify's `oauth` config causes 400 on page load without the above:**
+Amplify checks for an authorization code in the URL on every page load (to
+handle the redirect back from the identity provider). This check hits the
+Cognito token endpoint. If the app client doesn't have OAuth flows enabled,
+Cognito returns 400 on that check — every page load, whether or not the user
+clicked a social login button.
