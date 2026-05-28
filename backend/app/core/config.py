@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # record is automatically deleted by the Celery cleanup job.
     invite_expiry_days: int = 7
 
+    # NYC GeoClient API — used for address enrichment at manifest ingestion time.
+    # Register at https://api.nyc.gov/  (free, requires NYC account).
+    # Leave unset in development/test; enrichment task will skip GeoClient calls.
+    geoclient_app_id: str = ""
+    geoclient_app_key: str = ""
+
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
 
