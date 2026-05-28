@@ -7,7 +7,25 @@ from app import models
 from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, dispatch, schedule, time_off_requests, feedback, training, notifications, field_ops, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, walker_routes
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions
+
+# Proprietary routers — excluded from public repo; gracefully absent on staging/CI
+try:
+    from app.routers import dispatch as _dispatch_mod
+except ImportError:
+    _dispatch_mod = None
+try:
+    from app.routers import training as _training_mod
+except ImportError:
+    _training_mod = None
+try:
+    from app.routers import field_ops as _field_ops_mod
+except ImportError:
+    _field_ops_mod = None
+try:
+    from app.routers import walker_routes as _walker_routes_mod
+except ImportError:
+    _walker_routes_mod = None
 
 
 class _JsonFormatter(logging.Formatter):
@@ -61,13 +79,16 @@ api_v1_router.include_router(truck_assignments.router,        dependencies=_conf
 api_v1_router.include_router(assignment_members.router,       dependencies=_configured)
 api_v1_router.include_router(employee_off_days.router,        dependencies=_configured)
 api_v1_router.include_router(employee_relationships.router,   dependencies=_configured)
-api_v1_router.include_router(dispatch.router,                 dependencies=_configured)
+if _dispatch_mod:
+    api_v1_router.include_router(_dispatch_mod.router,        dependencies=_configured)
 api_v1_router.include_router(schedule.router,                 dependencies=_configured)
 api_v1_router.include_router(time_off_requests.router,        dependencies=_configured)
 api_v1_router.include_router(feedback.router,                 dependencies=_configured)
-api_v1_router.include_router(training.router,                 dependencies=_configured)
+if _training_mod:
+    api_v1_router.include_router(_training_mod.router,        dependencies=_configured)
 api_v1_router.include_router(notifications.router,            dependencies=_configured)
-api_v1_router.include_router(field_ops.router,                dependencies=_configured)
+if _field_ops_mod:
+    api_v1_router.include_router(_field_ops_mod.router,       dependencies=_configured)
 api_v1_router.include_router(continuation_requests.router,    dependencies=_configured)
 api_v1_router.include_router(assignment_change_requests.router, dependencies=_configured)
 api_v1_router.include_router(incidents.router,                dependencies=_configured)
@@ -79,7 +100,8 @@ api_v1_router.include_router(anchor_points.router,            dependencies=_conf
 api_v1_router.include_router(analytics.router,                dependencies=_configured)
 api_v1_router.include_router(shift_ops.router,                dependencies=_configured)
 api_v1_router.include_router(shift_sessions.router,           dependencies=_configured)
-api_v1_router.include_router(walker_routes.router,            dependencies=_configured)
+if _walker_routes_mod:
+    api_v1_router.include_router(_walker_routes_mod.router,   dependencies=_configured)
 api_v1_router.include_router(companies.router,                dependencies=_configured)
 # Exempt — must be reachable before and during setup
 api_v1_router.include_router(registration.router)
