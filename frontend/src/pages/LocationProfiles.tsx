@@ -321,7 +321,7 @@ function ProfilePanel({
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Operational Note</p>
                 {profile.note_verified && (
                   <span className="inline-flex items-center gap-1 text-xs text-success">
-                    <CheckCircle2 className="w-3 h-3" /> Verified by {profile.note_verified_by_name ?? 'captain'}
+                    <CheckCircle2 className="w-3 h-3" /> Verified by {profile.verified_by_name ?? 'captain'}
                   </span>
                 )}
               </div>
@@ -450,9 +450,8 @@ export default function LocationProfiles() {
     <div className="space-y-6 animate-slide-up">
       <SectionHeader
         title="Location Profiles"
-        subtitle="Crowdsourced building intelligence for delivery routing"
-        icon={Building2}
-        action={
+        description="Crowdsourced building intelligence for delivery routing"
+        actions={
           <button onClick={() => setShowSubmit(true)} className="btn-primary flex items-center gap-1.5 text-sm">
             <Plus className="w-3.5 h-3.5" /> Submit Profile
           </button>
