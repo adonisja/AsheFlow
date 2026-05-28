@@ -146,6 +146,7 @@ jobs:
               "export HOME=/home/ubuntu",
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git pull origin staging",
+              "touch /home/ubuntu/AsheFlow/bot/.env",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
               "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker",
               "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
@@ -277,6 +278,7 @@ jobs:
               "export HOME=/home/ubuntu",
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git pull origin master",
+              "touch /home/ubuntu/AsheFlow/bot/.env",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
               "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker",
               "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
