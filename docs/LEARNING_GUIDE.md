@@ -5081,3 +5081,156 @@ handle the redirect back from the identity provider). This check hits the
 Cognito token endpoint. If the app client doesn't have OAuth flows enabled,
 Cognito returns 400 on that check — every page load, whether or not the user
 clicked a social login button.
+
+---
+
+## 2026-05-29 — Proxy headers, schema drift, and workflow state machines
+
+### Why mixed-content errors come from the server, not the bundle
+
+When a React SPA sends API requests to an `https://` URL, "mixed content" means
+the browser received an `http://` URL somewhere in the response and refused to
+follow it. The instinct is to check the frontend bundle — is the `VITE_API_URL`
+set correctly?
+
+But Vite hashes bundle content. If the hash is unchanged across builds, the
+content is unchanged, which means the secret was already correct. The error is
+coming from somewhere else.
+
+The real source: FastAPI (via Starlette) uses the **request scheme** when
+building redirect URLs. When Caddy proxies over plain HTTP inside Docker, FastAPI
+sees `scheme=http`. Any `307 Temporary Redirect` — including the trailing-slash
+redirect from `GET /trucks` to `GET /trucks/` — produces a
+`Location: http://...` header. The browser blocks it as mixed content.
+
+**Fix:** `ProxyHeadersMiddleware` from Uvicorn reads the `X-Forwarded-Proto`
+header Caddy adds and patches `request.scope["scheme"]` before any handler runs.
+
+```python
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+```
+
+`trusted_hosts="*"` is safe because the backend port is not publicly accessible —
+only the reverse proxy can reach it. If the backend were exposed directly to the
+internet, this would allow header spoofing and you'd need to list trusted IPs.
+
+**Debugging rule:** If you see mixed-content errors against an `https://` API,
+check the Network tab for 3xx responses with `http://` Location headers before
+touching the frontend or CI configuration.
+
+---
+
+### Why Vite bundle hashes don't change when secrets are "wrong"
+
+A Vite production build hashes the content of each bundle file and embeds that
+hash in the filename (`index-Cra3Qo3t.js`). The same content always produces the
+same hash.
+
+If you change a `VITE_*` environment variable but the hash doesn't change, the
+secret value was already the same as before the change. This means either:
+1. The secret was already correct and something else is causing the error, or
+2. The variable isn't being read at build time (wrong name, missing `VITE_` prefix)
+
+In our case: `VITE_API_URL` was already `https://` from a prior CI run. Multiple
+re-deploys produced the same hash. The bundle was never the problem.
+
+---
+
+### Out-of-band schema drift: the migration gap that direct ALTER creates
+
+Alembic migrations record every schema change in version-controlled files. When
+staging runs `alembic upgrade head`, it applies every migration in order and ends
+up with exactly the schema described by the migration chain.
+
+If you run `ALTER TABLE` directly on the dev database without writing a migration,
+staging (and any fresh database) will be missing that change. Everything works on
+dev because the change is already there. Staging fails with a constraint violation
+or missing column, and the error message points at the application code — not at
+the schema drift.
+
+**Signs of schema drift:**
+- `CheckViolation` errors that can't be reproduced locally
+- `IntegrityError` for a constraint that "doesn't exist in the model"
+- `column does not exist` errors on a column that was added by `ALTER TABLE` on dev
+
+**Protocol:** Never run `ALTER TABLE` on a dev database without immediately writing
+an Alembic migration. Even for "temporary" changes or "I'll do it properly later"
+fixes.
+
+**Note on CheckViolation → CORS error:** A `CheckViolation` from SQLAlchemy
+reaches FastAPI as an unhandled exception, which produces a 500. FastAPI strips
+CORS headers from 500 responses. The browser reports it as a CORS error. Always
+check backend logs when you see CORS failures — they may be masking database errors.
+
+---
+
+### How `aws` CLI is unavailable in SSM RunShellScript
+
+AWS Systems Manager's `Run Command` (SSM RunShellScript) executes scripts inside
+the ssm-agent process on the EC2 instance. The agent runs with a minimal
+environment — it does not source the user's shell profile, so the `aws` CLI is
+not in PATH even if it's installed and available to the `ec2-user` interactively.
+
+**Workaround:** Use `curl` with a presigned S3 URL instead of `aws s3 cp`.
+Generate the presigned URL locally:
+
+```bash
+aws s3 presign s3://bucket/key --expires-in 3600
+```
+
+Then pass the URL to `curl` in the SSM command:
+
+```bash
+curl -s "https://bucket.s3.region.amazonaws.com/key?X-Amz-..." -o /tmp/file
+```
+
+The same issue applies to any CLI tool not in the default PATH — use absolute
+paths (`/usr/local/bin/aws`) or use HTTP-based alternatives.
+
+---
+
+### Workflow state machines: deriving step from durable DB state
+
+Multi-step workflows (Run → Publish → Finalize) need answers to two questions:
+1. What step is the workflow on right now?
+2. Which operations are valid from this step?
+
+A common frontend mistake is tracking this in React state (`const [isPublished, setIsPublished] = useState(false)`). This is fragile:
+- State is lost on page reload
+- Two browser tabs can drift out of sync
+- State derived from a count of related rows (e.g., "published if confirmations > 0")
+  can be wrong if those rows exist for other reasons
+
+**The right approach:** persist the workflow step in the database and derive
+frontend state from what the backend returns.
+
+For the dispatch workflow, `TruckAssignment.status` (`planned` / `active` /
+`completed`) was the right place — it already had the correct semantics in its
+check constraint but was never updated. Now:
+- `planned` → dispatch ran, not yet published
+- `active` → published to Discord, confirmation window open
+- `completed` → final crews posted, workflow done
+
+The GET endpoint derives a single `workflow_status` field from the aggregate of
+truck statuses. The frontend reads this field and computes a `workflowStep`
+constant — not a state variable, because it doesn't need to change independently
+of the data it's derived from.
+
+```typescript
+const workflowStep: WorkflowStep = !dispatchData
+  ? 'none'
+  : dispatchData.workflow_status === 'finalized' ? 'finalized'
+  : dispatchData.workflow_status === 'published' ? 'published'
+  : 'dispatched';
+```
+
+Each button is then gated on exactly one step:
+```typescript
+disabled={isLoading || workflowStep !== 'none'}        // Run Dispatch
+disabled={isPublishing || workflowStep !== 'dispatched'} // Publish
+disabled={isFinalizing || workflowStep !== 'published'}  // Post Final Crews
+```
+
+The backend gates mirror this: each endpoint checks the current status set and
+rejects with 409 if the operation is out of sequence or already completed.
