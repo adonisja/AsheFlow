@@ -5234,3 +5234,123 @@ disabled={isFinalizing || workflowStep !== 'published'}  // Post Final Crews
 
 The backend gates mirror this: each endpoint checks the current status set and
 rejects with 409 if the operation is out of sequence or already completed.
+
+---
+
+### The `allow_*` dep type trap: RoleChecker returns dict, not Employee
+
+FastAPI dependencies have a return type. `RoleChecker(["management", "admin"])` is a
+callable that validates the Cognito JWT and returns the decoded token — a plain `dict`.
+It does **not** return an `Employee`.
+
+The trap: a function parameter typed as `caller: Employee = Depends(allow_management)`
+compiles fine and passes type checking because FastAPI doesn't enforce return types on
+dependencies at startup — it only resolves them at request time. The endpoint will
+appear to work until it reaches a line that accesses any attribute like `caller.company_id`
+or `caller.id`, at which point Python raises `AttributeError: 'dict' object has no
+attribute 'company_id'`.
+
+This is a **silent runtime bomb**: the error only fires when a management-role user
+hits that specific endpoint. Any test that doesn't exercise the attribute access (e.g., a
+test that stubs out the dep) will pass cleanly.
+
+**Correct pattern when you need both role enforcement and an Employee:**
+```python
+def my_endpoint(
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),        # role gate — returns dict, discard it
+    caller: Employee = Depends(get_caller_employee),  # Employee row with company_id
+):
+```
+
+The `_: dict` convention makes the intent explicit: we want the side effect (reject if
+wrong role) but don't need the return value. `get_caller_employee` runs a second dep in
+parallel and provides the typed Employee object.
+
+**When `get_caller_employee` alone is sufficient:** if the endpoint only needs
+`driver`/`trainer`/`management` or higher and you just want to restrict by role, you can
+pass the roles to `get_caller_employee` via a role-aware dep variant, or keep the role
+checker separate. But never assign the `RoleChecker` result to a typed `Employee` parameter.
+
+---
+
+### The `model_dump()` company_id gap in INSERT operations
+
+Pydantic request schemas intentionally exclude `company_id` — it must come from the
+authenticated caller, never from client input. This is correct security design: a client
+that can inject `company_id` into a request body could write rows belonging to other tenants.
+
+The gap arises when the INSERT is written as:
+```python
+row = SomeModel(**payload.model_dump())
+db.add(row)
+```
+
+If `SomeModel` has `company_id NOT NULL` but the payload schema excludes it, SQLAlchemy
+sets the column to `None` and the INSERT raises an `IntegrityError` at the database level.
+Locally this surfaces as a 500. In a browser, FastAPI drops CORS headers on unhandled 500s,
+so it can look like a CORS error — check backend logs first.
+
+**The fix:** append `company_id` as a keyword argument after the spread:
+```python
+row = SomeModel(**payload.model_dump(), company_id=caller.company_id)
+db.add(row)
+```
+
+Python's `**` unpacking allows additional keyword arguments after a dict spread, provided
+they don't collide with keys already in the dict (they won't, since `company_id` is
+excluded from the schema by design).
+
+**Scanner script (from CLAUDE.md):** After writing any new INSERT, run the scanner to
+catch any `db.add(Model(` calls that don't include `company_id` in the block:
+```python
+import re
+text = open('backend/app/routers/your_file.py').read()
+for m in re.finditer(r'db\.add\((\w+)\(', text):
+    chunk = text[m.start():m.start()+600]
+    block = chunk[:chunk.find('))')] if chunk.find('))') != -1 else chunk
+    if 'company_id' not in block:
+        print(f'line {text[:m.start()].count(chr(10))+1}: {m.group(1)} missing company_id')
+```
+
+---
+
+### Latent NameError: private helpers that reference outer-scope variables
+
+A private helper function (not a FastAPI endpoint) is just a regular Python function. It
+doesn't have access to the caller's request context, dependencies, or any variable from
+the endpoint that calls it — only what's in its parameter list.
+
+The latent bug pattern:
+```python
+# The endpoint has 'caller' in scope
+def record_confirmation(caller: Employee = Depends(get_caller_employee), ...):
+    reassignment = _reassign_trainee_on_trainer_decline(db, trainer_id, date)
+
+# The helper was written as if it could access 'caller' — it cannot
+def _reassign_trainee_on_trainer_decline(db, trainer_id, dispatch_date):
+    n = Notification(
+        company_id=caller.company_id,   # NameError: 'caller' is not defined
+        ...
+    )
+```
+
+Python does **not** raise this at import time or at the time the helper is defined. It only
+raises `NameError` when the line is actually executed — when `record_confirmation` calls the
+helper and the helper reaches that line. If the code path is exercised rarely (e.g., the
+decline flow had never been triggered since the function was written), the bug sits dormant
+indefinitely.
+
+**The fix:** pass `company_id` explicitly as a parameter:
+```python
+def record_confirmation(caller: Employee = Depends(get_caller_employee), ...):
+    reassignment = _reassign_trainee_on_trainer_decline(db, trainer_id, date, caller.company_id)
+
+def _reassign_trainee_on_trainer_decline(db, trainer_id, dispatch_date, company_id):
+    n = Notification(company_id=company_id, ...)
+```
+
+**Discipline:** every private helper that needs `company_id` must receive it as an
+explicit parameter — never count on it being available from an enclosing scope. Python
+closures would only work if the helper were defined *inside* the endpoint function (a nested
+function), which is not how these routers are structured.
