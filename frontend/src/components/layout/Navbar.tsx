@@ -296,12 +296,14 @@ const Navbar = () => {
   const { groups, isAuthenticated } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [trainerPhase, setTrainerPhase] = useState<number | null>(null);
+  const [hasActiveQuiz, setHasActiveQuiz] = useState(false);
 
   const isFieldStaff = groups.some(role => ['driver', 'walker', 'trainer', 'trainee'].includes(role));
   const isTrainer = groups.includes('trainer');
   const isMgmt = groups.includes('management');
   const isDispatch = groups.includes('dispatch');
   const isAdmin = groups.includes('admin');
+  const isTrainee = groups.includes('trainee');
   const canAccessFieldOps = groups.some(role => ['driver', 'walker', 'trainee'].includes(role)) || isMgmt || isDispatch || isAdmin;
   const canAccessScheduleChanges = isFieldStaff || isDispatch || isAdmin;
   const canAccessSchedule = isFieldStaff || isMgmt || isAdmin;
@@ -312,6 +314,13 @@ const Navbar = () => {
       .then(res => setTrainerPhase(res.data?.record?.current_day_number ?? null))
       .catch(() => setTrainerPhase(null));
   }, [isAuthenticated, isTrainer]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !isTrainee) return;
+    axiosClient.get('/graduation-quiz/my-quiz')
+      .then(() => setHasActiveQuiz(true))
+      .catch(() => setHasActiveQuiz(false));
+  }, [isAuthenticated, isTrainee]);
 
   const homeRoute = (() => {
     if (isAdmin)      return '/dispatch-home';
@@ -347,6 +356,9 @@ const Navbar = () => {
       )}
       {groups.includes('trainee') && (
         <NavLink to="/my-training" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> My Training</NavLink>
+      )}
+      {groups.includes('trainee') && hasActiveQuiz && (
+        <NavLink to="/my-quiz" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Quiz</NavLink>
       )}
       {canAccessScheduleChanges && (
         <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
@@ -429,6 +441,7 @@ const Navbar = () => {
                 groups={groups}
                 isTrainer={isTrainer}
                 trainerPhase={trainerPhase}
+                hasActiveQuiz={hasActiveQuiz}
                 homeRoute={homeRoute}
                 canAccessFieldOps={canAccessFieldOps}
                 canAccessScheduleChanges={canAccessScheduleChanges}
@@ -448,12 +461,13 @@ const Navbar = () => {
 };
 
 function MobileLinks({
-  groups, isTrainer, trainerPhase, homeRoute,
+  groups, isTrainer, trainerPhase, hasActiveQuiz, homeRoute,
   canAccessFieldOps, canAccessScheduleChanges, canAccessSchedule,
   isFieldStaff, isMgmt, isDispatch, isAdmin,
   onNav,
 }: {
   groups: string[]; isTrainer: boolean; trainerPhase: number | null;
+  hasActiveQuiz: boolean;
   homeRoute: string; canAccessFieldOps: boolean; canAccessScheduleChanges: boolean;
   canAccessSchedule: boolean; isFieldStaff: boolean; isMgmt: boolean;
   isDispatch: boolean; isAdmin: boolean; onNav: () => void;
@@ -473,6 +487,7 @@ function MobileLinks({
       {isTrainer && <NavLink to="/trainer-dashboard" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainer Dash</NavLink>}
       {isTrainer && trainerPhase === 4 && <NavLink to="/phase4-observation" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Phase 4</NavLink>}
       {groups.includes('trainee') && <NavLink to="/my-training" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> My Training</NavLink>}
+      {groups.includes('trainee') && hasActiveQuiz && <NavLink to="/my-quiz" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Quiz</NavLink>}
       {canAccessScheduleChanges && <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>}
       {canAccessFieldOps && <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>}
       {groups.includes('driver') && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Point</NavLink>}

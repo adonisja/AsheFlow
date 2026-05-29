@@ -21,6 +21,8 @@ import WalkerPerformance from './pages/WalkerPerformance';
 import TrainerMarks from './pages/TrainerMarks';
 import Phase4Observation from './pages/Phase4Observation';
 import TrainingCurriculum from './pages/TrainingCurriculum';
+import GraduationQuiz from './pages/GraduationQuiz';
+import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
@@ -334,6 +336,22 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['trainer', 'admin']}>
                   <Phase4Observation />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/my-quiz"
+              element={
+                <ProtectedRoute allowedRoles={['trainee']}>
+                  <GraduationQuiz />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/graduation-quiz/:quizId"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <GraduationQuizReview />
                 </ProtectedRoute>
               }
             />

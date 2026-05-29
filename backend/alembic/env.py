@@ -13,6 +13,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.employee_relationship import EmployeeRelationship
+from app.models.graduation_quiz import GraduationQuizTemplate, GraduationQuiz, GraduationQuizResponse
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
