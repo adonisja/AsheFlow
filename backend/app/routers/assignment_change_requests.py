@@ -71,6 +71,7 @@ def submit_change_request(
 
     existing = db.query(AssignmentChangeRequest).filter(
         AssignmentChangeRequest.employee_id == payload.employee_id,
+        AssignmentChangeRequest.company_id == caller.company_id,
         AssignmentChangeRequest.requested_date == payload.requested_date,
         AssignmentChangeRequest.status == "pending",
     ).first()
@@ -82,6 +83,7 @@ def submit_change_request(
 
     new_req = AssignmentChangeRequest(
         employee_id=payload.employee_id,
+        company_id=caller.company_id,
         requested_date=payload.requested_date,
         reason=payload.reason,
     )
@@ -135,7 +137,7 @@ def get_pending_requests(
 
     result = []
     for req in pending:
-        employee = db.query(Employee).filter(Employee.id == req.employee_id).first()
+        employee = db.query(Employee).filter(Employee.id == req.employee_id, Employee.company_id == caller.company_id).first()
         result.append({
             "id": str(req.id),
             "employee": {

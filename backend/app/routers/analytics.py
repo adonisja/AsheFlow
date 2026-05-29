@@ -112,7 +112,7 @@ def get_trainer_load(
     trainer_ids = list({r.trainer_id for r in open_records})
     trainers = {
         e.id: e
-        for e in db.query(EmployeeModel).filter(EmployeeModel.id.in_(trainer_ids)).all()
+        for e in db.query(EmployeeModel).filter(EmployeeModel.id.in_(trainer_ids), EmployeeModel.company_id == caller.company_id).all()
     }
 
     # Aggregate

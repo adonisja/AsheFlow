@@ -185,7 +185,7 @@ async def submit_anchor_point(
     )
     db.add(new_ap)
 
-    truck = db.query(Truck).filter(Truck.id == payload.truck_id).first()
+    truck = db.query(Truck).filter(Truck.id == payload.truck_id, Truck.company_id == caller.company_id).first()
     truck_name = truck.name if truck else str(payload.truck_id)
 
     if is_first:
@@ -273,7 +273,7 @@ async def arrive_anchor_point(
     ap.status     = "arrived"
     ap.arrived_at = datetime.now(timezone.utc)
 
-    truck = db.query(Truck).filter(Truck.id == ap.truck_id).first()
+    truck = db.query(Truck).filter(Truck.id == ap.truck_id, Truck.company_id == caller.company_id).first()
     truck_name = truck.name if truck else str(ap.truck_id)
 
     fields = [{"name": "Driver",   "value": caller.name, "inline": True},
@@ -354,7 +354,11 @@ def get_my_anchor_points_today(
     """Return all of the caller's anchor points for today, ordered by sequence."""
     return (
         db.query(AnchorPoint)
-        .filter(AnchorPoint.driver_id == caller.id, AnchorPoint.date == date.today())
+        .filter(
+            AnchorPoint.driver_id == caller.id,
+            AnchorPoint.company_id == caller.company_id,
+            AnchorPoint.date == date.today(),
+        )
         .order_by(AnchorPoint.sequence.asc())
         .all()
     )
