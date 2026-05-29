@@ -77,8 +77,7 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
         sa.Column('updated_at', sa.DateTime(timezone=True), onupdate=sa.text('now()')),
     )
-    op.create_index('ix_graduation_quizzes_trainee_id', 'graduation_quizzes', ['trainee_id'])
-    op.create_index('ix_graduation_quizzes_status', 'graduation_quizzes', ['status'])
+    op.create_index('ix_graduation_quizzes_status', 'graduation_quizzes', ['status'], if_not_exists=True)
 
     op.create_table(
         'graduation_quiz_responses',
@@ -92,7 +91,7 @@ def upgrade() -> None:
         sa.Column('override_note', sa.Text, nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()')),
     )
-    op.create_index('ix_graduation_quiz_responses_quiz_id', 'graduation_quiz_responses', ['quiz_id'])
+    op.create_index('ix_graduation_quiz_responses_quiz_id', 'graduation_quiz_responses', ['quiz_id'], if_not_exists=True)
 
 
 def downgrade() -> None:
