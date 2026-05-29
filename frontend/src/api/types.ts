@@ -45,6 +45,8 @@ export interface DispatchWarning {
 export interface DispatchResult {
   date: string;
   assigned_crews: Record<string, CrewMember[]>;
+  truck_assignments?: { truck_id: string; status: string }[];
+  workflow_status?: 'dispatched' | 'published' | 'finalized';
   warnings: DispatchWarning[];
 }
 
