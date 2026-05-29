@@ -431,10 +431,10 @@ def update_employee(
                     GroupName=group,
                 )
         except ClientError as e:
-            logger.error("Cognito re-invite for corrected email %s failed: %s", new_email, e)
+            logger.error("Cognito re-invite for corrected email %s failed: %s", new_email, e.response["Error"]["Code"])
             raise HTTPException(
                 status_code=502,
-                detail=f"Email updated in DB but Cognito re-invite failed: {e.response['Error']['Message']}",
+                detail="Email updated in DB but Cognito re-invite failed. Contact support.",
             )
 
     # Sync Cognito group when role changes on an active account
@@ -802,7 +802,8 @@ def request_email_change(
         code = e.response["Error"]["Code"]
         if code == "NotAuthorizedException":
             raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
-        raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
+        logger.error("update_user_attributes failed for %s: %s", caller.id, e.response["Error"]["Code"])
+        raise HTTPException(status_code=500, detail="Failed to update email. Please try again.")
 
     return {"detail": "Verification code sent to the new email address."}
 
@@ -841,7 +842,8 @@ def confirm_email_change(
             raise HTTPException(status_code=400, detail="Verification code has expired. Request a new one.")
         if code_name == "NotAuthorizedException":
             raise HTTPException(status_code=401, detail="Access token is invalid or expired. Please sign in again.")
-        raise HTTPException(status_code=400, detail=e.response["Error"]["Message"])
+        logger.error("verify_user_attribute failed for %s: %s", caller.id, e.response["Error"]["Code"])
+        raise HTTPException(status_code=500, detail="Failed to verify email. Please try again.")
 
     # Cognito confirmed — sync to our DB
     caller.email = new_email
