@@ -3,32 +3,33 @@ Tests for graduate_eligible_trainees.
 
 HOW graduate_eligible_trainees WORKS (summary):
 1. Query all active trainees.
-2. For each trainee, count AssignmentMember rows joined to TruckAssignment
-   where date < target_date (past completed assignments only).
-3. If count < 5: skip.
-4. If reset_on_graduation=True: delete all TrainingRecord + TrainingTask rows
-   for this trainee and emit a reset Notification. Role stays 'trainee'.
-5. Otherwise: promote trainee.role → 'walker', emit Notifications to all
+2. For each trainee, look for a GraduationQuiz row where passed=True
+   (most recent manager_reviewed_at wins). If none exists: skip.
+3. If reset_on_graduation=True: delete all TrainingRecord + TrainingTask rows
+   and all GraduationQuiz rows for this trainee, emit a reset Notification.
+   Role stays 'trainee'.
+4. Otherwise: promote trainee.role → 'walker', emit Notifications to all
    management/admin/dispatch staff and to the trainee themselves.
-6. Nullify any open (pending/accepted) continuation requests for the trainee.
-7. After all trainees processed: db.commit() once, then fire Discord DMs.
-8. Return a list of warning dicts describing each graduation/reset.
+5. Nullify any open (pending/accepted) continuation requests for the trainee.
+6. After all trainees processed: db.commit() once, then fire Discord DMs.
+7. Return a list of warning dicts describing each graduation/reset.
 
 WHAT WE'RE VERIFYING:
-- Trainees with < 5 assignments are not graduated (threshold boundary).
-- Trainees with exactly 5 assignments are graduated.
+- Trainees with no passed quiz are not graduated.
+- Trainees with a passed quiz (passed=True) are graduated.
+- Trainees with a failed quiz (passed=False) are not graduated.
 - Graduation promotes role to 'walker' and writes Notification rows.
 - reset_on_graduation=True keeps role as 'trainee', resets training records.
 - Open continuation requests are nullified on graduation.
 - Continuation requests in other states (nullified, rejected) are not touched.
 - Multiple trainees are processed independently in one call.
-- Inactive trainees are excluded regardless of assignment count.
+- Inactive trainees are excluded regardless of quiz state.
 
 NOTE ON SQLite vs PostgreSQL:
 The conftest db fixture uses SQLite in-memory. graduate_eligible_trainees uses
-only standard SQL (no JSONB, no PostgreSQL-specific features), so SQLite is fine
-for these tests. TrainingRecord and TrainingTask tables are in DISPATCH_TABLES.
-We do need TrainerContinuationRequest, which is also already included.
+only standard SQL for all GraduationQuiz queries; SQLite is fine.
+graduation_quizzes is added to DISPATCH_TABLES as a SQLite-compatible mirror
+(JSONB → JSON) since the ORM model uses the PostgreSQL-specific JSONB type.
 """
 
 import uuid
@@ -39,15 +40,13 @@ import pytest
 
 from app.services.graduate_trainees import graduate_eligible_trainees
 from app.models.employee import Employee
-from app.models.truck import Truck
-from app.models.truck_assignment import TruckAssignment
-from app.models.assignment_member import AssignmentMember
+from app.models.graduation_quiz import GraduationQuiz
 from tests.conftest import SEED_COMPANY_ID
 from app.models.notification import Notification
 from app.models.training import TrainingRecord, TrainingTask
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 
-from tests.conftest import make_employee, make_truck, make_assignment, make_member
+from tests.conftest import make_employee, make_graduation_quiz
 
 
 # ---------------------------------------------------------------------------
@@ -55,42 +54,6 @@ from tests.conftest import make_employee, make_truck, make_assignment, make_memb
 # ---------------------------------------------------------------------------
 
 TARGET = date.today()
-PAST   = TARGET - timedelta(days=1)  # yesterday — counts as a past assignment
-
-
-def make_past_assignment(db, truck: Truck, employee: Employee, days_ago: int = 1) -> AssignmentMember:
-    """Add employee to a past TruckAssignment for truck on (TARGET - days_ago).
-
-    Reuses the TruckAssignment if one already exists for that truck+date pair,
-    so multiple trainees can share the same daily assignment without violating
-    the unique constraint on (truck_id, date).
-    """
-    past_date = TARGET - timedelta(days=days_ago)
-    ta = db.query(TruckAssignment).filter(
-        TruckAssignment.truck_id == truck.id,
-        TruckAssignment.date == past_date,
-    ).first()
-    if ta is None:
-        ta = TruckAssignment(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, truck_id=truck.id, date=past_date)
-        db.add(ta)
-        db.commit()
-        db.refresh(ta)
-    member = AssignmentMember(
-        id=uuid.uuid4(),
-        company_id=SEED_COMPANY_ID,
-        assignment_id=ta.id,
-        employee_id=employee.id,
-        role="trainee",
-    )
-    db.add(member)
-    db.commit()
-    return member
-
-
-def give_assignments(db, truck: Truck, trainee: Employee, count: int):
-    """Give `count` past assignments to `trainee` across distinct days."""
-    for i in range(1, count + 1):
-        make_past_assignment(db, truck, trainee, days_ago=i)
 
 
 def make_continuation_request(db, trainee: Employee, trainer: Employee, status: str = "pending") -> TrainerContinuationRequest:
@@ -144,80 +107,88 @@ def no_discord_dm():
 
 
 # ---------------------------------------------------------------------------
-# Threshold boundary — the 5-assignment gate
+# Quiz gate — passed vs no quiz vs failed
 # ---------------------------------------------------------------------------
 
-class TestThreshold:
+class TestQuizGate:
     """
-    Trainees must have 5+ past assignments (date < target_date) to graduate.
-    Exactly 4 → no graduation. Exactly 5 → graduates.
+    The graduation gate is a passed GraduationQuiz row (passed=True).
+    No quiz or a failed quiz → no graduation.
     """
 
-    def test_four_assignments_does_not_graduate(self, db):
+    def test_no_quiz_does_not_graduate(self, db):
         """
-        ARRANGE: trainee with 4 past assignments.
+        ARRANGE: active trainee with no GraduationQuiz rows at all.
         ASSERT: role stays 'trainee', no warnings, no Notifications.
 
-        WHY 4 AND NOT 3:
-        We test the boundary at threshold - 1, not some arbitrary small count,
-        to confirm the < 5 guard is correct (not ≤ 4 or < 4).
+        WHY: The gate requires passed=True. Absence of any quiz means the
+        trainee has not completed the final assessment.
         """
-        truck   = make_truck(db)
-        trainee = make_employee(db, role="trainee", name="Almost There")
-        give_assignments(db, truck, trainee, count=4)
+        trainee = make_employee(db, role="trainee", name="No Quiz Yet")
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
         db.refresh(trainee)
-        assert trainee.role == "trainee", "4 assignments should not graduate"
-        assert warnings == [], "No warnings when threshold not met"
+        assert trainee.role == "trainee", "No quiz → should not graduate"
+        assert warnings == []
         notifs = db.query(Notification).filter(Notification.employee_id == trainee.id).all()
-        assert notifs == [], "No Notifications written for ungraduated trainee"
+        assert notifs == [], "No Notifications written when no quiz exists"
 
-    def test_five_assignments_graduates(self, db):
+    def test_failed_quiz_does_not_graduate(self, db):
         """
-        ARRANGE: trainee with exactly 5 past assignments.
+        ARRANGE: trainee has a quiz with passed=False.
+        ASSERT: not graduated.
+
+        WHY: Only passed=True triggers graduation. A failed quiz means the
+        trainee is scheduled for remediation, not promotion.
+        """
+        trainee = make_employee(db, role="trainee", name="Failed Quiz")
+        make_graduation_quiz(db, trainee, passed=False)
+
+        warnings = graduate_eligible_trainees(db, TARGET)
+
+        db.refresh(trainee)
+        assert trainee.role == "trainee", "Failed quiz → should not graduate"
+        assert warnings == []
+
+    def test_passed_quiz_graduates(self, db):
+        """
+        ARRANGE: trainee has a quiz with passed=True.
         ASSERT: role becomes 'walker', 1 warning returned.
 
-        WHY EXACTLY 5:
-        This is the boundary the product spec defines. Under-counting by even 1
-        would mean a trainee never graduates (off-by-one is the most common bug here).
+        WHY: A passed quiz is the explicit sign-off for graduation — it means
+        the manager confirmed the trainee demonstrated sufficient knowledge.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Ready")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
         db.refresh(trainee)
-        assert trainee.role == "walker", "5 assignments should promote to walker"
+        assert trainee.role == "walker", "Passed quiz should promote to walker"
         assert len(warnings) == 1
         assert warnings[0]["type"] == "trainee_graduated"
 
-    def test_today_assignment_does_not_count(self, db):
+    def test_most_recent_quiz_wins(self, db):
         """
-        ARRANGE: trainee has 4 past + 1 today assignment (date == target_date).
-        ASSERT: not graduated — today's assignment doesn't count.
+        ARRANGE: trainee has an old failed quiz and a newer passed quiz.
+        ASSERT: graduated (most recent passed quiz wins).
 
-        WHY: The query filters TruckAssignment.date < target_date. An assignment
-        on exactly target_date is excluded. This prevents premature graduation
-        before today's dispatch day is actually complete.
+        WHY: A trainee may fail and retake. The latest outcome is what matters.
+        The service orders by manager_reviewed_at DESC and takes first().
         """
-        truck   = make_truck(db)
-        trainee = make_employee(db, role="trainee", name="Almost Today")
-        give_assignments(db, truck, trainee, count=4)
-
-        # Add one assignment for today (should NOT count)
-        ta = TruckAssignment(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, truck_id=truck.id, date=TARGET)
-        db.add(ta); db.commit(); db.refresh(ta)
-        db.add(AssignmentMember(id=uuid.uuid4(), company_id=SEED_COMPANY_ID, assignment_id=ta.id, employee_id=trainee.id, role="trainee"))
-        db.commit()
+        from datetime import datetime, timezone, timedelta as td
+        trainee = make_employee(db, role="trainee", name="Retry")
+        older = datetime.now(timezone.utc) - td(days=2)
+        newer = datetime.now(timezone.utc) - td(days=1)
+        make_graduation_quiz(db, trainee, passed=False, reviewed_at=older)
+        make_graduation_quiz(db, trainee, passed=True,  reviewed_at=newer)
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
         db.refresh(trainee)
-        assert trainee.role == "trainee", "Today's assignment should not count toward graduation"
-        assert warnings == []
+        assert trainee.role == "walker"
+        assert len(warnings) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +205,8 @@ class TestNormalGraduation:
         """
         ASSERT: trainee receives a Notification of type 'trainee_graduated'.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Graduate")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         graduate_eligible_trainees(db, TARGET)
 
@@ -254,11 +224,10 @@ class TestNormalGraduation:
         WHY: Management and admin make staffing decisions. They need to know
         immediately when a trainee is promoted so they can update schedules.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Graduate")
         manager = make_employee(db, role="management", name="Manager")
         admin   = make_employee(db, role="admin",      name="Admin")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         graduate_eligible_trainees(db, TARGET)
 
@@ -269,19 +238,19 @@ class TestNormalGraduation:
             ).all()
             assert len(notifs) == 1, f"{emp.name} should receive a graduation Notification"
 
-    def test_warning_message_includes_assignment_count(self, db):
+    def test_warning_message_references_quiz(self, db):
         """
-        The warning dict's message should reference the actual assignment count
-        so dispatch can verify why the graduation happened.
+        The warning dict's message should mention the graduation quiz
+        so dispatch can identify the reason for the promotion.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Count Check")
-        give_assignments(db, truck, trainee, count=6)
+        make_graduation_quiz(db, trainee, passed=True)
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
         assert len(warnings) == 1
-        assert "6" in warnings[0]["message"], "Warning should mention the assignment count"
+        assert "graduation quiz" in warnings[0]["message"].lower(), \
+            "Warning should reference the graduation quiz"
 
 
 # ---------------------------------------------------------------------------
@@ -291,18 +260,17 @@ class TestNormalGraduation:
 class TestResetOnGraduation:
     """
     Trainees with reset_on_graduation=True should NOT be promoted.
-    Their training records are deleted and they remain 'trainee' for the next cycle.
+    Their training records and quiz rows are deleted; they remain 'trainee' for the next cycle.
     """
 
     def test_reset_trainee_stays_trainee(self, db):
         """
-        ASSERT: role remains 'trainee' after graduation threshold is met.
+        ASSERT: role remains 'trainee' after a passed quiz when reset_on_graduation=True.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Timmy Reset")
         trainee.reset_on_graduation = True
         db.commit()
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         graduate_eligible_trainees(db, TARGET)
 
@@ -318,12 +286,11 @@ class TestResetOnGraduation:
         what phase to inject next. If the record isn't deleted, the trainee
         would resume from where they left off rather than starting Phase 1.
         """
-        truck   = make_truck(db)
         trainer = make_employee(db, role="trainer", name="Trainer")
         trainee = make_employee(db, role="trainee", name="Timmy Reset")
         trainee.reset_on_graduation = True
         db.commit()
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         record = make_training_record(db, trainee, trainer)
         make_training_task(db, record)
@@ -337,15 +304,31 @@ class TestResetOnGraduation:
         assert remaining_records == [], "TrainingRecords must be deleted on reset"
         assert remaining_tasks   == [], "TrainingTasks must be deleted on reset"
 
+    def test_reset_deletes_graduation_quiz_rows(self, db):
+        """
+        ASSERT: GraduationQuiz rows are deleted on reset so the next cycle
+        starts clean — without a stale passed=True row triggering graduation again.
+        """
+        trainee = make_employee(db, role="trainee", name="Timmy Reset")
+        trainee.reset_on_graduation = True
+        db.commit()
+        make_graduation_quiz(db, trainee, passed=True)
+
+        graduate_eligible_trainees(db, TARGET)
+
+        remaining = db.query(GraduationQuiz).filter(
+            GraduationQuiz.trainee_id == trainee.id,
+        ).all()
+        assert remaining == [], "GraduationQuiz rows must be deleted on reset"
+
     def test_reset_emits_reset_notification_not_graduated(self, db):
         """
         ASSERT: Notification type is 'trainee_reset', not 'trainee_graduated'.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Timmy Reset")
         trainee.reset_on_graduation = True
         db.commit()
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         graduate_eligible_trainees(db, TARGET)
 
@@ -362,11 +345,10 @@ class TestResetOnGraduation:
         assert graduated_notifs == [], "trainee_graduated should NOT be written for reset path"
 
     def test_reset_warning_type_is_trainee_reset(self, db):
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Timmy Reset")
         trainee.reset_on_graduation = True
         db.commit()
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
@@ -393,10 +375,9 @@ class TestContinuationRequests:
         pairing. Leaving requests open would create stale approvals that dispatch
         might act on incorrectly.
         """
-        truck   = make_truck(db)
         trainer = make_employee(db, role="trainer", name="Trainer")
         trainee = make_employee(db, role="trainee", name="Graduate")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="pending")
 
         graduate_eligible_trainees(db, TARGET)
@@ -405,10 +386,9 @@ class TestContinuationRequests:
         assert req.status == "nullified", "Pending continuation request must be nullified"
 
     def test_accepted_continuation_request_nullified(self, db):
-        truck   = make_truck(db)
         trainer = make_employee(db, role="trainer", name="Trainer")
         trainee = make_employee(db, role="trainee", name="Graduate")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="accepted")
 
         graduate_eligible_trainees(db, TARGET)
@@ -423,10 +403,9 @@ class TestContinuationRequests:
         WHY: Rejected requests are already resolved — they shouldn't be
         overwritten. Doing so would lose audit information about why it was rejected.
         """
-        truck   = make_truck(db)
         trainer = make_employee(db, role="trainer", name="Trainer")
         trainee = make_employee(db, role="trainee", name="Graduate")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="rejected")
 
         graduate_eligible_trainees(db, TARGET)
@@ -435,10 +414,9 @@ class TestContinuationRequests:
         assert req.status == "rejected", "Rejected continuation request must not be modified"
 
     def test_already_nullified_request_not_touched(self, db):
-        truck   = make_truck(db)
         trainer = make_employee(db, role="trainer", name="Trainer")
         trainee = make_employee(db, role="trainee", name="Graduate")
-        give_assignments(db, truck, trainee, count=5)
+        make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="nullified")
 
         graduate_eligible_trainees(db, TARGET)
@@ -454,19 +432,18 @@ class TestContinuationRequests:
 class TestMultipleTrainees:
     """
     When several trainees exist, each is evaluated independently.
-    One graduating does not affect another below threshold.
+    One graduating does not affect another without a passed quiz.
     """
 
     def test_only_eligible_trainee_graduates(self, db):
         """
-        ARRANGE: 2 trainees — one with 5 assignments, one with 2.
-        ASSERT: only the eligible one is promoted.
+        ARRANGE: 2 trainees — one with a passed quiz, one with no quiz.
+        ASSERT: only the one with a passed quiz is promoted.
         """
-        truck    = make_truck(db)
         eligible = make_employee(db, role="trainee", name="Ready")
         not_yet  = make_employee(db, role="trainee", name="Not Yet")
-        give_assignments(db, truck, eligible, count=5)
-        give_assignments(db, truck, not_yet,  count=2)
+        make_graduation_quiz(db, eligible, passed=True)
+        # not_yet has no quiz at all
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
@@ -478,14 +455,13 @@ class TestMultipleTrainees:
 
     def test_two_eligible_trainees_both_graduate(self, db):
         """
-        ARRANGE: 2 trainees both with 5+ assignments.
+        ARRANGE: 2 trainees both with passed quizzes.
         ASSERT: both become walker, 2 warnings returned.
         """
-        truck    = make_truck(db)
         trainee1 = make_employee(db, role="trainee", name="First")
         trainee2 = make_employee(db, role="trainee", name="Second")
-        give_assignments(db, truck, trainee1, count=5)
-        give_assignments(db, truck, trainee2, count=5)
+        make_graduation_quiz(db, trainee1, passed=True)
+        make_graduation_quiz(db, trainee2, passed=True)
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
@@ -503,7 +479,7 @@ class TestMultipleTrainees:
 class TestInactiveExclusion:
     """
     Inactive employees (is_active=False) must never be graduated, even if
-    their assignment history would qualify them.
+    they have a passed quiz.
     """
 
     def test_inactive_trainee_not_graduated(self, db):
@@ -511,11 +487,10 @@ class TestInactiveExclusion:
         WHY: An inactive employee is off the system — promoting them would
         be a data integrity error and could surface them on dispatch boards.
         """
-        truck   = make_truck(db)
         trainee = make_employee(db, role="trainee", name="Inactive")
         trainee.is_active = False
         db.commit()
-        give_assignments(db, truck, trainee, count=7)
+        make_graduation_quiz(db, trainee, passed=True)
 
         warnings = graduate_eligible_trainees(db, TARGET)
 
