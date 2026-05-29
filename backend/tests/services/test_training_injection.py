@@ -69,7 +69,7 @@ def _build_crews(trainee, trainer, truck_id=None):
     return {
         tid: [
             {"id": trainer.id, "role": "trainer"},
-            {"id": trainee.id, "role": "trainee"},
+            {"id": trainee.id, "role": "trainee", "paired_trainer_id": trainer.id},
         ]
     }
 

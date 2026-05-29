@@ -29,17 +29,15 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
       items as demonstration tasks, not from a static Phase 4 curriculum.
     - Phase 5 (remediation) records are never injected here; score_phase4 creates them.
     """
-    # 1. Identify all trainees and their paired trainer from today's crews
+    # 1. Identify all trainees and their paired trainer from today's crews.
+    # paired_trainer_id is persisted on AssignmentMember (set during dispatch) and
+    # passed through in the crew dict — use it directly rather than inferring from
+    # truck position, which breaks when a truck has multiple trainers.
     trainees_in_crews = []
     for truck_id, crew in assigned_crews.items():
-        trainer_id = None
-        for member in crew:
-            if member["role"] == "trainer":
-                trainer_id = member["id"]
-                break
         for member in crew:
             if member["role"] == "trainee":
-                trainees_in_crews.append((member["id"], trainer_id))
+                trainees_in_crews.append((member["id"], member.get("paired_trainer_id")))
 
     logger.info("inject_curriculum: date=%s trainees=%d", target_date, len(trainees_in_crews))
     if not trainees_in_crews:
