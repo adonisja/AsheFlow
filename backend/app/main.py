@@ -2,6 +2,7 @@ import logging
 import json
 from fastapi import FastAPI, APIRouter, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.database import engine
 from app import models
 from app.models.base import Base
@@ -40,6 +41,10 @@ _configure_logging()
 # We no longer need Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AsheFlow Dispatch API")
+
+# Trust X-Forwarded-Proto from Caddy so redirect Location headers use https://.
+# Caddy is the only trusted proxy — it runs in the same Docker network.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Configure CORS — origins loaded from CORS_ORIGINS env var (comma-separated).
 # Dev default is set in config.py; override with CORS_ORIGINS in production.
