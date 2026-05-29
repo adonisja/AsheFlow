@@ -80,19 +80,10 @@ export default function AdminDashboard() {
   const handleConfirmAll = async () => {
     setConfirmAllState('loading');
     try {
-      const res = await axiosClient.get<{ date: string; confirmations: Record<string, string> }>(
-        `/dispatch/${confirmDate}/confirmations`
+      const res = await axiosClient.post<{ date: string; confirmed_count: number }>(
+        `/dispatch/${confirmDate}/confirmations/confirm-all`
       );
-      const pending = Object.entries(res.data.confirmations ?? {}).filter(([, s]) => s === 'pending');
-      setConfirmAllCount(pending.length);
-      await Promise.all(
-        pending.map(([employee_id]) =>
-          axiosClient.post(`/dispatch/${confirmDate}/confirmations`, {
-            employee_id,
-            status: 'confirmed',
-          })
-        )
-      );
+      setConfirmAllCount(res.data.confirmed_count);
       setConfirmAllState('done');
       setPendingConfirmCount(0);
     } catch {

@@ -314,7 +314,7 @@ const Navbar = () => {
   }, [isAuthenticated, isTrainer]);
 
   const homeRoute = (() => {
-    if (isAdmin)      return '/admin';
+    if (isAdmin)      return '/dispatch-home';
     if (isDispatch)   return '/dispatch-home';
     if (isMgmt)       return '/management';
     if (isTrainer)    return '/trainer-dashboard';
