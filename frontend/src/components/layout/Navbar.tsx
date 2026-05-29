@@ -331,7 +331,7 @@ const Navbar = () => {
 
   const links = (
     <>
-      <NavLink to={homeRoute} className={linkClass}><Home className="w-3.5 h-3.5" /> Home</NavLink>
+      {!isAdmin && <NavLink to={homeRoute} className={linkClass}><Home className="w-3.5 h-3.5" /> Home</NavLink>}
 
       {canAccessSchedule && (
         <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
@@ -467,7 +467,7 @@ function MobileLinks({
 
   return (
     <>
-      <NavLink to={homeRoute} onClick={onNav} className={cls}><Home className="w-4 h-4" /> Home</NavLink>
+      {!isAdmin && <NavLink to={homeRoute} onClick={onNav} className={cls}><Home className="w-4 h-4" /> Home</NavLink>}
       {canAccessSchedule && <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>}
       {isFieldStaff && <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>}
       {isTrainer && <NavLink to="/trainer-dashboard" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainer Dash</NavLink>}
