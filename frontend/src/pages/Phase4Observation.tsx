@@ -153,7 +153,7 @@ export default function Phase4Observation() {
                 <AlertTriangle className="w-14 h-14 mx-auto text-danger" />
                 <p className="text-xl font-bold text-danger">Did Not Pass</p>
                 <p className="text-sm text-muted-foreground">
-                  Score: {submitResult.score.toFixed(1)}% — A remediation session (Phase 5) has been generated.
+                  Score: {submitResult.score.toFixed(1)}% — A remediation session has been scheduled.
                   Management has been notified.
                 </p>
                 {submitResult.failed.length > 0 && (
