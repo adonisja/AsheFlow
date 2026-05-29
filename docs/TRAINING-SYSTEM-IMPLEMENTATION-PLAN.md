@@ -329,7 +329,7 @@ Seed all Phase 1–4 curriculum items. Run once after migration. Script should b
 | ADP: review timecard daily for accuracy | policy | True |
 | ADP: missing punches or incorrect times result in schedule removal | policy | True |
 | ADP: use "Forgot username/password" immediately if credentials are lost | policy | True |
-| Contact: Dispatch for delivery/route issues, TEAM@NYCDeliveryLLC.com for HR issues | policy | True |
+| Contact: Dispatch for delivery/route issues, hr@yourdsp.com for HR issues | policy | True |
 | Attendance policy: 24-hour notice required for callout via email to HR | policy | True |
 | Attendance policy: 2 no-call-no-shows = schedule removal, considered job abandonment | policy | True |
 | Flex activation: request work block from Driver / Driver activates from station | policy | True |
