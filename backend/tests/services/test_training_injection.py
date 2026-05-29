@@ -595,17 +595,18 @@ class TestPastRecordLocking:
 # ---------------------------------------------------------------------------
 
 class TestIdempotency:
-    def test_existing_today_record_updates_trainer_not_duplicated(self, db):
+    def test_existing_today_record_recreated_with_new_trainer(self, db):
         """
         ARRANGE: a record for today already exists with original_trainer.
         Inject again with a different trainer in crews.
-        ASSERT: still only 1 record for today; trainer_id updated.
+        ASSERT: still only 1 record for today; new record has updated trainer_id.
+        The old record is deleted and recreated — db.refresh(existing) would error.
         """
         trainee  = make_employee(db, role="trainee")
         original = make_employee(db, role="trainer", name="Original")
         updated  = make_employee(db, role="trainer", name="Updated")
 
-        existing = make_training_record(
+        make_training_record(
             db, trainee, original, record_date=date.today(), phase=1, phase_closed=False
         )
         make_curriculum(db, day_number=1, topic_title="Topic")
@@ -618,8 +619,7 @@ class TestIdempotency:
         records = _records_for(db, trainee)
         today_records = [r for r in records if r.record_date == date.today()]
         assert len(today_records) == 1, "Must not create a duplicate record for the same date"
-        db.refresh(existing)
-        assert existing.trainer_id == updated.id, "trainer_id should be updated to the new trainer"
+        assert today_records[0].trainer_id == updated.id, "Recreated record must have the new trainer"
 
 
 # ---------------------------------------------------------------------------

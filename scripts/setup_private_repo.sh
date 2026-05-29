@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 # setup_private_repo.sh
 #
-# Run this ONCE after creating the AsheFlow-private GitHub repo and
-# adding the deploy key. It initialises the private repo with the
-# correct directory structure and pushes all proprietary files.
+# Two modes:
 #
-# Prerequisites:
+#   INIT (first time only):
+#     bash scripts/setup_private_repo.sh --init
+#     Creates the private repo structure, writes register.py, README, .gitignore,
+#     and pushes an initial commit to both `main` and `staging` branches.
+#     Run once after creating the AsheFlow-private GitHub repo.
+#
+#   SYNC (normal use — called automatically by the pre-push hook):
+#     bash scripts/setup_private_repo.sh
+#     Copies proprietary files into a fresh clone of AsheFlow-private, commits,
+#     and pushes to the branch matching the current public branch
+#     (staging → staging, master → main, anything else → staging).
+#
+# Prerequisites (one-time setup):
 #   1. Create AsheFlow-private on GitHub (private, empty — no README)
 #
 #   2. Generate a deploy key:
 #        ssh-keygen -t ed25519 -C "asheflow-private-deploy" \
 #          -f ~/.ssh/asheflow_private_deploy -N ""
 #
-#   3. Add the PUBLIC key to AsheFlow-private:
+#   3. Add the PUBLIC key to AsheFlow-private with write access:
 #        GitHub → AsheFlow-private → Settings → Deploy keys → Add deploy key
-#        Title: "staging-ci-deploy", paste ~/.ssh/asheflow_private_deploy.pub
-#        Do NOT check "Allow write access"
+#        Title: "local-dev-push", paste ~/.ssh/asheflow_private_deploy.pub
+#        Check "Allow write access"
 #
-#   4. Store the PRIVATE key in AWS SSM Parameter Store (both envs):
+#   4. Store the PRIVATE key in AWS SSM (read-only for CI — no write access needed):
 #        aws ssm put-parameter \
 #          --name /asheflow/staging/PRIVATE_REPO_DEPLOY_KEY \
 #          --value "$(cat ~/.ssh/asheflow_private_deploy)" \
@@ -26,32 +36,57 @@
 #          --name /asheflow/prod/PRIVATE_REPO_DEPLOY_KEY \
 #          --value "$(cat ~/.ssh/asheflow_private_deploy)" \
 #          --type SecureString --region us-east-2 --overwrite
-#      (Same key works for both envs — it's a read-only key on the private repo)
 #
-#   5. Run this script from the root of the AsheFlow repo:
-#        bash scripts/setup_private_repo.sh
+#   5. Run init once:
+#        bash scripts/setup_private_repo.sh --init
 #
-# After this runs: push to staging → CI will clone AsheFlow-private and
-# copy files into the correct paths before docker compose build.
+#   6. Install the pre-push hook so sync runs automatically on every push:
+#        bash scripts/install_hooks.sh
 
 set -euo pipefail
 
 PRIVATE_REPO="git@github.com:adonisja/AsheFlow-private.git"
 PUBLIC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
+INIT_MODE=false
 
-echo "Public repo root: $PUBLIC_ROOT"
+if [ "${1:-}" = "--init" ]; then
+  INIT_MODE=true
+fi
+
+# Determine which private branch to push to based on current public branch.
+CURRENT_BRANCH=$(git -C "$PUBLIC_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
+if [ "$CURRENT_BRANCH" = "master" ]; then
+  PRIVATE_BRANCH="main"
+elif [ "$CURRENT_BRANCH" = "staging" ]; then
+  PRIVATE_BRANCH="staging"
+else
+  # Feature branches sync to staging so they can be tested without touching main.
+  PRIVATE_BRANCH="staging"
+fi
+
+echo "Public branch:  $CURRENT_BRANCH"
+echo "Private branch: $PRIVATE_BRANCH"
 echo "Cloning private repo to: $TMP_DIR"
 
-git clone "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+if $INIT_MODE; then
+  git clone "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+else
+  git clone -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+fi
+
 cd "$TMP_DIR/AsheFlow-private"
 
-# Create directory structure mirroring the public repo layout
+if $INIT_MODE; then
+  git checkout -B main
+fi
+
+# ── Directory structure ─────────────────────────────────────────────────────
 mkdir -p backend/app/routers
 mkdir -p backend/app/services
 mkdir -p asheflow_private
 
-# Copy proprietary files
+# ── Proprietary files ───────────────────────────────────────────────────────
 ROUTERS=(
   dispatch.py
   training.py
@@ -97,9 +132,8 @@ for f in "${SERVICES[@]}"; do
   fi
 done
 
-# Write the black-box registration module
+# ── Black-box registration module ───────────────────────────────────────────
 # main.py does: from asheflow_private.register import register_proprietary_routers
-# This keeps all proprietary router names out of the public repo.
 cat > asheflow_private/__init__.py << 'PYEOF'
 PYEOF
 
@@ -118,15 +152,15 @@ PYEOF
 echo ""
 echo "  ✓ asheflow_private/register.py"
 
-# Copy CLAUDE.md if present
+# ── Sync CLAUDE.md ───────────────────────────────────────────────────────────
 if [ -f "$PUBLIC_ROOT/CLAUDE.md" ]; then
   cp "$PUBLIC_ROOT/CLAUDE.md" "CLAUDE.md"
-  echo ""
   echo "  ✓ CLAUDE.md"
 fi
 
-# Add a README so the repo is navigable
-cat > README.md << 'EOF'
+# ── Static files (init only) ─────────────────────────────────────────────────
+if $INIT_MODE; then
+  cat > README.md << 'EOF'
 # AsheFlow — Private
 
 Proprietary business logic for AsheFlow. This repo is pulled by CI during
@@ -135,14 +169,21 @@ the corresponding paths in the main AsheFlow repo before `docker compose build`.
 
 Do not share this repository. Do not add it as a dependency in package managers.
 
+## Branch mapping
+
+| AsheFlow-private branch | Deployed to |
+|-------------------------|-------------|
+| `staging`               | Staging EC2 |
+| `main`                  | Prod EC2    |
+
+CI clones the branch that matches the environment it is deploying to.
+`setup_private_repo.sh` pushes to the matching branch automatically.
+
 ## Contents
 
 ### Registration module (black-box entry point)
 - `asheflow_private/__init__.py`
 - `asheflow_private/register.py` — `register_proprietary_routers(router, configured)`
-
-The public `main.py` imports only this function. No proprietary module names are visible
-in the public repo.
 
 ### Routers
 - `backend/app/routers/dispatch.py`
@@ -164,23 +205,38 @@ in the public repo.
 - `backend/app/services/score_phase4.py`
 EOF
 
-# Add .gitignore so __pycache__ etc. don't leak in
-cat > .gitignore << 'EOF'
+  cat > .gitignore << 'EOF'
 __pycache__/
 *.py[cod]
 *.pyo
 .DS_Store
 *.env
 EOF
+fi
 
+# ── Commit and push ──────────────────────────────────────────────────────────
 git add .
-git commit -m "initialise proprietary services from AsheFlow main repo"
-git push origin main
 
-echo ""
-echo "Done. AsheFlow-private is ready."
-echo "Next: push to the staging branch of AsheFlow — CI will pull this repo automatically."
+if git diff --cached --quiet; then
+  echo ""
+  echo "No changes to sync — private repo already up to date."
+else
+  git commit -m "sync from AsheFlow $CURRENT_BRANCH"
+  git push origin HEAD:"$PRIVATE_BRANCH"
+  echo ""
+  echo "Pushed to AsheFlow-private/$PRIVATE_BRANCH."
+fi
 
-# Cleanup
+if $INIT_MODE; then
+  # Create the staging branch as a copy of main for init.
+  git checkout -B staging
+  git push origin staging
+  echo "Created AsheFlow-private/staging branch."
+fi
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
 cd /
 rm -rf "$TMP_DIR"
+
+echo ""
+echo "Done."
