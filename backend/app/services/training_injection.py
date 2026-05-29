@@ -97,15 +97,21 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
 
         db.flush()
 
-        # --- If record already exists for today, just update trainer ---
+        # --- If record already exists for today, delete and recreate it.
+        # Updating trainer_id in place would leave tasks generated for the old
+        # pairing/phase intact. Full deletion lets the creation path below run
+        # fresh so phase logic, debt rollover, and task generation are correct.
         existing_record = db.query(TrainingRecord).filter(
             TrainingRecord.trainee_id == trainee_id,
             TrainingRecord.record_date == target_date,
         ).first()
 
         if existing_record:
-            existing_record.trainer_id = trainer_id
-            continue
+            db.query(TrainingTask).filter(
+                TrainingTask.training_record_id == existing_record.id
+            ).delete()
+            db.delete(existing_record)
+            db.flush()
 
         # --- Determine current phase ---
         prev_records = db.query(TrainingRecord).filter(
