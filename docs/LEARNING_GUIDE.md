@@ -4438,7 +4438,7 @@ This two-tier cache strategy means: zero stale app delivery, near-zero origin re
 
 CloudFront requires an SSL certificate in **us-east-1** regardless of where the S3 bucket lives. This is a hard AWS requirement — CloudFront's certificate lookup is always global/us-east-1.
 
-Certificate ARN: `arn:aws:acm:us-east-1:586794453404:certificate/f19b4975-549e-4835-b15f-8046ae9144a5`
+Certificate ARN: `arn:aws:acm:us-east-1:[account-id]:certificate/[redacted]`
 
 Validated via DNS: two CNAME records added to Route 53 hosted zone `Z05950531EYSU1BYQZRAG`. ACM checks for these records and issues the certificate automatically. Validation took ~2 minutes.
 

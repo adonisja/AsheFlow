@@ -85,6 +85,9 @@ fi
 mkdir -p backend/app/routers
 mkdir -p backend/app/services
 mkdir -p asheflow_private
+mkdir -p docs/decisions
+mkdir -p docs/journals
+mkdir -p docs/templates
 
 # ── Proprietary files ───────────────────────────────────────────────────────
 ROUTERS=(
@@ -131,6 +134,18 @@ for f in "${SERVICES[@]}"; do
     echo "  ✗ MISSING: services/$f (skipped)"
   fi
 done
+
+# ── Docs (PII-scrubbed ADRs, journals, guides) ───────────────────────────────
+echo ""
+echo "Copying docs..."
+cp -r "$PUBLIC_ROOT/docs/decisions/." "docs/decisions/"
+cp -r "$PUBLIC_ROOT/docs/journals/." "docs/journals/"
+cp -r "$PUBLIC_ROOT/docs/templates/." "docs/templates/"
+# Top-level docs (LEARNING_GUIDE, ARCHITECTURE, etc.)
+for f in "$PUBLIC_ROOT/docs/"*.md; do
+  [ -f "$f" ] && cp "$f" "docs/$(basename "$f")"
+done
+echo "  ✓ docs/"
 
 # ── Black-box registration module ───────────────────────────────────────────
 # main.py does: from asheflow_private.register import register_proprietary_routers
