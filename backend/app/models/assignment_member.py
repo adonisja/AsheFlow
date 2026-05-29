@@ -28,11 +28,14 @@ class AssignmentMember(Base):
         CheckConstraint("role IN ('driver', 'trainer', 'trainee', 'walker')", name="ck_assignment_members_role"),
     )
 
-    id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    assignment_id = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="CASCADE"), nullable=False, index=True)
-    employee_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),          nullable=False, index=True)
-    role          = Column(String(50),         nullable=False)
+    id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id        = Column(UUID(as_uuid=True), nullable=False, index=True)
+    assignment_id     = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="CASCADE"), nullable=False, index=True)
+    employee_id       = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),          nullable=False, index=True)
+    role              = Column(String(50),         nullable=False)
+    # Set only for role='trainee' rows — the specific trainer paired during dispatch.
+    # Null for all other roles. Used by inject_curriculum, Discord DMs, and dashboards.
+    paired_trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
     # True when a dispatch coordinator placed this member manually after the algorithm ran.
     # False (default) = algorithm-placed. Used for fill-rate analytics.
-    is_manual     = Column(Boolean,            nullable=False, default=False)
+    is_manual         = Column(Boolean,            nullable=False, default=False)
