@@ -64,10 +64,12 @@ CURRICULUM: list[tuple[int, str, str | None, str, bool]] = [
      "text message.",
      "policy", True),
 
-    (1, "ADP: timecard must be 100% accurate and submitted by Sunday night",
-     "The DA's timecard must be fully accurate and submitted every Sunday night "
-     "for payroll. Missing or incorrect entries (no lunch break, wrong times) "
-     "will result in removal from the schedule.",
+    (1, "ADP: timecard must be 100% accurate and submitted by Sunday midnight",
+     "The DA's timecard must be fully accurate and submitted by Sunday midnight. "
+     "The official ADP payroll cutoff is Monday at 8 AM, but Sunday midnight is "
+     "taught as the cutoff to prevent last-minute human errors. Missing or "
+     "incorrect entries (no lunch break, wrong times) will result in removal "
+     "from the schedule.",
      "policy", True),
 
     (1, "ADP: review timecard daily for accuracy",
@@ -88,15 +90,22 @@ CURRICULUM: list[tuple[int, str, str | None, str, bool]] = [
      "flow.",
      "policy", True),
 
+    (1, "Discord: immediate communication for shift issues (replaced Amazon Chime)",
+     "Discord is the company's primary real-time communication tool for the shift. "
+     "Amazon Chime was the previous platform and is no longer used. All delivery "
+     "issues, truck room alerts, and dispatch notifications happen in Discord. "
+     "DAs must have Discord installed and notifications enabled.",
+     "app_setup", True),
+
     (1, "Contact: Dispatch for delivery/route issues, HR for HR issues",
      "For any delivery or route-related problems during the shift, contact "
-     "Dispatch. For HR matters (payroll, scheduling, policy), email "
-     "TEAM@NYCDeliveryLLC.com.",
+     "Dispatch via Discord. For HR matters (payroll, scheduling, policy), email "
+     "hr@yourdsp.com.",
      "policy", True),
 
     (1, "Attendance policy: 24-hour notice required for callout via HR email",
      "If the DA cannot work their scheduled shift, they must email HR at "
-     "TEAM@NYCDeliveryLLC.com at least 24 hours in advance.",
+     "hr@yourdsp.com at least 24 hours in advance.",
      "policy", True),
 
     (1, "Attendance policy: 2 no-call-no-shows = schedule removal (job abandonment)",
@@ -187,6 +196,15 @@ CURRICULUM: list[tuple[int, str, str | None, str, bool]] = [
      "use this option regardless of who answers the door.",
      "delivery_standards", True),
 
+    (2, "Delivery priority hierarchy: Front Door → Safe Location → Receptionist → Contact Customer → Customer Support → RTS",
+     "Always attempt the customer's preferred delivery method first (usually Front Door). "
+     "If unavailable, attempt in this order: (1) Front Door, (2) Another Secure/Safe Location, "
+     "(3) Receptionist. If all physical options fail: (4) Contact the customer to arrange "
+     "a delivery method — check notes for any guidance first. (5) Contact Customer Support "
+     "if the customer cannot be reached or cannot resolve the issue. (6) RTS (Return to Station) "
+     "is the absolute last resort after all other options are exhausted. Never skip steps.",
+     "delivery_standards", True),
+
     (2, "Scorecard overview: DSB, POD, CDF, CC — what each metric is and why it matters",
      "DSB (Delivery Success Behavior): controlled DNRs to avoid. "
      "POD (Photo on Delivery): photo quality and defect avoidance. "
@@ -274,11 +292,67 @@ CURRICULUM: list[tuple[int, str, str | None, str, bool]] = [
      "to mark it correctly in Flex.",
      "delivery_types", True),
 
-    (3, "Bulk building drops: doorman protocol, mailroom vs. receptionist, PODs",
-     "Bulk building drops require specific protocols: always get the doorman's "
-     "name and mark it per standard (e.g. 'Paul-doorman denied access to front "
-     "door'). Understand the difference between mailroom and receptionist "
-     "delivery. POD photos are required for bulk drops.",
+    (3, "Bulk building drops: doorman and mailroom as bulk-drop methods, PODs required",
+     "Doorman and Mailroom are bulk-drop delivery methods used when delivering "
+     "multiple packages to a building at once — they are not primary walker delivery "
+     "methods. Doorman: always get the doorman's name and record it in Flex (e.g. "
+     "'Paul - doorman, accepted delivery'). If doorman denies access, record that too. "
+     "Mailroom: hand packages directly to mailroom staff; get a name if possible. "
+     "POD photos are required for all bulk drops. Other delivery methods: Front Door, "
+     "Another Secure Location, Receptionist, and direct to customer.",
+     "delivery_types", True),
+
+    (3, "RTS (Return to Station): definition, procedure, and when it applies",
+     "RTS means returning an undelivered package to the station. It is the last resort "
+     "after all delivery attempts and escalations have failed. Procedure: (1) Attempt "
+     "preferred delivery method (e.g. Front Door). (2) If access is unavailable and no "
+     "Safe Location exists, attempt Contact Compliance — message customer first, then "
+     "call until voicemail (do NOT hang up before 2 rings). (3) Contact Driver Support "
+     "if customer cannot be reached. (4) If Driver Support cannot resolve the issue, "
+     "they authorize the RTS procedure. (5) Reattempt delivery at a later time during "
+     "the route if possible before returning to station. Mark with correct reason code.",
+     "delivery_types", True),
+
+    (3, "RTS: Not Deliverable — when and how to determine",
+     "A package is Not Deliverable after calling AND texting the customer and "
+     "reattempting delivery at least 2 more times. Ringing the doorbell once with "
+     "no answer is NOT sufficient. Attempting delivery 1 time and getting no response "
+     "is NOT sufficient. All Contact Compliance steps must be completed before marking "
+     "Not Deliverable.",
+     "delivery_types", True),
+
+    (3, "DNR (Did Not Reattempt): definition and how to avoid one",
+     "DNR means the associate did not follow the full delivery attempt procedure before "
+     "marking a package undeliverable. A DNR is triggered when: the DA skips Contact "
+     "Compliance, marks Not Deliverable after only 1 attempt, or fails to reattempt "
+     "delivery later in the route when it was possible to do so. Prevention: always "
+     "follow the full delivery hierarchy (Front Door → Safe Location → Receptionist → "
+     "Contact Customer → Customer Support → RTS), complete all Contact Compliance steps, "
+     "and reattempt before marking final.",
+     "scorecard", True),
+
+    (3, "Business closed: procedure when you cannot deliver to a closed business",
+     "If a business is closed and you cannot complete the delivery: (1) Mark 'Business "
+     "Closed' as the reason code in the Amazon Flex app. (2) Send an alert in the DS "
+     "Chime/Discord truck room notifying Dispatch and your Driver. (3) Return the package "
+     "to the truck. Do not leave the package outside or in an unsecured location.",
+     "delivery_types", True),
+
+    (3, "Mailroom full: procedure when the mailroom cannot accept more packages",
+     "If the mailroom is full and cannot accept the delivery: (1) Contact the customer "
+     "to arrange an alternative delivery location. (2) Check delivery notes for any "
+     "guidance. (3) Attempt an available alternative (e.g. receptionist, Front Door). "
+     "(4) If no alternative is available, contact Customer Support. (5) If unresolved, "
+     "begin RTS procedure. Never leave packages in a full or unattended mailroom.",
+     "delivery_types", True),
+
+    (3, "Stolen vs. missing package: how to handle each",
+     "Missing package: mark the package as missing in Amazon Flex and send an alert "
+     "in the Discord truck room to notify Dispatch and your Driver immediately. "
+     "Stolen package: complete an incident report (detailed in the Incidents section "
+     "of company procedure), mark the package as missing in Amazon Flex, and notify "
+     "Dispatch and Driver via the Discord truck room. The incident report is required "
+     "for stolen packages — it is not required for missing packages.",
      "delivery_types", True),
 ]
 
