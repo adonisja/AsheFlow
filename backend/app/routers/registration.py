@@ -211,7 +211,7 @@ def resend_credentials(
             Permanent=False,
         )
     except ClientError as e:
-        logger.error("admin_set_user_password failed for %s: %s", employee.username, e)
+        logger.error("admin_set_user_password failed for %s: %s", employee.username, e.response["Error"]["Code"])
         raise HTTPException(status_code=502, detail="Failed to reset credentials. Please try again.")
 
     try:
