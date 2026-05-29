@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 SEED_COMPANY_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, Table, Column, String, Boolean, Float, Integer, DateTime
 from sqlalchemy.orm import sessionmaker
 
 # We import only the models the dispatch services use.
@@ -29,6 +29,7 @@ from sqlalchemy.orm import sessionmaker
 # Instead of Base.metadata.create_all (all tables), we create a targeted
 # MetaData from only the tables we need.
 from sqlalchemy import MetaData
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from app.models.base import Base
 from app.models.employee import Employee
 from app.models.truck import Truck
@@ -42,6 +43,32 @@ from app.models.notification import Notification
 from app.models.time_off_request import TimeOffRequest
 from app.models.company import Company, CompanyConfig
 from app.models.shift_session import ShiftSession
+from app.models.graduation_quiz import GraduationQuiz
+
+# graduation_quizzes uses JSONB (PostgreSQL-specific) in the ORM model so we
+# can't include GraduationQuiz.__table__ directly in SQLite tests. Define a
+# SQLite-compatible mirror of only the columns graduate_trainees.py queries.
+_graduation_quizzes_sqlite = Table(
+    "graduation_quizzes",
+    MetaData(),
+    Column("id",                  String(36),  primary_key=True),
+    Column("company_id",          String(36),  nullable=False),
+    Column("trainee_id",          String(36),  nullable=False),
+    Column("issued_by",           String(36),  nullable=True),
+    Column("training_record_id",  String(36),  nullable=True),
+    Column("attempt_number",      Integer,     nullable=False, default=1),
+    Column("issued_at",           DateTime,    nullable=True),
+    Column("submitted_at",        DateTime,    nullable=True),
+    Column("status",              String(20),  nullable=False, default="pending_issue"),
+    Column("auto_score",          Float,       nullable=True),
+    Column("final_score",         Float,       nullable=True),
+    Column("passed",              Boolean,     nullable=True),
+    Column("manager_reviewed_by", String(36),  nullable=True),
+    Column("manager_reviewed_at", DateTime,    nullable=True),
+    Column("weak_topics",         SQLiteJSON,  nullable=True),
+    Column("created_at",          DateTime,    nullable=True),
+    Column("updated_at",          DateTime,    nullable=True),
+)
 
 # Collect only the Table objects for models we actually need in tests.
 # Any model imported above registers its Table in Base.metadata.
@@ -66,6 +93,7 @@ DISPATCH_TABLES = [
     TimeOffRequest.__table__,
     CompanyConfig.__table__,
     ShiftSession.__table__,
+    _graduation_quizzes_sqlite,
 ]
 
 
@@ -306,3 +334,20 @@ def make_shift_session(db, driver: Employee, current_gate: int = 1,
     db.commit()
     db.refresh(session)
     return session
+
+
+def make_graduation_quiz(db, trainee: Employee, passed: bool = True,
+                         reviewed_at=None) -> GraduationQuiz:
+    """Insert a GraduationQuiz row for a trainee."""
+    quiz = GraduationQuiz(
+        id=uuid.uuid4(),
+        company_id=trainee.company_id,
+        trainee_id=trainee.id,
+        status="passed" if passed else "failed",
+        passed=passed,
+        manager_reviewed_at=reviewed_at or datetime.now(timezone.utc),
+    )
+    db.add(quiz)
+    db.commit()
+    db.refresh(quiz)
+    return quiz
