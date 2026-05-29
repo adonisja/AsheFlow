@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { CheckCircle2, XCircle, AlertTriangle, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, XCircle, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';
@@ -162,8 +162,7 @@ export default function GraduationQuizReview() {
 
       <SectionHeader
         title={`Quiz Review — ${quiz.trainee_name ?? 'Trainee'}`}
-        subtitle={`Attempt ${quiz.attempt_number} · Submitted ${quiz.submitted_at ? new Date(quiz.submitted_at).toLocaleDateString() : '—'}`}
-        icon={<AlertTriangle className="w-5 h-5" />}
+        description={`Attempt ${quiz.attempt_number} · Submitted ${quiz.submitted_at ? new Date(quiz.submitted_at).toLocaleDateString() : '—'}`}
       />
 
       {error && <ErrorBanner message={error} />}
