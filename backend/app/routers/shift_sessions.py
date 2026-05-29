@@ -47,6 +47,7 @@ def start_shift(
     """Start a new shift session for the calling driver. Fails if one is already active."""
     existing = db.query(ShiftSession).filter(
         ShiftSession.driver_id == caller.id,
+        ShiftSession.company_id == caller.company_id,
         ShiftSession.completed_at.is_(None),
     ).first()
     if existing:
@@ -79,6 +80,7 @@ def get_my_active_session(
     """Return the caller's current active shift session, or null if none exists."""
     return db.query(ShiftSession).filter(
         ShiftSession.driver_id == caller.id,
+        ShiftSession.company_id == caller.company_id,
         ShiftSession.completed_at.is_(None),
     ).first()
 
@@ -96,6 +98,7 @@ def advance_gate(
     """Advance the active session to the next gate. Idempotent if already at gate 5."""
     session = db.query(ShiftSession).filter(
         ShiftSession.driver_id == caller.id,
+        ShiftSession.company_id == caller.company_id,
         ShiftSession.completed_at.is_(None),
     ).first()
     if not session:
@@ -146,6 +149,7 @@ def skip_to_gate(
 
     session = db.query(ShiftSession).filter(
         ShiftSession.driver_id == caller.id,
+        ShiftSession.company_id == caller.company_id,
         ShiftSession.completed_at.is_(None),
     ).first()
     if not session:
