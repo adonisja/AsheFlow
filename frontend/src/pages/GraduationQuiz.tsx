@@ -160,8 +160,7 @@ export default function GraduationQuiz() {
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       <SectionHeader
         title="Graduation Quiz"
-        subtitle={`Attempt ${quiz.attempt_number} · ${quiz.questions.length} questions · Answer all questions before submitting`}
-        icon={<ClipboardList className="w-5 h-5" />}
+        description={`Attempt ${quiz.attempt_number} · ${quiz.questions.length} questions · Answer all questions before submitting`}
       />
 
       {error && <ErrorBanner message={error} />}
