@@ -82,7 +82,7 @@ type TabDef = {
 };
 
 const ALL_TABS: TabDef[] = [
-  { key: 'Home',            label: 'Home',            icon: '⌂',  roles: [],                     component: HomeNavigator },
+  { key: 'Home',            label: 'Home',            icon: '🏠', roles: [],                     component: HomeNavigator },
   { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
   { key: 'AnchorPoints',    label: 'Anchor Points',    icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointsScreen },
   { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
