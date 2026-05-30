@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
-import { useColors } from '@contexts/ThemeContext';
+import { useColors, useTheme } from '@contexts/ThemeContext';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } from '@env';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
@@ -18,6 +18,7 @@ const CLIENT_ID        = COGNITO_CLIENT_ID ?? '';
 
 export default function MyAccountScreen() {
   const c = useColors();
+  const { isDark, toggleTheme, isSystemTheme, useSystemTheme } = useTheme();
   const { user, signOut } = useAuth();
   const s = styles(c);
 
@@ -194,6 +195,31 @@ export default function MyAccountScreen() {
           }
         </TouchableOpacity>
 
+        {/* Appearance */}
+        <View style={[s.divider, { backgroundColor: c.border }]} />
+        <Text style={[s.sectionTitle, { color: c.foreground }]}>Appearance</Text>
+
+        <View style={[s.themeRow, { backgroundColor: c.surface, borderColor: c.border }]}>
+          <Text style={[s.themeLabel, { color: c.foreground }]}>
+            {isDark ? '🌙 Dark mode' : '☀️ Light mode'}
+          </Text>
+          <TouchableOpacity
+            style={[s.themeToggle, { backgroundColor: isDark ? c.primary : c.border }]}
+            onPress={toggleTheme}
+            activeOpacity={0.8}
+          >
+            <View style={[s.themeKnob, { transform: [{ translateX: isDark ? 20 : 2 }] }]} />
+          </TouchableOpacity>
+        </View>
+
+        {!isSystemTheme && (
+          <TouchableOpacity onPress={useSystemTheme}>
+            <Text style={{ color: c.mutedForeground, fontSize: fontSize.xs, textAlign: 'center', marginTop: -spacing.xs }}>
+              Use system setting
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Sign out */}
         <View style={[s.divider, { backgroundColor: c.border }]} />
 
@@ -241,4 +267,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   divider:      { height: 1, marginVertical: spacing.xs },
   signOutBtn:   { borderWidth: 1.5, borderRadius: radius.md, padding: spacing.md, alignItems: 'center' },
   signOutText:  { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+
+  themeRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderRadius: radius.md, padding: spacing.md },
+  themeLabel:   { fontSize: fontSize.base, fontWeight: fontWeight.medium },
+  themeToggle:  { width: 44, height: 26, borderRadius: 13, justifyContent: 'center' },
+  themeKnob:    { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 2, elevation: 2 },
 });
