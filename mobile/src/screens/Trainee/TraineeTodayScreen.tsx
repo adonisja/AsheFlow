@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, useColorScheme, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Task = { id: string; topic_title: string; description?: string; is_completed: boolean; is_training_debt?: boolean };
 type TodayData = {
@@ -14,8 +15,7 @@ type TodayData = {
 };
 
 export default function TraineeTodayScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [data,       setData]       = useState<TodayData | null>(null);
@@ -134,7 +134,7 @@ export default function TraineeTodayScreen() {
 }
 
 function ReadOnlyGroup({ label, accentColor, tasks, c, debt }: {
-  label: string; accentColor: string; tasks: Task[]; c: typeof lightColors; debt?: boolean;
+  label: string; accentColor: string; tasks: Task[]; c: ThemeColors; debt?: boolean;
 }) {
   return (
     <View style={{ marginBottom: spacing.md }}>
@@ -152,7 +152,7 @@ function ReadOnlyGroup({ label, accentColor, tasks, c, debt }: {
   );
 }
 
-function ReadOnlyTaskRow({ task, c, debt, last }: { task: Task; c: typeof lightColors; debt?: boolean; last?: boolean }) {
+function ReadOnlyTaskRow({ task, c, debt, last }: { task: Task; c: ThemeColors; debt?: boolean; last?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const hasDesc = !!task.description;
 
@@ -204,7 +204,7 @@ const gs = StyleSheet.create({
   taskDesc:     { fontSize: fontSize.xs, marginTop: 2, lineHeight: 16 },
 });
 
-const s = (c: typeof lightColors) => StyleSheet.create({
+const s = (c: ThemeColors) => StyleSheet.create({
   heroCard:        { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.md },
   heroTop:         { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
   heroAvatar:      { width: 44, height: 44, borderRadius: 22, backgroundColor: c.primaryLight, alignItems: 'center', justifyContent: 'center' },

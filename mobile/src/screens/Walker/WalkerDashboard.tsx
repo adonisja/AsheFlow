@@ -6,29 +6,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
-import TraineeTodayScreen    from './TraineeTodayScreen';
-import TraineeHistoryScreen  from './TraineeHistoryScreen';
-import MyRouteScreen         from './MyRouteScreen';
-import GraduationQuizScreen  from './GraduationQuizScreen';
+import MyRouteScreen          from '@screens/Trainee/MyRouteScreen';
+import WalkerPerformanceScreen from './WalkerPerformanceScreen';
 
-type Tab = 'today' | 'history' | 'myroute' | 'quiz';
+type Tab = 'myroute' | 'performance';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: 'today',   label: 'Today',    icon: '📚' },
-  { key: 'history', label: 'History',  icon: '📂' },
-  { key: 'myroute', label: 'My Route', icon: '🗺️' },
-  { key: 'quiz',    label: 'Quiz',     icon: '🎓' },
+  { key: 'myroute',     label: 'My Route',    icon: '🗺️' },
+  { key: 'performance', label: 'Performance', icon: '📊' },
 ];
 
-export default function TraineeDashboard() {
+export default function WalkerDashboard() {
   const c = useColors();
-  const [activeTab, setActiveTab] = useState<Tab>('today');
+  const [activeTab, setActiveTab] = useState<Tab>('myroute');
   const s = styles(c);
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <View style={s.header}>
-        <Text style={s.title}>My Training</Text>
+        <Text style={s.title}>Walker</Text>
       </View>
 
       <View style={s.tabBarWrap}>
@@ -58,10 +54,8 @@ export default function TraineeDashboard() {
       </View>
 
       <View style={{ flex: 1 }}>
-        {activeTab === 'today'   && <TraineeTodayScreen />}
-        {activeTab === 'history' && <TraineeHistoryScreen />}
-        {activeTab === 'myroute' && <MyRouteScreen />}
-        {activeTab === 'quiz'    && <GraduationQuizScreen />}
+        {activeTab === 'myroute'     && <MyRouteScreen />}
+        {activeTab === 'performance' && <WalkerPerformanceScreen />}
       </View>
     </SafeAreaView>
   );
@@ -69,14 +63,7 @@ export default function TraineeDashboard() {
 
 const styles = (c: ThemeColors) => StyleSheet.create({
   safe:         { flex: 1, backgroundColor: c.background },
-  header:       {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.xs,
-    backgroundColor: c.background,
-    borderBottomWidth: 1,
-    borderBottomColor: c.border,
-  },
+  header:       { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.xs, backgroundColor: c.background, borderBottomWidth: 1, borderBottomColor: c.border },
   title:        { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: c.foreground },
   tabBarWrap:   { backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border },
   tabBarScroll: { paddingHorizontal: spacing.sm },

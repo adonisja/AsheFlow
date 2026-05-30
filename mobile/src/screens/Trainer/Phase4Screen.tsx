@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, ActivityIndicator, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Task = { id: string; topic: string; description?: string; mandatory: boolean };
 type Preview = {
@@ -17,8 +18,7 @@ type Preview = {
 };
 
 export default function Phase4Screen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
 
   const [session,    setSession]    = useState<{ record_id: string; trainee_name: string; tasks: Task[] } | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -187,7 +187,7 @@ export default function Phase4Screen() {
 }
 
 function ObsRow({ task, observed, onToggle, c }: {
-  task: Task; observed: boolean; onToggle: (id: string) => void; c: typeof lightColors;
+  task: Task; observed: boolean; onToggle: (id: string) => void; c: ThemeColors;
 }) {
   return (
     <TouchableOpacity
@@ -206,7 +206,7 @@ function ObsRow({ task, observed, onToggle, c }: {
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   hint:         { fontSize: fontSize.sm, color: c.mutedForeground, marginBottom: spacing.md },
   sectionTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, marginTop: spacing.lg, marginBottom: spacing.sm },
   textArea:     { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.sm, minHeight: 100, marginBottom: spacing.sm },

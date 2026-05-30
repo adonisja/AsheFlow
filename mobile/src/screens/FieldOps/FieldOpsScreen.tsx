@@ -38,14 +38,15 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  useColorScheme, ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl,
   TextInput, Alert, Switch, Modal, FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
+import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function localToday(): string {
@@ -147,7 +148,7 @@ const EMPTY_SHIFT: ShiftState = {
 // ── Shared UI primitives ──────────────────────────────────────────────────────
 function Btn({ label, onPress, disabled, loading: ld, variant = 'primary', c }: {
   label: string; onPress: () => void; disabled?: boolean;
-  loading?: boolean; variant?: 'primary' | 'ghost'; c: typeof lightColors;
+  loading?: boolean; variant?: 'primary' | 'ghost'; c: ThemeColors;
 }) {
   const bg = variant === 'ghost' ? 'transparent' : c.primary;
   const border = variant === 'ghost' ? c.border : c.primary;
@@ -165,7 +166,7 @@ function Btn({ label, onPress, disabled, loading: ld, variant = 'primary', c }: 
   );
 }
 
-function DonePill({ label, c }: { label: string; c: typeof lightColors }) {
+function DonePill({ label, c }: { label: string; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: c.success + '18',
       borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs,
@@ -177,7 +178,7 @@ function DonePill({ label, c }: { label: string; c: typeof lightColors }) {
 
 function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
   num: string; title: string; subtitle?: string;
-  done?: boolean; doneLabel?: string; c: typeof lightColors;
+  done?: boolean; doneLabel?: string; c: ThemeColors;
 }) {
   return (
     <View style={{ marginBottom: done ? spacing.xs : spacing.sm }}>
@@ -200,7 +201,7 @@ function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
   );
 }
 
-function Card({ children, c }: { children: React.ReactNode; c: typeof lightColors }) {
+function Card({ children, c }: { children: React.ReactNode; c: ThemeColors }) {
   return (
     <View style={{ backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1,
       borderColor: c.border, padding: spacing.md, marginBottom: spacing.md }}>
@@ -209,7 +210,7 @@ function Card({ children, c }: { children: React.ReactNode; c: typeof lightColor
   );
 }
 
-function LocationDivider({ label, c }: { label: string; c: typeof lightColors }) {
+function LocationDivider({ label, c }: { label: string; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md, marginTop: spacing.xs }}>
       <View style={{ flex: 1, height: 1, backgroundColor: c.border }} />
@@ -225,7 +226,7 @@ function LocationDivider({ label, c }: { label: string; c: typeof lightColors })
 
 // Collapsed done-step row — replaces the full Card when a step is complete
 function CompletedRow({ num, title, summary, c }: {
-  num: string; title: string; summary: string; c: typeof lightColors;
+  num: string; title: string; summary: string; c: ThemeColors;
 }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
@@ -245,7 +246,7 @@ function CompletedRow({ num, title, summary, c }: {
 // Pure-JS time picker modal — no native dependency required
 function TimePickerModal({ visible, initial, onConfirm, onCancel, c }: {
   visible: boolean; initial: Date; onConfirm: (h: number, m: number) => void;
-  onCancel: () => void; c: typeof lightColors;
+  onCancel: () => void; c: ThemeColors;
 }) {
   const [hour,   setHour]   = useState(initial.getHours());
   const [minute, setMinute] = useState(Math.floor(initial.getMinutes() / 5) * 5);
@@ -325,7 +326,7 @@ function TimePickerModal({ visible, initial, onConfirm, onCancel, c }: {
 
 // ── Inspection form (shared by pre-trip and EOD) ──────────────────────────────
 function InspectionForm({ employeeId, inspType, onDone, c }: {
-  employeeId: string; inspType: 'pre_trip' | 'eod'; onDone: () => void; c: typeof lightColors;
+  employeeId: string; inspType: 'pre_trip' | 'eod'; onDone: () => void; c: ThemeColors;
 }) {
   const [items,   setItems]   = useState<string[]>([]);
   const [results, setResults] = useState<Record<string, boolean | null>>({});
@@ -402,7 +403,7 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
   );
 }
 
-function InspDoneView({ data, c }: { data: InspData; c: typeof lightColors }) {
+function InspDoneView({ data, c }: { data: InspData; c: ThemeColors }) {
   const bg = data.has_failures ? c.danger + '12' : c.success + '12';
   const border = data.has_failures ? c.danger + '40' : c.success + '40';
   const col = data.has_failures ? c.danger : c.success;
@@ -442,8 +443,7 @@ const CI_TIMES = ['~11:15 AM', '~2:00 PM', '~4:00 PM', '~5:30 PM'];
 
 // ── Root screen ───────────────────────────────────────────────────────────────
 export default function FieldOpsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user, hasRole } = useAuth();
   const isDriver = hasRole('driver');
   const isWalker = hasRole('walker');
@@ -814,7 +814,7 @@ export default function FieldOpsScreen() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
-  employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors;
+  employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors;
 }) {
   const [acting, setActing] = useState<'confirming' | 'declining' | null>(null);
   const submitting = useRef(false);
@@ -946,7 +946,7 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
   );
 }
 
-function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const [acting, setActing] = useState(false);
   const act = async () => {
     setActing(true);
@@ -968,7 +968,7 @@ function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shi
   );
 }
 
-function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: typeof lightColors }) {
+function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: ThemeColors }) {
   // Only collapse once we're past the offsite section (i.e. departed). While still offsite,
   // keep it visible so the driver can see their gate.
   return (
@@ -1000,7 +1000,7 @@ function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: typeo
 
 function StepInspection({ employeeId, shift, inspType, stepNum, title, subtitle, onDone, c }: {
   employeeId: string; shift: ShiftState; inspType: 'pre_trip' | 'eod';
-  stepNum: string; title: string; subtitle: string; onDone: () => void; c: typeof lightColors;
+  stepNum: string; title: string; subtitle: string; onDone: () => void; c: ThemeColors;
 }) {
   const done = inspType === 'pre_trip' ? shift.preTripDone : shift.eodDone;
   const data = inspType === 'pre_trip' ? shift.preTripData : shift.eodData;
@@ -1016,7 +1016,7 @@ function StepInspection({ employeeId, shift, inspType, stepNum, title, subtitle,
   );
 }
 
-function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const [unit, setUnit] = useState<Unit>('imperial');
   const [val,  setVal]  = useState('');
   const [saving, setSaving] = useState(false);
@@ -1060,7 +1060,7 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
   );
 }
 
-function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationLoadArrived;
   const [staged,   setStaged]   = useState<boolean | null>(null);
   const [missing,  setMissing]  = useState<Record<string, boolean>>({});
@@ -1139,7 +1139,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
 }
 
 function StepManifest({ truckId, shift, employeeId, onDone, c }: {
-  truckId: string | null; shift: ShiftState; employeeId: string; onDone: () => void; c: typeof lightColors;
+  truckId: string | null; shift: ShiftState; employeeId: string; onDone: () => void; c: ThemeColors;
 }) {
   const m = shift.manifest;
   const [acking, setAcking] = useState(false);
@@ -1199,7 +1199,7 @@ function StepManifest({ truckId, shift, employeeId, onDone, c }: {
   );
 }
 
-function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const [acting, setActing] = useState(false);
   const act = async () => {
     setActing(true);
@@ -1222,7 +1222,7 @@ function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; s
 }
 
 function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
-  employeeId: string; truckId: string | null; shift: ShiftState; onDone: () => void; c: typeof lightColors;
+  employeeId: string; truckId: string | null; shift: ShiftState; onDone: () => void; c: ThemeColors;
 }) {
   const ap = shift.activeAP;
   const done = !!ap;
@@ -1306,7 +1306,7 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
   );
 }
 
-function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: typeof lightColors }) {
+function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeColors }) {
   const [location, setLocation] = useState(ap.location);
   const [notes,    setNotes]    = useState('');
   const [acting,   setActing]   = useState(false);
@@ -1339,7 +1339,7 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: typeof
 }
 
 function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
-  employeeId: string; shift: ShiftState; crew: CrewMember[]; onDone: () => void; c: typeof lightColors;
+  employeeId: string; shift: ShiftState; crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
   const done = !!shift.checkIn1;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
@@ -1457,7 +1457,7 @@ function StepWalkerRatings({ walkers, drafts, submitted, onUpdateDraft, c }: {
   drafts: Record<string, WalkerDraft>;
   submitted: Record<string, boolean>;
   onUpdateDraft: (id: string, patch: Partial<WalkerDraft>) => void;
-  c: typeof lightColors;
+  c: ThemeColors;
 }) {
   const pending = walkers.filter(w => !submitted[w.id]);
   const done    = walkers.filter(w => submitted[w.id]);
@@ -1512,7 +1512,7 @@ function StepWalkerRatings({ walkers, drafts, submitted, onUpdateDraft, c }: {
 function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, onDone, c }: {
   employeeId: string; shift: ShiftState; num: 2 | 3;
   time: string; record: CheckInRecord | null; prevRecord: CheckInRecord | null;
-  crew: CrewMember[]; onDone: () => void; c: typeof lightColors;
+  crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
   const maxWorking = prevRecord?.working_crew_count ?? shift.checkIn1?.working_crew_count ?? 0;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
@@ -1694,7 +1694,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
   );
 }
 
-function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const rts = shift.rtsReport;
   const done = !!rts;
   const [crewCount,  setCrewCount]  = useState('');
@@ -1791,7 +1791,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
   );
 }
 
-function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationReturnArrived;
   const [acting, setActing] = useState(false);
   const act = async () => {
@@ -1816,7 +1816,7 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
   );
 }
 
-function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationHandoff;
   const [totes,  setTotes]  = useState('');
   const [rtsN,   setRtsN]   = useState('');
@@ -1873,7 +1873,7 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
 function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings, onDone, c }: {
   employeeId: string; shift: ShiftState; walkers: CrewMember[];
   drafts: Record<string, WalkerDraft>; submittedRatings: Record<string, boolean>;
-  onDone: () => void; c: typeof lightColors;
+  onDone: () => void; c: ThemeColors;
 }) {
   const done = shift.fuelLog?.odometer_end != null;
   const [unit,   setUnit]   = useState<Unit>('imperial');
@@ -1976,7 +1976,7 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
   );
 }
 
-function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.returned;
   const [acting, setActing] = useState(false);
   const act = async () => {
@@ -1999,7 +1999,7 @@ function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shi
   );
 }
 
-function WalkerPerformanceView({ employeeId, c }: { employeeId: string; c: typeof lightColors }) {
+function WalkerPerformanceView({ employeeId, c }: { employeeId: string; c: ThemeColors }) {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const GRADE_COLOR: Record<string, string> = { A: c.success, B: c.info, C: c.warning, D: c.warning, F: c.danger };
@@ -2047,7 +2047,7 @@ function WalkerPerformanceView({ employeeId, c }: { employeeId: string; c: typeo
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:      { flex: 1, backgroundColor: c.background },
   scroll:    { flex: 1 },
   content:   { padding: spacing.lg, paddingBottom: 100 },
