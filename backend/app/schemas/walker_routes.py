@@ -142,6 +142,8 @@ class CommitSortResponse(BaseModel):
     packages_sorted: int
     packages_dropped: int        # packages excluded due to missing address after enrichment
     dropped_tbas: list[str]      # TBA numbers of dropped packages (for trainer awareness)
+    sort_initiated_by_name: Optional[str] = None
+    sort_committed_at: Optional[datetime] = None
 
 
 class CommitSortRequest(BaseModel):

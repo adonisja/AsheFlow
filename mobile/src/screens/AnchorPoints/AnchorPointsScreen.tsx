@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, ActivityIndicator, Alert, ScrollView, Modal,
+  ActivityIndicator, Alert, ScrollView, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AP = {
@@ -29,7 +30,7 @@ type Crew = {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const STATUS_COLOR = (status: string, c: typeof lightColors) => {
+const STATUS_COLOR = (status: string, c: ThemeColors) => {
   if (status === 'arrived')    return c.success;
   if (status === 'relocated')  return c.mutedForeground;
   return c.warning; // preliminary
@@ -53,8 +54,7 @@ function todayISO(): string {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function AnchorPointsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [employeeId, setEmployeeId] = useState<string | null>(null);
@@ -413,7 +413,7 @@ export default function AnchorPointsScreen() {
 }
 
 // ── Timeline row ──────────────────────────────────────────────────────────────
-function TimelineRow({ ap, isLast, c }: { ap: AP; isLast: boolean; c: typeof lightColors }) {
+function TimelineRow({ ap, isLast, c }: { ap: AP; isLast: boolean; c: ThemeColors }) {
   const dotColor = STATUS_COLOR(ap.status, c);
   return (
     <View style={{ flexDirection: 'row', marginBottom: isLast ? 0 : spacing.xs }}>
@@ -447,7 +447,7 @@ const tlStyles = StyleSheet.create({
 });
 
 // ── Meta chip ─────────────────────────────────────────────────────────────────
-function MetaChip({ icon, value, c }: { icon: string; value: string; c: typeof lightColors }) {
+function MetaChip({ icon, value, c }: { icon: string; value: string; c: ThemeColors }) {
   return (
     <View style={[mcStyles.chip, { backgroundColor: c.surfaceMuted }]}>
       <Text style={mcStyles.icon}>{icon}</Text>
@@ -462,7 +462,7 @@ const mcStyles = StyleSheet.create({
 });
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:            { flex: 1, backgroundColor: c.background },
   scroll:          { flex: 1 },
   content:         { padding: spacing.lg, paddingBottom: spacing.xxl },

@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
-  useColorScheme, ActivityIndicator, RefreshControl, Modal, Pressable, Alert,
+  ActivityIndicator, RefreshControl, Modal, Pressable, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Notification = {
   id: string;
@@ -41,7 +42,7 @@ function typeMeta(type: string): { label: string; icon: string } {
   return { label, icon: '🔔' };
 }
 
-function typeColor(type: string, c: typeof lightColors): string {
+function typeColor(type: string, c: ThemeColors): string {
   if (type === 'dispatch_assignment')              return c.primary;
   if (type === 'trainer_decline_reassignment')     return c.warning;
   if (type === 'trainee_unassigned')               return c.danger;
@@ -78,7 +79,7 @@ type DispatchModalProps = {
   userId: string;
   onClose: () => void;
   onResponded: (notifId: string) => void;
-  c: typeof lightColors;
+  c: ThemeColors;
 };
 
 function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: DispatchModalProps) {
@@ -215,7 +216,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
   );
 }
 
-const modalStyles = (c: typeof lightColors) => StyleSheet.create({
+const modalStyles = (c: ThemeColors) => StyleSheet.create({
   backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
   sheet:       {
     borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
@@ -253,8 +254,7 @@ const modalStyles = (c: typeof lightColors) => StyleSheet.create({
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function NotificationsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -432,7 +432,7 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:         { flex: 1 },
   header:       {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',

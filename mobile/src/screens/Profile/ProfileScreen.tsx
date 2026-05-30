@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
-  useColorScheme, ScrollView, TextInput, Alert, ActivityIndicator,
+  ScrollView, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
@@ -29,7 +30,7 @@ type EmailStep = 'idle' | 'entering' | 'verifying';
 
 export default function ProfileScreen() {
   // All hooks first — no derived values between them
-  const scheme     = useColorScheme();
+  const c          = useColors();
   const { user, signOut } = useAuth();
   const navigation = useNavigation<any>();
   const [emailStep,    setEmailStep]    = useState<EmailStep>('idle');
@@ -39,7 +40,6 @@ export default function ProfileScreen() {
   const [currentEmail, setCurrentEmail] = useState(user?.email ?? '');
 
   // Derived values after all hooks
-  const c           = scheme === 'dark' ? darkColors : lightColors;
   const displayName = user?.firstName ?? user?.email?.split('@')[0] ?? 'Crew Member';
   const primaryRole = ['driver', 'trainer', 'trainee', 'walker', 'dispatch', 'management', 'admin']
     .find(r => user?.groups?.includes(r));
@@ -241,7 +241,7 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:    { flex: 1, backgroundColor: c.background },
   navBar:  {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

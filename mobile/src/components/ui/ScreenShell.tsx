@@ -1,10 +1,11 @@
 import React from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  useColorScheme, ActivityIndicator,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { lightColors, darkColors, spacing, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Edge = 'top' | 'bottom' | 'left' | 'right';
 
@@ -25,8 +26,7 @@ export default function ScreenShell({
   title, subtitle, loading, refreshing, onRefresh, children,
   edges = ['top'], noHeader = false,
 }: Props) {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const s = styles(c);
 
   if (loading) {
@@ -63,7 +63,7 @@ export default function ScreenShell({
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:           { flex: 1, backgroundColor: c.background },
   header:         {
     paddingHorizontal: spacing.lg,

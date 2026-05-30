@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, ActivityIndicator, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Task = {
   id: string;
@@ -31,8 +32,7 @@ type Session = {
 };
 
 export default function TrainerTodayScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [session,      setSession]      = useState<Session | null>(null);
@@ -266,7 +266,7 @@ function TaskGroup({
   completedIds: Set<string>;
   completing: string | null;
   onToggle: (id: string) => void;
-  c: typeof lightColors;
+  c: ThemeColors;
   debt?: boolean;
   readOnly?: boolean;
 }) {
@@ -298,7 +298,7 @@ function TaskGroup({
 
 function TaskRow({ task, done, completing, onToggle, c, debt, last, readOnly }: {
   task: Task; done: boolean; completing: boolean;
-  onToggle: (id: string) => void; c: typeof lightColors; debt?: boolean; last?: boolean; readOnly?: boolean;
+  onToggle: (id: string) => void; c: ThemeColors; debt?: boolean; last?: boolean; readOnly?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasDesc = !!task.description;
@@ -340,7 +340,7 @@ function TaskRow({ task, done, completing, onToggle, c, debt, last, readOnly }: 
   );
 }
 
-function EmptyState({ c }: { c: typeof lightColors }) {
+function EmptyState({ c }: { c: ThemeColors }) {
   return (
     <View style={{ alignItems: 'center', marginTop: 64, gap: spacing.sm }}>
       <Text style={{ fontSize: 48 }}>📋</Text>
@@ -368,7 +368,7 @@ const gs = StyleSheet.create({
 });
 
 // ── Screen-level styles ───────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   heroCard:        {
     backgroundColor: c.card,
     borderRadius: radius.lg,
