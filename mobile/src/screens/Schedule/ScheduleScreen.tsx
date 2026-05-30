@@ -1,13 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  useColorScheme, ActivityIndicator, RefreshControl, Modal,
+  ActivityIndicator, RefreshControl, Modal,
   TextInput, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type CrewMember = { id: string; name: string; role: string };
@@ -46,7 +47,7 @@ const SCR_TYPE_LABELS: Record<string, string> = {
 };
 const OFF_STATUSES = new Set(['Off (Recurring)', 'Time Off', 'Pending Time Off', 'Pending Off (Recurring)']);
 
-function statusColor(status: string, c: typeof lightColors): string {
+function statusColor(status: string, c: ThemeColors): string {
   if (status === 'approved') return c.success;
   if (status === 'rejected') return c.danger;
   return c.warning;
@@ -58,8 +59,7 @@ function formatFullDate(iso: string): string {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function ScheduleScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const today    = new Date();
@@ -434,7 +434,7 @@ export default function ScheduleScreen() {
 }
 
 // ── Selected day detail card ──────────────────────────────────────────────────
-function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr: string; c: typeof lightColors }) {
+function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr: string; c: ThemeColors }) {
   const s = styles(c);
   const isOff     = OFF_STATUSES.has(entry.status);
   const isWorking = !isOff;
@@ -492,7 +492,7 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
 }
 
 // ── PTO History ───────────────────────────────────────────────────────────────
-function PTOHistory({ list, onCancel, c }: { list: PTORequest[]; onCancel: (id: string) => void; c: typeof lightColors }) {
+function PTOHistory({ list, onCancel, c }: { list: PTORequest[]; onCancel: (id: string) => void; c: ThemeColors }) {
   const s = styles(c);
   if (list.length === 0) {
     return <View style={s.emptyCard}><Text style={s.emptyText}>No time-off requests yet</Text></View>;
@@ -519,7 +519,7 @@ function PTOHistory({ list, onCancel, c }: { list: PTORequest[]; onCancel: (id: 
 }
 
 // ── SCR History ───────────────────────────────────────────────────────────────
-function SCRHistory({ list, c, onNew }: { list: SCR[]; c: typeof lightColors; onNew: () => void }) {
+function SCRHistory({ list, c, onNew }: { list: SCR[]; c: ThemeColors; onNew: () => void }) {
   const s = styles(c);
   return (
     <>
@@ -552,7 +552,7 @@ function SCRHistory({ list, c, onNew }: { list: SCR[]; c: typeof lightColors; on
 }
 
 // ── Day picker ────────────────────────────────────────────────────────────────
-function DayPicker({ selected, onToggle, c }: { selected: string[]; onToggle: (d: string) => void; c: typeof lightColors }) {
+function DayPicker({ selected, onToggle, c }: { selected: string[]; onToggle: (d: string) => void; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.sm }}>
       {WEEKDAYS.map(day => {
@@ -589,7 +589,7 @@ function buildWeeks(firstDay: number, daysInMonth: number): (number | null)[][] 
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:        { flex: 1, backgroundColor: c.background },
   header:      { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: c.border, backgroundColor: c.background },
   pageTitle:   { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: c.foreground },

@@ -1,16 +1,16 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform,
   ActivityIndicator, ScrollView,
 } from 'react-native';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 
 export default function LoginScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { signIn, signInWithProvider } = useAuth();
 
   const [username,       setUsername]       = useState('');
@@ -176,7 +176,7 @@ export default function LoginScreen() {
 }
 
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   flex:       { flex: 1, backgroundColor: c.background },
   container:  { flexGrow: 1, alignItems: 'stretch' },
 

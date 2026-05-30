@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, ActivityIndicator, Alert, ScrollView,
+  ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Incident = {
   id: string;
@@ -34,15 +35,14 @@ const AUTO_SEVERITY: Record<string, string> = {
   route_issue: 'info', crew_conduct: 'info', other: 'info',
 };
 
-const SEVERITY_COLOR: Record<string, (c: typeof lightColors) => string> = {
+const SEVERITY_COLOR: Record<string, (c: ThemeColors) => string> = {
   critical: c => c.danger,
   warning:  c => c.warning,
   info:     c => c.info,
 };
 
 export default function IncidentsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [tab, setTab] = useState<'report' | 'history'>('report');
@@ -252,7 +252,7 @@ export default function IncidentsScreen() {
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:          { flex: 1, backgroundColor: c.background },
   tabBar:        { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: c.border, backgroundColor: c.surface },
   tab:           { flex: 1, paddingVertical: spacing.sm + 2, alignItems: 'center' },

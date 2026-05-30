@@ -1,22 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, useColorScheme, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 import TrainerTodayScreen       from './TrainerTodayScreen';
 import TrainerHistoryScreen     from './TrainerHistoryScreen';
 import TrainerPerformanceScreen from './TrainerPerformanceScreen';
 import Phase4Screen             from './Phase4Screen';
+import RouteSortScreen          from './RouteSortScreen';
 
-type Tab = 'today' | 'history' | 'performance' | 'phase4';
+type Tab = 'today' | 'history' | 'performance' | 'phase4' | 'routesort';
 
 export default function TrainerDashboard() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [activeTab, setActiveTab] = useState<Tab>('today');
@@ -37,6 +38,7 @@ export default function TrainerDashboard() {
     { key: 'today',       label: "Today",       icon: '📋' },
     { key: 'history',     label: 'History',     icon: '📂' },
     { key: 'performance', label: 'Performance', icon: '📊' },
+    { key: 'routesort',   label: 'Route Sort',  icon: '🗺️' },
     ...(isPhase4 ? [{ key: 'phase4' as Tab, label: 'Phase 4', icon: '🎯' }] : []),
   ];
 
@@ -81,13 +83,14 @@ export default function TrainerDashboard() {
         {activeTab === 'today'       && <TrainerTodayScreen />}
         {activeTab === 'history'     && <TrainerHistoryScreen />}
         {activeTab === 'performance' && <TrainerPerformanceScreen />}
+        {activeTab === 'routesort'   && <RouteSortScreen />}
         {activeTab === 'phase4'      && <Phase4Screen />}
       </View>
     </SafeAreaView>
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:          { flex: 1, backgroundColor: c.background },
   header:        {
     paddingHorizontal: spacing.lg,
