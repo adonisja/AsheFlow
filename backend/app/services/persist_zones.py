@@ -80,11 +80,14 @@ def persist_zones(
         else:
             label = assignment.truck_name
 
+        tbas = [p["tba"] for p in assignment.cluster.packages if p.get("tba")]
+
         zone = TruckZone(
             id              = uuid.uuid4(),
             company_id      = company_id,
             truck_id        = tid,
             truck_polygon   = assignment.cluster.polygon,
+            package_tbas    = tbas,
             zone_label      = label[:50],   # column is VARCHAR(50)
             zone_date       = zone_date,
             is_active       = True,

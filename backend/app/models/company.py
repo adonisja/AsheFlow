@@ -86,6 +86,9 @@ class CompanyConfig(Base):
     # ── Manifest ingestion mode ───────────────────────────────────────────────
     ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
 
+    # ── GeoClient address enrichment ─────────────────────────────────────────
+    geoclient_borough = Column(String(30), nullable=True)              # e.g. "manhattan", "brooklyn", "queens"
+
     # ── Discord guild integration (optional — all nullable) ───────────────────
     discord_guild_id            = Column(BigInteger, nullable=True)
     discord_drivers_channel_id  = Column(BigInteger, nullable=True)
