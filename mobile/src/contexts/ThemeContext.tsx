@@ -11,8 +11,11 @@ type ThemeContextValue = {
   scheme: ColorScheme;
   isDark: boolean;
   colors: ThemeColors;
-  toggleTheme: () => void;
+  // Set an explicit override; pass null to revert to system
+  setTheme: (scheme: ColorScheme | null) => void;
   isSystemTheme: boolean;
+  // Convenience flip — kept for any callers that still use it
+  toggleTheme: () => void;
   useSystemTheme: () => void;
 };
 
@@ -20,6 +23,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   scheme: 'light',
   isDark: false,
   colors: lightColors,
+  setTheme: () => {},
   toggleTheme: () => {},
   isSystemTheme: true,
   useSystemTheme: () => {},
@@ -27,9 +31,8 @@ const ThemeContext = createContext<ThemeContextValue>({
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const deviceScheme = useColorScheme();
-  // null = follow system, 'light'/'dark' = manual override
   const [override, setOverride] = useState<ColorScheme | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded,   setLoaded]   = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then(val => {
@@ -41,25 +44,27 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const activeScheme: ColorScheme = override ?? (deviceScheme === 'dark' ? 'dark' : 'light');
   const isDark = activeScheme === 'dark';
 
-  const toggleTheme = useCallback(() => {
-    const next: ColorScheme = isDark ? 'light' : 'dark';
-    setOverride(next);
-    AsyncStorage.setItem(STORAGE_KEY, next);
-  }, [isDark]);
-
-  const useSystemTheme = useCallback(() => {
-    setOverride(null);
-    AsyncStorage.removeItem(STORAGE_KEY);
+  const setTheme = useCallback((scheme: ColorScheme | null) => {
+    setOverride(scheme);
+    if (scheme === null) {
+      AsyncStorage.removeItem(STORAGE_KEY);
+    } else {
+      AsyncStorage.setItem(STORAGE_KEY, scheme);
+    }
   }, []);
+
+  const toggleTheme    = useCallback(() => setTheme(isDark ? 'light' : 'dark'), [isDark, setTheme]);
+  const useSystemTheme = useCallback(() => setTheme(null), [setTheme]);
 
   const value = useMemo<ThemeContextValue>(() => ({
     scheme: activeScheme,
     isDark,
     colors: isDark ? darkColors : lightColors,
+    setTheme,
     toggleTheme,
     isSystemTheme: override === null,
     useSystemTheme,
-  }), [activeScheme, isDark, toggleTheme, useSystemTheme, override]);
+  }), [activeScheme, isDark, setTheme, toggleTheme, useSystemTheme, override]);
 
   if (!loaded) return null;
 
