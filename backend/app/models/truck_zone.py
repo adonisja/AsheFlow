@@ -12,6 +12,7 @@ class TruckZone(Base):
     company_id     = Column(UUID(as_uuid=True), nullable=False, index=True)
     truck_id       = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False, index=True)
     truck_polygon  = Column(JSONB, nullable=False)
+    package_tbas   = Column(JSONB, nullable=True)   # list[str] of TBA numbers in this cluster
     zone_label     = Column(String(50), nullable=False)
     zone_date      = Column(Date, nullable=False, index=True)
     is_active      = Column(Boolean, nullable=False, default=True)
