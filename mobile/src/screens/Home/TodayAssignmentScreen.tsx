@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, useColorScheme, ActivityIndicator,
+  View, Text, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type CrewMember = { id: string; name: string; role: string };
 
@@ -31,8 +32,7 @@ const ROLE_COLORS: Record<string, string> = {
 const ROLE_ORDER = ['driver', 'trainer', 'trainee', 'walker'];
 
 export default function TodayAssignmentScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [assignment, setAssignment] = useState<Assignment | null>(null);
@@ -159,7 +159,7 @@ export default function TodayAssignmentScreen() {
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   heroCard:      { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.lg },
   truckRow:      { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   truckIcon:     { width: 48, height: 48, borderRadius: radius.md, backgroundColor: c.primaryLight, alignItems: 'center', justifyContent: 'center' },
