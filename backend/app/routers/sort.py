@@ -259,6 +259,7 @@ def upload_manifest(
             "lat":          p.lat,
             "lng":          p.lng,
             "address":      p.address,
+            "bag_id":       p.bag_id,
             "tag_number":   p.tag_number,
             "package_type": p.package_type,
         }
