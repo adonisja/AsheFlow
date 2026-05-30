@@ -132,7 +132,27 @@ def enrich_manifest_packages(
 
     Stores enriched packages in Redis. Notifies dispatch on completion and on
     any failures. Safe to re-run: Redis key is overwritten.
+
+    On unhandled exception, writes a manifest_failed:{company_id}:{date} key
+    to Redis (TTL 24h) so the status endpoint can return "failed" instead of
+    leaving dispatch with a silent "not_found" response.
     """
+    _failed_key = f"manifest_failed:{company_id}:{sort_date}"
+    r = _redis_client()
+
+    try:
+        return _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key)
+    except Exception as exc:
+        logger.error(
+            "enrich_manifest_packages unhandled exception: %s",
+            type(exc).__name__,
+            extra={"company_id": company_id, "sort_date": sort_date},
+        )
+        r.setex(_failed_key, _REDIS_TTL_SECONDS, type(exc).__name__)
+        raise
+
+
+def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key):
     enriched: list[dict] = []
     failed: list[dict] = []
 
@@ -178,10 +198,11 @@ def enrich_manifest_packages(
                 "reason": failure_reason,
             })
 
-    # Cache enriched packages in Redis
-    r = _redis_client()
+    # Cache enriched packages in Redis (r was passed in from caller)
     key = _manifest_key(company_id, sort_date)
     r.setex(key, _REDIS_TTL_SECONDS, json.dumps(enriched))
+    # Clear any prior failure key now that enrichment succeeded
+    r.delete(_failed_key)
 
     # Notify dispatch
     db = SessionLocal()
