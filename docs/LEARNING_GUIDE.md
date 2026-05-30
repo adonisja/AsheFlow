@@ -5354,3 +5354,127 @@ def _reassign_trainee_on_trainer_decline(db, trainer_id, dispatch_date, company_
 explicit parameter — never count on it being available from an enclosing scope. Python
 closures would only work if the helper were defined *inside* the endpoint function (a nested
 function), which is not how these routers are structured.
+
+---
+
+### Two-pipeline sort sequencing: truck sort vs. walker sort
+
+The sort pipeline runs in two distinct phases, separated in time and in HTTP surface:
+
+**Phase 1 — Truck sort** (morning, at the warehouse):
+```
+POST /sort/upload         → parse manifest, async GeoClient enrichment
+GET  /sort/manifest/{date}/status  → poll until "ready"
+POST /sort/run            → DBSCAN cluster → assign clusters to trucks
+                            → tier-1 tote verify → persist TruckZone rows
+```
+Output: `TruckZone` rows, one per cluster. Each stores `package_tbas` (list of TBA strings in that cluster) and `zone_date`.
+
+**Phase 2 — Walker sort** (later, after trucks arrive at the station):
+```
+POST /walker-routes/commit → load packages from Redis via TruckZone.package_tbas
+                             → run route_sort → persist WalkerRoute + WalkerTrip rows
+```
+The trainer distributes that truck's packages among the walkers boarding it. No package addresses come from the HTTP request — they come from the Redis manifest filtered by the TBAs stored on the TruckZone.
+
+**Why this split?** Trucks go out first. Walker assignment happens later when the trainer physically sees which walkers are boarding which truck. Trying to do both at once would require blocking the entire dispatch flow until all walkers are physically present at each truck.
+
+**The data handoff:** `TruckZone.package_tbas` is the link between the two phases. It lets the walker sort know exactly which packages belong to this truck without re-running the clustering or re-supplying data from the client.
+
+---
+
+### Address ephemerality — why addresses never hit the DB or response bodies
+
+ADR-096 established that package addresses are ephemeral: they are used for computation (GeoClient enrichment, DBSCAN clustering, block_key derivation, route sort) but never stored in PostgreSQL and never returned in API responses.
+
+**Why?** Delivery addresses are PII. Storing them in the operational DB creates compliance obligations, increases breach impact, and requires retention policy management. Keeping them in Redis (short TTL, easy to expire) limits the exposure window.
+
+**In practice this means:**
+- `PackageInput.address` is used by the route sort algorithm, never written to any DB table
+- `WalkerRoute`, `WalkerTrip`, `TruckZone` contain TBA numbers and bag IDs — not addresses
+- `CommitSortResponse` contains TBA numbers — not addresses
+- The `dropped_tbas` list in `CommitSortResponse` is identifiers, not addresses
+
+**The sentinel for reviewers:** if you see `address` being added to a `db.add(...)` call in the sort or walker route routers, it is a bug. Addresses must only travel through in-memory objects during computation.
+
+---
+
+### Manifest upload data flow — the enriching sentinel pattern
+
+The manifest upload flow has a subtle ordering requirement:
+
+```
+1. Parse file synchronously (validate extension, size, column structure)
+2. SET manifest_enriching:{company_id}:{date} key (5-min TTL)   ← MUST come before step 3
+3. Dispatch Celery task
+4. Return 202
+```
+
+**Why set the sentinel before dispatching?** The status endpoint checks Redis keys in this order:
+1. `manifest:{company_id}:{date}` → `"ready"`
+2. `manifest_enriching:{company_id}:{date}` → `"enriching"`
+3. `manifest_failed:{company_id}:{date}` → `"failed"`
+4. (nothing) → `"not_found"`
+
+Dispatch dispatches the Celery task (a Redis/queue write), then the task starts asynchronously. There is a gap between the dispatch call returning and the task actually starting. If the frontend polls the status endpoint in that gap and the sentinel is not yet set, it sees `"not_found"` — which the user interprets as "nothing was uploaded".
+
+Setting the sentinel first eliminates this window entirely. The 5-minute TTL is long enough to survive task startup in any realistic environment; the task clears the sentinel implicitly by writing the manifest key.
+
+**Failure signal:** if the Celery task crashes, it writes `manifest_failed:{company_id}:{date}` (24h TTL) so the status endpoint can return `"failed"` instead of silently falling through to `"not_found"`. On success, the task deletes any stale failed key so a re-upload after a failure starts clean.
+
+---
+
+### File upload size limiting — read once, write from buffer
+
+When an uploaded file needs to be size-checked before writing to disk:
+
+```python
+# Read up to limit+1 bytes — if we get limit+1, the file is over the limit
+contents = file.file.read(MAX_UPLOAD_BYTES + 1)
+if len(contents) > MAX_UPLOAD_BYTES:
+    raise HTTPException(status_code=413, detail="File too large")
+
+# Write the buffer (not the stream — the stream is now exhausted)
+with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+    tmp.write(contents)
+```
+
+The stream from `UploadFile.file` is a standard file-like object. After calling `read()`, the stream position is at the end — there is nothing left to read. If you then try to use `shutil.copyfileobj(file.file, tmp)`, it copies zero bytes.
+
+The buffer in `contents` is what you have. Write from that.
+
+---
+
+### Concurrent write safety — partial unique indexes vs. application locks
+
+**The problem:** two concurrent `POST /sort/run` requests for the same company+date will both:
+1. Read existing active zones and mark them `is_active = False`
+2. Insert new zone rows
+
+Since both read the same "no active zones" state, both insert, and both try to commit — leaving double the active zone rows.
+
+**DB-level defense:** a partial unique index catches the second insert as an `IntegrityError`:
+```sql
+CREATE UNIQUE INDEX uq_truck_zones_active_label
+ON truck_zones (company_id, zone_label, zone_date)
+WHERE is_active = true
+```
+Zone labels are unique per run (truck name + overflow/sequence suffix), so a duplicate run generating the same labels is caught. The second transaction gets an `IntegrityError` rather than silently committing.
+
+**Why zone_label and not truck_id?** A truck can have multiple active zones (overflow clusters). A unique index on `(company_id, truck_id, zone_date)` would block that. Labels are unique per run across all clusters; the label-based constraint catches duplicate runs without constraining legitimate overflow.
+
+**Application-level lock (future improvement):** a Redis SETNX lock would give a better user experience — a 409 "sort already in progress" rather than a 500 IntegrityError. The DB index is the safety net; an app-level lock would be the UX layer on top. Do not rely solely on the UX (disabling the button) because the button state is not a concurrency guarantee.
+
+---
+
+### Surfacing operational metadata to end users — the `dropped_tbas` pattern
+
+When a batch operation partially fails, the right response is:
+1. Proceed with the successful subset
+2. Return both the results AND the identifiers of what was excluded
+
+For walker sort, packages that failed address enrichment are dropped silently from the route distribution. A count (`packages_dropped: int`) tells the trainer something went wrong. The full list (`dropped_tbas: list[str]`) tells them *exactly* which packages to handle manually.
+
+The principle: trainers work with physical packages labeled with TBA numbers. Abstract counts are not actionable; specific identifiers are. Design responses to give operators the level of specificity they need to take action without looking something up.
+
+This pattern generalizes: any endpoint that processes a batch and may partially succeed should return both the successes and the identifiers of failures. `packages_dropped: int` alone is a bad design for this domain.
