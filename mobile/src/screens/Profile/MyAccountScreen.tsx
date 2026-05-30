@@ -20,7 +20,7 @@ type PasswordStep = 'idle' | 'open';
 
 export default function MyAccountScreen() {
   const c = useColors();
-  const { isDark, isSystemTheme, toggleTheme, useSystemTheme } = useTheme();
+  const { isDark, isSystemTheme, setTheme } = useTheme();
   const { user, signOut } = useAuth();
   const s = styles(c);
 
@@ -155,11 +155,9 @@ export default function MyAccountScreen() {
   const activeTheme: ThemeOption = isSystemTheme ? 'system' : isDark ? 'dark' : 'light';
 
   const pickTheme = (opt: ThemeOption) => {
-    if (opt === 'system') { useSystemTheme(); return; }
-    // Leave system override first so toggleTheme works on the resolved isDark
-    if (isSystemTheme) useSystemTheme();
-    if (opt === 'dark'  && !isDark) toggleTheme();
-    if (opt === 'light' && isDark)  toggleTheme();
+    if (opt === 'system') { setTheme(null);    return; }
+    if (opt === 'dark')   { setTheme('dark');  return; }
+    if (opt === 'light')  { setTheme('light'); return; }
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
