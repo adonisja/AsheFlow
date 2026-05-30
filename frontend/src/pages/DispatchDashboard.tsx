@@ -336,7 +336,7 @@ export default function DispatchDashboard() {
         setIsLoading(true);
         try {
           await axiosClient.delete(`/dispatch/assign/${selectedDate}/${employeeId}`);
-          await fetchDispatchData();
+          await Promise.all([fetchDispatchData(), fetchAvailablePool()]);
         } catch (err: any) {
           console.error(err);
           setError(err.response?.data?.detail || 'Failed to remove employee.');
@@ -648,8 +648,8 @@ export default function DispatchDashboard() {
                         <div className="h-px bg-border/60 flex-1"></div>
                       </div>
                     )}
-                    <div 
-                      draggable
+                    <div
+                      draggable={!isLoading}
                       onDragStart={(e) => handleDragStart(e, emp.id)}
                       className="flex items-center gap-2 bg-accent/50 p-2 rounded border border-transparent hover:border-primary/30 cursor-grab active:cursor-grabbing"
                     >
@@ -729,7 +729,7 @@ export default function DispatchDashboard() {
                                </div>
                              )}
                              <div
-                               draggable
+                               draggable={!isLoading}
                                onDragStart={(e) => handleDragStart(e, member.employee_id, truckId)}
                                className="flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm"
                              >
