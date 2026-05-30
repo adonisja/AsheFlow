@@ -11,16 +11,21 @@ class RawPackage:
     lat: float
     lng: float
     address: str | None = None
-    tag_number: str | None = None
+    bag_id: str | None = None       # physical tote/bag ID from Amazon manifest
+    tag_number: str | None = None   # sort-zone label, e.g. "A-12" — NOT a bag ID
     package_type: str | None = None
 
+# Column names from Amazon's Delivery Station manifest CSV.
+# Update these when a real manifest is available to verify.
+# All values are case-sensitive and must match the CSV header row exactly.
 DEFAULT_COLUMN_MAP = {
-    "tba":          "tracking_id",      # placeholder — Amazon's actual TBA column name TBD
-    "lat":          "latitude",         # placeholder
-    "lng":          "longitude",        # placeholder
-    "address":      "address",          # placeholder — may not exist
-    "tag_number":   "tag_number",       # placeholder
-    "package_type": "package_type",     # placeholder
+    "tba":          "Tracking ID",
+    "lat":          "Latitude",
+    "lng":          "Longitude",
+    "address":      "Address",
+    "bag_id":       "Bag ID",
+    "tag_number":   "Tag Number",
+    "package_type": "Package Type",
 }
 
 class ManifestIngestor(ABC):
@@ -58,6 +63,7 @@ class APIManifestIngestor(ManifestIngestor):
                     lat          = float(row[self.column_map["lat"]]),
                     lng          = float(row[self.column_map["lng"]]),
                     address      = row.get(self.column_map["address"]) or None,
+                    bag_id       = row.get(self.column_map.get("bag_id", "")) or None,
                     tag_number   = row.get(self.column_map["tag_number"]) or None,
                     package_type = row.get(self.column_map["package_type"]) or None,
                 )
@@ -90,6 +96,7 @@ class FileManifestIngestor(ManifestIngestor):
                     lat          = float(row[self.column_map["lat"]]),
                     lng          = float(row[self.column_map["lng"]]),
                     address      = row.get(self.column_map["address"]) or None,
+                    bag_id       = row.get(self.column_map.get("bag_id", "")) or None,
                     tag_number   = row.get(self.column_map["tag_number"]) or None,
                     package_type = row.get(self.column_map["package_type"]) or None,
                 )
