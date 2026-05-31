@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
@@ -14,6 +14,7 @@ interface Notification {
 
 interface Props {
   employeeId: string;
+  onNotification?: (type: string) => void;
 }
 
 function styleForType(type: string): { bg: string; border: string; icon: React.ReactNode } {
@@ -56,18 +57,30 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
 // Maps notification id → 'confirmed' | 'declined'
 type ResponseMap = Record<string, 'confirmed' | 'declined'>;
 
-const NotificationBanner: React.FC<Props> = ({ employeeId }) => {
+const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [responses, setResponses]         = useState<ResponseMap>({});
   const [responding, setResponding]       = useState<string | null>(null); // id currently being submitted
+  const seenIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!employeeId) return;
     axiosClient
       .get<Notification[]>(`/notifications/${employeeId}`)
-      .then((res) => setNotifications(res.data.filter((n) => !n.is_read)))
+      .then((res) => {
+        const unread = res.data.filter((n) => !n.is_read);
+        setNotifications(unread);
+        if (onNotification) {
+          for (const n of unread) {
+            if (!seenIds.current.has(n.id)) {
+              seenIds.current.add(n.id);
+              onNotification(n.type);
+            }
+          }
+        }
+      })
       .catch(() => {});
-  }, [employeeId]);
+  }, [employeeId, onNotification]);
 
   const dismiss = async (id: string) => {
     await axiosClient.patch(`/notifications/${id}/read`).catch(() => {});
