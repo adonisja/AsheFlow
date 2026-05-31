@@ -304,7 +304,7 @@ const Navbar = () => {
   const isDispatch = groups.includes('dispatch');
   const isAdmin = groups.includes('admin');
   const isTrainee = groups.includes('trainee');
-  const canAccessFieldOps = groups.some(role => ['driver', 'walker', 'trainee'].includes(role)) || isMgmt || isDispatch || isAdmin;
+  const canAccessFieldOps = groups.some(role => ['driver', 'walker', 'trainer', 'trainee'].includes(role)) || isMgmt || isDispatch || isAdmin;
   const canAccessScheduleChanges = isFieldStaff || isDispatch || isAdmin;
   const canAccessSchedule = isFieldStaff || isMgmt || isAdmin;
 
