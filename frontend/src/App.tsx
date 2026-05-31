@@ -230,8 +230,8 @@ function App() {
               }
             />
             <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin']}><Schedule /></ProtectedRoute>} />
-            {/* field-ops: drivers submit; management/dispatch/admin view oversight dashboard; walkers see self-performance */}
-            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'dispatch', 'management', 'admin']}><FieldOps /></ProtectedRoute>} />
+            {/* field-ops: drivers submit; trainers/trainees see AP card; walkers see self-performance; oversight roles see summary */}
+            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><FieldOps /></ProtectedRoute>} />
             {/* schedule-changes: dispatch excluded — not their job */}
             <Route
               path="/schedule-changes"
