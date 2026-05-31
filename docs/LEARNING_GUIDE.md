@@ -5478,3 +5478,122 @@ For walker sort, packages that failed address enrichment are dropped silently fr
 The principle: trainers work with physical packages labeled with TBA numbers. Abstract counts are not actionable; specific identifiers are. Design responses to give operators the level of specificity they need to take action without looking something up.
 
 This pattern generalizes: any endpoint that processes a batch and may partially succeed should return both the successes and the identifiers of failures. `packages_dropped: int` alone is a bad design for this domain.
+
+---
+
+## 2026-05-31 — Anchor points, field staff FieldOps, and deploy failures
+
+### Idempotent event logging with a unique constraint
+
+When a server-side check runs on every poll (e.g. "is this driver running late?"),
+the naive approach writes a new row every time the condition is true. The correct
+approach is to write exactly one row per event, regardless of how many times the
+check runs.
+
+Pattern: add a `UniqueConstraint` on the business key of the event — in this case
+`anchor_point_id` on `anchor_point_late_flags`. On the first late check, the INSERT
+succeeds. On every subsequent check, the INSERT fails silently (the application
+catches the IntegrityError or uses `INSERT ... ON CONFLICT DO NOTHING`). The flag
+table becomes an accurate audit log with no duplicates.
+
+The same pattern applies to any "flag once" operation: first login bonuses, daily
+quota checks, one-per-day notifications.
+
+### Event-driven polling: stop when nothing is changing
+
+A fixed-interval poll that runs regardless of state wastes resources and adds
+unnecessary DB load. The better pattern is conditional polling:
+
+```
+shouldPoll(state) → bool
+```
+
+Define the conditions under which the data *could* change, and only poll then.
+For `TruckAPCard`:
+- Preliminary AP: poll — ETA+15 late check may fire, driver may arrive
+- Arrived + no departure pending: stop — nothing will change until driver sets a departure
+- Departed: stop — the next AP (preliminary) will arrive via notification
+
+When a notification signals a state change (`anchor_point_*`), restart the poll
+immediately instead of waiting for the next interval. This gives near-realtime
+updates on events while near-zero load during idle periods.
+
+### Untracked files are invisible to git — and to CI
+
+A file that exists locally but was never `git add`ed is not in the repo. Any
+module that imports it will crash with `ModuleNotFoundError` on every other
+machine and on every server.
+
+The symptom in FastAPI is always the same: the backend fails to start, every
+request returns 500, and the browser reports a CORS error (because FastAPI strips
+CORS headers on unhandled startup errors — the 500 is the real error, not CORS).
+
+**Prevention checklist before any backend push:**
+```bash
+git status backend/app/
+```
+Any untracked `.py` file in `routers/` or `services/` that is imported by committed
+code is a guaranteed crash. Stage it or the deploy will break.
+
+### Alembic `head` vs `heads` — multiple migration tips
+
+`alembic upgrade head` (singular) fails when the migration graph has more than one
+leaf node (two branches that haven't been merged). This happens when two features
+add migrations in parallel and the merge migration hasn't been created yet, or when
+a deploy was aborted before the merge migration was committed.
+
+`alembic upgrade heads` (plural) upgrades all current tips simultaneously and is
+safe regardless of how many branch tips exist. Always use `heads` in CI and in
+manual commands.
+
+If staging ends up with diverged heads after a bad deploy, run:
+```bash
+docker compose exec -T backend alembic current   # shows where the DB is
+docker compose exec -T backend alembic upgrade heads  # advances all tips
+```
+
+### How a crash-looping backend leaves migrations incomplete
+
+CI runs two steps in sequence: (1) pull new code + restart containers, (2) run
+`alembic upgrade heads`. If step 1 produces a backend that crashes on startup,
+step 2 may still succeed (it runs `alembic` directly in the container, not via the
+running server). But if the container itself fails to start at all, the `exec`
+command has nothing to attach to and migrations are skipped silently.
+
+Result: new code is deployed (including ORM models with new columns), but the DB
+schema hasn't been updated. Every request that touches the new column hits
+`UndefinedColumn` → 500 → CORS error in the browser.
+
+After fixing any startup crash and redeploying, always verify migrations ran:
+```bash
+docker compose exec -T backend alembic current
+```
+If it shows a revision behind what you expect, run `alembic upgrade heads` manually.
+
+### Notification lifecycle: keep the inbox consistent with assignment state
+
+A `dispatch_assignment` notification tells an employee "you are assigned to truck X."
+If that assignment is later removed, swapped, or cleared, the notification must be
+updated or deleted — otherwise the employee's inbox contradicts reality.
+
+Rules implemented:
+- **Remove:** delete the `DispatchConfirmation` and the `Notification`
+- **Clear all:** delete all `Notification` rows for the date alongside all confirmations
+- **Swap truck:** update the notification message with the new truck name, reset `is_read=False`
+
+The inbox is a view of current state, not a history log. History belongs in
+`AuditLog`. The notification is only useful while the information is actionable.
+
+### Available pool semantics: "who can still be placed"
+
+`GET /schedule/available/{date}` answers the question "who can dispatch assign
+today?" The answer is not simply "who is active and not on leave." It must exclude:
+
+1. Already assigned (has an `AssignmentMember` row for the date)
+2. Declined (has a `DispatchConfirmation` with `status='declined'`)
+3. On recurring off-day
+4. On approved time-off
+
+Each exclusion uses an `EXISTS` subquery so the filter composes cleanly and
+evaluates in a single DB round-trip. Never filter in Python after fetching — push
+all exclusion logic into the query.
