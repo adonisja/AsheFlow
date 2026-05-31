@@ -41,6 +41,7 @@ class CompanyConfig(Base):
     shift_end      = Column(Time, nullable=True)   # e.g. 18:00
     checkin_open   = Column(Time, nullable=True)   # earliest accepted check-in
     checkin_close  = Column(Time, nullable=True)   # latest accepted check-in
+    dispatch_confirmation_cutoff = Column(Time, nullable=True)  # default 09:00 — pending notifications expire after this
 
     # ── Walker rating window ──────────────────────────────────────────────────
     # Hours after driver departure that walker ratings are accepted.

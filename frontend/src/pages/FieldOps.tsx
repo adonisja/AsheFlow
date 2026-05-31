@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
+import NotificationBanner from '../components/NotificationBanner';
 import { getLocalYMD as todayStr } from '../utils/date';
 import { fileToDataUrl } from '../utils/file';
 
@@ -1668,6 +1669,7 @@ export default function FieldOps() {
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
+      <NotificationBanner employeeId={employeeId} />
       {isDriver && <DriverFieldOpsView employeeId={employeeId} />}
       {isWalker && <WalkerSelfPerformancePanel employeeId={employeeId} />}
     </div>
