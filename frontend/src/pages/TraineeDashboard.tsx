@@ -3,6 +3,7 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { ClipboardCheck, Loader2 } from 'lucide-react';
 import TaskChecklist from '../components/TrainerDashboard/TaskChecklist';
+import NotificationBanner from '../components/NotificationBanner';
 import { getLocalYMD } from '../utils/date';
 
 export default function TraineeDashboard() {
@@ -10,6 +11,7 @@ export default function TraineeDashboard() {
   const [trainingRecords, setTrainingRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [trainerName, setTrainerName] = useState<string>('Your Trainer');
+  const [traineeId, setTraineeId] = useState<string | null>(null);
 
   const [rating, setRating] = useState<number>(0);
   const [reviewText, setReviewText] = useState<string>('');
@@ -20,6 +22,7 @@ export default function TraineeDashboard() {
       try {
         const meRes = await axiosClient.get('/employees/me');
         const traineeId = meRes.data.id;
+        setTraineeId(traineeId);
 
         const res = await axiosClient.get(`/training/trainee/${traineeId}`);
         const records = res.data;
@@ -78,6 +81,7 @@ export default function TraineeDashboard() {
           </p>
         </div>
       </div>
+      {traineeId && <NotificationBanner employeeId={traineeId} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
