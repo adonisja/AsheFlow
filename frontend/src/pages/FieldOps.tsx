@@ -847,7 +847,9 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
 
 // ---------------------------------------------------------------------------
 // Truck AP Card — shown to trainers, trainees, walkers
-// Polls GET /anchor-points/truck/{truck_id}/active every 30s
+// Polls GET /anchor-points/truck/{truck_id}/active every 60s, but only
+// while an active AP exists. Polling stops once the AP is departed/arrived
+// with no pending departure, and restarts if a new notification arrives.
 // ---------------------------------------------------------------------------
 interface ActiveAP {
   id: string;
@@ -861,36 +863,81 @@ interface ActiveAP {
   arrived_at: string | null;
 }
 
-function TruckAPCard({ employeeId }: { employeeId: string }) {
-  const [truckId, setTruckId]     = useState<string | null>(null);
+const AP_POLL_MS = 60_000;
+
+function shouldPoll(ap: ActiveAP | null): boolean {
+  if (!ap) return false;
+  // Stop once arrived with no pending departure
+  if (ap.status === 'arrived' && !ap.expected_departure_at) return false;
+  // Stop once actually departed (crew has moved, next AP will be preliminary)
+  if (ap.actual_departed_at) return false;
+  return true;
+}
+
+function TruckAPCard({ employeeId, refreshTrigger = 0 }: { employeeId: string; refreshTrigger?: number }) {
+  const [truckId, setTruckId]       = useState<string | null>(null);
   const [driverName, setDriverName] = useState<string | null>(null);
-  const [ap, setAp]               = useState<ActiveAP | null>(null);
+  const [ap, setAp]                 = useState<ActiveAP | null>(null);
   const [noAssignment, setNoAssignment] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const apRef = useRef<ActiveAP | null>(null);
+  const truckIdRef = useRef<string | null>(null);
+
+  const clearPoll = () => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+  };
 
   const fetchAP = useCallback(async (tid: string) => {
     try {
       const res = await axiosClient.get<ActiveAP>(`/anchor-points/truck/${tid}/active`);
+      apRef.current = res.data;
       setAp(res.data);
+      if (!shouldPoll(res.data)) clearPoll();
     } catch (err: any) {
-      if (err.response?.status === 404) setAp(null);
+      if (err.response?.status === 404) {
+        apRef.current = null;
+        setAp(null);
+        clearPoll();
+      }
     }
   }, []);
+
+  const startPoll = useCallback((tid: string) => {
+    clearPoll();
+    intervalRef.current = setInterval(() => fetchAP(tid), AP_POLL_MS);
+  }, [fetchAP]);
 
   useEffect(() => {
     axiosClient.get(`/field-ops/crew/${employeeId}`)
       .then(res => {
         const tid: string | null = res.data.truck_id ?? null;
         const dname: string | null = res.data.driver_name ?? null;
+        truckIdRef.current = tid;
         setTruckId(tid);
         setDriverName(dname);
         if (!tid) { setNoAssignment(true); return; }
-        fetchAP(tid);
-        intervalRef.current = setInterval(() => fetchAP(tid), 30_000);
+        // Initial fetch — start polling only if there's an active AP to watch
+        axiosClient.get<ActiveAP>(`/anchor-points/truck/${tid}/active`)
+          .then(r => {
+            apRef.current = r.data;
+            setAp(r.data);
+            if (shouldPoll(r.data)) startPoll(tid);
+          })
+          .catch(err => {
+            if (err.response?.status === 404) { apRef.current = null; setAp(null); }
+          });
       })
       .catch(() => setNoAssignment(true));
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [employeeId, fetchAP]);
+    return () => clearPoll();
+  }, [employeeId, fetchAP, startPoll]);
+
+  // Re-fetch and restart polling when a relevant notification arrives
+  useEffect(() => {
+    if (refreshTrigger === 0 || !truckIdRef.current) return;
+    const tid = truckIdRef.current;
+    fetchAP(tid);
+    if (shouldPoll(apRef.current)) startPoll(tid);
+  }, [refreshTrigger, fetchAP, startPoll]);
 
   const fmt = (iso: string) =>
     new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1002,10 +1049,17 @@ function TruckAPCard({ employeeId }: { employeeId: string }) {
 // Field staff view — trainers, trainees, walkers
 // ---------------------------------------------------------------------------
 function FieldStaffView({ employeeId }: { employeeId: string }) {
+  const [apRefreshTrigger, setApRefreshTrigger] = useState(0);
+
+  // Called by NotificationBanner when an anchor_point_* notification arrives
+  const handleNotification = useCallback((type: string) => {
+    if (type.startsWith('anchor_point')) setApRefreshTrigger(n => n + 1);
+  }, []);
+
   return (
     <div className="space-y-4">
-      <NotificationBanner employeeId={employeeId} />
-      <TruckAPCard employeeId={employeeId} />
+      <NotificationBanner employeeId={employeeId} onNotification={handleNotification} />
+      <TruckAPCard employeeId={employeeId} refreshTrigger={apRefreshTrigger} />
     </div>
   );
 }
