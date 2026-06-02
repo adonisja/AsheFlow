@@ -4,6 +4,7 @@ import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Task = { id: string; topic_title: string; description?: string; is_completed: boolean; is_training_debt?: boolean };
@@ -17,15 +18,17 @@ type TodayData = {
 export default function TraineeTodayScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
 
   const [data,       setData]       = useState<TodayData | null>(null);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetch = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     try {
-      const res = await apiClient.get(`/training/trainee/${user.id}`);
+      const res = await apiClient.get(`/training/trainee/${eid}`);
       const today = res.data?.[0] ?? null;
       if (!today) { setData(null); setLoading(false); setRefreshing(false); return; }
       let trainer_name: string | null = null;
@@ -47,7 +50,7 @@ export default function TraineeTodayScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { fetch(); }, [fetch]);
 

@@ -1,7 +1,7 @@
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -19,8 +19,10 @@ allow_mgmt         = RoleChecker(["management", "admin"])
 allow_trainer_self = RoleChecker(["trainer", "management", "admin"])
 
 
-@router.get("/", response_model=List[dict])
+@router.get("/", response_model=dict)
 def list_all_marks(
+    limit: int = Query(50, ge=1, le=200, description="Max results to return"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
@@ -28,13 +30,14 @@ def list_all_marks(
     """List all trainer marks with trainer name, trainee name, date, and reason.
     Most recent first. Management/admin only.
     """
-    marks = (
+    base_q = (
         db.query(TrainerMark)
         .join(Employee, TrainerMark.trainer_id == Employee.id)
         .filter(Employee.company_id == caller.company_id)
         .order_by(TrainerMark.created_at.desc())
-        .all()
     )
+    total = base_q.count()
+    marks = base_q.offset(offset).limit(limit).all()
 
     emp_ids = {m.trainer_id for m in marks} | {m.trainee_id for m in marks}
     emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids), Employee.company_id == caller.company_id).all()}
@@ -42,7 +45,7 @@ def list_all_marks(
     record_ids = {m.training_record_id for m in marks}
     record_map = {r.id: r for r in db.query(TrainingRecord).filter(TrainingRecord.id.in_(record_ids), TrainingRecord.company_id == caller.company_id).all()}
 
-    return [
+    items = [
         {
             "id": str(m.id),
             "trainer": _emp_stub(emp_map.get(m.trainer_id)),
@@ -56,6 +59,7 @@ def list_all_marks(
         }
         for m in marks
     ]
+    return {"total": total, "items": items}
 
 
 @router.get("/mine", response_model=List[dict])

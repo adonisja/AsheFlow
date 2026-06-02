@@ -2,6 +2,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import UUID
 
+from app.services.local_date import company_today
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -346,7 +348,7 @@ def get_incident_summary(
     db: Session = Depends(get_db),
 ):
     """Return incident counts grouped by severity and category over the last N days."""
-    since = date.today() - timedelta(days=days - 1)
+    since = company_today(db, caller.company_id) - timedelta(days=days - 1)
 
     incidents = (
         db.query(Incident)

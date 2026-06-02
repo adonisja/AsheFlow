@@ -84,7 +84,6 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 
 function RoleRedirect() {
   const { groups, isConfigured, isLoading } = useAuth();
-  console.log('[RoleRedirect] isLoading:', isLoading, 'groups:', groups);
   if (isLoading) return null;
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
   if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/dispatch-home' : '/setup'} replace />;

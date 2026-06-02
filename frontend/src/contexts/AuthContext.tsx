@@ -57,7 +57,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       // 2. Decode the JWT to get their Cognito groups using our utility
       const userGroups = await getUserGroups();
-      console.log('[checkAuth] groups:', userGroups);
       setGroups(userGroups);
 
       // Resolve DB first name — skip for super_admin (no Employee row)

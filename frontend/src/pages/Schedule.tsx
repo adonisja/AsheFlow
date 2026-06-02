@@ -104,7 +104,7 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
   const [allReworks, setAllReworks] = useState<any[]>([]);
 
   useEffect(() => {
-    axiosClient.get('/employees/').then(r => setEmployees(r.data)).catch(() => {});
+    axiosClient.get('/employees/').then(r => setEmployees(r.data)).catch((e) => { console.error('Failed to load employees:', e); });
 
     Promise.allSettled([
       axiosClient.get('/time-off-requests/')
@@ -584,7 +584,7 @@ const Schedule = () => {
     if (isPrivileged || !myId) return;
     axiosClient.get(`/time-off-requests/${myId}`)
       .then(res => setPendingRequests(res.data.filter((r: any) => r.status === 'pending')))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load pending time-off requests:', e); });
   }, [isPrivileged, myId]);
 
   // Early return for privileged roles — all hooks are above this line

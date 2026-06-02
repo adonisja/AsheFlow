@@ -200,9 +200,10 @@ def bulk_import_employees(
             db.flush()
         except Exception as e:
             db.rollback()
+            logger.error("bulk import flush failed for row %d (%s): %s", i, row.name, e)
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
-                reason=f"Database error: {str(e)}",
+                reason="Database error saving employee.",
             ))
             continue
 
@@ -219,9 +220,10 @@ def bulk_import_employees(
             db.commit()
         except Exception as e:
             db.rollback()
+            logger.error("bulk import commit failed for row %d (%s): %s", i, row.name, e)
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
-                reason=f"Database error: {str(e)}",
+                reason="Database error saving employee.",
             ))
             continue
 

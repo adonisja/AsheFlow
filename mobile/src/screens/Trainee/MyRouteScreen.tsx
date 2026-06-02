@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, ScrollView,
+  ActivityIndicator, Alert, ScrollView, RefreshControl,
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -57,36 +58,40 @@ function today(): string {
 export default function MyRouteScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
   const s = styles(c);
 
-  const [loading,   setLoading]   = useState(true);
-  const [route,     setRoute]     = useState<WalkerRoute | null>(null);
-  const [updating,  setUpdating]  = useState<string | null>(null); // trip id being updated
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [route,      setRoute]      = useState<WalkerRoute | null>(null);
+  const [updating,   setUpdating]   = useState<string | null>(null); // trip id being updated
 
-  const load = useCallback(async () => {
-    if (!user?.id) return;
-    setLoading(true);
+  const load = useCallback(async (opts?: { refresh?: boolean }) => {
+    const eid = await fetchId();
+    if (!eid) return;
+    if (opts?.refresh) setRefreshing(true); else setLoading(true);
     try {
       // Find today's truck assignment for the current user
       const dispRes = await apiClient.get(`/dispatch/${today()}`);
       const myMember = dispRes.data?.assignment_members?.find(
-        (m: any) => m.employee_id === user.id
+        (m: any) => m.employee_id === eid
       );
-      if (!myMember) { setRoute(null); setLoading(false); return; }
+      if (!myMember) { setRoute(null); return; }
 
       const assignmentId = myMember.truck_assignment_id;
       const routesRes = await apiClient.get(`/walker-routes/assignment/${assignmentId}`);
       const routes: WalkerRoute[] = routesRes.data ?? [];
 
       // Walker is matched to a route by walker_id
-      const myRoute = routes.find((r: any) => r.walker_id === user.id) ?? null;
+      const myRoute = routes.find((r: any) => r.walker_id === eid) ?? null;
       setRoute(myRoute);
     } catch {
       setRoute(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -146,7 +151,7 @@ export default function MyRouteScreen() {
           <Text style={s.emptySub}>
             Your trainer will commit the route sort before routes appear here.
           </Text>
-          <TouchableOpacity onPress={load} style={[s.refreshBtn, { borderColor: c.primary }]}>
+          <TouchableOpacity onPress={() => load()} style={[s.refreshBtn, { borderColor: c.primary }]}>
             <Text style={{ color: c.primary, fontSize: fontSize.sm, fontWeight: fontWeight.medium }}>Refresh</Text>
           </TouchableOpacity>
         </View>
@@ -157,7 +162,13 @@ export default function MyRouteScreen() {
   const completedTrips = route.trips.filter(t => t.status === 'completed').length;
 
   return (
-    <ScrollView style={s.scroll} contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}>
+    <ScrollView
+      style={s.scroll}
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} tintColor={c.primary} />
+      }
+    >
 
       {/* Summary card */}
       <View style={[s.summaryCard, { borderColor: c.border, backgroundColor: c.surface }]}>

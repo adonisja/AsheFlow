@@ -8,11 +8,16 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
 import { Linking } from 'react-native';
-import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
+import { Platform } from 'react-native';
+import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
 
 const USER_POOL_ID    = COGNITO_USER_POOL_ID ?? '';
 const CLIENT_ID       = COGNITO_CLIENT_ID ?? '';
-const API_BASE        = ASHEFLOW_API_URL ?? 'http://localhost:8000/api/v1';
+const API_BASE        = ASHEFLOW_API_URL
+  ? ASHEFLOW_API_URL
+  : Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000/api/v1'
+    : `http://${ASHEFLOW_LAN_IP ?? '192.168.1.1'}:8000/api/v1`;
 const REGION          = USER_POOL_ID.split('_')[0] ?? 'us-east-2';
 const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
 const OAUTH_DOMAIN    = COGNITO_OAUTH_DOMAIN ?? '';
@@ -150,7 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await AsyncStorage.removeMany([
+    await AsyncStorage.multiRemove([
       'asheflow_access_token',
       'asheflow_id_token',
       'asheflow_refresh_token',

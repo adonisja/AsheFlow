@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl, Modal,
@@ -72,9 +72,11 @@ export default function ScheduleScreen() {
   const [scrList,      setScrList]      = useState<SCR[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
+  const [fetchError,   setFetchError]   = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
-  const employeeId = user?.id ?? null;
+  // Cognito sub != Employee DB id — fetch the real employee UUID once and cache it
+  const employeeDbId = useRef<string | null>(null);
 
   // PTO modal
   const [ptoModal,      setPtoModal]      = useState(false);
@@ -92,8 +94,15 @@ export default function ScheduleScreen() {
   const [subTab, setSubTab] = useState<'pto'|'schedule'>('pto');
 
   const fetchSchedule = useCallback(async () => {
-    if (!employeeId) return;
+    if (!user) return;
     try {
+      // Resolve the employee's database UUID on first load
+      if (!employeeDbId.current) {
+        const meRes = await apiClient.get('/employees/me');
+        employeeDbId.current = meRes.data.id;
+      }
+      const employeeId = employeeDbId.current!;
+
       const firstOfMonth = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`;
       const lastDay      = new Date(viewYear, viewMonth + 1, 0).getDate();
       const lastOfMonth  = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
@@ -105,16 +114,18 @@ export default function ScheduleScreen() {
       setSchedule(schedRes.data ?? []);
       setPtoList(ptoRes.data ?? []);
       setScrList(scrRes.data ?? []);
-    } catch {
+      setFetchError(null);
+    } catch (err: any) {
       setSchedule([]);
+      setFetchError(err?.response?.data?.detail ?? err?.message ?? 'Failed to load schedule.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [employeeId, viewMonth, viewYear]);
+  }, [user, viewMonth, viewYear]);
 
   useEffect(() => {
-    if (employeeId) { setLoading(true); fetchSchedule(); }
+    if (user) { setLoading(true); fetchSchedule(); }
   }, [fetchSchedule]);
 
   const onRefresh = useCallback(() => { setRefreshing(true); fetchSchedule(); }, [fetchSchedule]);
@@ -152,10 +163,10 @@ export default function ScheduleScreen() {
 
   // ── PTO submit ──────────────────────────────────────────────────────────────
   const submitPTO = useCallback(async () => {
-    if (!employeeId) return;
+    if (!employeeDbId.current) return;
     setPtoSubmitting(true);
     try {
-      await apiClient.post('/time-off-requests/', { employee_id: employeeId, date: selectedDate });
+      await apiClient.post('/time-off-requests/', { employee_id: employeeDbId.current, date: selectedDate });
       Alert.alert('Submitted', `PTO request for ${selectedDate} sent to management.`);
       setPtoModal(false);
       fetchSchedule();
@@ -164,7 +175,7 @@ export default function ScheduleScreen() {
     } finally {
       setPtoSubmitting(false);
     }
-  }, [employeeId, selectedDate, fetchSchedule]);
+  }, [selectedDate, fetchSchedule]);
 
   const cancelPTO = useCallback(async (id: string) => {
     Alert.alert('Cancel Request', 'Remove this PTO request?', [
@@ -178,14 +189,14 @@ export default function ScheduleScreen() {
 
   // ── SCR submit ──────────────────────────────────────────────────────────────
   const submitSCR = useCallback(async () => {
-    if (!employeeId) return;
+    if (!employeeDbId.current) return;
     if (scrType === 'add_day'     && scrDaysAdd.length === 0)  { Alert.alert('Required', 'Select at least one day to add.'); return; }
     if (scrType === 'drop_day'    && scrDaysDrop.length === 0) { Alert.alert('Required', 'Select at least one day to drop.'); return; }
     if (scrType === 'full_rework' && scrProposed.length === 0) { Alert.alert('Required', 'Select your proposed schedule days.'); return; }
     setScrSubmitting(true);
     try {
       await apiClient.post('/schedule-change-requests/', {
-        employee_id: employeeId, request_type: scrType,
+        employee_id: employeeDbId.current, request_type: scrType,
         days_to_add: scrType === 'add_day' ? scrDaysAdd : [],
         days_to_drop: scrType === 'drop_day' ? scrDaysDrop : [],
         proposed_schedule: scrType === 'full_rework' ? scrProposed : undefined,
@@ -200,7 +211,7 @@ export default function ScheduleScreen() {
     } finally {
       setScrSubmitting(false);
     }
-  }, [employeeId, scrType, scrDaysAdd, scrDaysDrop, scrProposed, scrReason, fetchSchedule]);
+  }, [scrType, scrDaysAdd, scrDaysDrop, scrProposed, scrReason, fetchSchedule]);
 
   const toggleDay = (day: string, list: string[], setter: (l: string[]) => void) =>
     setter(list.includes(day) ? list.filter(d => d !== day) : [...list, day]);
@@ -299,6 +310,12 @@ export default function ScheduleScreen() {
         </View>
 
         {loading && <ActivityIndicator color={c.primary} style={{ marginVertical: spacing.md }} />}
+
+        {fetchError && (
+          <View style={{ backgroundColor: c.danger + '18', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm, borderWidth: 1, borderColor: c.danger + '40' }}>
+            <Text style={{ fontSize: fontSize.xs, color: c.danger }}>{fetchError}</Text>
+          </View>
+        )}
 
         {/* Legend */}
         <View style={s.legend}>

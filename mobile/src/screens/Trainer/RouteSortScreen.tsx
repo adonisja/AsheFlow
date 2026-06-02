@@ -7,6 +7,7 @@ import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ function today(): string {
 export default function RouteSortScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
   const s = styles(c);
 
   // ── State ──
@@ -88,14 +90,15 @@ export default function RouteSortScreen() {
 
   // ── Load today's assignment for this trainer ──
   const load = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     setLoading(true);
     try {
       // Today's dispatch — find the truck assignment this trainer is on
       const dispRes = await apiClient.get(`/dispatch/${today()}`);
       const dispatch = dispRes.data;
       const myMember = dispatch?.assignment_members?.find(
-        (m: any) => m.employee_id === user.id
+        (m: any) => m.employee_id === eid
       );
       if (!myMember) { setAssignment(null); setLoading(false); return; }
 
@@ -138,7 +141,7 @@ export default function RouteSortScreen() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { load(); }, [load]);
 

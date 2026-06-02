@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ActivityIndicator, ScrollView,
+  View, Text, StyleSheet, ActivityIndicator, ScrollView, RefreshControl,
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -57,21 +58,25 @@ export default function WalkerPerformanceScreen() {
   const { user } = useAuth();
   const s = styles(c);
 
-  const [loading, setLoading] = useState(true);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { fetchId } = useEmployeeId();
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [profile,    setProfile]    = useState<Profile | null>(null);
 
-  const load = useCallback(async () => {
-    if (!user?.id) return;
-    setLoading(true);
+  const load = useCallback(async (opts?: { refresh?: boolean }) => {
+    const eid = await fetchId();
+    if (!eid) return;
+    if (opts?.refresh) setRefreshing(true); else setLoading(true);
     try {
-      const res = await apiClient.get(`/field-ops/walker-profile/${user.id}`);
+      const res = await apiClient.get(`/field-ops/walker-profile/${eid}`);
       setProfile(res.data);
     } catch {
       setProfile(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -98,7 +103,13 @@ export default function WalkerPerformanceScreen() {
   const gradeCol = gradeColor(profile.grade);
 
   return (
-    <ScrollView style={s.scroll} contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}>
+    <ScrollView
+      style={s.scroll}
+      contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} tintColor={c.primary} />
+      }
+    >
 
       {/* Grade + headline stats */}
       <View style={[s.heroCard, { backgroundColor: c.surface, borderColor: c.border }]}>

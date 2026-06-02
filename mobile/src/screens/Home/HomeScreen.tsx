@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
   TouchableOpacity, ActivityIndicator,
@@ -13,9 +13,7 @@ import {
   spacing, radius, fontSize, fontWeight,
   getRoleColor, getRoleLight, ROLE_LABELS, type ThemeColors,
 } from '@theme/index';
-import {
-  Avatar, Badge, Card, SectionHeader, Skeleton, Row,
-} from '@components/ui/primitives';
+import { Avatar, Badge, Skeleton } from '@components/ui/primitives';
 
 function greet() {
   const h = new Date().getHours();
@@ -29,6 +27,10 @@ function localToday() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function formatTodayLong() {
+  return new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
 function stripMarkdown(text: string): string {
   return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
 }
@@ -39,17 +41,21 @@ function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-// Role → Badge tone mapping
 const roleBadgeTone: Record<string, 'slate' | 'teal' | 'gold' | 'info' | 'neutral'> = {
-  driver:  'slate',
-  walker:  'teal',
-  trainer: 'gold',
-  trainee: 'info',
+  driver: 'slate', walker: 'teal', trainer: 'gold', trainee: 'info',
 };
 
+// Quick-action definitions — key matches tab key in navigation
+const QUICK_ACTIONS = [
+  { key: 'FieldOps',      label: 'Field Ops',    icon: '🔧' },
+  { key: 'Schedule',      label: 'Schedule',     icon: '📅' },
+  { key: 'Notifications', label: 'Inbox',        icon: '🔔' },
+  { key: 'Account',       label: 'Account',      icon: '👤' },
+];
+
 export default function HomeScreen() {
-  const c = useColors();
-  const { user } = useAuth();
+  const c          = useColors();
+  const { user }   = useAuth();
   const navigation = useNavigation<any>();
   const switchTab  = useTabSwitch();
 
@@ -57,45 +63,61 @@ export default function HomeScreen() {
 
   const [truckName,  setTruckName]  = useState<string | null>(null);
   const [myRole,     setMyRole]     = useState<string | null>(null);
-  const [crewCount,  setCrewCount]  = useState<number>(0);
+  const [crew,       setCrew]       = useState<{ id: string; name: string; role: string }[]>([]);
   const [assignLoad, setAssignLoad] = useState(true);
 
-  const [unreadCount,    setUnreadCount]    = useState(0);
-  const [latestMessage,  setLatestMessage]  = useState<string | null>(null);
-  const [notifLoad,      setNotifLoad]      = useState(true);
+  const [unreadCount,   setUnreadCount]   = useState(0);
+  const [latestMessage, setLatestMessage] = useState<string | null>(null);
+  const [notifLoad,     setNotifLoad]     = useState(true);
 
   const [refreshing, setRefreshing] = useState(false);
 
-  const displayName  = user?.firstName ?? user?.email?.split('@')[0] ?? 'Crew Member';
-  const primaryRole  = ['driver', 'trainer', 'trainee', 'walker'].find(r => user?.groups?.includes(r)) as string | undefined;
-  const roleColor    = primaryRole ? getRoleColor(primaryRole as any, c) : c.primary;
-  const roleLight    = primaryRole ? getRoleLight(primaryRole as any, c) : c.primaryLight;
-  const initials     = getInitials(displayName);
+  const employeeDbId = useRef<string | null>(null);
+
+  const displayName = user?.firstName ?? user?.email?.split('@')[0] ?? 'Crew Member';
+  const primaryRole = ['driver', 'trainer', 'trainee', 'walker'].find(r => user?.groups?.includes(r)) as string | undefined;
+  const roleColor   = primaryRole ? getRoleColor(primaryRole as any, c) : c.primary;
+  const roleLight   = primaryRole ? getRoleLight(primaryRole as any, c) : c.primaryLight;
+  const initials    = getInitials(displayName);
+
+  const resolveEmployeeId = useCallback(async (): Promise<string | null> => {
+    if (employeeDbId.current) return employeeDbId.current;
+    try {
+      const res = await apiClient.get('/employees/me');
+      employeeDbId.current = res.data.id;
+      return res.data.id;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const fetchAssignment = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await resolveEmployeeId();
+    if (!eid) return;
     try {
-      const res   = await apiClient.get(`/schedule/${user.id}?start_date=${today}&end_date=${today}`);
+      const res   = await apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`);
       const entry = (res.data ?? [])[0];
       if (!entry || entry.status !== 'Assigned' || !entry.truck_name) {
-        setTruckName(null); setMyRole(null); setCrewCount(0);
+        setTruckName(null); setMyRole(null); setCrew([]);
         return;
       }
-      const me = (entry.crew ?? []).find((m: any) => m.id === user.id);
+      const crewList = entry.crew ?? [];
+      const me       = crewList.find((m: any) => m.id === eid);
       setTruckName(entry.truck_name);
       setMyRole(me?.role ?? null);
-      setCrewCount((entry.crew ?? []).length);
+      setCrew(crewList);
     } catch {
       setTruckName(null);
     } finally {
       setAssignLoad(false);
     }
-  }, [today, user?.id]);
+  }, [today, resolveEmployeeId]);
 
   const fetchNotifications = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await resolveEmployeeId();
+    if (!eid) return;
     try {
-      const res  = await apiClient.get(`/notifications/${user.id}?limit=10`);
+      const res  = await apiClient.get(`/notifications/${eid}?limit=10`);
       const list: any[] = res.data ?? [];
       setUnreadCount(list.filter(n => !n.is_read).length);
       setLatestMessage(list[0]?.message ?? null);
@@ -104,7 +126,7 @@ export default function HomeScreen() {
     } finally {
       setNotifLoad(false);
     }
-  }, [user?.id]);
+  }, [resolveEmployeeId]);
 
   useEffect(() => {
     fetchAssignment();
@@ -119,129 +141,175 @@ export default function HomeScreen() {
 
   const s = styles(c);
 
+  // Crew initials to show in assignment card (max 4)
+  const crewInitials = crew.slice(0, 4).map(m => ({
+    initials: m.name.split(' ').map(p => p[0]).join('').toUpperCase().slice(0, 2),
+    role: m.role,
+  }));
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
 
-      {/* ── Top bar ────────────────────────────────────────── */}
-      <View style={[s.topBar, { borderBottomColor: c.border, backgroundColor: c.surface }]}>
-        <Text style={[s.wordmark, { color: c.foreground }]}>AsheFlow</Text>
-        <TouchableOpacity
-          onPress={() => navigation.navigate('Profile')}
-          activeOpacity={0.75}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Avatar initials={initials} role={primaryRole as any ?? 'driver'} size={36} />
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Scrollable body ────────────────────────────────── */}
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />}
       >
-        {/* Greeting */}
-        <View style={s.greeting}>
-          <Text style={[s.greetMuted, { color: c.mutedForeground }]}>{greet()},</Text>
-          <Text style={[s.greetName, { color: c.foreground }]}>{displayName}</Text>
+
+        {/* ── Hero card ── */}
+        <View style={[s.hero, { backgroundColor: c.card, borderColor: c.border }]}>
+          <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.8} style={s.heroAvatarWrap}>
+            <View style={[s.heroAvatarRing, { borderColor: roleColor }]}>
+              <Avatar initials={initials} role={primaryRole as any ?? 'driver'} size={80} />
+            </View>
+          </TouchableOpacity>
+          <Text style={[s.heroDate, { color: c.mutedForeground }]}>{formatTodayLong()}</Text>
+          <Text style={[s.heroGreet, { color: c.mutedForeground }]}>{greet()},</Text>
+          <Text style={[s.heroName, { color: c.foreground }]}>{displayName}</Text>
           {primaryRole && (
-            <View style={{ marginTop: spacing.xs }}>
-              <Badge tone={roleBadgeTone[primaryRole] ?? 'muted'} dot>
+            <View style={[s.heroRolePill, { backgroundColor: roleColor + '18', borderColor: roleColor + '35' }]}>
+              <View style={[s.heroRoleDot, { backgroundColor: roleColor }]} />
+              <Text style={[s.heroRoleText, { color: roleColor }]}>
                 {ROLE_LABELS[primaryRole] ?? primaryRole}
-              </Badge>
+              </Text>
             </View>
           )}
         </View>
 
-        {/* ── Today's Assignment ── */}
-        <SectionHeader eyebrow="Today" title="Assignment" style={{ marginBottom: spacing.sm }} />
+        {/* ── Quick actions ── */}
+        <View style={s.quickRow}>
+          {QUICK_ACTIONS.map(action => (
+            <TouchableOpacity
+              key={action.key}
+              style={[s.quickBtn, { backgroundColor: c.card, borderColor: c.border }]}
+              onPress={() => switchTab(action.key)}
+              activeOpacity={0.7}
+            >
+              <Text style={s.quickIcon}>{action.icon}</Text>
+              <Text style={[s.quickLabel, { color: c.mutedForeground }]}>{action.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
 
-        <Card
-          pressable={!assignLoad}
+        {/* ── Today's assignment ── */}
+        <Text style={s.sectionLabel}>TODAY'S ASSIGNMENT</Text>
+        <TouchableOpacity
+          style={[s.assignCard, { backgroundColor: c.card, borderColor: truckName ? roleColor : c.border }]}
           onPress={() => navigation.navigate('TodayAssignment')}
-          accent={truckName ? roleColor : undefined}
-          style={{ marginBottom: spacing.md }}
+          activeOpacity={0.75}
         >
-          <View style={s.cardInner}>
-            {/* Icon well */}
-            <View style={[s.iconWell, { backgroundColor: roleLight }]}>
-              <Text style={s.iconEmoji}>🚚</Text>
+          {/* Color accent stripe */}
+          <View style={[s.assignStripe, { backgroundColor: truckName ? roleColor : c.surfaceMuted }]} />
+
+          <View style={s.assignBody}>
+            {/* Icon + truck info */}
+            <View style={s.assignTop}>
+              <View style={[s.assignIconWell, { backgroundColor: truckName ? roleLight : c.surfaceMuted }]}>
+                <Text style={{ fontSize: 22 }}>🚚</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                {assignLoad ? (
+                  <>
+                    <Skeleton width={80} height={11} style={{ marginBottom: 6 }} />
+                    <Skeleton width={140} height={18} />
+                  </>
+                ) : truckName ? (
+                  <>
+                    <Text style={[s.assignEyebrow, { color: c.mutedForeground }]}>ASSIGNED TRUCK</Text>
+                    <Text style={[s.assignTruck, { color: c.foreground }]}>{truckName}</Text>
+                    {myRole && (
+                      <View style={[s.rolePill, { backgroundColor: roleLight }]}>
+                        <Text style={[s.rolePillText, { color: roleColor }]}>
+                          {ROLE_LABELS[myRole] ?? myRole}
+                        </Text>
+                      </View>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Text style={[s.assignEyebrow, { color: c.mutedForeground }]}>TRUCK</Text>
+                    <Text style={[s.assignEmpty, { color: c.mutedForeground }]}>No assignment today</Text>
+                  </>
+                )}
+              </View>
+              <Text style={[s.chevron, { color: c.subtleForeground }]}>›</Text>
             </View>
 
-            {/* Body */}
-            <View style={s.cardBody}>
-              <Text style={[s.cardEyebrow, { color: c.mutedForeground }]}>TRUCK</Text>
-              {assignLoad ? (
-                <Skeleton width={120} height={18} style={{ marginTop: 4 }} />
-              ) : truckName ? (
-                <>
-                  <Text style={[s.cardValue, { color: c.foreground }]}>{truckName}</Text>
-                  {myRole && (
-                    <Text style={[s.cardSub, { color: roleColor }]}>
-                      {ROLE_LABELS[myRole] ?? myRole}
-                    </Text>
+            {/* Crew row */}
+            {truckName && crewInitials.length > 0 && (
+              <View style={s.crewRow}>
+                <View style={s.crewAvatars}>
+                  {crewInitials.map((m, i) => (
+                    <View
+                      key={i}
+                      style={[
+                        s.crewAvatar,
+                        { backgroundColor: c.surfaceMuted, borderColor: c.card, marginLeft: i === 0 ? 0 : -8 },
+                      ]}
+                    >
+                      <Text style={[s.crewAvatarText, { color: c.foreground }]}>{m.initials}</Text>
+                    </View>
+                  ))}
+                  {crew.length > 4 && (
+                    <View style={[s.crewAvatar, { backgroundColor: c.surfaceMuted, borderColor: c.card, marginLeft: -8 }]}>
+                      <Text style={[s.crewAvatarText, { color: c.mutedForeground }]}>+{crew.length - 4}</Text>
+                    </View>
                   )}
-                </>
-              ) : (
-                <Text style={[s.cardValue, { color: c.mutedForeground, fontWeight: fontWeight.regular }]}>
-                  No assignment today
+                </View>
+                <Text style={[s.crewCount, { color: c.mutedForeground }]}>
+                  {crew.length} crew member{crew.length !== 1 ? 's' : ''}
                 </Text>
-              )}
-            </View>
-
-            {/* Crew bubble */}
-            {truckName && (
-              <View style={[s.crewBubble, { backgroundColor: c.primaryLight }]}>
-                <Text style={[s.crewNum, { color: c.primary }]}>{crewCount}</Text>
-                <Text style={[s.crewLabel, { color: c.mutedForeground }]}>CREW</Text>
               </View>
             )}
-
-            <Text style={[s.chevron, { color: c.subtleForeground }]}>›</Text>
           </View>
-        </Card>
+        </TouchableOpacity>
 
         {/* ── Notifications ── */}
-        <SectionHeader eyebrow="Inbox" title="Notifications" style={{ marginBottom: spacing.sm }} />
-
-        <Card
-          pressable={!notifLoad}
+        <Text style={s.sectionLabel}>INBOX</Text>
+        <TouchableOpacity
+          style={[
+            s.notifCard,
+            unreadCount > 0
+              ? { backgroundColor: c.danger + '06', borderColor: c.danger + '40' }
+              : { backgroundColor: c.card, borderColor: c.border },
+          ]}
           onPress={() => switchTab('NotificationsTab')}
-          style={{ marginBottom: spacing.md }}
+          activeOpacity={0.75}
         >
-          <View style={s.cardInner}>
-            <View style={[s.iconWell, {
-              backgroundColor: unreadCount > 0 ? c.primaryLight : c.surfaceMuted,
+          {/* Top stripe when unread */}
+          {unreadCount > 0 && <View style={[s.notifStripe, { backgroundColor: c.danger }]} />}
+
+          <View style={s.notifInner}>
+            <View style={[s.notifIconWell, {
+              backgroundColor: unreadCount > 0 ? c.danger + '18' : c.surfaceMuted,
             }]}>
-              <Text style={s.iconEmoji}>🔔</Text>
+              <Text style={{ fontSize: 22 }}>🔔</Text>
             </View>
 
-            <View style={s.cardBody}>
-              <Row gap={8} align="center">
-                <Text style={[s.cardEyebrow, { color: c.mutedForeground }]}>MESSAGES</Text>
+            <View style={{ flex: 1 }}>
+              <View style={s.notifTitleRow}>
+                <Text style={[s.notifTitle, { color: c.foreground }]}>Notifications</Text>
                 {unreadCount > 0 && (
-                  <View style={[s.unreadBubble, { backgroundColor: c.danger }]}>
-                    <Text style={s.unreadText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                  <View style={[s.unreadBadge, { backgroundColor: c.danger }]}>
+                    <Text style={s.unreadText}>{unreadCount > 99 ? '99+' : unreadCount} unread</Text>
                   </View>
                 )}
-              </Row>
+              </View>
 
               {notifLoad ? (
-                <Skeleton width={160} height={16} style={{ marginTop: 4 }} />
+                <Skeleton width={180} height={13} style={{ marginTop: 4 }} />
               ) : latestMessage ? (
-                <Text style={[s.cardSub, { color: c.foreground }]} numberOfLines={1}>
+                <Text style={[s.notifPreview, { color: unreadCount > 0 ? c.foreground : c.mutedForeground }]} numberOfLines={1}>
                   {stripMarkdown(latestMessage)}
                 </Text>
               ) : (
-                <Text style={[s.cardSub, { color: c.mutedForeground }]}>All caught up</Text>
+                <Text style={[s.notifPreview, { color: c.mutedForeground }]}>All caught up</Text>
               )}
             </View>
 
             <Text style={[s.chevron, { color: c.subtleForeground }]}>›</Text>
           </View>
-        </Card>
+        </TouchableOpacity>
 
       </ScrollView>
     </SafeAreaView>
@@ -251,8 +319,9 @@ export default function HomeScreen() {
 const styles = (c: ThemeColors) => StyleSheet.create({
   safe:    { flex: 1, backgroundColor: c.background },
   scroll:  { flex: 1 },
-  content: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  content: { padding: spacing.md, paddingBottom: spacing.xxl, gap: spacing.xs },
 
+  // Top bar
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -260,42 +329,124 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm + 2,
     borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.border,
+    backgroundColor: c.surface,
   },
   wordmark: {
     fontSize: fontSize.lg,
     fontWeight: fontWeight.extrabold,
     letterSpacing: -0.5,
+    color: c.foreground,
   },
 
-  greeting: {
-    marginBottom: spacing.xl,
-    gap: 2,
+  // Hero card — centered profile style
+  hero: {
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    gap: spacing.xs,
   },
-  greetMuted: {
-    fontSize: fontSize.base,
-    fontWeight: fontWeight.regular,
+  heroAvatarWrap: { marginBottom: spacing.lg },
+  heroAvatarRing: {
+    borderRadius: 999, borderWidth: 2.5, padding: 3,
   },
-  greetName: {
-    fontSize: fontSize['2xl'],
-    fontWeight: fontWeight.extrabold,
-    letterSpacing: -0.5,
-    lineHeight: 34,
+  heroDate:    { fontSize: fontSize.xs, fontWeight: fontWeight.medium, letterSpacing: 0.2, textAlign: 'center' },
+  heroGreet:   { fontSize: fontSize.sm, fontWeight: fontWeight.regular, textAlign: 'center' },
+  heroName:    { fontSize: fontSize['2xl'], fontWeight: fontWeight.extrabold, letterSpacing: -0.5, lineHeight: 34, textAlign: 'center' },
+  heroRolePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: spacing.sm + 2, paddingVertical: 5,
+    borderRadius: radius.full, borderWidth: 1,
+    marginTop: spacing.xs,
+  },
+  heroRoleDot:  { width: 7, height: 7, borderRadius: 4 },
+  heroRoleText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, letterSpacing: 0.3 },
+
+  // Quick actions
+  quickRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  quickBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    gap: 4,
+  },
+  quickIcon:  { fontSize: 22 },
+  quickLabel: { fontSize: 10, fontWeight: fontWeight.semibold, textAlign: 'center' },
+
+  // Section labels
+  sectionLabel: {
+    fontSize: 10,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 0.8,
+    color: c.mutedForeground,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.xs,
   },
 
-  cardInner:   { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md },
-  iconWell:    { width: 48, height: 48, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  iconEmoji:   { fontSize: 22 },
-  cardBody:    { flex: 1 },
-  cardEyebrow: { fontSize: 10, fontWeight: fontWeight.semibold, letterSpacing: 0.6, textTransform: 'uppercase' },
-  cardValue:   { fontSize: fontSize.base, fontWeight: fontWeight.bold, marginTop: 2 },
-  cardSub:     { fontSize: fontSize.xs, marginTop: 2 },
+  // Assignment card
+  assignCard: {
+    flexDirection: 'row',
+    borderRadius: radius.xl,
+    borderWidth: 1.5,
+    overflow: 'hidden',
+    marginBottom: spacing.xs,
+  },
+  assignStripe: { width: 4 },
+  assignBody:   { flex: 1, padding: spacing.md, gap: spacing.sm },
+  assignTop:    { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  assignIconWell: {
+    width: 52, height: 52,
+    borderRadius: radius.lg,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  assignEyebrow: { fontSize: 10, fontWeight: fontWeight.semibold, letterSpacing: 0.6, textTransform: 'uppercase' },
+  assignTruck:   { fontSize: fontSize.lg, fontWeight: fontWeight.extrabold, marginTop: 1, letterSpacing: -0.3 },
+  assignEmpty:   { fontSize: fontSize.base, fontWeight: fontWeight.regular, marginTop: 2 },
+  rolePill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    marginTop: spacing.xs,
+  },
+  rolePillText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
-  crewBubble: { alignItems: 'center', paddingHorizontal: spacing.xs, paddingVertical: 4, borderRadius: radius.sm },
-  crewNum:    { fontSize: fontSize.md, fontWeight: fontWeight.extrabold },
-  crewLabel:  { fontSize: 9, fontWeight: fontWeight.semibold, letterSpacing: 0.6 },
+  // Crew row
+  crewRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingTop: spacing.xs, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
+  crewAvatars:   { flexDirection: 'row' },
+  crewAvatar:    { width: 28, height: 28, borderRadius: 14, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  crewAvatarText:{ fontSize: 9, fontWeight: fontWeight.bold },
+  crewCount:     { fontSize: fontSize.xs },
 
-  unreadBubble: { minWidth: 18, height: 18, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  unreadText:   { color: '#fff', fontSize: 10, fontWeight: fontWeight.bold },
+  // Notifications card
+  notifCard: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    marginBottom: spacing.xs,
+    overflow: 'hidden',
+  },
+  notifStripe:   { height: 3 },
+  notifInner:    { flexDirection: 'row', alignItems: 'center', padding: spacing.md, gap: spacing.sm },
+  notifIconWell: { width: 48, height: 48, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  notifTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 2 },
+  notifTitle:    { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground },
+  notifPreview:  { fontSize: fontSize.xs },
+
+  unreadBadge: { paddingHorizontal: spacing.sm, height: 20, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center' },
+  unreadText:  { color: '#fff', fontSize: 10, fontWeight: fontWeight.bold },
 
   chevron: { fontSize: 22, paddingLeft: spacing.xs },
 });
