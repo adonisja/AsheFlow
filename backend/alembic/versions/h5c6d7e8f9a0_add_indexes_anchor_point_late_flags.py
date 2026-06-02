@@ -1,7 +1,7 @@
 """add indexes on truck_id and driver_id in anchor_point_late_flags
 
-Revision ID: d7e8f9a0b1c2
-Revises: c6d7e8f9a0b1
+Revision ID: h5c6d7e8f9a0
+Revises: g4b5c6d7e8f9
 Create Date: 2026-06-01
 
 These columns are used in WHERE clauses when querying late flags by truck or
@@ -9,8 +9,8 @@ driver for a given date; without indexes each query scans the full table.
 """
 from alembic import op
 
-revision = 'd7e8f9a0b1c2'
-down_revision = 'c6d7e8f9a0b1'
+revision = 'h5c6d7e8f9a0'
+down_revision = 'g4b5c6d7e8f9'
 branch_labels = None
 depends_on = None
 
