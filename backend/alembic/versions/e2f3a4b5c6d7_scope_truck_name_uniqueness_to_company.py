@@ -1,6 +1,6 @@
 """scope truck name uniqueness to company
 
-Revision ID: a4b5c6d7e8f9
+Revision ID: e2f3a4b5c6d7
 Revises: z3a4b5c6d7e8
 Create Date: 2026-06-01
 
@@ -12,7 +12,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision = 'a4b5c6d7e8f9'
+revision = 'e2f3a4b5c6d7'
 down_revision = 'z3a4b5c6d7e8'
 branch_labels = None
 depends_on = None
