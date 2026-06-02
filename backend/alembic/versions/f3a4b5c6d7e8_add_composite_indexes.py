@@ -1,7 +1,7 @@
 """add composite indexes for high-frequency company+date queries
 
-Revision ID: b5c6d7e8f9a0
-Revises: a4b5c6d7e8f9
+Revision ID: f3a4b5c6d7e8
+Revises: e2f3a4b5c6d7
 Create Date: 2026-06-01
 
 Adds composite indexes to tables most frequently queried by (company_id, date)
@@ -12,8 +12,8 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision = 'b5c6d7e8f9a0'
-down_revision = 'a4b5c6d7e8f9'
+revision = 'f3a4b5c6d7e8'
+down_revision = 'e2f3a4b5c6d7'
 branch_labels = None
 depends_on = None
 
