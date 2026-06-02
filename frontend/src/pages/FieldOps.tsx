@@ -50,7 +50,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
         setSubmitted(true);
         setSubmittedData({ has_failures: todayRecord.has_failures, items: todayRecord.items, notes: todayRecord.notes });
       }
-    }).catch(() => {});
+    }).catch((e) => { console.error('Failed to load inspection data:', e); });
   }, [employeeId]);
 
   const setResult = (item: string, pass: boolean) => {
@@ -182,7 +182,7 @@ function CheckInPanel({ employeeId }: { employeeId: string }) {
           }
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load check-in status:', e); });
   }, [employeeId]);
 
   const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -278,7 +278,7 @@ function DeparturePanel({ employeeId }: { employeeId: string }) {
           if (todayRecord.itinerary_photo_url) setPreviewUrl(todayRecord.itinerary_photo_url);
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load departure status:', e); });
   }, [employeeId]);
 
   const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -374,7 +374,7 @@ function ReturnPanel({ employeeId }: { employeeId: string }) {
           }
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load return status:', e); });
   }, [employeeId]);
 
   const handleReturn = async () => {
@@ -487,7 +487,7 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
         const todayRecord = res.data.find((r: any) => r.date === today);
         if (todayRecord) setLog(todayRecord);
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load fuel log:', e); });
   }, [employeeId]);
 
   // When the driver flips units, convert displayed input values automatically
@@ -707,7 +707,7 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
         }
         setEntries(pre);
       })
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load walker ratings:', e); })
       .finally(() => setCrewLoading(false));
   }, [employeeId]);
 
@@ -1329,13 +1329,13 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
   const loadAPs = useCallback(() => {
     axiosClient.get('/anchor-points/driver/today')
       .then(res => setAps(Array.isArray(res.data) ? res.data : []))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load anchor points:', e); });
   }, []);
 
   useEffect(() => {
     axiosClient.get(`/field-ops/crew/${employeeId}`)
       .then(res => { if (res.data.truck_id) setMyTruckId(res.data.truck_id); })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load crew/truck info:', e); });
     loadAPs();
   }, [employeeId, loadAPs]);
 
@@ -1579,7 +1579,7 @@ function WalkerSelfPerformancePanel({ employeeId }: { employeeId: string }) {
     if (!employeeId) return;
     axiosClient.get(`/field-ops/walker-profile/${employeeId}`)
       .then(r => setProfile(r.data))
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load walker performance profile:', e); })
       .finally(() => setLoading(false));
   }, [employeeId]);
 
@@ -1664,7 +1664,7 @@ function DriverInspectionHistoryPanel({ employeeId }: { employeeId: string }) {
     if (!employeeId) return;
     axiosClient.get(`/field-ops/inspection/${employeeId}`)
       .then(r => setRecords(r.data))
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load inspection history:', e); })
       .finally(() => setLoading(false));
   }, [employeeId]);
 
@@ -2005,7 +2005,7 @@ export default function FieldOps() {
     if (isOversight || !user) return;
     axiosClient.get('/employees/me')
       .then(res => setEmployeeId(res.data.id))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load employee identity:', e); });
   }, [user, isOversight]);
 
   if (isOversight) return <AdminFieldOpsView />;

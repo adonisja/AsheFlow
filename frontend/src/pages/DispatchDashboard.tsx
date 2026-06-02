@@ -30,6 +30,7 @@ export default function DispatchDashboard() {
   const [isPollingConfirmations, setIsPollingConfirmations] = useState(false);
   const [confirmingEmployee, setConfirmingEmployee] = useState<string | null>(null);
   const [confirmationsStale, setConfirmationsStale] = useState(false);
+  const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailureCount = useRef(0);
 
@@ -74,6 +75,7 @@ export default function DispatchDashboard() {
 
   useEffect(() => {
     fetchTrucksAndEmployees();
+    axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {});
     return () => stopConfirmationPolling();
   }, []);
 
@@ -462,12 +464,17 @@ export default function DispatchDashboard() {
             className="w-36 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary outline-none"
             min="1"
           />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
-          />
+          <div className="flex items-center gap-1.5">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+            />
+            {companyTimezone && (
+              <span className="text-xs text-muted-foreground whitespace-nowrap">({companyTimezone})</span>
+            )}
+          </div>
           {isAdmin && (
             <button
               onClick={handleClearDispatch}

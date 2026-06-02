@@ -6,6 +6,7 @@ import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // Backend: [{ trainee: {id, name}, sessions: [{record, tasks}] }]
@@ -45,10 +46,13 @@ export default function TrainerHistoryScreen() {
   // Which session card is expanded within a group
   const [openSession, setOpenSession] = useState<string | null>(null);
 
+  const { fetchId } = useEmployeeId();
+
   const load = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     try {
-      const res = await apiClient.get(`/training/trainer/${user.id}/history`);
+      const res = await apiClient.get(`/training/trainer/${eid}/history`);
       setGroups(res.data ?? []);
     } catch {
       setGroups([]);
@@ -56,7 +60,7 @@ export default function TrainerHistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { load(); }, [load]);
 

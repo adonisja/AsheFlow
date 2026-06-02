@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  TextInput, Alert, ActivityIndicator,
+  TextInput, Alert, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
@@ -64,12 +64,14 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
   const [error,      setError]      = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const workingDays = DAYS.filter(d => !offDays.includes(d));
   const selectableDays = mode === 'add_day' ? offDays : mode === 'drop_day' ? workingDays : DAYS;
   const hasPending = requests.some(r => r.status === 'pending');
 
-  const load = useCallback(async (id: string) => {
+  const load = useCallback(async (id: string, opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) setRefreshing(true);
     try {
       const [offRes, reqRes] = await Promise.all([
         apiClient.get(`/employee-off-days/${id}`),
@@ -78,6 +80,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
       setOffDays(offRes.data.map((o: any) => o.day_of_week));
       setRequests(reqRes.data);
     } catch { /* silently ignore */ }
+    finally { setRefreshing(false); }
   }, []);
 
   useEffect(() => {
@@ -150,7 +153,14 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
   }
 
   return (
-    <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={s.scroll}
+      contentContainerStyle={s.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => { if (myId) load(myId, { refresh: true }); }} tintColor={c.primary} />
+      }
+    >
       {/* Request type selector */}
       <View style={s.section}>
         <Text style={s.sectionTitle}>Request Type</Text>
@@ -264,11 +274,13 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
 // ── Privileged view (dispatch / management / admin) ───────────────────────────
 function PrivilegedView({ c }: { c: ThemeColors }) {
   const s = styles(c);
-  const [pending,  setPending]  = useState<SCR[]>([]);
-  const [all,      setAll]      = useState<SCR[]>([]);
-  const [loading,  setLoading]  = useState(true);
+  const [pending,    setPending]    = useState<SCR[]>([]);
+  const [all,        setAll]        = useState<SCR[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) setRefreshing(true);
     try {
       const [pendRes, allRes] = await Promise.all([
         apiClient.get('/schedule-change-requests/', { params: { status: 'pending' } }),
@@ -277,7 +289,7 @@ function PrivilegedView({ c }: { c: ThemeColors }) {
       setPending(pendRes.data);
       setAll(allRes.data);
     } catch { /* silently ignore */ }
-    finally { setLoading(false); }
+    finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -311,7 +323,14 @@ function PrivilegedView({ c }: { c: ThemeColors }) {
   }
 
   return (
-    <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={s.scroll}
+      contentContainerStyle={s.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => load({ refresh: true })} tintColor={c.primary} />
+      }
+    >
       {/* Stats */}
       <View style={s.statsRow}>
         {[
