@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from app.services.local_date import company_today
 from uuid import UUID
 from typing import List, Optional
 
@@ -9,6 +10,7 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
 from app.models.employee import Employee
 from app.models.field_ops import Departure
+from app.models.notification import Notification
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.crew_compliance import CrewCompliance
@@ -214,7 +216,7 @@ def get_check_ins_summary(
 ):
     """Return latest check-in per driver for a date. Shows which drivers need support."""
     if target_date is None:
-        target_date = date.today()
+        target_date = company_today(db, caller.company_id)
 
     rows = (
         db.query(DriverCheckIn)
@@ -287,6 +289,25 @@ def submit_rts_report(
         status="pending",
     )
     db.add(row)
+
+    dispatch_recipients = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.role.in_(["dispatch", "management", "admin"]),
+        Employee.is_active == True,
+    ).all()
+    rts_summary = f"{total_rts} package(s)" if total_rts else "no undelivered packages"
+    for recipient in dispatch_recipients:
+        db.add(Notification(
+            company_id=caller.company_id,
+            employee_id=recipient.id,
+            type="rts_submitted",
+            message=(
+                f"{caller.name} submitted an RTS report for {payload.date} "
+                f"({rts_summary}). Crew confirmed: {'yes' if payload.crew_confirmed else 'no'}. "
+                f"Awaiting your approval to release the driver."
+            ),
+        ))
+
     db.commit()
     db.refresh(row)
     return row
@@ -307,7 +328,7 @@ def review_rts_report(
     Rejecting holds the driver in the field — dispatch_notes should explain why.
     """
     if target_date is None:
-        target_date = date.today()
+        target_date = company_today(db, caller.company_id)
 
     if payload.status not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="status must be 'approved' or 'rejected'.")
@@ -326,6 +347,30 @@ def review_rts_report(
     row.dispatch_notes = payload.dispatch_notes
     row.reviewed_by = caller.id
     row.reviewed_at = datetime.now(timezone.utc)
+
+    driver = db.query(Employee).filter(
+        Employee.id == driver_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if driver:
+        if payload.status == "approved":
+            driver_message = (
+                f"Your RTS report for {target_date} has been approved. "
+                f"You are cleared to return to the station."
+            )
+        else:
+            notes_suffix = f" Dispatch notes: {payload.dispatch_notes}" if payload.dispatch_notes else ""
+            driver_message = (
+                f"Your RTS report for {target_date} was not approved.{notes_suffix} "
+                f"Contact dispatch for further instructions."
+            )
+        db.add(Notification(
+            company_id=caller.company_id,
+            employee_id=driver.id,
+            type=f"rts_{payload.status}",
+            message=driver_message,
+        ))
+
     db.commit()
     db.refresh(row)
     return row
@@ -342,7 +387,7 @@ def get_rts_report(
     assert_owns_or_privileged(caller, driver_id, "RTS report")
 
     if target_date is None:
-        target_date = date.today()
+        target_date = company_today(db, caller.company_id)
 
     row = db.query(RTSReport).filter(
         RTSReport.driver_id == driver_id,
@@ -361,7 +406,7 @@ def get_pending_rts_reports(
 ):
     """Return all pending RTS reports. Dispatch review queue."""
     if target_date is None:
-        target_date = date.today()
+        target_date = company_today(db, caller.company_id)
 
     rows = (
         db.query(RTSReport)
@@ -452,7 +497,7 @@ def get_station_handoff(
     assert_owns_or_privileged(caller, driver_id, "station handoff")
 
     if target_date is None:
-        target_date = date.today()
+        target_date = company_today(db, caller.company_id)
 
     row = db.query(StationHandoff).filter(
         StationHandoff.driver_id == driver_id,
@@ -471,7 +516,7 @@ def get_station_handoffs_summary(
 ):
     """Return all station handoffs for a date. Management overview of returned totes and RTS."""
     if target_date is None:
-        target_date = date.today()
+        target_date = company_today(db, caller.company_id)
 
     rows = (
         db.query(StationHandoff)
