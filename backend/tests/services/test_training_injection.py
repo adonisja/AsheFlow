@@ -25,7 +25,7 @@ COVERAGE:
 - First-ever dispatch day → Phase 1 record created
 - Phase closed → next phase record created
 - Phase not closed → same phase record created
-- Phase 4 closed (training complete) → no new record
+- Phase 4 closed → Phase 5 (quiz day) record created with "Quiz Day Walk-Along" task
 - Curriculum tasks added for the correct phase
 - Phase 4 creates demonstration tasks from mandatory Phase 1–3 items
 - Debt rollover from prior uncompleted mandatory tasks
@@ -69,7 +69,7 @@ def _build_crews(trainee, trainer, truck_id=None):
     return {
         tid: [
             {"id": trainer.id, "role": "trainer"},
-            {"id": trainee.id, "role": "trainee"},
+            {"id": trainee.id, "role": "trainee", "paired_trainer_id": trainer.id},
         ]
     }
 
@@ -163,10 +163,16 @@ class TestPhaseAdvancement:
         today_record = next(r for r in records if r.record_date == date.today())
         assert today_record.current_day_number == 2
 
-    def test_phase_4_closed_skips_new_record(self, db):
+    def test_phase_4_closed_creates_phase_5_quiz_day_record(self, db):
         """
         ARRANGE: trainee completed Phase 4 (phase_closed=True).
-        ASSERT: no new TrainingRecord created today — training is complete.
+        ASSERT: a Phase 5 (quiz day) TrainingRecord is created today with a
+        single "Quiz Day Walk-Along" coverage task.
+
+        WHY: Phase 5 is the quiz day — the trainee is dispatched with a trainer
+        for a walk-along while the graduation quiz is administered. The quiz
+        itself lives in graduation_quizzes, not in TrainingTask rows. The
+        walk-along task gives the trainer a record that the day occurred.
         """
         trainee = make_employee(db, role="trainee")
         trainer = make_employee(db, role="trainer")
@@ -176,9 +182,64 @@ class TestPhaseAdvancement:
         inject_curriculum(db, target_date=date.today(), assigned_crews=_build_crews(trainee, trainer), company_id=SEED_COMPANY_ID)
 
         records = _records_for(db, trainee)
+        today_records = [r for r in records if r.record_date == date.today()]
+        assert len(today_records) == 1, "A Phase 5 record should be created after Phase 4 closes"
+        assert today_records[0].current_day_number == 5, "Phase 4 closed → Phase 5 (quiz day)"
+
+        tasks = _tasks_for_record(db, today_records[0])
+        assert len(tasks) == 1, "Phase 5 record should have exactly one walk-along task"
+        assert tasks[0].topic_title == "Quiz Day Walk-Along"
+
+    def test_phase_5_closed_skips_new_record(self, db):
+        """
+        ARRANGE: trainee completed Phase 5 / quiz day (phase_closed=True).
+        ASSERT: no new TrainingRecord is created — training is complete at
+        dispatch level. Graduation or remediation is handled elsewhere.
+
+        WHY: Phase 5 closed means the quiz day occurred. If the quiz passed,
+        graduate_trainees promotes the trainee. If it failed,
+        generate_quiz_remediation creates a Phase 6 record. inject_curriculum
+        has nothing left to do — creating a new dispatch record here would
+        be a stale duplicate that would confuse both paths.
+        """
+        trainee = make_employee(db, role="trainee")
+        trainer = make_employee(db, role="trainer")
+        yesterday = date.today() - timedelta(days=1)
+        make_training_record(db, trainee, trainer, record_date=yesterday, phase=5, phase_closed=True)
+
+        inject_curriculum(db, target_date=date.today(), assigned_crews=_build_crews(trainee, trainer), company_id=SEED_COMPANY_ID)
+
+        records = _records_for(db, trainee)
         assert all(r.record_date != date.today() for r in records), (
-            "No record should be created after Phase 4 is closed"
+            "No record should be created after Phase 5 (quiz day) is closed"
         )
+
+    def test_phase_6_closed_creates_new_phase_5_quiz_day(self, db):
+        """
+        ARRANGE: trainee completed Phase 6 remediation (phase_closed=True).
+        ASSERT: a new Phase 5 (quiz day) record is created — the trainee gets
+        another shot at the graduation quiz.
+
+        WHY: Phase 6+ is targeted remediation for topics failed on the quiz.
+        When that remediation closes, the trainee needs to re-sit the quiz.
+        inject_curriculum re-issues the quiz day record; management then issues
+        a new GraduationQuiz separately.
+        """
+        trainee = make_employee(db, role="trainee")
+        trainer = make_employee(db, role="trainer")
+        yesterday = date.today() - timedelta(days=1)
+        make_training_record(db, trainee, trainer, record_date=yesterday, phase=6, phase_closed=True)
+
+        inject_curriculum(db, target_date=date.today(), assigned_crews=_build_crews(trainee, trainer), company_id=SEED_COMPANY_ID)
+
+        records = _records_for(db, trainee)
+        today_records = [r for r in records if r.record_date == date.today()]
+        assert len(today_records) == 1, "A new Phase 5 record should be created after Phase 6 remediation closes"
+        assert today_records[0].current_day_number == 5, "Phase 6 closed → new Phase 5 (quiz day)"
+
+        tasks = _tasks_for_record(db, today_records[0])
+        assert len(tasks) == 1
+        assert tasks[0].topic_title == "Quiz Day Walk-Along"
 
 
 # ---------------------------------------------------------------------------
@@ -595,17 +656,18 @@ class TestPastRecordLocking:
 # ---------------------------------------------------------------------------
 
 class TestIdempotency:
-    def test_existing_today_record_updates_trainer_not_duplicated(self, db):
+    def test_existing_today_record_recreated_with_new_trainer(self, db):
         """
         ARRANGE: a record for today already exists with original_trainer.
         Inject again with a different trainer in crews.
-        ASSERT: still only 1 record for today; trainer_id updated.
+        ASSERT: still only 1 record for today; new record has updated trainer_id.
+        The old record is deleted and recreated — db.refresh(existing) would error.
         """
         trainee  = make_employee(db, role="trainee")
         original = make_employee(db, role="trainer", name="Original")
         updated  = make_employee(db, role="trainer", name="Updated")
 
-        existing = make_training_record(
+        make_training_record(
             db, trainee, original, record_date=date.today(), phase=1, phase_closed=False
         )
         make_curriculum(db, day_number=1, topic_title="Topic")
@@ -618,8 +680,7 @@ class TestIdempotency:
         records = _records_for(db, trainee)
         today_records = [r for r in records if r.record_date == date.today()]
         assert len(today_records) == 1, "Must not create a duplicate record for the same date"
-        db.refresh(existing)
-        assert existing.trainer_id == updated.id, "trainer_id should be updated to the new trainer"
+        assert today_records[0].trainer_id == updated.id, "Recreated record must have the new trainer"
 
 
 # ---------------------------------------------------------------------------

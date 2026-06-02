@@ -63,7 +63,10 @@ def submit_continuation_request(
     # This prevents requests to arbitrary trainers the trainee has never worked with.
     most_recent_record = (
         db.query(TrainingRecord)
-        .filter(TrainingRecord.trainee_id == payload.trainee_id)
+        .filter(
+            TrainingRecord.trainee_id == payload.trainee_id,
+            TrainingRecord.company_id == caller.company_id,
+        )
         .order_by(TrainingRecord.record_date.desc())
         .first()
     )
@@ -76,6 +79,7 @@ def submit_continuation_request(
     # Nullify any existing active request for this trainee
     existing = db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.trainee_id == payload.trainee_id,
+        TrainerContinuationRequest.company_id == caller.company_id,
         TrainerContinuationRequest.status.in_(["pending", "accepted"]),
     ).first()
     if existing:
@@ -86,6 +90,7 @@ def submit_continuation_request(
     new_request = TrainerContinuationRequest(
         trainee_id=payload.trainee_id,
         trainer_id=payload.trainer_id,
+        company_id=caller.company_id,
     )
     db.add(new_request)
     db.flush()
@@ -93,6 +98,7 @@ def submit_continuation_request(
     # Notify the trainer — shows on their dashboard notification feed
     db.add(Notification(
         employee_id=payload.trainer_id,
+        company_id=caller.company_id,
         type="continuation_request",
         message=f"{trainee.name} has requested to continue training with you on their next assigned day.",
     ))
@@ -122,6 +128,7 @@ def get_pending_requests_for_trainer(
         )
     return db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.trainer_id == trainer_id,
+        TrainerContinuationRequest.company_id == caller.company_id,
         TrainerContinuationRequest.status == "pending",
     ).all()
 
@@ -142,6 +149,7 @@ def accept_continuation_request(
     """
     req = db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.id == request_id,
+        TrainerContinuationRequest.company_id == caller.company_id,
         TrainerContinuationRequest.status == "pending",
     ).first()
     if not req:
@@ -184,6 +192,7 @@ def set_request_priority(
     """
     req = db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.id == request_id,
+        TrainerContinuationRequest.company_id == caller_employee.company_id,
         TrainerContinuationRequest.status.in_(["pending", "accepted"]),
     ).first()
     if not req:
@@ -204,6 +213,7 @@ def set_request_priority(
             db.query(TrainerContinuationRequest)
             .filter(
                 TrainerContinuationRequest.trainer_id == req.trainer_id,
+                TrainerContinuationRequest.company_id == caller_employee.company_id,
                 TrainerContinuationRequest.status.in_(["pending", "accepted"]),
                 TrainerContinuationRequest.priority == payload.priority,
                 TrainerContinuationRequest.id != request_id,
@@ -237,6 +247,7 @@ def reject_continuation_request(
     """
     req = db.query(TrainerContinuationRequest).filter(
         TrainerContinuationRequest.id == request_id,
+        TrainerContinuationRequest.company_id == caller.company_id,
         TrainerContinuationRequest.status == "pending",
     ).first()
     if not req:

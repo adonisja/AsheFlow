@@ -4,6 +4,8 @@
 
 services:
   backend:
+    ports:
+      - "8000:8000"
     volumes:
       - ./backend:/app
       - ~/.aws:/root/.aws:ro

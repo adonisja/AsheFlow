@@ -79,7 +79,7 @@ def record_trainer_mark(
             f"training phases for {distinct_trainees} different trainees. "
             f"Review their training records for patterns."
         )
-        _notify_management(db, notif_message, notification_type="underperforming_trainer")
+        _notify_management(db, notif_message, notification_type="underperforming_trainer", company_id=record.company_id)
 
     return mark
 
@@ -115,17 +115,19 @@ def record_exemplary_note(
         f"Exemplary trainer: {trainer_name} cleared inherited training debt and "
         f"completed Phase {record.current_day_number} for {trainee_name} in a single session."
     )
-    _notify_management(db, notif_message, notification_type="exemplary_trainer")
+    _notify_management(db, notif_message, notification_type="exemplary_trainer", company_id=record.company_id)
 
 
-def _notify_management(db: Session, message: str, notification_type: str) -> None:
-    """Fan out a notification to all active management and admin employees."""
+def _notify_management(db: Session, message: str, notification_type: str, company_id) -> None:
+    """Fan out a notification to management/admin employees within the same company."""
     recipients = db.query(Employee).filter(
+        Employee.company_id == company_id,
         Employee.role.in_(["management", "admin"]),
         Employee.is_active == True,
     ).all()
     for recipient in recipients:
         db.add(Notification(
+            company_id=company_id,
             employee_id=recipient.id,
             type=notification_type,
             message=message,

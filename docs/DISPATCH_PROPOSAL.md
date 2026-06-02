@@ -1,7 +1,7 @@
 # Proposal: AsheFlow — Automated Dispatch & Operations Platform
 
 **To:** [Manager / Operations Director Name]  
-**From:** Akkeem [Last Name], [Your Title] / Independent Software Developer  
+**From:** [Author]  
 **Date:** [Date]  
 **Re:** Proposal for Automated Daily Dispatch, Crew Management, and Operations Tooling
 
@@ -151,6 +151,6 @@ Please let me know what time works best.
 
 ---
 
-**Akkeem [Last Name]**  
+[Author]  
 [Your Title] / Independent Software Developer & Solutions Architect  
 [Email] | [Phone]

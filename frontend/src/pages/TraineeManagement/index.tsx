@@ -221,7 +221,7 @@ function HistoryView({
     setLoading(true);
     axiosClient.get(`/training/trainee/${traineeId}`)
       .then(res => setRecords(res.data))
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load trainee records:', e); })
       .finally(() => setLoading(false));
   }, [traineeId]);
 

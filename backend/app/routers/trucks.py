@@ -10,6 +10,7 @@ from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.employee import Employee
 from app.models.truck import Truck
 from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/trucks", tags=["trucks"])
 
@@ -98,6 +99,16 @@ async def deactivate_truck(
     channel_id = db_truck.discord_channel_id
     db_truck.is_active = False
     db_truck.discord_channel_id = None
+    write_audit(
+        db,
+        action_type="truck.deactivated",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"is_active": True},
+        after={"is_active": False},
+    )
     db.commit()
     db.refresh(db_truck)
 
@@ -144,5 +155,15 @@ def delete_truck(
     db_truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
     if not db_truck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
+    write_audit(
+        db,
+        action_type="truck.deleted",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"name": db_truck.name, "is_active": db_truck.is_active},
+        after=None,
+    )
     db_truck.is_active = False
     db.commit()

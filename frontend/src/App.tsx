@@ -21,10 +21,13 @@ import WalkerPerformance from './pages/WalkerPerformance';
 import TrainerMarks from './pages/TrainerMarks';
 import Phase4Observation from './pages/Phase4Observation';
 import TrainingCurriculum from './pages/TrainingCurriculum';
+import GraduationQuiz from './pages/GraduationQuiz';
+import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
+import LocationProfiles from './pages/LocationProfiles';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
@@ -81,10 +84,9 @@ const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.React
 
 function RoleRedirect() {
   const { groups, isConfigured, isLoading } = useAuth();
-  console.log('[RoleRedirect] isLoading:', isLoading, 'groups:', groups);
   if (isLoading) return null;
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
-  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
+  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/dispatch-home' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
@@ -227,8 +229,8 @@ function App() {
               }
             />
             <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin']}><Schedule /></ProtectedRoute>} />
-            {/* field-ops: drivers submit; management/dispatch/admin view oversight dashboard; walkers see self-performance */}
-            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'dispatch', 'management', 'admin']}><FieldOps /></ProtectedRoute>} />
+            {/* field-ops: drivers submit; trainers/trainees see AP card; walkers see self-performance; oversight roles see summary */}
+            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><FieldOps /></ProtectedRoute>} />
             {/* schedule-changes: dispatch excluded — not their job */}
             <Route
               path="/schedule-changes"
@@ -337,6 +339,22 @@ function App() {
               }
             />
             <Route
+              path="/my-quiz"
+              element={
+                <ProtectedRoute allowedRoles={['trainee']}>
+                  <GraduationQuiz />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/graduation-quiz/:quizId"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <GraduationQuizReview />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/feedback"
               element={
                 <ProtectedRoute allowedRoles={['admin']}>
@@ -365,6 +383,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
                   <AnchorPoints />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/location-profiles"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                  <LocationProfiles />
                 </ProtectedRoute>
               }
             />

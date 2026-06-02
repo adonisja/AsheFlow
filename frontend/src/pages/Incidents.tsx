@@ -312,7 +312,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
     if (!employeeId) return;
     axiosClient.get('/incidents/my')
       .then(res => setIncidents(res.data))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load incidents:', e); });
   }, [employeeId, refreshKey]);
 
   if (incidents.length === 0) return (
@@ -385,7 +385,7 @@ function ManagementView() {
     if (filterResolved !== '') params.resolved = filterResolved === 'true';
     axiosClient.get('/incidents/', { params })
       .then(res => setIncidents(res.data))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load incidents list:', e); });
   };
 
   useEffect(() => { load(); }, [filterSeverity, filterCategory, filterResolved]);
@@ -516,7 +516,7 @@ export default function Incidents() {
   useEffect(() => {
     axiosClient.get('/employees/me')
       .then(res => { setEmployeeId(res.data.id); setReporterName(res.data.name || ''); })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load employee identity:', e); });
   }, []);
 
   const tabs = [

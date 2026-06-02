@@ -135,3 +135,27 @@ class MisroutedPackageFlagResponse(BaseModel):
 class AssignWalkersRequest(BaseModel):
     """After a sort preview is accepted, bind the walker_route rows to real walker IDs."""
     walker_ids: list[UUID] = Field(..., description="Ordered list matching walker_index in SortResult")
+
+
+class CommitSortResponse(BaseModel):
+    routes: list["WalkerRouteResponse"]
+    packages_sorted: int
+    packages_dropped: int        # packages excluded due to missing address after enrichment
+    dropped_tbas: list[str]      # TBA numbers of dropped packages (for trainer awareness)
+    sort_initiated_by_name: Optional[str] = None
+    sort_committed_at: Optional[datetime] = None
+
+
+class CommitSortRequest(BaseModel):
+    """Commit a walker sort for a truck assignment.
+
+    The server loads the packages for this truck from the enriched Redis
+    manifest (via TruckZone.package_tbas) — addresses are NOT supplied by the
+    client.  OV data (bag pairings for oversized items) is supplied by the
+    trainer doing the sort since it requires physical observation of the totes.
+    """
+    truck_assignment_id: UUID
+    route_date: date
+    walker_count: int = Field(..., ge=1, le=30)
+    walker_ids: list[UUID] = Field(..., description="Ordered list; length must equal walker_count")
+    ovs: list[OVInput] = []
