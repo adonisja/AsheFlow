@@ -1,7 +1,7 @@
 """add check constraints for dispatch weight columns
 
-Revision ID: c6d7e8f9a0b1
-Revises: b5c6d7e8f9a0
+Revision ID: g4b5c6d7e8f9
+Revises: f3a4b5c6d7e8
 Create Date: 2026-06-01
 
 All seven dispatch weight / bonus / penalty / cap columns must be in [0, 1]
@@ -9,8 +9,8 @@ when set. NULL is allowed (means "use the hardcoded default from constants.py").
 """
 from alembic import op
 
-revision = 'c6d7e8f9a0b1'
-down_revision = 'b5c6d7e8f9a0'
+revision = 'g4b5c6d7e8f9'
+down_revision = 'f3a4b5c6d7e8'
 branch_labels = None
 depends_on = None
 
