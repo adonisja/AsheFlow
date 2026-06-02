@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
-  useColorScheme, ActivityIndicator, RefreshControl, Modal, Pressable, Alert,
+  ActivityIndicator, RefreshControl, Modal, Pressable, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { useTabSwitch } from '@navigation/index';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Notification = {
   id: string;
@@ -21,17 +23,35 @@ type ConfirmationStatus = 'pending' | 'confirmed' | 'declined' | null;
 
 // Human-readable label + icon per notification type
 const TYPE_META: Record<string, { label: string; icon: string }> = {
-  dispatch_assignment:            { label: 'Assignment',        icon: '📋' },
-  trainer_decline_reassignment:   { label: 'Reassignment',      icon: '🔀' },
-  trainee_unassigned:             { label: 'Unassigned',        icon: '⚠️' },
-  graduation:                     { label: 'Graduation',        icon: '🎓' },
-  schedule_change:                { label: 'Schedule Change',   icon: '📅' },
-  schedule_change_approved:       { label: 'Schedule Approved', icon: '✅' },
-  schedule_change_denied:         { label: 'Schedule Denied',   icon: '❌' },
-  incident:                       { label: 'Incident',          icon: '🚨' },
-  anchor_point_submitted:         { label: 'Anchor Point',      icon: '📍' },
-  anchor_point_arrived:           { label: 'AP Arrival',        icon: '📍' },
-  anchor_point_confirmed:         { label: 'AP Confirmed',      icon: '📍' },
+  dispatch_assignment:            { label: 'Assignment',         icon: '📋' },
+  trainer_decline_reassignment:   { label: 'Reassignment',       icon: '🔀' },
+  trainee_unassigned:             { label: 'Unassigned',         icon: '⚠️' },
+  graduation:                     { label: 'Graduation',         icon: '🎓' },
+  trainee_graduated:              { label: 'Graduation',         icon: '🎓' },
+  trainee_reset:                  { label: 'Training Reset',     icon: '🔄' },
+  schedule_change:                { label: 'Schedule Change',    icon: '📅' },
+  schedule_change_approved:       { label: 'Schedule Approved',  icon: '✅' },
+  schedule_change_denied:         { label: 'Schedule Denied',    icon: '❌' },
+  schedule_change_rejected:       { label: 'Schedule Denied',    icon: '❌' },
+  schedule_change_request:        { label: 'Schedule Request',   icon: '📅' },
+  incident:                       { label: 'Incident',           icon: '🚨' },
+  incident_resolved:              { label: 'Incident Resolved',  icon: '✅' },
+  anchor_point_submitted:         { label: 'Anchor Point',       icon: '📍' },
+  anchor_point_arrived:           { label: 'AP Arrival',         icon: '📍' },
+  anchor_point_confirmed:         { label: 'AP Confirmed',       icon: '📍' },
+  rts_submitted:                  { label: 'RTS Submitted',      icon: '🏁' },
+  rts_approved:                   { label: 'RTS Approved',       icon: '✅' },
+  rts_rejected:                   { label: 'RTS Rejected',       icon: '❌' },
+  training_phase_closed:          { label: 'Phase Complete',     icon: '📚' },
+  phase4_failed:                  { label: 'Phase 4 Result',     icon: '📋' },
+  underperforming_trainer:        { label: 'Trainer Alert',      icon: '⚠️' },
+  exemplary_trainer:              { label: 'Trainer Noted',      icon: '⭐' },
+  ban_override_reassignment:      { label: 'Override Notice',    icon: '🔀' },
+  offday_approved:                { label: 'Day Off Approved',   icon: '✅' },
+  offday_rejected:                { label: 'Day Off Denied',     icon: '❌' },
+  pto_approved:                   { label: 'PTO Approved',       icon: '✅' },
+  pto_rejected:                   { label: 'PTO Denied',         icon: '❌' },
+  feedback_submitted:             { label: 'Feedback',           icon: '💬' },
 };
 
 function typeMeta(type: string): { label: string; icon: string } {
@@ -41,16 +61,24 @@ function typeMeta(type: string): { label: string; icon: string } {
   return { label, icon: '🔔' };
 }
 
-function typeColor(type: string, c: typeof lightColors): string {
-  if (type === 'dispatch_assignment')              return c.primary;
-  if (type === 'trainer_decline_reassignment')     return c.warning;
-  if (type === 'trainee_unassigned')               return c.danger;
-  if (type === 'graduation')                       return c.success;
-  if (type === 'incident')                         return c.danger;
-  if (type === 'schedule_change_approved')         return c.success;
-  if (type === 'schedule_change_denied')           return c.danger;
-  if (type.includes('schedule'))                   return c.info;
-  if (type.includes('anchor_point'))               return c.gold;
+function typeColor(type: string, c: ThemeColors): string {
+  if (type === 'dispatch_assignment')                          return c.primary;
+  if (type === 'trainer_decline_reassignment')                 return c.warning;
+  if (type === 'trainee_unassigned')                           return c.danger;
+  if (type === 'trainee_graduated' || type === 'graduation')  return c.success;
+  if (type === 'trainee_reset')                                return c.info;
+  if (type === 'incident' || type === 'incident_resolved')     return c.danger;
+  if (type === 'rts_approved')                                 return c.success;
+  if (type === 'rts_rejected')                                 return c.danger;
+  if (type === 'rts_submitted')                                return c.warning;
+  if (type === 'training_phase_closed')                        return c.success;
+  if (type === 'phase4_failed')                                return c.danger;
+  if (type === 'underperforming_trainer')                      return c.danger;
+  if (type === 'exemplary_trainer')                            return c.success;
+  if (type.includes('approved') || type.includes('exemplary')) return c.success;
+  if (type.includes('rejected') || type.includes('denied') || type.includes('failed')) return c.danger;
+  if (type.includes('schedule'))                               return c.info;
+  if (type.includes('anchor_point'))                           return c.gold;
   return c.info;
 }
 
@@ -71,6 +99,30 @@ function formatRelative(iso: string) {
   } catch { return ''; }
 }
 
+// ── Confirmation status cache (30-second TTL, keyed by dispatch_date) ────────
+
+type CacheEntry = { status: ConfirmationStatus; fetchedAt: number };
+const confirmationCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 30_000;
+
+function getCached(date: string): ConfirmationStatus | undefined {
+  const entry = confirmationCache.get(date);
+  if (!entry) return undefined;
+  if (Date.now() - entry.fetchedAt > CACHE_TTL_MS) {
+    confirmationCache.delete(date);
+    return undefined;
+  }
+  return entry.status;
+}
+
+function setCached(date: string, status: ConfirmationStatus) {
+  confirmationCache.set(date, { status, fetchedAt: Date.now() });
+}
+
+function bustCache(date: string) {
+  confirmationCache.delete(date);
+}
+
 // ── Dispatch Confirmation Modal ───────────────────────────────────────────────
 
 type DispatchModalProps = {
@@ -78,8 +130,15 @@ type DispatchModalProps = {
   userId: string;
   onClose: () => void;
   onResponded: (notifId: string) => void;
-  c: typeof lightColors;
+  c: ThemeColors;
 };
+
+function extractTruckName(message: string): string | null {
+  const m = message.match(/\b([A-Z]{2,4}[-\s]?\d{1,4}[A-Z]?)\b/) ??
+            message.match(/truck\s+([^\s,]+)/i) ??
+            message.match(/assigned to\s+([^\s,.]+)/i);
+  return m ? m[1] : null;
+}
 
 function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: DispatchModalProps) {
   const [status,  setStatus]  = useState<ConfirmationStatus>(null);
@@ -91,8 +150,20 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
     if (!notif?.dispatch_date) return;
     setLoading(true);
     setStatus(null);
+
+    const cached = getCached(notif.dispatch_date);
+    if (cached !== undefined) {
+      setStatus(cached);
+      setLoading(false);
+      return;
+    }
+
     apiClient.get(`/dispatch/${notif.dispatch_date}/my-confirmation`)
-      .then(r => setStatus(r.data.status ?? null))
+      .then(r => {
+        const s = r.data.status ?? null;
+        setCached(notif.dispatch_date!, s);
+        setStatus(s);
+      })
       .catch(() => setStatus(null))
       .finally(() => setLoading(false));
   }, [notif?.id, notif?.dispatch_date]);
@@ -107,10 +178,12 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
         status: choice,
       });
       await apiClient.patch(`/notifications/${notif.id}/read`);
+      bustCache(notif.dispatch_date);
+      setCached(notif.dispatch_date, choice);
       setStatus(choice);
       onResponded(notif.id);
       Alert.alert(
-        choice === 'confirmed' ? 'Confirmed ✓' : 'Declined',
+        choice === 'confirmed' ? 'Confirmed' : 'Declined',
         choice === 'confirmed'
           ? 'Your assignment has been confirmed.'
           : 'Your assignment has been declined. Dispatch has been notified.',
@@ -126,68 +199,117 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
 
   const ms = modalStyles(c);
 
-  const StatusBadge = () => {
-    if (status === 'confirmed') return (
-      <View style={[ms.statusBadge, { backgroundColor: c.success + '15', borderColor: c.success + '40' }]}>
-        <Text style={{ fontSize: 18 }}>✅</Text>
-        <View>
-          <Text style={[ms.statusTitle, { color: c.success }]}>Assignment Confirmed</Text>
-          <Text style={[ms.statusSub, { color: c.mutedForeground }]}>Your response has been recorded</Text>
-        </View>
-      </View>
-    );
-    if (status === 'declined') return (
-      <View style={[ms.statusBadge, { backgroundColor: c.danger + '10', borderColor: c.danger + '30' }]}>
-        <Text style={{ fontSize: 18 }}>❌</Text>
-        <View>
-          <Text style={[ms.statusTitle, { color: c.danger }]}>Assignment Declined</Text>
-          <Text style={[ms.statusSub, { color: c.mutedForeground }]}>Contact dispatch if this was a mistake</Text>
-        </View>
-      </View>
-    );
-    return null;
-  };
-
   const dateLabel = notif?.dispatch_date
     ? new Date(notif.dispatch_date + 'T12:00:00').toLocaleDateString('en-US', {
         weekday: 'long', month: 'long', day: 'numeric',
       })
     : '';
 
+  const cleanMessage = notif?.message ? stripMarkdown(notif.message) : '';
+  const truckName = cleanMessage ? extractTruckName(cleanMessage) : null;
+
+  // A past-date notification is read-only — never prompt for action
+  const localToday = new Date().toISOString().slice(0, 10);
+  const isPastDate = !!notif?.dispatch_date && notif.dispatch_date < localToday;
+
+  // Derive accent color and status metadata from current status
+  const statusAccent = status === 'confirmed' ? c.success
+    : status === 'declined' ? c.danger
+    : c.warning;
+
+  const statusIcon = status === 'confirmed' ? '✅'
+    : status === 'declined' ? '❌'
+    : '⏳';
+
+  const statusLabel = status === 'confirmed' ? 'Confirmed'
+    : status === 'declined' ? 'Declined'
+    : isPastDate ? 'No Response Recorded'
+    : 'Awaiting Response';
+
+  const statusSub = status === 'confirmed' ? 'Your attendance was recorded'
+    : status === 'declined' ? 'You declined this assignment'
+    : isPastDate ? 'This assignment has passed'
+    : 'Please confirm or decline your assignment';
+
+  // Only show action buttons for today's unresponded assignment
+  const needsAction = !isPastDate && (status === 'pending' || status === null);
+
   return (
     <Modal visible={!!notif} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={ms.backdrop} onPress={onClose} />
       <View style={[ms.sheet, { backgroundColor: c.card }]}>
+
+        {/* Status-colored top stripe */}
+        {!loading && <View style={[ms.topStripe, { backgroundColor: statusAccent }]} />}
+
         <View style={[ms.handle, { backgroundColor: c.border }]} />
 
+        {/* Header */}
         <View style={ms.sheetHeader}>
-          <View style={[ms.sheetIcon, { backgroundColor: c.primary + '15' }]}>
-            <Text style={{ fontSize: 22 }}>📋</Text>
+          <View style={[ms.sheetIcon, { backgroundColor: c.primary + '18' }]}>
+            <Text style={{ fontSize: 24 }}>📋</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[ms.sheetTitle, { color: c.foreground }]}>Dispatch Assignment</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+              <Text style={[ms.sheetTitle, { color: c.foreground }]}>Dispatch Assignment</Text>
+              {isPastDate && (
+                <View style={[ms.pastPill, { backgroundColor: c.mutedForeground + '20' }]}>
+                  <Text style={[ms.pastPillText, { color: c.mutedForeground }]}>Past</Text>
+                </View>
+              )}
+            </View>
             {dateLabel ? <Text style={[ms.sheetDate, { color: c.mutedForeground }]}>{dateLabel}</Text> : null}
           </View>
         </View>
 
+        {/* Truck name hero (when extractable) */}
+        {truckName && (
+          <View style={[ms.truckRow, { backgroundColor: c.primary + '10', borderColor: c.primary + '30' }]}>
+            <Text style={{ fontSize: 16 }}>🚚</Text>
+            <Text style={[ms.truckLabel, { color: c.primary }]}>Truck {truckName}</Text>
+          </View>
+        )}
+
+        {/* Message box */}
         {notif?.message ? (
           <View style={[ms.messageBox, { backgroundColor: c.surfaceMuted, borderColor: c.border }]}>
-            <Text style={[ms.messageText, { color: c.foreground }]}>{stripMarkdown(notif.message)}</Text>
+            <Text style={[ms.messageText, { color: c.mutedForeground }]} numberOfLines={4}>
+              {stripMarkdown(notif.message)}
+            </Text>
           </View>
         ) : null}
 
+        {/* Status / action area */}
         {loading ? (
-          <ActivityIndicator color={c.primary} style={{ marginVertical: spacing.lg }} />
+          <View style={ms.loadingRow}>
+            <ActivityIndicator color={c.primary} />
+            <Text style={[ms.loadingText, { color: c.mutedForeground }]}>Checking status…</Text>
+          </View>
         ) : (
           <>
-            <StatusBadge />
+            {/* Status badge — always shown */}
+            <View style={[ms.statusBadge, {
+              backgroundColor: statusAccent + '12',
+              borderColor: statusAccent + '35',
+            }]}>
+              <Text style={ms.statusIcon}>{statusIcon}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[ms.statusTitle, { color: statusAccent }]}>{statusLabel}</Text>
+                <Text style={[ms.statusSub, { color: c.mutedForeground }]}>{statusSub}</Text>
+              </View>
+            </View>
 
-            {(status === 'pending' || status === null) && (
+            {/* Action buttons — only when no response yet */}
+            {needsAction && (
               <View style={ms.actionRow}>
                 <TouchableOpacity
                   onPress={() => respond('declined')}
                   disabled={!!acting}
-                  style={[ms.btn, ms.btnDecline, { opacity: acting === 'confirming' ? 0.35 : 1 }]}>
+                  style={[ms.btn, ms.btnDecline, {
+                    borderColor: c.danger,
+                    backgroundColor: c.danger + '08',
+                    opacity: acting === 'confirming' ? 0.35 : 1,
+                  }]}>
                   {acting === 'declining'
                     ? <ActivityIndicator size="small" color={c.danger} />
                     : <Text style={[ms.btnText, { color: c.danger }]}>Decline</Text>
@@ -196,7 +318,11 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
                 <TouchableOpacity
                   onPress={() => respond('confirmed')}
                   disabled={!!acting}
-                  style={[ms.btn, ms.btnConfirm, { backgroundColor: c.success, opacity: acting === 'declining' ? 0.35 : 1 }]}>
+                  style={[ms.btn, ms.btnConfirm, {
+                    backgroundColor: c.success,
+                    borderColor: c.success,
+                    opacity: acting === 'declining' ? 0.35 : 1,
+                  }]}>
                   {acting === 'confirming'
                     ? <ActivityIndicator size="small" color="#fff" />
                     : <Text style={[ms.btnText, { color: '#fff' }]}>Confirm Attendance</Text>
@@ -215,47 +341,66 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
   );
 }
 
-const modalStyles = (c: typeof lightColors) => StyleSheet.create({
-  backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
+const modalStyles = (c: ThemeColors) => StyleSheet.create({
+  backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet:       {
     borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
-    padding: spacing.lg, paddingBottom: spacing.xl + 16, gap: spacing.sm,
+    overflow: 'hidden',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.xl + 16,
+    gap: spacing.sm,
   },
-  handle:      { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: spacing.md },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xs },
-  sheetIcon:   { width: 44, height: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
-  sheetTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  topStripe:   { height: 4, marginHorizontal: -spacing.lg },
+  handle:      { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: spacing.sm, marginBottom: spacing.xs },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
+  sheetIcon:   { width: 48, height: 48, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center' },
+  sheetTitle:  { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
   sheetDate:   { fontSize: fontSize.xs, marginTop: 2 },
-  messageBox:  {
-    padding: spacing.md, borderRadius: radius.md, borderWidth: 1,
-    marginBottom: spacing.xs,
+  pastPill:    { paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.sm },
+  pastPillText:{ fontSize: 10, fontWeight: fontWeight.semibold, textTransform: 'uppercase' as const, letterSpacing: 0.4 },
+
+  truckRow:    {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderRadius: radius.md, borderWidth: 1,
   },
-  messageText: { fontSize: fontSize.sm, lineHeight: 22 },
+  truckLabel:  { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: 0.3 },
+
+  messageBox:  { padding: spacing.md, borderRadius: radius.md, borderWidth: 1 },
+  messageText: { fontSize: fontSize.sm, lineHeight: 20 },
+
+  loadingRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.md },
+  loadingText: { fontSize: fontSize.sm },
+
   statusBadge: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    padding: spacing.md, borderRadius: radius.md, borderWidth: 1,
-    marginTop: spacing.xs,
+    padding: spacing.md, borderRadius: radius.lg, borderWidth: 1,
   },
-  statusTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  statusIcon:  { fontSize: 22 },
+  statusTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   statusSub:   { fontSize: fontSize.xs, marginTop: 2 },
-  actionRow:   { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+
+  actionRow:   { flexDirection: 'row', gap: spacing.sm },
   btn:         {
-    paddingVertical: spacing.sm + 4, borderRadius: radius.md,
+    paddingVertical: spacing.sm + 6, borderRadius: radius.md,
     alignItems: 'center', justifyContent: 'center', borderWidth: 1.5,
   },
-  btnDecline:  { flex: 1, borderColor: c.danger, backgroundColor: c.danger + '08' },
-  btnConfirm:  { flex: 2, borderColor: c.success },
-  btnText:     { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  closeBtn:    { marginTop: spacing.xs, paddingVertical: spacing.sm + 2, borderRadius: radius.md, borderWidth: 1, alignItems: 'center' },
+  btnDecline:  { flex: 1 },
+  btnConfirm:  { flex: 2 },
+  btnText:     { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  closeBtn:    {
+    marginTop: spacing.xs, paddingVertical: spacing.sm + 4,
+    borderRadius: radius.md, borderWidth: 1, alignItems: 'center',
+  },
   closeBtnText:{ fontSize: fontSize.sm },
 });
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function NotificationsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
+  const switchTab = useTabSwitch();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading,       setLoading]       = useState(true);
@@ -263,17 +408,29 @@ export default function NotificationsScreen() {
   const [markingAll,    setMarkingAll]    = useState(false);
   const [activeNotif,   setActiveNotif]   = useState<Notification | null>(null);
 
-  const fetchNotifications = useCallback(async () => {
-    if (!user?.id) return;
+  const employeeDbId = useRef<string | null>(null);
+
+  const resolveEmployeeId = useCallback(async (): Promise<string | null> => {
+    if (employeeDbId.current) return employeeDbId.current;
     try {
-      const res = await apiClient.get(`/notifications/${user.id}?limit=50`);
+      const res = await apiClient.get('/employees/me');
+      employeeDbId.current = res.data.id;
+      return res.data.id;
+    } catch { return null; }
+  }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    const eid = await resolveEmployeeId();
+    if (!eid) return;
+    try {
+      const res = await apiClient.get(`/notifications/${eid}?limit=50`);
       setNotifications(res.data ?? []);
     } catch {
       setNotifications([]);
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [resolveEmployeeId]);
 
   useEffect(() => { fetchNotifications(); }, [fetchNotifications]);
 
@@ -291,16 +448,17 @@ export default function NotificationsScreen() {
   }, []);
 
   const markAllRead = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = employeeDbId.current;
+    if (!eid) return;
     setMarkingAll(true);
     try {
-      await apiClient.patch(`/notifications/employee/${user.id}/read-all`);
+      await apiClient.patch(`/notifications/employee/${eid}/read-all`);
       setNotifications(prev =>
         prev.map(n => n.type === 'dispatch_assignment' ? n : { ...n, is_read: true })
       );
     } catch { /* no-op */ }
     finally { setMarkingAll(false); }
-  }, [user?.id]);
+  }, []);
 
   const handleTap = useCallback((item: Notification) => {
     if (item.type === 'dispatch_assignment' && item.dispatch_date) {
@@ -317,81 +475,106 @@ export default function NotificationsScreen() {
   const unreadCount = notifications.filter(n => !n.is_read).length;
   const s = styles(c);
 
-  const renderItem = ({ item, index }: { item: Notification; index: number }) => {
-    const meta      = typeMeta(item.type);
-    const accent    = typeColor(item.type, c);
-    const isDispatch = item.type === 'dispatch_assignment';
-    const isFirst   = index === 0;
-    const isLast    = index === notifications.length - 1;
+  const renderItem = ({ item }: { item: Notification }) => {
+    const meta       = typeMeta(item.type);
+    const accent     = typeColor(item.type, c);
+    const isDispatch  = item.type === 'dispatch_assignment';
+    const unread      = !item.is_read;
+    const isPast      = !!item.dispatch_date && item.dispatch_date < new Date().toISOString().slice(0, 10);
 
     return (
       <TouchableOpacity
         style={[
-          s.row,
-          isFirst  && s.rowFirst,
-          isLast   && s.rowLast,
-          !isLast  && s.rowDivider,
-          !item.is_read && { backgroundColor: accent + '06' },
+          s.card,
+          unread
+            ? { borderColor: accent + '50', backgroundColor: accent + '06' }
+            : { borderColor: c.border, backgroundColor: c.card },
         ]}
         onPress={() => handleTap(item)}
-        activeOpacity={0.65}
+        activeOpacity={0.7}
       >
-        {/* Unread indicator strip */}
-        {!item.is_read && (
-          <View style={[s.unreadStrip, { backgroundColor: accent }]} />
-        )}
+        {/* Left accent stripe — only on unread */}
+        {unread && <View style={[s.stripe, { backgroundColor: accent }]} />}
 
-        {/* Icon bubble */}
-        <View style={[s.iconBubble, { backgroundColor: accent + '15' }]}>
-          <Text style={s.iconText}>{meta.icon}</Text>
-        </View>
-
-        {/* Content */}
-        <View style={s.rowContent}>
-          <View style={s.rowTop}>
-            <Text style={[s.typeLabel, { color: accent }]}>{meta.label}</Text>
-            <Text style={[s.timeText, { color: c.mutedForeground }]}>{formatRelative(item.created_at)}</Text>
+        <View style={s.cardInner}>
+          {/* Icon */}
+          <View style={[s.iconBubble, { backgroundColor: accent + (unread ? '20' : '12') }]}>
+            <Text style={s.iconText}>{meta.icon}</Text>
           </View>
-          <Text style={[s.messageText, { color: item.is_read ? c.mutedForeground : c.foreground }]}
-            numberOfLines={2}>
-            {stripMarkdown(item.message)}
-          </Text>
-          {isDispatch && item.dispatch_date && (
-            <Text style={[s.tapHint, { color: c.primary }]}>Tap to view assignment →</Text>
+
+          {/* Body */}
+          <View style={s.body}>
+            {/* Top row: label + time */}
+            <View style={s.topRow}>
+              <View style={[s.typePill, { backgroundColor: accent + '18' }]}>
+                <Text style={[s.typeLabel, { color: accent }]}>{meta.label}</Text>
+              </View>
+              <Text style={[s.timeText, { color: c.mutedForeground }]}>{formatRelative(item.created_at)}</Text>
+            </View>
+
+            {/* Message */}
+            <Text
+              style={[s.message, { color: unread ? c.foreground : c.mutedForeground,
+                fontWeight: unread ? fontWeight.medium : fontWeight.regular }]}
+              numberOfLines={2}
+            >
+              {stripMarkdown(item.message)}
+            </Text>
+
+            {/* Dispatch CTA */}
+            {isDispatch && item.dispatch_date && (
+              <View style={s.ctaRow}>
+                <Text style={[s.cta, { color: isPast ? c.mutedForeground : c.primary }]}>
+                  {isPast ? 'View past assignment →' : 'View & respond to assignment →'}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Unread dot — right edge */}
+          {unread && !isDispatch && (
+            <View style={[s.dot, { backgroundColor: accent }]} />
+          )}
+          {isDispatch && unread && (
+            <View style={[s.dot, { backgroundColor: c.warning }]} />
           )}
         </View>
-
-        {/* Unread dot */}
-        {!item.is_read && !isDispatch && (
-          <View style={[s.dot, { backgroundColor: accent }]} />
-        )}
       </TouchableOpacity>
     );
   };
 
-  // Group rows in a single rounded container like iOS Settings
-  const grouped = notifications.length > 0;
-
   return (
-    <SafeAreaView style={[s.safe, { backgroundColor: c.background }]} edges={['top']}>
-      {/* Header */}
-      <View style={[s.header, { borderBottomColor: c.border }]}>
-        <View>
-          <Text style={[s.pageTitle, { color: c.foreground }]}>Notifications</Text>
+    <SafeAreaView style={s.safe} edges={['top']}>
+
+      {/* ── Header ── */}
+      <View style={s.header}>
+        {/* Back */}
+        <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
+          <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
+        </TouchableOpacity>
+
+        {/* Centred title + badge */}
+        <View style={s.headerCenter}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+            <Text style={s.pageTitle}>Notifications</Text>
+            {unreadCount > 0 && (
+              <View style={[s.unreadBadge, { backgroundColor: c.danger }]}>
+                <Text style={s.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Right action */}
+        <View style={s.headerRight}>
           {unreadCount > 0 && (
-            <Text style={[s.unreadLabel, { color: c.mutedForeground }]}>
-              {unreadCount} unread
-            </Text>
+            <TouchableOpacity onPress={markAllRead} disabled={markingAll}>
+              {markingAll
+                ? <ActivityIndicator color={c.primary} size="small" />
+                : <Text style={[s.markAllText, { color: c.primary }]}>All read</Text>}
+            </TouchableOpacity>
           )}
         </View>
-        {unreadCount > 0 && (
-          <TouchableOpacity onPress={markAllRead} disabled={markingAll} style={s.markAllBtn}>
-            {markingAll
-              ? <ActivityIndicator color={c.primary} size="small" />
-              : <Text style={[s.markAllText, { color: c.primary }]}>Mark all read</Text>
-            }
-          </TouchableOpacity>
-        )}
       </View>
 
       {loading ? (
@@ -401,14 +584,8 @@ export default function NotificationsScreen() {
           data={notifications}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={[s.list, grouped && s.listGrouped]}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />
-          }
-          ListHeaderComponent={grouped ? (
-            // Wrap in a container — the rows themselves form one group card
-            null
-          ) : null}
+          contentContainerStyle={s.list}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />}
           ListEmptyComponent={
             <View style={s.emptyCard}>
               <View style={[s.emptyIcon, { backgroundColor: c.surfaceMuted }]}>
@@ -423,7 +600,7 @@ export default function NotificationsScreen() {
 
       <DispatchConfirmationModal
         notif={activeNotif}
-        userId={user?.id ?? ''}
+        userId={employeeDbId.current ?? ''}
         onClose={() => setActiveNotif(null)}
         onResponded={handleResponded}
         c={c}
@@ -432,49 +609,49 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
-  safe:         { flex: 1 },
-  header:       {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
-    paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+const styles = (c: ThemeColors) => StyleSheet.create({
+  safe:   { flex: 1, backgroundColor: c.background },
+
+  // Header
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
+    backgroundColor: c.surface,
   },
-  pageTitle:    { fontSize: fontSize.xl, fontWeight: fontWeight.bold, letterSpacing: -0.3 },
-  unreadLabel:  { fontSize: fontSize.xs, marginTop: 2 },
-  markAllBtn:   { paddingBottom: 2 },
-  markAllText:  { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
-  center:       { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  backBtn:         { width: 44, alignItems: 'center' },
+  backChevron:     { fontSize: 30, lineHeight: 32, fontWeight: '300' },
+  headerCenter:    { flex: 1, alignItems: 'center' },
+  headerRight:     { width: 64, alignItems: 'flex-end' },
+  pageTitle:       { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: c.foreground, letterSpacing: -0.3 },
+  unreadBadge:     { minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  unreadBadgeText: { color: '#fff', fontSize: 11, fontWeight: fontWeight.bold },
+  markAllText:     { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
+  center:          { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  list:         { paddingBottom: 80 },
-  listGrouped:  { paddingHorizontal: spacing.md, paddingTop: spacing.md },
+  list: { padding: spacing.md, paddingBottom: 80, gap: spacing.sm },
 
-  // Rows form one grouped card (Settings-style)
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: c.card,
-    paddingVertical: spacing.md,
-    paddingRight: spacing.md,
-    paddingLeft: spacing.sm,
-    position: 'relative',
+  // Individual notification card
+  card: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
     overflow: 'hidden',
   },
-  rowFirst:   { borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg },
-  rowLast:    { borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg },
-  rowDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border },
+  stripe:    { height: 3 },
+  cardInner: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, padding: spacing.md },
+  iconBubble:{ width: 44, height: 44, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  iconText:  { fontSize: 20 },
 
-  unreadStrip:  { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3 },
-  iconBubble:   { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  iconText:     { fontSize: 18 },
+  body:    { flex: 1, gap: 4 },
+  topRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.xs },
+  typePill:{ paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
+  typeLabel:{ fontSize: 10, fontWeight: fontWeight.bold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  timeText: { fontSize: fontSize.xs, color: c.mutedForeground },
+  message:  { fontSize: fontSize.sm, lineHeight: 20 },
+  ctaRow:   { marginTop: 2 },
+  cta:      { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
-  rowContent:   { flex: 1, gap: 3 },
-  rowTop:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  typeLabel:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.4 },
-  timeText:     { fontSize: fontSize.xs },
-  messageText:  { fontSize: fontSize.sm, lineHeight: 19 },
-  tapHint:      { fontSize: fontSize.xs, fontWeight: fontWeight.medium, marginTop: 2 },
-  dot:          { width: 8, height: 8, borderRadius: 4, flexShrink: 0, marginLeft: spacing.xs },
+  dot: { width: 9, height: 9, borderRadius: 5, flexShrink: 0, marginTop: 2 },
 
   // Empty state
   emptyCard:    { alignItems: 'center', marginTop: 80, gap: spacing.md },

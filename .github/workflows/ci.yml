@@ -9,8 +9,10 @@ name: CI
 #   staging branch   → staging EC2 + S3 (auto-deploy after green tests)
 #   master branch    → prod EC2 + S3    (auto-deploy after green tests)
 #
-# Frontend secrets injected at build time from GitHub Actions secrets —
-# no .env files are committed to the repo.
+# Backend secrets live in AWS SSM Parameter Store (/asheflow/staging/ and
+# /asheflow/prod/). The EC2 instance role has read access; CI never touches
+# the secret values. Frontend secrets are injected from GitHub Actions secrets
+# at build time.
 #
 # Staging EC2 is stopped by default (Option B — cost saving).
 # CI starts it before deploy and stops it 30 minutes after deploy completes.
@@ -102,17 +104,30 @@ jobs:
           aws ec2 wait instance-running --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
           echo "Staging EC2 is running."
 
-      # Write staging .env from secrets — no secrets stored on disk permanently
-      - name: Write staging backend .env via SSM
+      # EC2 uses boto3 to pull /asheflow/staging/* from SSM Parameter Store.
+      # No secret values pass through the CI runner or CLI arguments.
+      - name: Write staging backend .env via SSM Parameter Store
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
             --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
             --document-name AWS-RunShellScript \
-            --parameters commands=["cat > /home/ubuntu/AsheFlow/.env << 'ENVEOF'\nAPP_ENV=production\nREDIS_URL=redis://redis:6379/0\nPOSTGRES_USER=asheflow\nPOSTGRES_DB=asheflow_db\nPOSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}\nSECRET_KEY=${{ secrets.SECRET_KEY }}\nINTERNAL_SECRET=${{ secrets.INTERNAL_SECRET }}\nDISCORD_BOT_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }}\nBOT_INTERNAL_URL=http://bot:8001\nAWS_REGION=us-east-2\nAWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb\nAWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d\nSES_FROM_EMAIL=AsheFlow <noreply@asheflow.com>\nAPP_BASE_URL=https://staging.asheflow.com\nCORS_ORIGINS=https://staging.asheflow.com\nENVEOF"] \
+            --parameters 'commands=[
+              "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); ps=c.get_parameters_by_path(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]; skip={chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] not in skip]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
+              "echo APP_ENV=production >> /home/ubuntu/AsheFlow/.env",
+              "echo REDIS_URL=redis://redis:6379/0 >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_DB=asheflow_db >> /home/ubuntu/AsheFlow/.env",
+              "echo BOT_INTERNAL_URL=http://bot:8001 >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
+              "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+            ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 8
+          sleep 10
           STATUS=$(aws ssm get-command-invocation \
             --region us-east-2 \
             --command-id "$COMMAND_ID" \
@@ -121,50 +136,91 @@ jobs:
           echo "Write .env status: $STATUS"
           [ "$STATUS" = "Success" ] || exit 1
 
-      # Deploy backend via SSM — no SSH key needed
-      - name: Deploy backend via SSM
+      - name: Write staging bot .env via SSM Parameter Store
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
             --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "git config --global --add safe.directory /home/ubuntu/AsheFlow",
-              "cd /home/ubuntu/AsheFlow && git pull origin staging",
-              "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d backend"
+              "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); ps=c.get_parameters_by_path(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]; keep={chr(68)+chr(73)+chr(83)+chr(67)+chr(79)+chr(82)+chr(68)+chr(95)+chr(66)+chr(79)+chr(84)+chr(95)+chr(84)+chr(79)+chr(75)+chr(69)+chr(78),chr(66)+chr(79)+chr(84)+chr(95)+chr(85)+chr(83)+chr(69)+chr(82)+chr(78)+chr(65)+chr(77)+chr(69),chr(66)+chr(79)+chr(84)+chr(95)+chr(80)+chr(65)+chr(83)+chr(83)+chr(87)+chr(79)+chr(82)+chr(68),chr(73)+chr(78)+chr(84)+chr(69)+chr(82)+chr(78)+chr(65)+chr(76)+chr(95)+chr(83)+chr(69)+chr(67)+chr(82)+chr(69)+chr(84)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] in keep]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(98)+chr(111)+chr(116)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
+              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/bot/.env",
+              "echo AWS_COGNITO_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/bot/.env",
+              "echo API_BASE_URL=http://backend:8000/api/v1 >> /home/ubuntu/AsheFlow/bot/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
+          sleep 10
+          STATUS=$(aws ssm get-command-invocation \
+            --region us-east-2 \
+            --command-id "$COMMAND_ID" \
+            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+            --query "Status" --output text)
+          echo "Write bot .env status: $STATUS"
+          [ "$STATUS" = "Success" ] || exit 1
 
-          echo "SSM Command ID: $COMMAND_ID"
+      # Deploy backend via SSM — no SSH key needed
+      - name: Deploy backend via SSM
+        run: |
+          poll() {
+            local CMD_ID=$1 INSTANCE=$2 MAX=$3
+            for i in $(seq 1 $MAX); do
+              STATUS=$(aws ssm get-command-invocation \
+                --region us-east-2 --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                --query "Status" --output text 2>/dev/null || echo "Pending")
+              echo "[$i/$MAX] $STATUS"
+              if [ "$STATUS" = "Success" ]; then return 0; fi
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardErrorContent" --output text
+                return 1
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for SSM command."
+            return 1
+          }
+
+          INSTANCE=${{ secrets.STAGING_EC2_INSTANCE_ID }}
+
+          # Step 1: pull public repo, pull private repo (key from SSM), copy proprietary files, build + start
+          # The deploy key is stored in SSM at /asheflow/staging/PRIVATE_REPO_DEPLOY_KEY.
+          # boto3 pulls it onto the EC2 — the key value never passes through CI or CLI args.
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "export HOME=/home/ubuntu",
+              "git config --global --add safe.directory /home/ubuntu/AsheFlow",
+              "cd /home/ubuntu/AsheFlow && git pull origin staging",
+              "python3 -c \"import boto3,os; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); v=c.get_parameter(Name=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47)+chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)][chr(86)+chr(97)+chr(108)+chr(117)+chr(101)]; os.makedirs(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104),exist_ok=True); open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),chr(119)).write(v.strip()+chr(10)); os.chmod(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),0o600)\"",
+              "ssh-keyscan github.com >> /home/ubuntu/.ssh/known_hosts 2>/dev/null",
+              "rm -rf /tmp/asheflow-private && GIT_SSH_COMMAND=\"ssh -i /home/ubuntu/.ssh/asheflow_private_deploy -o StrictHostKeyChecking=no\" git clone -b staging git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private",
+              "cp /tmp/asheflow-private/backend/app/routers/*.py /home/ubuntu/AsheFlow/backend/app/routers/",
+              "cp /tmp/asheflow-private/backend/app/services/*.py /home/ubuntu/AsheFlow/backend/app/services/",
+              "cp -r /tmp/asheflow-private/asheflow_private /home/ubuntu/AsheFlow/backend/asheflow_private",
+              "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
+              "touch /home/ubuntu/AsheFlow/bot/.env",
+              "cd /home/ubuntu/AsheFlow && docker compose build backend",
+              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy bot"
+            ]' \
+            --query "Command.CommandId" --output text)
+          echo "Step 1 SSM: $CID"
           sleep 15
+          poll "$CID" "$INSTANCE" 36 || exit 1
 
-          for i in $(seq 1 18); do
-            STATUS=$(aws ssm get-command-invocation \
-              --region us-east-2 \
-              --command-id "$COMMAND_ID" \
-              --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-              --query "Status" \
-              --output text 2>/dev/null || echo "Pending")
-            echo "[$i] Status: $STATUS"
-            if [ "$STATUS" = "Success" ]; then
-              echo "Backend deploy succeeded."
-              exit 0
-            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              aws ssm get-command-invocation \
-                --region us-east-2 \
-                --command-id "$COMMAND_ID" \
-                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-                --query "StandardErrorContent" \
-                --output text
-              echo "Backend deploy failed with status: $STATUS"
-              exit 1
-            fi
-            sleep 10
-          done
-          echo "Backend deploy timed out."
-          exit 1
+          # Step 2: run migrations (separate command — longer polling window for first-run backfills)
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
+            ]' \
+            --query "Command.CommandId" --output text)
+          echo "Step 2 SSM (migrations): $CID"
+          sleep 15
+          poll "$CID" "$INSTANCE" 60 || exit 1
+
+          echo "Backend deploy succeeded."
 
       # Build frontend with staging env vars injected from secrets
       - name: Setup Node
@@ -220,17 +276,30 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-2
 
-      # Write prod .env from secrets — no secrets stored on disk permanently
-      - name: Write prod backend .env via SSM
+      # EC2 uses boto3 to pull /asheflow/prod/* from SSM Parameter Store.
+      # No secret values pass through the CI runner or CLI arguments.
+      - name: Write prod backend .env via SSM Parameter Store
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
             --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
             --document-name AWS-RunShellScript \
-            --parameters commands=["cat > /home/ubuntu/AsheFlow/.env << 'ENVEOF'\nAPP_ENV=production\nREDIS_URL=redis://redis:6379/0\nPOSTGRES_USER=asheflow\nPOSTGRES_DB=asheflow_db\nPOSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}\nSECRET_KEY=${{ secrets.SECRET_KEY }}\nINTERNAL_SECRET=${{ secrets.INTERNAL_SECRET }}\nDISCORD_BOT_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }}\nBOT_INTERNAL_URL=http://bot:8001\nAWS_REGION=us-east-2\nAWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb\nAWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d\nSES_FROM_EMAIL=AsheFlow <noreply@asheflow.com>\nAPP_BASE_URL=https://asheflow.com\nCORS_ORIGINS=https://asheflow.com,https://www.asheflow.com\nENVEOF"] \
+            --parameters 'commands=[
+              "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); ps=c.get_parameters_by_path(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(112)+chr(114)+chr(111)+chr(100)+chr(47),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]; skip={chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] not in skip]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
+              "echo APP_ENV=production >> /home/ubuntu/AsheFlow/.env",
+              "echo REDIS_URL=redis://redis:6379/0 >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
+              "echo POSTGRES_DB=asheflow_db >> /home/ubuntu/AsheFlow/.env",
+              "echo BOT_INTERNAL_URL=http://bot:8001 >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
+              "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+            ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 8
+          sleep 10
           STATUS=$(aws ssm get-command-invocation \
             --region us-east-2 \
             --command-id "$COMMAND_ID" \
@@ -241,47 +310,64 @@ jobs:
 
       - name: Deploy backend via SSM
         run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --region us-east-2 \
-            --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+          poll() {
+            local CMD_ID=$1 INSTANCE=$2 MAX=$3
+            for i in $(seq 1 $MAX); do
+              STATUS=$(aws ssm get-command-invocation \
+                --region us-east-2 --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                --query "Status" --output text 2>/dev/null || echo "Pending")
+              echo "[$i/$MAX] $STATUS"
+              if [ "$STATUS" = "Success" ]; then return 0; fi
+              if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+                aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardErrorContent" --output text
+                return 1
+              fi
+              sleep 10
+            done
+            echo "Timed out waiting for SSM command."
+            return 1
+          }
+
+          INSTANCE=${{ secrets.EC2_INSTANCE_ID }}
+
+          # Step 1: pull public repo, pull private repo (key from SSM), copy proprietary files, build + start
+          # Deploy key stored in SSM at /asheflow/prod/PRIVATE_REPO_DEPLOY_KEY
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
+              "export HOME=/home/ubuntu",
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git pull origin master",
+              "python3 -c \"import boto3,os; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); v=c.get_parameter(Name=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(112)+chr(114)+chr(111)+chr(100)+chr(47)+chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)][chr(86)+chr(97)+chr(108)+chr(117)+chr(101)]; os.makedirs(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104),exist_ok=True); open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),chr(119)).write(v.strip()+chr(10)); os.chmod(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),0o600)\"",
+              "ssh-keyscan github.com >> /home/ubuntu/.ssh/known_hosts 2>/dev/null",
+              "rm -rf /tmp/asheflow-private && GIT_SSH_COMMAND=\"ssh -i /home/ubuntu/.ssh/asheflow_private_deploy -o StrictHostKeyChecking=no\" git clone -b main git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private",
+              "cp /tmp/asheflow-private/backend/app/routers/*.py /home/ubuntu/AsheFlow/backend/app/routers/",
+              "cp /tmp/asheflow-private/backend/app/services/*.py /home/ubuntu/AsheFlow/backend/app/services/",
+              "cp -r /tmp/asheflow-private/asheflow_private /home/ubuntu/AsheFlow/backend/asheflow_private",
+              "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
+              "touch /home/ubuntu/AsheFlow/bot/.env",
               "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d backend"
+              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy"
             ]' \
-            --query "Command.CommandId" \
-            --output text)
-
-          echo "SSM Command ID: $COMMAND_ID"
+            --query "Command.CommandId" --output text)
+          echo "Step 1 SSM: $CID"
           sleep 15
+          poll "$CID" "$INSTANCE" 36 || exit 1
 
-          for i in $(seq 1 18); do
-            STATUS=$(aws ssm get-command-invocation \
-              --region us-east-2 \
-              --command-id "$COMMAND_ID" \
-              --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
-              --query "Status" \
-              --output text 2>/dev/null || echo "Pending")
-            echo "[$i] Status: $STATUS"
-            if [ "$STATUS" = "Success" ]; then
-              echo "Backend deploy succeeded."
-              exit 0
-            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              aws ssm get-command-invocation \
-                --region us-east-2 \
-                --command-id "$COMMAND_ID" \
-                --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
-                --query "StandardErrorContent" \
-                --output text
-              echo "Backend deploy failed with status: $STATUS"
-              exit 1
-            fi
-            sleep 10
-          done
-          echo "Backend deploy timed out."
-          exit 1
+          # Step 2: run migrations (separate command — longer polling window)
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
+            ]' \
+            --query "Command.CommandId" --output text)
+          echo "Step 2 SSM (migrations): $CID"
+          sleep 15
+          poll "$CID" "$INSTANCE" 60 || exit 1
+
+          echo "Backend deploy succeeded."
 
       # Build frontend with prod env vars injected from secrets
       - name: Setup Node

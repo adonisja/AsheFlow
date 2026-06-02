@@ -54,12 +54,18 @@ def create_employee_relationship(
             detail="You can only create relationships for yourself.",
         )
 
-    db_employee = db.query(Employee).filter(Employee.id == employee_relationship.employee_id).first()
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_relationship.employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
 
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    db_target = db.query(Employee).filter(Employee.id == employee_relationship.target_employee_id).first()
+    db_target = db.query(Employee).filter(
+        Employee.id == employee_relationship.target_employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
 
     if not db_target:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target employee not found")
@@ -73,6 +79,7 @@ def create_employee_relationship(
         existing_count = db.query(EmployeeRelationship).join(
             Employee, EmployeeRelationship.target_employee_id == Employee.id).filter(
                 and_(EmployeeRelationship.employee_id == db_employee.id,
+                    EmployeeRelationship.company_id == caller.company_id,
                     Employee.role == db_target.role,
                     EmployeeRelationship.relationship_type == employee_relationship.relationship_type)).count()
 
@@ -84,6 +91,7 @@ def create_employee_relationship(
         # ban limit is global (not role-segmented) — each employee may only ban 2 people total
         ban_count = db.query(EmployeeRelationship).filter(
             EmployeeRelationship.employee_id == db_employee.id,
+            EmployeeRelationship.company_id == caller.company_id,
             EmployeeRelationship.relationship_type == "ban"
         ).count()
 
@@ -93,6 +101,7 @@ def create_employee_relationship(
     # guard against exact duplicates after passing all limit checks
     existing = db.query(EmployeeRelationship).filter(
         EmployeeRelationship.employee_id == employee_relationship.employee_id,
+        EmployeeRelationship.company_id == caller.company_id,
         EmployeeRelationship.target_employee_id == employee_relationship.target_employee_id,
         EmployeeRelationship.relationship_type == employee_relationship.relationship_type
     ).first()
@@ -100,8 +109,10 @@ def create_employee_relationship(
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Relationship already exists")
 
-    # unpack the validated Pydantic schema directly into the ORM model
-    db_relationship = EmployeeRelationship(**employee_relationship.model_dump())
+    db_relationship = EmployeeRelationship(
+        **employee_relationship.model_dump(),
+        company_id=caller.company_id,
+    )
     db.add(db_relationship)
     db.commit()
     # refresh to populate server-generated fields (e.g. id, created_at) before returning
@@ -109,13 +120,15 @@ def create_employee_relationship(
     return db_relationship
 
 @router.get("/", response_model=list[EmployeeRelationshipResponse])
-def get_all_employee_relationships(db: Session = Depends(get_db), _: dict = Depends(allow_admin)):
+def get_all_employee_relationships(db: Session = Depends(get_db), _: dict = Depends(allow_admin), caller: Employee = Depends(get_caller_employee)):
     """Return all employee relationship records. Admin only — used for aggregate analytics.
 
     Dispatch and management must never access individual-level fav/ban data directly.
     The dispatch service reads relationships internally via service functions, not this endpoint.
     """
-    return db.query(EmployeeRelationship).all()
+    return db.query(EmployeeRelationship).filter(
+        EmployeeRelationship.company_id == caller.company_id,
+    ).all()
 
 
 @router.get("/{employee_id}", response_model=list[EmployeeRelationshipResponse])
@@ -136,10 +149,13 @@ def get_employee_relationships(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own relationships.",
         )
-    return db.query(EmployeeRelationship).filter(EmployeeRelationship.employee_id == employee_id).all()
+    return db.query(EmployeeRelationship).filter(
+        EmployeeRelationship.employee_id == employee_id,
+        EmployeeRelationship.company_id == caller.company_id,
+    ).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
-def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_admin)):
+def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_admin), caller: Employee = Depends(get_caller_employee)):
     """Delete all relationships where the given employee is the source.
 
     Args:
@@ -149,12 +165,18 @@ def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db
     Raises:
         HTTPException(404): If the employee does not exist.
     """
-    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
 
     if not employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
-    
-    db.query(EmployeeRelationship).filter(EmployeeRelationship.employee_id == employee_id).delete()
+
+    db.query(EmployeeRelationship).filter(
+        EmployeeRelationship.employee_id == employee_id,
+        EmployeeRelationship.company_id == caller.company_id,
+    ).delete()
     db.commit()
 
 @router.delete("/{employee_relationship_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -168,7 +190,8 @@ def delete_employee_relationships(
     Field staff can only delete their own relationships. Management/admin can delete any.
     """
     relationship = db.query(EmployeeRelationship).filter(
-        EmployeeRelationship.id == employee_relationship_id
+        EmployeeRelationship.id == employee_relationship_id,
+        EmployeeRelationship.company_id == caller.company_id,
     ).first()
     if not relationship:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")

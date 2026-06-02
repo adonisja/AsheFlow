@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, ActivityIndicator, Alert, ScrollView, Modal,
+  ActivityIndicator, Alert, ScrollView, Modal, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { useTabSwitch } from '@navigation/index';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AP = {
@@ -29,7 +31,7 @@ type Crew = {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const STATUS_COLOR = (status: string, c: typeof lightColors) => {
+const STATUS_COLOR = (status: string, c: ThemeColors) => {
   if (status === 'arrived')    return c.success;
   if (status === 'relocated')  return c.mutedForeground;
   return c.warning; // preliminary
@@ -53,15 +55,17 @@ function todayISO(): string {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function AnchorPointsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
+  const switchTab = useTabSwitch();
 
-  const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [crew,       setCrew]       = useState<Crew | null>(null);
-  const [apList,     setApList]     = useState<AP[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [employeeId,          setEmployeeId]          = useState<string | null>(null);
+  const [crew,                setCrew]                = useState<Crew | null>(null);
+  const [apList,              setApList]              = useState<AP[]>([]);
+  const [loading,             setLoading]             = useState(true);
+  const [refreshing,          setRefreshing]          = useState(false);
+  const [confirmationStatus,  setConfirmationStatus]  = useState<'confirmed' | 'pending' | 'declined' | null>(null);
+  const [crewPublished,       setCrewPublished]       = useState(false);
 
   // Submit AP modal
   const [submitModal, setSubmitModal] = useState(false);
@@ -80,22 +84,37 @@ export default function AnchorPointsScreen() {
   // Prefill suggestions from previous locations
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
-  // Resolve employee ID + crew info once
+  // Resolve employee ID, confirmation status, and crew info once
   useEffect(() => {
+    const today = todayISO();
     apiClient.get('/employees/me').then(r => {
       const id = r.data?.id;
       setEmployeeId(id ?? null);
-      if (id) {
-        apiClient.get(`/field-ops/crew/${id}`).then(cr => {
-          setCrew({ truck_id: cr.data?.truck_id ?? null, truck_name: cr.data?.truck_name ?? null });
-          // Fetch last-used AP locations for this truck
-          if (cr.data?.truck_id) {
-            apiClient.get(`/anchor-points/truck/${cr.data.truck_id}?limit=5`)
+      if (!id) return;
+
+      // Check confirmation status for today
+      apiClient.get(`/dispatch/${today}/my-confirmation`)
+        .then(confRes => {
+          const confData = confRes.data;
+          if (confData?.date === today) {
+            setConfirmationStatus(confData.status ?? null);
+          }
+        })
+        .catch(() => {});
+
+      // Check if crew is published (any TruckAssignment exists for today with this employee)
+      apiClient.get(`/field-ops/crew/${id}`)
+        .then(cr => {
+          const truckId = cr.data?.truck_id ?? null;
+          setCrew({ truck_id: truckId, truck_name: cr.data?.truck_name ?? null });
+          setCrewPublished(!!truckId);
+          if (truckId) {
+            apiClient.get(`/anchor-points/truck/${truckId}?limit=5`)
               .then(h => setSuggestions([...new Set<string>((h.data as AP[]).map((a: AP) => a.location))].slice(0, 4)))
               .catch(() => {});
           }
-        }).catch(() => setCrew(null));
-      }
+        })
+        .catch(() => { setCrew(null); setCrewPublished(false); });
     }).catch(() => {});
   }, []);
 
@@ -171,30 +190,49 @@ export default function AnchorPointsScreen() {
 
   const s = styles(c);
 
+  const isUnlocked = confirmationStatus === 'confirmed' && crewPublished;
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      {/* ── Header ── */}
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
+          <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
+        </TouchableOpacity>
+        <View style={s.headerCenter}>
+          <Text style={s.pageTitle}>Anchor Points</Text>
+          {crew?.truck_name ? (
+            <Text style={s.subtitle}>{crew.truck_name} · {todayISO()}</Text>
+          ) : (
+            <Text style={[s.subtitle, { color: c.danger }]}>No truck assignment today</Text>
+          )}
+        </View>
+        <TouchableOpacity style={s.refreshBtn} onPress={() => { setRefreshing(true); fetchAPs(); }}>
+          <Text style={{ color: c.primary, fontSize: fontSize.lg }}>↻</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Locked gate ── */}
+      {!isUnlocked ? (
+        <View style={s.lockedContainer}>
+          <View style={[s.lockedCard, { backgroundColor: c.card, borderColor: c.border }]}>
+            <Text style={s.lockedIcon}>🔒</Text>
+            <Text style={[s.lockedTitle, { color: c.foreground }]}>Not available yet</Text>
+            <Text style={[s.lockedBody, { color: c.mutedForeground }]}>
+              {!crewPublished
+                ? 'Dispatch has not published today\'s crew list yet. Check back after dispatch runs.'
+                : 'Confirm your attendance in Field Ops first. Anchor Points unlock once your assignment is confirmed.'}
+            </Text>
+          </View>
+        </View>
+      ) : (
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.content}
         refreshControl={
-          <View /> /* pull-to-refresh via header button instead to keep simple */
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />
         }
       >
-        {/* Header */}
-        <View style={s.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={s.pageTitle}>Anchor Points</Text>
-            {crew?.truck_name ? (
-              <Text style={s.subtitle}>{crew.truck_name} · {todayISO()}</Text>
-            ) : (
-              <Text style={[s.subtitle, { color: c.danger }]}>No truck assignment today</Text>
-            )}
-          </View>
-          <TouchableOpacity style={s.refreshBtn} onPress={() => { setRefreshing(true); fetchAPs(); }}>
-            <Text style={{ color: c.primary, fontSize: fontSize.lg }}>↻</Text>
-          </TouchableOpacity>
-        </View>
-
         {loading ? (
           <ActivityIndicator color={c.primary} style={{ marginTop: spacing.xl }} />
         ) : (
@@ -273,6 +311,7 @@ export default function AnchorPointsScreen() {
           </>
         )}
       </ScrollView>
+      )}
 
       {/* ── Submit / Relocate AP Modal ── */}
       <Modal visible={submitModal} transparent animationType="slide" onRequestClose={() => setSubmitModal(false)}>
@@ -413,7 +452,7 @@ export default function AnchorPointsScreen() {
 }
 
 // ── Timeline row ──────────────────────────────────────────────────────────────
-function TimelineRow({ ap, isLast, c }: { ap: AP; isLast: boolean; c: typeof lightColors }) {
+function TimelineRow({ ap, isLast, c }: { ap: AP; isLast: boolean; c: ThemeColors }) {
   const dotColor = STATUS_COLOR(ap.status, c);
   return (
     <View style={{ flexDirection: 'row', marginBottom: isLast ? 0 : spacing.xs }}>
@@ -447,7 +486,7 @@ const tlStyles = StyleSheet.create({
 });
 
 // ── Meta chip ─────────────────────────────────────────────────────────────────
-function MetaChip({ icon, value, c }: { icon: string; value: string; c: typeof lightColors }) {
+function MetaChip({ icon, value, c }: { icon: string; value: string; c: ThemeColors }) {
   return (
     <View style={[mcStyles.chip, { backgroundColor: c.surfaceMuted }]}>
       <Text style={mcStyles.icon}>{icon}</Text>
@@ -462,14 +501,27 @@ const mcStyles = StyleSheet.create({
 });
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:            { flex: 1, backgroundColor: c.background },
   scroll:          { flex: 1 },
   content:         { padding: spacing.lg, paddingBottom: spacing.xxl },
-  header:          { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.lg },
-  pageTitle:       { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, color: c.foreground },
-  subtitle:        { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2 },
-  refreshBtn:      { padding: spacing.sm },
+  header:          {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
+    backgroundColor: c.surface,
+  },
+  backBtn:         { width: 44, alignItems: 'center' },
+  backChevron:     { fontSize: 30, lineHeight: 32, fontWeight: '300' },
+  headerCenter:    { flex: 1, alignItems: 'center' },
+  pageTitle:       { fontSize: fontSize.lg, fontWeight: fontWeight.extrabold, color: c.foreground },
+  subtitle:        { fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 },
+  refreshBtn:      { width: 44, alignItems: 'center', padding: spacing.sm },
+  lockedContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.xl },
+  lockedCard:      { borderRadius: radius.xl, borderWidth: 1, padding: spacing.xl, alignItems: 'center', gap: spacing.sm, width: '100%' },
+  lockedIcon:      { fontSize: 40 },
+  lockedTitle:     { fontSize: fontSize.lg, fontWeight: fontWeight.bold, textAlign: 'center' },
+  lockedBody:      { fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
   actionRow:       { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   actionBtn:       { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', paddingHorizontal: spacing.md },
   actionBtnText:   { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },

@@ -4438,7 +4438,7 @@ This two-tier cache strategy means: zero stale app delivery, near-zero origin re
 
 CloudFront requires an SSL certificate in **us-east-1** regardless of where the S3 bucket lives. This is a hard AWS requirement — CloudFront's certificate lookup is always global/us-east-1.
 
-Certificate ARN: `arn:aws:acm:us-east-1:586794453404:certificate/f19b4975-549e-4835-b15f-8046ae9144a5`
+Certificate ARN: `arn:aws:acm:us-east-1:[account-id]:certificate/[redacted]`
 
 Validated via DNS: two CNAME records added to Route 53 hosted zone `Z05950531EYSU1BYQZRAG`. ACM checks for these records and issues the certificate automatically. Validation took ~2 minutes.
 
@@ -4830,3 +4830,1025 @@ ADP exports are not formatted like a generic employee list. Three specific probl
 2. **ADP column aliases.** ADP uses column headers like `File #`, `Associate ID`, `Work Email`, `Business Phone`. These are added to the `ALIASES` map alongside our existing aliases.
 
 3. **Role translation.** ADP job titles (`Delivery Associate`, `Dispatcher`, `DSP Owner`) don't match our role values (`walker`, `dispatch`, `management`). A `ADP_ROLE_MAP` lookup table translates them. Unrecognized titles fall back to `walker` and are highlighted in the preview step for manual correction — they are never silently dropped.
+
+---
+
+## 2026-05-27 — The Sort Pipeline: Orchestrator Design and Zone Persistence
+
+### Why the sort pipeline is split into four pure functions
+
+The sort pipeline (`cluster_packages → assign_clusters → tier1_verify → persist_zones`) is built as four separate pure functions instead of one monolithic function. Each stage:
+
+- Takes explicit inputs, produces explicit outputs
+- Has no side effects except `persist_zones` (which writes to DB)
+- Can be tested independently with mock data
+- Can be replaced without touching the others
+
+This is especially important for `tier1_verify` — it runs a geometry check and produces a `VerificationResult`. The caller (the orchestrator) decides what to do with the result. Embedding that decision inside a single function would make it impossible to support the `force=True` override without deeply entangling business logic with geometry code.
+
+### Why enriched packages live in Redis, not re-derived at sort time
+
+Address enrichment (GeoClient API calls) takes 30–120 seconds for a full manifest. The sort pipeline needs to run fast — dispatch is waiting. The solution is to pre-compute enrichment during manifest upload (Celery task, async) and cache the result in Redis.
+
+When the sort runs, it reads the cached `manifest:{company_id}:{date}` key in milliseconds. The sort itself is pure in-memory computation: DBSCAN, centroid math, polygon containment checks. No external API calls.
+
+**Consequence:** sort requires enrichment to have completed first. If the Redis key is missing or expired (24h TTL), `run_sort` raises `SortError("no_manifest")` with a clear message. The frontend shows "enrich the manifest first."
+
+### Why tier-1 failure blocks zone persistence by default
+
+If any totes are flagged as misaligned, zones are not written. The `force=True` parameter lets dispatch explicitly override after reviewing.
+
+This might seem overly strict. The reason: if a misaligned tote is physically corrected (packages moved to the right truck), the package distribution changes, and the zone polygons may shift. Writing zones before the correction means routing runs on an incorrect zone layout. The 409 Conflict + review flow ensures dispatch has seen the flags before zones are committed.
+
+Forcing dispatch to actively choose `force=True` is a deliberate friction point. It creates an audit trail ("dispatch saw these flags and proceeded anyway") instead of silent acceptance.
+
+### Why zone_date is a required column, not inferred from created_at
+
+`TruckZone` originally had no date column. Re-sorts for the same day would stack up — you could not distinguish "today's zones" from "yesterday's zones" without looking at `created_at`, which is unreliable if sorts run near midnight or the server clock drifts.
+
+`zone_date DATE NOT NULL` makes the intent explicit. `persist_zones()` receives it as a parameter from the sort orchestrator. `GET /sort/{date}` uses it directly. Re-sorts are idempotent per date: the old zones are soft-deactivated, new ones are written.
+
+### Why old zones are deactivated, not deleted, on re-sort
+
+Deleting old zones destroys the audit trail. If a sort runs at 7am with flagged totes and is forced through, then re-runs at 8am after corrections, dispatch may want to see what changed — which totes moved, which zones shifted. Soft deactivation (`is_active = False`) preserves the history without serving stale zones to the routing algorithm.
+
+---
+
+## 2026-05-27 — Location Profile System: Crowdsourcing, Verification, and the Global Library
+
+### Why a two-tier system instead of one table with nullable company_id
+
+The simplest design would be one `location_profiles` table with `company_id NULL` for global records. We rejected this for a fundamental reason: the codebase has a hardened invariant that every company-scoped query filters by `company_id`. A nullable `company_id` breaks that invariant — queries that filter `company_id = X` silently miss the global records, and queries that try to include global records have to write special-case logic.
+
+Two tables keeps isolation intact: `location_profiles` (always has `company_id`), `location_profile_library` (never has `company_id`). The routing algorithm queries both explicitly and merges the results in the orchestrator. No invariant violations, no special-case query logic.
+
+### The locking flow: crowdsourced consensus, not authority
+
+A single captain cannot lock a profile. Building type status advances by accumulating agreements from multiple people: `pending → verified → locked`. The threshold (default 3 agreements) is company-tunable.
+
+This models operational reality. A captain bulk-entering building types before day 1 might be wrong — they haven't made the deliveries yet. A walker who delivers to the building five times a week and has verified the type three times is more reliable. The crowdsourced threshold captures confidence level rather than relying on role hierarchy.
+
+### Why editing an operational note un-verifies it
+
+The `note_verified` flag means "a captain has reviewed this note and attests it's accurate." If the note text changes, that attestation is no longer valid — the captain hasn't reviewed the new text. Un-verifying on edit prevents a verified flag from surviving changes it was never applied to. Re-verification is a quick action (one POST call) that restores the audit trail after review.
+
+### The nomination pipeline: why it's automatic on lock
+
+Once a profile is locked, it's automatically set to `nomination_status = "nominated"`. Super admins see it in the nominations queue.
+
+Why not require a captain to manually nominate? Because it would never happen. Captains are focused on daily operations. A profile that reaches locked status has already cleared the trust bar — nomination is a bureaucratic step, not a judgment call. Automating it ensures no valid profile sits idle in a company's database when it could be helping other DSPs entering the same delivery area.
+
+### How company records shadow the global library
+
+The routing algorithm (in `run_sort.py → _get_location_profiles()`) loads global library records first, then company records. When `assign_clusters` builds its `profiles_by_block` lookup, company records overwrite library records for the same `block_key`.
+
+This is the shadow: if the company has a locked record for `W_36_St_410s_odd` saying `biz_security` (high_touch), but the library says `elevator` (standard), the company's experience wins. Their field data is more recent and specific to their operation.
+
+If no company record exists, the library provides cold-start data. If neither exists, the routing algorithm falls back to raw package count and flags low confidence to dispatch.
+
+---
+
+## 2026-05-28 — NOT NULL migrations and constructor call audits
+
+### The gap migrations can't close
+
+When you add a NOT NULL column to a model via Alembic, the migration does three things:
+
+1. Adds the column as nullable
+2. Backfills existing rows with a default value
+3. Alters the column to NOT NULL
+
+This catches the DB layer. It does not catch Python-side omissions. Every
+`db.add(ModelName(...))` call that doesn't pass the new field will compile and
+run fine — until it hits the database at runtime and raises an IntegrityError.
+
+The error is non-obvious in local dev because FastAPI drops CORS headers on
+unhandled 500s. The browser reports a CORS error before you can see the real
+IntegrityError in the backend logs.
+
+### The audit pattern
+
+After adding a NOT NULL column, run:
+
+```python
+import re
+text = open('backend/app/routers/your_router.py').read()
+blocks = list(re.finditer(r'db\.add\(YourModel\(', text))
+for m in blocks:
+    chunk = text[m.start():m.start()+400]
+    if 'new_column' not in chunk.split('))')[0]:
+        line = text[:m.start()].count('\n') + 1
+        print(f'MISSING at line ~{line}')
+```
+
+Or grep across all routers:
+
+```bash
+grep -rn "db.add(ModelName(" backend/app/routers/ | grep -v "new_column"
+```
+
+Note: the grep only catches single-line matches. Use the Python regex approach
+for multi-line constructor calls where `new_column` appears on a later line.
+
+### The publish gate pattern
+
+A boolean action gate should be derived from whether the action itself succeeded,
+not from downstream side effects. In `DispatchDashboard`, "Post Final Crews" was
+gated on `confirmations.length > 0` — but confirmations are populated by a
+page-load fetch that returns data from any prior date's publish. The gate was
+effectively measuring "did a publish ever succeed for this date" rather than
+"did the current publish succeed".
+
+The fix is a dedicated `isPublished` state flag set only inside the `try` block
+of the publish call. Side effects (populating confirmations, starting polling)
+follow on success. The gate never fires on failure.
+
+### The protocol_reminder pattern: derived, not stored
+
+The `BUILDING_TYPE_PROTOCOL` dict in `schemas/location_profile.py` maps `building_type → reminder string`. The reminder is appended to API responses by `from_orm_with_protocol()` at serialization time.
+
+**Why not store it?** Protocol reminders are fixed operational guidance. "Photo at front door" does not change based on company data. Storing it would require a migration every time the text is updated, and creates a risk that stored text diverges from the canonical definition. Deriving at serialization always serves the current guidance.
+
+**Why in the schema file, not the model?** Models represent database rows. Protocol reminders are not database concepts — they're presentation layer guidance. Putting the lookup table and derivation logic in the schema file keeps the model clean and the schema self-contained for response building.
+
+---
+
+### Black-box import pattern for proprietary code
+
+When part of a codebase is gitignored for competitive reasons, the public repo
+should expose as little information as possible about what's hidden. The naive
+approach — individual `try/except ImportError` blocks in `main.py` — leaks all
+proprietary module names into a public file.
+
+The black-box pattern solves this with a single entry point in the private repo:
+
+```python
+# main.py (public) — reveals nothing about what's inside
+try:
+    from asheflow_private.register import register_proprietary_routers as _register
+except ImportError:
+    _register = None
+
+if _register:
+    _register(router, dependencies)
+```
+
+```python
+# asheflow_private/register.py (private) — module names stay confidential
+def register_proprietary_routers(router, configured):
+    from app.routers import dispatch, training, field_ops, walker_routes
+    router.include_router(dispatch.router, dependencies=configured)
+    ...
+```
+
+If the private package isn't present the backend starts cleanly — proprietary
+routes are simply absent. Adding new proprietary routers only requires editing
+`register.py`; `main.py` never changes.
+
+---
+
+### Why FastAPI 500s appear as CORS errors
+
+FastAPI applies CORS middleware to responses it controls. When an unhandled
+exception bubbles past all middleware (a 500 that isn't caught by the route
+handler), FastAPI emits the 500 response before the CORS middleware gets a
+chance to add `Access-Control-Allow-Origin` headers.
+
+The browser receives a response with no CORS headers and reports a CORS error
+— even though the real problem is a 500. The actual error is in the backend
+logs, not in the browser console.
+
+**Consequence:** A `company_id=None` IntegrityError in a route handler will
+show as "CORS error" in the browser. Always check backend logs first before
+investigating CORS configuration.
+
+**Prevention:** Handle exceptions in route handlers with `try/except` and
+return a proper `HTTPException`. Never let IntegrityErrors, ValueError, or
+similar reach the unhandled exception boundary.
+
+---
+
+### Reverse proxy and TLS on EC2 (Caddy pattern)
+
+A FastAPI backend running in Docker on an EC2 listens on an internal port
+(8000). To be reachable via HTTPS, a TLS-terminating reverse proxy must sit
+in front of it and listen on ports 80 and 443.
+
+Caddy is the simplest option for this setup:
+- Auto-provisions and auto-renews Let's Encrypt certificates
+- HTTP-01 ACME challenge requires port 80 to be open and DNS to point to the server
+- Two-line `Caddyfile`: domain + `reverse_proxy backend:8000`
+- Certificate state is persisted in a named Docker volume — loss of the volume
+  means re-provisioning, which works but hits Let's Encrypt rate limits if done
+  repeatedly
+
+The backend port should **not** be exposed externally (remove it from the base
+`docker-compose.yml`). Only Caddy should accept inbound traffic on 443. Re-expose
+the backend port in `docker-compose.override.yml` for local dev only.
+
+An `API_DOMAIN` environment variable makes the same `Caddyfile` work for both
+staging and prod — only the value in `.env` differs.
+
+---
+
+### Cognito OAuth federation: how it connects to existing accounts
+
+Cognito supports identity federation (Discord, Google, etc.) alongside
+username/password auth on the same user pool. For AsheFlow, federation is
+a convenience feature — it doesn't create new accounts, it lets existing
+employees sign in with a social identity whose email matches their record.
+
+**How the linking works:**
+1. Employee signs in via Discord/Google through the Cognito hosted UI
+2. Cognito calls the identity provider, receives an email claim
+3. Cognito creates or finds a user pool entry for that email
+4. The backend receives an ID token; `_resolve_employee_from_cognito` looks up
+   `Employee.email == token.email`
+5. On first match, `cognito_sub` is stamped on the employee row for future
+   fast-path lookups
+
+**What Cognito requires for federation to work:**
+- Identity providers configured on the user pool (Discord as OIDC, Google as Google)
+- Hosted UI domain provisioned (`<prefix>.auth.<region>.amazoncognito.com`)
+- App client with `AllowedOAuthFlowsUserPoolClient: true`, `code` flow,
+  `openid email profile` scopes, and callback URLs registered for each environment
+- `VITE_AWS_DOMAIN` must be set to the hosted UI domain so Amplify knows where
+  to redirect
+
+**Why Amplify's `oauth` config causes 400 on page load without the above:**
+Amplify checks for an authorization code in the URL on every page load (to
+handle the redirect back from the identity provider). This check hits the
+Cognito token endpoint. If the app client doesn't have OAuth flows enabled,
+Cognito returns 400 on that check — every page load, whether or not the user
+clicked a social login button.
+
+---
+
+## 2026-05-29 — Proxy headers, schema drift, and workflow state machines
+
+### Why mixed-content errors come from the server, not the bundle
+
+When a React SPA sends API requests to an `https://` URL, "mixed content" means
+the browser received an `http://` URL somewhere in the response and refused to
+follow it. The instinct is to check the frontend bundle — is the `VITE_API_URL`
+set correctly?
+
+But Vite hashes bundle content. If the hash is unchanged across builds, the
+content is unchanged, which means the secret was already correct. The error is
+coming from somewhere else.
+
+The real source: FastAPI (via Starlette) uses the **request scheme** when
+building redirect URLs. When Caddy proxies over plain HTTP inside Docker, FastAPI
+sees `scheme=http`. Any `307 Temporary Redirect` — including the trailing-slash
+redirect from `GET /trucks` to `GET /trucks/` — produces a
+`Location: http://...` header. The browser blocks it as mixed content.
+
+**Fix:** `ProxyHeadersMiddleware` from Uvicorn reads the `X-Forwarded-Proto`
+header Caddy adds and patches `request.scope["scheme"]` before any handler runs.
+
+```python
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+```
+
+`trusted_hosts="*"` is safe because the backend port is not publicly accessible —
+only the reverse proxy can reach it. If the backend were exposed directly to the
+internet, this would allow header spoofing and you'd need to list trusted IPs.
+
+**Debugging rule:** If you see mixed-content errors against an `https://` API,
+check the Network tab for 3xx responses with `http://` Location headers before
+touching the frontend or CI configuration.
+
+---
+
+### Why Vite bundle hashes don't change when secrets are "wrong"
+
+A Vite production build hashes the content of each bundle file and embeds that
+hash in the filename (`index-Cra3Qo3t.js`). The same content always produces the
+same hash.
+
+If you change a `VITE_*` environment variable but the hash doesn't change, the
+secret value was already the same as before the change. This means either:
+1. The secret was already correct and something else is causing the error, or
+2. The variable isn't being read at build time (wrong name, missing `VITE_` prefix)
+
+In our case: `VITE_API_URL` was already `https://` from a prior CI run. Multiple
+re-deploys produced the same hash. The bundle was never the problem.
+
+---
+
+### Out-of-band schema drift: the migration gap that direct ALTER creates
+
+Alembic migrations record every schema change in version-controlled files. When
+staging runs `alembic upgrade head`, it applies every migration in order and ends
+up with exactly the schema described by the migration chain.
+
+If you run `ALTER TABLE` directly on the dev database without writing a migration,
+staging (and any fresh database) will be missing that change. Everything works on
+dev because the change is already there. Staging fails with a constraint violation
+or missing column, and the error message points at the application code — not at
+the schema drift.
+
+**Signs of schema drift:**
+- `CheckViolation` errors that can't be reproduced locally
+- `IntegrityError` for a constraint that "doesn't exist in the model"
+- `column does not exist` errors on a column that was added by `ALTER TABLE` on dev
+
+**Protocol:** Never run `ALTER TABLE` on a dev database without immediately writing
+an Alembic migration. Even for "temporary" changes or "I'll do it properly later"
+fixes.
+
+**Note on CheckViolation → CORS error:** A `CheckViolation` from SQLAlchemy
+reaches FastAPI as an unhandled exception, which produces a 500. FastAPI strips
+CORS headers from 500 responses. The browser reports it as a CORS error. Always
+check backend logs when you see CORS failures — they may be masking database errors.
+
+---
+
+### How `aws` CLI is unavailable in SSM RunShellScript
+
+AWS Systems Manager's `Run Command` (SSM RunShellScript) executes scripts inside
+the ssm-agent process on the EC2 instance. The agent runs with a minimal
+environment — it does not source the user's shell profile, so the `aws` CLI is
+not in PATH even if it's installed and available to the `ec2-user` interactively.
+
+**Workaround:** Use `curl` with a presigned S3 URL instead of `aws s3 cp`.
+Generate the presigned URL locally:
+
+```bash
+aws s3 presign s3://bucket/key --expires-in 3600
+```
+
+Then pass the URL to `curl` in the SSM command:
+
+```bash
+curl -s "https://bucket.s3.region.amazonaws.com/key?X-Amz-..." -o /tmp/file
+```
+
+The same issue applies to any CLI tool not in the default PATH — use absolute
+paths (`/usr/local/bin/aws`) or use HTTP-based alternatives.
+
+---
+
+### Workflow state machines: deriving step from durable DB state
+
+Multi-step workflows (Run → Publish → Finalize) need answers to two questions:
+1. What step is the workflow on right now?
+2. Which operations are valid from this step?
+
+A common frontend mistake is tracking this in React state (`const [isPublished, setIsPublished] = useState(false)`). This is fragile:
+- State is lost on page reload
+- Two browser tabs can drift out of sync
+- State derived from a count of related rows (e.g., "published if confirmations > 0")
+  can be wrong if those rows exist for other reasons
+
+**The right approach:** persist the workflow step in the database and derive
+frontend state from what the backend returns.
+
+For the dispatch workflow, `TruckAssignment.status` (`planned` / `active` /
+`completed`) was the right place — it already had the correct semantics in its
+check constraint but was never updated. Now:
+- `planned` → dispatch ran, not yet published
+- `active` → published to Discord, confirmation window open
+- `completed` → final crews posted, workflow done
+
+The GET endpoint derives a single `workflow_status` field from the aggregate of
+truck statuses. The frontend reads this field and computes a `workflowStep`
+constant — not a state variable, because it doesn't need to change independently
+of the data it's derived from.
+
+```typescript
+const workflowStep: WorkflowStep = !dispatchData
+  ? 'none'
+  : dispatchData.workflow_status === 'finalized' ? 'finalized'
+  : dispatchData.workflow_status === 'published' ? 'published'
+  : 'dispatched';
+```
+
+Each button is then gated on exactly one step:
+```typescript
+disabled={isLoading || workflowStep !== 'none'}        // Run Dispatch
+disabled={isPublishing || workflowStep !== 'dispatched'} // Publish
+disabled={isFinalizing || workflowStep !== 'published'}  // Post Final Crews
+```
+
+The backend gates mirror this: each endpoint checks the current status set and
+rejects with 409 if the operation is out of sequence or already completed.
+
+---
+
+### The `allow_*` dep type trap: RoleChecker returns dict, not Employee
+
+FastAPI dependencies have a return type. `RoleChecker(["management", "admin"])` is a
+callable that validates the Cognito JWT and returns the decoded token — a plain `dict`.
+It does **not** return an `Employee`.
+
+The trap: a function parameter typed as `caller: Employee = Depends(allow_management)`
+compiles fine and passes type checking because FastAPI doesn't enforce return types on
+dependencies at startup — it only resolves them at request time. The endpoint will
+appear to work until it reaches a line that accesses any attribute like `caller.company_id`
+or `caller.id`, at which point Python raises `AttributeError: 'dict' object has no
+attribute 'company_id'`.
+
+This is a **silent runtime bomb**: the error only fires when a management-role user
+hits that specific endpoint. Any test that doesn't exercise the attribute access (e.g., a
+test that stubs out the dep) will pass cleanly.
+
+**Correct pattern when you need both role enforcement and an Employee:**
+```python
+def my_endpoint(
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_management),        # role gate — returns dict, discard it
+    caller: Employee = Depends(get_caller_employee),  # Employee row with company_id
+):
+```
+
+The `_: dict` convention makes the intent explicit: we want the side effect (reject if
+wrong role) but don't need the return value. `get_caller_employee` runs a second dep in
+parallel and provides the typed Employee object.
+
+**When `get_caller_employee` alone is sufficient:** if the endpoint only needs
+`driver`/`trainer`/`management` or higher and you just want to restrict by role, you can
+pass the roles to `get_caller_employee` via a role-aware dep variant, or keep the role
+checker separate. But never assign the `RoleChecker` result to a typed `Employee` parameter.
+
+---
+
+### The `model_dump()` company_id gap in INSERT operations
+
+Pydantic request schemas intentionally exclude `company_id` — it must come from the
+authenticated caller, never from client input. This is correct security design: a client
+that can inject `company_id` into a request body could write rows belonging to other tenants.
+
+The gap arises when the INSERT is written as:
+```python
+row = SomeModel(**payload.model_dump())
+db.add(row)
+```
+
+If `SomeModel` has `company_id NOT NULL` but the payload schema excludes it, SQLAlchemy
+sets the column to `None` and the INSERT raises an `IntegrityError` at the database level.
+Locally this surfaces as a 500. In a browser, FastAPI drops CORS headers on unhandled 500s,
+so it can look like a CORS error — check backend logs first.
+
+**The fix:** append `company_id` as a keyword argument after the spread:
+```python
+row = SomeModel(**payload.model_dump(), company_id=caller.company_id)
+db.add(row)
+```
+
+Python's `**` unpacking allows additional keyword arguments after a dict spread, provided
+they don't collide with keys already in the dict (they won't, since `company_id` is
+excluded from the schema by design).
+
+**Scanner script (from CLAUDE.md):** After writing any new INSERT, run the scanner to
+catch any `db.add(Model(` calls that don't include `company_id` in the block:
+```python
+import re
+text = open('backend/app/routers/your_file.py').read()
+for m in re.finditer(r'db\.add\((\w+)\(', text):
+    chunk = text[m.start():m.start()+600]
+    block = chunk[:chunk.find('))')] if chunk.find('))') != -1 else chunk
+    if 'company_id' not in block:
+        print(f'line {text[:m.start()].count(chr(10))+1}: {m.group(1)} missing company_id')
+```
+
+---
+
+### Latent NameError: private helpers that reference outer-scope variables
+
+A private helper function (not a FastAPI endpoint) is just a regular Python function. It
+doesn't have access to the caller's request context, dependencies, or any variable from
+the endpoint that calls it — only what's in its parameter list.
+
+The latent bug pattern:
+```python
+# The endpoint has 'caller' in scope
+def record_confirmation(caller: Employee = Depends(get_caller_employee), ...):
+    reassignment = _reassign_trainee_on_trainer_decline(db, trainer_id, date)
+
+# The helper was written as if it could access 'caller' — it cannot
+def _reassign_trainee_on_trainer_decline(db, trainer_id, dispatch_date):
+    n = Notification(
+        company_id=caller.company_id,   # NameError: 'caller' is not defined
+        ...
+    )
+```
+
+Python does **not** raise this at import time or at the time the helper is defined. It only
+raises `NameError` when the line is actually executed — when `record_confirmation` calls the
+helper and the helper reaches that line. If the code path is exercised rarely (e.g., the
+decline flow had never been triggered since the function was written), the bug sits dormant
+indefinitely.
+
+**The fix:** pass `company_id` explicitly as a parameter:
+```python
+def record_confirmation(caller: Employee = Depends(get_caller_employee), ...):
+    reassignment = _reassign_trainee_on_trainer_decline(db, trainer_id, date, caller.company_id)
+
+def _reassign_trainee_on_trainer_decline(db, trainer_id, dispatch_date, company_id):
+    n = Notification(company_id=company_id, ...)
+```
+
+**Discipline:** every private helper that needs `company_id` must receive it as an
+explicit parameter — never count on it being available from an enclosing scope. Python
+closures would only work if the helper were defined *inside* the endpoint function (a nested
+function), which is not how these routers are structured.
+
+---
+
+### Two-pipeline sort sequencing: truck sort vs. walker sort
+
+The sort pipeline runs in two distinct phases, separated in time and in HTTP surface:
+
+**Phase 1 — Truck sort** (morning, at the warehouse):
+```
+POST /sort/upload         → parse manifest, async GeoClient enrichment
+GET  /sort/manifest/{date}/status  → poll until "ready"
+POST /sort/run            → DBSCAN cluster → assign clusters to trucks
+                            → tier-1 tote verify → persist TruckZone rows
+```
+Output: `TruckZone` rows, one per cluster. Each stores `package_tbas` (list of TBA strings in that cluster) and `zone_date`.
+
+**Phase 2 — Walker sort** (later, after trucks arrive at the station):
+```
+POST /walker-routes/commit → load packages from Redis via TruckZone.package_tbas
+                             → run route_sort → persist WalkerRoute + WalkerTrip rows
+```
+The trainer distributes that truck's packages among the walkers boarding it. No package addresses come from the HTTP request — they come from the Redis manifest filtered by the TBAs stored on the TruckZone.
+
+**Why this split?** Trucks go out first. Walker assignment happens later when the trainer physically sees which walkers are boarding which truck. Trying to do both at once would require blocking the entire dispatch flow until all walkers are physically present at each truck.
+
+**The data handoff:** `TruckZone.package_tbas` is the link between the two phases. It lets the walker sort know exactly which packages belong to this truck without re-running the clustering or re-supplying data from the client.
+
+---
+
+### Address ephemerality — why addresses never hit the DB or response bodies
+
+ADR-096 established that package addresses are ephemeral: they are used for computation (GeoClient enrichment, DBSCAN clustering, block_key derivation, route sort) but never stored in PostgreSQL and never returned in API responses.
+
+**Why?** Delivery addresses are PII. Storing them in the operational DB creates compliance obligations, increases breach impact, and requires retention policy management. Keeping them in Redis (short TTL, easy to expire) limits the exposure window.
+
+**In practice this means:**
+- `PackageInput.address` is used by the route sort algorithm, never written to any DB table
+- `WalkerRoute`, `WalkerTrip`, `TruckZone` contain TBA numbers and bag IDs — not addresses
+- `CommitSortResponse` contains TBA numbers — not addresses
+- The `dropped_tbas` list in `CommitSortResponse` is identifiers, not addresses
+
+**The sentinel for reviewers:** if you see `address` being added to a `db.add(...)` call in the sort or walker route routers, it is a bug. Addresses must only travel through in-memory objects during computation.
+
+---
+
+### Manifest upload data flow — the enriching sentinel pattern
+
+The manifest upload flow has a subtle ordering requirement:
+
+```
+1. Parse file synchronously (validate extension, size, column structure)
+2. SET manifest_enriching:{company_id}:{date} key (5-min TTL)   ← MUST come before step 3
+3. Dispatch Celery task
+4. Return 202
+```
+
+**Why set the sentinel before dispatching?** The status endpoint checks Redis keys in this order:
+1. `manifest:{company_id}:{date}` → `"ready"`
+2. `manifest_enriching:{company_id}:{date}` → `"enriching"`
+3. `manifest_failed:{company_id}:{date}` → `"failed"`
+4. (nothing) → `"not_found"`
+
+Dispatch dispatches the Celery task (a Redis/queue write), then the task starts asynchronously. There is a gap between the dispatch call returning and the task actually starting. If the frontend polls the status endpoint in that gap and the sentinel is not yet set, it sees `"not_found"` — which the user interprets as "nothing was uploaded".
+
+Setting the sentinel first eliminates this window entirely. The 5-minute TTL is long enough to survive task startup in any realistic environment; the task clears the sentinel implicitly by writing the manifest key.
+
+**Failure signal:** if the Celery task crashes, it writes `manifest_failed:{company_id}:{date}` (24h TTL) so the status endpoint can return `"failed"` instead of silently falling through to `"not_found"`. On success, the task deletes any stale failed key so a re-upload after a failure starts clean.
+
+---
+
+### File upload size limiting — read once, write from buffer
+
+When an uploaded file needs to be size-checked before writing to disk:
+
+```python
+# Read up to limit+1 bytes — if we get limit+1, the file is over the limit
+contents = file.file.read(MAX_UPLOAD_BYTES + 1)
+if len(contents) > MAX_UPLOAD_BYTES:
+    raise HTTPException(status_code=413, detail="File too large")
+
+# Write the buffer (not the stream — the stream is now exhausted)
+with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+    tmp.write(contents)
+```
+
+The stream from `UploadFile.file` is a standard file-like object. After calling `read()`, the stream position is at the end — there is nothing left to read. If you then try to use `shutil.copyfileobj(file.file, tmp)`, it copies zero bytes.
+
+The buffer in `contents` is what you have. Write from that.
+
+---
+
+### Concurrent write safety — partial unique indexes vs. application locks
+
+**The problem:** two concurrent `POST /sort/run` requests for the same company+date will both:
+1. Read existing active zones and mark them `is_active = False`
+2. Insert new zone rows
+
+Since both read the same "no active zones" state, both insert, and both try to commit — leaving double the active zone rows.
+
+**DB-level defense:** a partial unique index catches the second insert as an `IntegrityError`:
+```sql
+CREATE UNIQUE INDEX uq_truck_zones_active_label
+ON truck_zones (company_id, zone_label, zone_date)
+WHERE is_active = true
+```
+Zone labels are unique per run (truck name + overflow/sequence suffix), so a duplicate run generating the same labels is caught. The second transaction gets an `IntegrityError` rather than silently committing.
+
+**Why zone_label and not truck_id?** A truck can have multiple active zones (overflow clusters). A unique index on `(company_id, truck_id, zone_date)` would block that. Labels are unique per run across all clusters; the label-based constraint catches duplicate runs without constraining legitimate overflow.
+
+**Application-level lock (future improvement):** a Redis SETNX lock would give a better user experience — a 409 "sort already in progress" rather than a 500 IntegrityError. The DB index is the safety net; an app-level lock would be the UX layer on top. Do not rely solely on the UX (disabling the button) because the button state is not a concurrency guarantee.
+
+---
+
+### Surfacing operational metadata to end users — the `dropped_tbas` pattern
+
+When a batch operation partially fails, the right response is:
+1. Proceed with the successful subset
+2. Return both the results AND the identifiers of what was excluded
+
+For walker sort, packages that failed address enrichment are dropped silently from the route distribution. A count (`packages_dropped: int`) tells the trainer something went wrong. The full list (`dropped_tbas: list[str]`) tells them *exactly* which packages to handle manually.
+
+The principle: trainers work with physical packages labeled with TBA numbers. Abstract counts are not actionable; specific identifiers are. Design responses to give operators the level of specificity they need to take action without looking something up.
+
+This pattern generalizes: any endpoint that processes a batch and may partially succeed should return both the successes and the identifiers of failures. `packages_dropped: int` alone is a bad design for this domain.
+
+---
+
+## 2026-05-31 — Anchor points, field staff FieldOps, and deploy failures
+
+### Idempotent event logging with a unique constraint
+
+When a server-side check runs on every poll (e.g. "is this driver running late?"),
+the naive approach writes a new row every time the condition is true. The correct
+approach is to write exactly one row per event, regardless of how many times the
+check runs.
+
+Pattern: add a `UniqueConstraint` on the business key of the event — in this case
+`anchor_point_id` on `anchor_point_late_flags`. On the first late check, the INSERT
+succeeds. On every subsequent check, the INSERT fails silently (the application
+catches the IntegrityError or uses `INSERT ... ON CONFLICT DO NOTHING`). The flag
+table becomes an accurate audit log with no duplicates.
+
+The same pattern applies to any "flag once" operation: first login bonuses, daily
+quota checks, one-per-day notifications.
+
+### Event-driven polling: stop when nothing is changing
+
+A fixed-interval poll that runs regardless of state wastes resources and adds
+unnecessary DB load. The better pattern is conditional polling:
+
+```
+shouldPoll(state) → bool
+```
+
+Define the conditions under which the data *could* change, and only poll then.
+For `TruckAPCard`:
+- Preliminary AP: poll — ETA+15 late check may fire, driver may arrive
+- Arrived + no departure pending: stop — nothing will change until driver sets a departure
+- Departed: stop — the next AP (preliminary) will arrive via notification
+
+When a notification signals a state change (`anchor_point_*`), restart the poll
+immediately instead of waiting for the next interval. This gives near-realtime
+updates on events while near-zero load during idle periods.
+
+### Untracked files are invisible to git — and to CI
+
+A file that exists locally but was never `git add`ed is not in the repo. Any
+module that imports it will crash with `ModuleNotFoundError` on every other
+machine and on every server.
+
+The symptom in FastAPI is always the same: the backend fails to start, every
+request returns 500, and the browser reports a CORS error (because FastAPI strips
+CORS headers on unhandled startup errors — the 500 is the real error, not CORS).
+
+**Prevention checklist before any backend push:**
+```bash
+git status backend/app/
+```
+Any untracked `.py` file in `routers/` or `services/` that is imported by committed
+code is a guaranteed crash. Stage it or the deploy will break.
+
+### Alembic `head` vs `heads` — multiple migration tips
+
+`alembic upgrade head` (singular) fails when the migration graph has more than one
+leaf node (two branches that haven't been merged). This happens when two features
+add migrations in parallel and the merge migration hasn't been created yet, or when
+a deploy was aborted before the merge migration was committed.
+
+`alembic upgrade heads` (plural) upgrades all current tips simultaneously and is
+safe regardless of how many branch tips exist. Always use `heads` in CI and in
+manual commands.
+
+If staging ends up with diverged heads after a bad deploy, run:
+```bash
+docker compose exec -T backend alembic current   # shows where the DB is
+docker compose exec -T backend alembic upgrade heads  # advances all tips
+```
+
+### How a crash-looping backend leaves migrations incomplete
+
+CI runs two steps in sequence: (1) pull new code + restart containers, (2) run
+`alembic upgrade heads`. If step 1 produces a backend that crashes on startup,
+step 2 may still succeed (it runs `alembic` directly in the container, not via the
+running server). But if the container itself fails to start at all, the `exec`
+command has nothing to attach to and migrations are skipped silently.
+
+Result: new code is deployed (including ORM models with new columns), but the DB
+schema hasn't been updated. Every request that touches the new column hits
+`UndefinedColumn` → 500 → CORS error in the browser.
+
+After fixing any startup crash and redeploying, always verify migrations ran:
+```bash
+docker compose exec -T backend alembic current
+```
+If it shows a revision behind what you expect, run `alembic upgrade heads` manually.
+
+### Notification lifecycle: keep the inbox consistent with assignment state
+
+A `dispatch_assignment` notification tells an employee "you are assigned to truck X."
+If that assignment is later removed, swapped, or cleared, the notification must be
+updated or deleted — otherwise the employee's inbox contradicts reality.
+
+Rules implemented:
+- **Remove:** delete the `DispatchConfirmation` and the `Notification`
+- **Clear all:** delete all `Notification` rows for the date alongside all confirmations
+- **Swap truck:** update the notification message with the new truck name, reset `is_read=False`
+
+The inbox is a view of current state, not a history log. History belongs in
+`AuditLog`. The notification is only useful while the information is actionable.
+
+### Available pool semantics: "who can still be placed"
+
+`GET /schedule/available/{date}` answers the question "who can dispatch assign
+today?" The answer is not simply "who is active and not on leave." It must exclude:
+
+1. Already assigned (has an `AssignmentMember` row for the date)
+2. Declined (has a `DispatchConfirmation` with `status='declined'`)
+3. On recurring off-day
+4. On approved time-off
+
+Each exclusion uses an `EXISTS` subquery so the filter composes cleanly and
+evaluates in a single DB round-trip. Never filter in Python after fetching — push
+all exclusion logic into the query.
+
+---
+
+## 2026-06-01 — Pagination envelopes: why shape changes need rollout care
+
+### The problem with bare arrays
+
+Early endpoints returned bare arrays: `GET /field-ops/walker-leaderboard` returned `[{...}, {...}]`. This makes it impossible for the client to know the total count without fetching everything, and makes adding a second piece of metadata (total, cursor, page info) a breaking change.
+
+### The envelope pattern
+
+The new shape is:
+```json
+{ "total": 47, "items": [{...}, {...}] }
+```
+
+`total` is always the unfiltered count (before limit/offset). `items` is the page. This lets the frontend display "Showing 20 of 47" and build paginators without a separate count query.
+
+### Rollout safety: the `?? r.data` fallback
+
+When you change a response shape, every consumer must be updated atomically or you need a fallback. Because some consumers call the old endpoint format and some call the new one depending on which code was deployed last:
+
+```js
+setWalkers(r.data.items ?? r.data)
+```
+
+`r.data.items` is undefined on a bare array (since arrays don't have an `.items` property), so `?? r.data` gives the old array. Once all deployments are on the new shape, the fallback is harmless.
+
+**Never break a consumer silently.** A shape change that turns a valid response into `undefined` will render a blank list with no error — worse than a thrown error.
+
+### DB-level vs Python-level pagination
+
+Prefer DB-level pagination (`.offset(offset).limit(limit)` in the query) over Python-level slicing (`result[offset:offset+limit]` after `.all()`). The DB variant avoids loading all rows into memory. Python slicing is acceptable only when the result set is already small and bounded (e.g. a per-employee list capped at 50 rows).
+
+---
+
+## 2026-06-01 — AbortController pattern for race-condition-safe data loading
+
+### The problem
+
+A component that fires a network request on mount (or on a dependency change) can have multiple in-flight requests when the user navigates away and back rapidly. If request B completes before request A, request A's stale data overwrites B's fresh data. The user sees yesterday's shift state while actually viewing today's.
+
+### The pattern
+
+```tsx
+const loadAbortRef = useRef<AbortController | null>(null);
+
+const loadShift = useCallback(async () => {
+  loadAbortRef.current?.abort();             // cancel any in-flight request
+  const ctrl = new AbortController();
+  loadAbortRef.current = ctrl;
+
+  try {
+    const [r1, r2] = await Promise.allSettled([
+      apiClient.get('/field-ops/shift', { signal: ctrl.signal }),
+      apiClient.get('/field-ops/crew',  { signal: ctrl.signal }),
+    ]);
+    if (ctrl.signal.aborted) return;         // component unmounted mid-flight
+    // process results...
+  } finally {
+    setLoading(false);
+  }
+}, []);
+
+useEffect(() => {
+  loadShift();
+  return () => { loadAbortRef.current?.abort(); };  // cleanup on unmount
+}, [loadShift]);
+```
+
+### Key points
+
+- `abort()` on the previous controller before creating a new one — not after. This ensures there is never a window where both are active.
+- The `if (ctrl.signal.aborted) return` guard after `Promise.allSettled` is necessary because `allSettled` does not throw when the signal is aborted — it resolves with rejected entries. Without the guard, you set state after unmount.
+- Pass the **same** `signal` to every parallel request. If you create separate controllers per request, aborting one does not abort the others.
+- Axios supports `{ signal: controller.signal }` natively — no adapter needed.
+
+### When not to use it
+
+For screens that are not in a navigator stack (tab-level screens always mounted), unmount-based race conditions don't apply. Use `RefreshControl` instead. AbortController is primarily valuable for screens that mount/unmount on navigation (stack screens) and for screens with expensive parallel fan-out loads like `FieldOpsScreen`.
+
+---
+
+## 2026-06-01 — Pull-to-refresh in React Native
+
+### The pattern
+
+```tsx
+const [refreshing, setRefreshing] = useState(false);
+
+const load = useCallback(async (opts?: { refresh?: boolean }) => {
+  if (opts?.refresh) setRefreshing(true);
+  else setLoading(true);
+  try {
+    // ...fetch
+  } finally {
+    setLoading(false);
+    setRefreshing(false);    // always clear both
+  }
+}, []);
+
+<ScrollView
+  refreshControl={
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={() => load({ refresh: true })}
+      tintColor={c.primary}
+    />
+  }
+>
+```
+
+### The opts parameter pitfall
+
+When you add `opts?: { refresh?: boolean }` to a function that was previously `() => void`, any `onPress={load}` or `onPress={fn}` binding that previously worked will now receive the native event object as the first argument. React Native's `TouchableOpacity.onPress` passes a `GestureResponderEvent`, which has no overlap with `{ refresh?: boolean }`. TypeScript will catch this, but only if the function signature is typed:
+
+```tsx
+// WRONG — passes GestureResponderEvent as opts
+<TouchableOpacity onPress={load}>
+
+// CORRECT
+<TouchableOpacity onPress={() => load()}>
+```
+
+Always wrap with an arrow function when the handler has a non-event parameter signature.
+
+---
+
+## 2026-06-01 — Classifying silent catches: a decision framework
+
+When auditing `.catch(() => {})` calls, the question is not "should this throw?" but "who needs to know, and how urgently?"
+
+### Category 1 — Keep silent (fire-and-forget side effects)
+
+These are operations where:
+- The user already got the feedback they need (UI updated optimistically)
+- Failure has no meaningful consequence (a notification stays "unread" server-side — the user dismissed it locally)
+- Showing an error would be actively confusing ("You dismissed this notification" → error → "What did I do wrong?")
+
+Examples: mark-as-read, bulk-dismiss, sign-out cleanup after navigation.
+
+### Category 2 — Add `console.error` (background data loads)
+
+These are `useEffect` fetches that populate UI sections. The component already handles empty/null state gracefully. Failure just means the section stays empty. No user action depends on the result in the moment it fires.
+
+The right fix is `console.error('Failed to load X:', e)` — visible in DevTools for diagnosis, not surfaced to the user.
+
+**Do not add a toast or modal for these.** A background load failing silently (empty section) is less disruptive than an error notification that fires before the user has even scrolled to that section.
+
+### Category 3 — User-visible error (user-triggered mutations)
+
+These are click handlers and form submits. The user took an action and expects a result. If the action fails silently, the user doesn't know whether it succeeded. They may retry (causing duplicates) or assume success (causing data loss).
+
+The right fix is to surface the error near the action that failed — either via existing `setError` state, or by adding a localized error state for that section. A component-level error state (rather than a global toast) keeps the error co-located with the failed action.
+
+### The `.bak` file problem
+
+`frontend/src/pages/DispatchDashboard.tsx.bak` is committed to the repo and contains stale code with `console.error(e)` calls. It should be deleted — tracked backup files create confusion about which version is authoritative and can be accidentally imported.
+
+---
+
+## 2026-06-01 — DB CHECK constraints on nullable float columns
+
+Dispatch weight columns (`dispatch_weight_driver`, etc.) are nullable — `NULL` means "use the system default." But when a value is present, it must be between 0 and 1 (they are fractional weights that sum to 1.0 in the algorithm).
+
+A `CHECK (col BETWEEN 0 AND 1)` constraint rejects `NULL` in most databases because `NULL BETWEEN 0 AND 1` evaluates to `NULL` (unknown), not `TRUE`. This is not what we want — `NULL` should be allowed.
+
+The correct pattern:
+```sql
+CHECK (col IS NULL OR (col BETWEEN 0 AND 1))
+```
+
+In SQLAlchemy:
+```python
+CheckConstraint(
+  "dispatch_weight_driver IS NULL OR (dispatch_weight_driver BETWEEN 0 AND 1)",
+  name="ck_company_configs_weight_driver",
+)
+```
+
+Always use this pattern for nullable columns with value constraints. A plain `BETWEEN` constraint on a nullable column will reject all NULL values, blocking any row where the column is not set.
+
+---
+
+## 2026-06-01 — Audit findings: always verify current state before fixing
+
+The four-agent audit on 2026-06-01 produced 5 Critical and 7 High findings. All 12 were already fixed by the time remediation began — the audit captured a snapshot taken before an active remediation cycle.
+
+**The lesson:** An audit finding is a claim that a problem existed at a specific point in time. Before writing any fix:
+
+1. Read the current state of the file
+2. Grep for the exact pattern the audit flagged
+3. Check recent git history (`git log -p -- path/to/file`) for the fix
+
+"The audit said it's broken" is not sufficient justification to write code. Writing a fix for something already fixed introduces a regression (you may overwrite the correct version with a broken one), wasted effort, and noise in the PR diff.
+
+This is especially important when audits and remediation happen in overlapping sessions — the audit snapshot may be minutes old but the code may have already moved.
+
+---
+
+## 2026-06-01 — Multi-tenancy applies to service-layer helpers too
+
+Service-layer functions that fan out notifications to management (e.g. `_notify_management` in `record_trainer_mark.py`, `_notify_management_phase4_fail` in `score_phase4.py`) are not exempt from the multi-tenancy invariant.
+
+The pattern to watch for: a helper that queries `Employee` by role without a `company_id` filter:
+
+```python
+# BAD — notifies management across all companies
+recipients = db.query(Employee).filter(
+    Employee.role.in_(["management", "admin"]),
+    Employee.is_active == True,
+).all()
+for recipient in recipients:
+    db.add(Notification(employee_id=recipient.id, type="x", message="..."))
+```
+
+```python
+# GOOD — scoped to the correct company
+recipients = db.query(Employee).filter(
+    Employee.company_id == company_id,
+    Employee.role.in_(["management", "admin"]),
+    Employee.is_active == True,
+).all()
+for recipient in recipients:
+    db.add(Notification(company_id=company_id, employee_id=recipient.id, type="x", message="..."))
+```
+
+The `company_id` must come from somewhere in the call chain — usually from the ORM model that triggered the event (e.g. `record.company_id` on a `TrainingRecord`). Thread it explicitly; never assume a global or session-level scope.
+
+**Scanner:** after writing any notification fan-out, search for `db.add(Notification(` in the file and verify every call includes `company_id=`.
+
+---
+
+## 2026-06-01 — Notification gaps: the "else" branch pattern
+
+When a notification update path only handles the case where an existing notification exists, an employee who never received the original notification gets nothing at all.
+
+Example from `dispatch.py::manual_assignment`:
+
+```python
+# Before: only the if branch existed
+existing_notif = db.query(Notification).filter(..., type="dispatch_assignment", dispatch_date=date).first()
+if existing_notif:
+    existing_notif.message = "You have been reassigned..."
+    existing_notif.is_read = False
+# If no prior notification: silent. Employee never knows about the assignment.
+```
+
+The fix is an `else` branch that creates the notification from scratch using the same message format and fields (`dispatch_date` populated) as the original publish path.
+
+This pattern appears whenever:
+- A feature was built assuming a prior flow always runs first (publish before reassign)
+- A new code path bypasses the original flow (manual-only dispatch)
+
+When reviewing any "update existing X" pattern, always ask: what happens if X doesn't exist yet?

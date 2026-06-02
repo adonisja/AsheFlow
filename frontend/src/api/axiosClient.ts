@@ -1,10 +1,10 @@
 import axios from 'axios';
 import { fetchAuthSession, signOut } from 'aws-amplify/auth';
 
-// VITE_API_URL must be set in .env (development) and in the build environment
-// (staging/production). Falls back to localhost only as a last resort so a
-// missing env var produces an obvious failure rather than a silent wrong-host request.
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1';
+if (!import.meta.env.VITE_API_URL) {
+  throw new Error('VITE_API_URL is not set. Add it to .env.local (dev) or the CI secrets (staging/prod).');
+}
+const BASE_URL = import.meta.env.VITE_API_URL;
 
 const axiosClient = axios.create({
   baseURL: BASE_URL,

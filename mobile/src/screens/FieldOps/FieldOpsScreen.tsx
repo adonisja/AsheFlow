@@ -38,14 +38,16 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  useColorScheme, ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl,
   TextInput, Alert, Switch, Modal, FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
+import { useColors } from '@contexts/ThemeContext';
+import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function localToday(): string {
@@ -147,7 +149,7 @@ const EMPTY_SHIFT: ShiftState = {
 // ── Shared UI primitives ──────────────────────────────────────────────────────
 function Btn({ label, onPress, disabled, loading: ld, variant = 'primary', c }: {
   label: string; onPress: () => void; disabled?: boolean;
-  loading?: boolean; variant?: 'primary' | 'ghost'; c: typeof lightColors;
+  loading?: boolean; variant?: 'primary' | 'ghost'; c: ThemeColors;
 }) {
   const bg = variant === 'ghost' ? 'transparent' : c.primary;
   const border = variant === 'ghost' ? c.border : c.primary;
@@ -165,7 +167,7 @@ function Btn({ label, onPress, disabled, loading: ld, variant = 'primary', c }: 
   );
 }
 
-function DonePill({ label, c }: { label: string; c: typeof lightColors }) {
+function DonePill({ label, c }: { label: string; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: c.success + '18',
       borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs,
@@ -177,7 +179,7 @@ function DonePill({ label, c }: { label: string; c: typeof lightColors }) {
 
 function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
   num: string; title: string; subtitle?: string;
-  done?: boolean; doneLabel?: string; c: typeof lightColors;
+  done?: boolean; doneLabel?: string; c: ThemeColors;
 }) {
   return (
     <View style={{ marginBottom: done ? spacing.xs : spacing.sm }}>
@@ -200,7 +202,7 @@ function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
   );
 }
 
-function Card({ children, c }: { children: React.ReactNode; c: typeof lightColors }) {
+function Card({ children, c }: { children: React.ReactNode; c: ThemeColors }) {
   return (
     <View style={{ backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1,
       borderColor: c.border, padding: spacing.md, marginBottom: spacing.md }}>
@@ -209,7 +211,7 @@ function Card({ children, c }: { children: React.ReactNode; c: typeof lightColor
   );
 }
 
-function LocationDivider({ label, c }: { label: string; c: typeof lightColors }) {
+function LocationDivider({ label, c }: { label: string; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md, marginTop: spacing.xs }}>
       <View style={{ flex: 1, height: 1, backgroundColor: c.border }} />
@@ -225,7 +227,7 @@ function LocationDivider({ label, c }: { label: string; c: typeof lightColors })
 
 // Collapsed done-step row — replaces the full Card when a step is complete
 function CompletedRow({ num, title, summary, c }: {
-  num: string; title: string; summary: string; c: typeof lightColors;
+  num: string; title: string; summary: string; c: ThemeColors;
 }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
@@ -245,7 +247,7 @@ function CompletedRow({ num, title, summary, c }: {
 // Pure-JS time picker modal — no native dependency required
 function TimePickerModal({ visible, initial, onConfirm, onCancel, c }: {
   visible: boolean; initial: Date; onConfirm: (h: number, m: number) => void;
-  onCancel: () => void; c: typeof lightColors;
+  onCancel: () => void; c: ThemeColors;
 }) {
   const [hour,   setHour]   = useState(initial.getHours());
   const [minute, setMinute] = useState(Math.floor(initial.getMinutes() / 5) * 5);
@@ -325,7 +327,7 @@ function TimePickerModal({ visible, initial, onConfirm, onCancel, c }: {
 
 // ── Inspection form (shared by pre-trip and EOD) ──────────────────────────────
 function InspectionForm({ employeeId, inspType, onDone, c }: {
-  employeeId: string; inspType: 'pre_trip' | 'eod'; onDone: () => void; c: typeof lightColors;
+  employeeId: string; inspType: 'pre_trip' | 'eod'; onDone: () => void; c: ThemeColors;
 }) {
   const [items,   setItems]   = useState<string[]>([]);
   const [results, setResults] = useState<Record<string, boolean | null>>({});
@@ -358,7 +360,7 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
         notes: notes.trim() || null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Submission failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit inspection. Try again.'); }
     finally { setSaving(false); }
   };
 
@@ -402,7 +404,7 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
   );
 }
 
-function InspDoneView({ data, c }: { data: InspData; c: typeof lightColors }) {
+function InspDoneView({ data, c }: { data: InspData; c: ThemeColors }) {
   const bg = data.has_failures ? c.danger + '12' : c.success + '12';
   const border = data.has_failures ? c.danger + '40' : c.success + '40';
   const col = data.has_failures ? c.danger : c.success;
@@ -442,9 +444,9 @@ const CI_TIMES = ['~11:15 AM', '~2:00 PM', '~4:00 PM', '~5:30 PM'];
 
 // ── Root screen ───────────────────────────────────────────────────────────────
 export default function FieldOpsScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user, hasRole } = useAuth();
+  const switchTab = useTabSwitch();
   const isDriver = hasRole('driver');
   const isWalker = hasRole('walker');
 
@@ -457,29 +459,36 @@ export default function FieldOpsScreen() {
   const [walkerDrafts, setWalkerDrafts] = useState<Record<string, WalkerDraft>>({});
   const draftsRef = useRef(walkerDrafts);
   draftsRef.current = walkerDrafts;
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   const loadShift = useCallback(async (empId: string) => {
+    loadAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    loadAbortRef.current = ctrl;
+    const sig = { signal: ctrl.signal };
+
     const today = localToday();
     const [ciRes, dockRes, inspRes, fuelRes, crewRes, arrRes, depRes, apRes,
            ci1Res, ci2Res, ci3Res, rtsRes, handoffRes, notifRes, confRes] = await Promise.allSettled([
-      apiClient.get(`/field-ops/check-in/${empId}`),
-      apiClient.get(`/field-ops/dock-assignment/${empId}`),
-      apiClient.get(`/field-ops/inspection/${empId}`),
-      apiClient.get(`/field-ops/fuel-log/${empId}`),
-      apiClient.get(`/field-ops/crew/${empId}`),
-      apiClient.get(`/field-ops/station-arrival/${empId}`, { params: { target_date: today } }),
-      apiClient.get(`/field-ops/departure/${empId}`),
-      apiClient.get('/anchor-points/driver/today'),
-      apiClient.get(`/shift-ops/check-in/${empId}`, { params: { target_date: today } }),
-      apiClient.get(`/shift-ops/check-in/${empId}`, { params: { target_date: today } }),
-      apiClient.get(`/shift-ops/check-in/${empId}`, { params: { target_date: today } }),
-      apiClient.get(`/shift-ops/rts-report/${empId}`),
-      apiClient.get(`/shift-ops/station-handoff/${empId}`),
+      apiClient.get(`/field-ops/check-in/${empId}`, sig),
+      apiClient.get(`/field-ops/dock-assignment/${empId}`, sig),
+      apiClient.get(`/field-ops/inspection/${empId}`, sig),
+      apiClient.get(`/field-ops/fuel-log/${empId}`, sig),
+      apiClient.get(`/field-ops/crew/${empId}`, sig),
+      apiClient.get(`/field-ops/station-arrival/${empId}`, { params: { target_date: today }, ...sig }),
+      apiClient.get(`/field-ops/departure/${empId}`, sig),
+      apiClient.get('/anchor-points/driver/today', sig),
+      apiClient.get(`/shift-ops/check-in/${empId}`, { params: { target_date: today }, ...sig }),
+      apiClient.get(`/shift-ops/check-in/${empId}`, { params: { target_date: today }, ...sig }),
+      apiClient.get(`/shift-ops/check-in/${empId}`, { params: { target_date: today }, ...sig }),
+      apiClient.get(`/shift-ops/rts-report/${empId}`, sig),
+      apiClient.get(`/shift-ops/station-handoff/${empId}`, sig),
       // Dispatch assignment notification for today (to get message text)
-      apiClient.get(`/notifications/${empId}?limit=10`),
+      apiClient.get(`/notifications/${empId}?limit=10`, sig),
       // Confirmation status for today
-      apiClient.get(`/dispatch/${today}/my-confirmation`),
+      apiClient.get(`/dispatch/${today}/my-confirmation`, sig),
     ]);
+    if (ctrl.signal.aborted) return;
 
     const ci      = ciRes.status === 'fulfilled' ? ciRes.value.data.find((r: any) => r.date === today) : null;
     const dock    = dockRes.status === 'fulfilled' ? dockRes.value.data : null;
@@ -507,14 +516,17 @@ export default function FieldOpsScreen() {
     const rts     = rtsRes.status === 'fulfilled' ? rtsRes.value.data : null;
     const handoff = handoffRes.status === 'fulfilled' ? handoffRes.value.data : null;
 
-    // Dispatch confirmation for today
-    const confData = confRes.status === 'fulfilled' ? confRes.value.data : null;
-    const confirmationStatus: ShiftState['confirmationStatus'] = confData?.status ?? null;
-    const dispatchDate: string | null = confData?.date ?? null;
-    // Pull the assignment message from the notification list
+    // Pull the assignment message from the notification list first — it anchors today's dispatch
     const notifs: any[] = notifRes.status === 'fulfilled' ? (notifRes.value.data ?? []) : [];
     const dispatchNotif = notifs.find((n: any) => n.type === 'dispatch_assignment' && n.dispatch_date === today);
     const dispatchMessage: string | null = dispatchNotif?.message ?? null;
+
+    // Dispatch confirmation — only valid when the confirmed date matches today
+    const confData = confRes.status === 'fulfilled' ? confRes.value.data : null;
+    const confIsToday = confData?.date === today;
+    const confirmationStatus: ShiftState['confirmationStatus'] = confIsToday ? (confData?.status ?? null) : null;
+    // Show the card if today's dispatch notification exists OR if there's a same-day confirmation record
+    const dispatchDate: string | null = (dispatchNotif || confIsToday) ? today : null;
 
     // Truck ID from crew endpoint
     const truckId: string | null = crewRes.status === 'fulfilled' ? (crewRes.value.data.truck_id ?? null) : null;
@@ -566,6 +578,7 @@ export default function FieldOpsScreen() {
       setEmployeeId(id);
       await Promise.all([loadShift(id), loadDrafts(id).then(setWalkerDrafts)]);
     }).catch(() => {}).finally(() => setLoadingId(false));
+    return () => { loadAbortRef.current?.abort(); };
   }, [user, loadShift]);
 
   const reload = useCallback(() => { if (employeeId) loadShift(employeeId); }, [employeeId, loadShift]);
@@ -626,13 +639,55 @@ export default function FieldOpsScreen() {
   const rtsApproved  = rtsReport?.status === 'rts_approved' || rtsReport?.status === 'approved';
   const rtsPending   = rtsReport?.status === 'pending';
 
+  // Step progress for driver shift (20 total gated steps 0–19)
+  const TOTAL_STEPS = 20;
+  const completedSteps = isDriver ? [
+    confirmationStatus === 'confirmed',
+    !!checkedIn,
+    !!dockZone,
+    !!preTripDone,
+    !!fuelLog?.odometer_start,
+    !!stationLoadArrived,
+    !!manifest,
+    !!departed,
+    !!(activeAP && activeAP.status !== 'preliminary'),
+    !!(activeAP && activeAP.status === 'arrived'),
+    !!checkIn1,
+    walkers.length === 0 || Object.keys(walkerRatingsSubmitted).length > 0,
+    !!checkIn2,
+    !!checkIn3,
+    !!rtsReport,
+    !!stationReturnArrived,
+    !!stationHandoff,
+    !!(fuelLog?.odometer_end != null),
+    !!eodDone,
+    !!returned,
+  ].filter(Boolean).length : 0;
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView style={s.scroll} contentContainerStyle={s.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.primary} />}>
 
-        <Text style={s.pageTitle}>Field Ops</Text>
-        <Text style={s.subtitle}>{localToday()}</Text>
+        {/* ── Header ── */}
+        <View style={s.screenHeader}>
+          <TouchableOpacity onPress={() => switchTab('Home')} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
+            <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
+          </TouchableOpacity>
+          <View style={s.screenHeaderCenter}>
+            <Text style={s.pageTitle}>Field Ops</Text>
+            <Text style={s.subtitle}>{localToday()}</Text>
+          </View>
+          {isDriver ? (
+            <View style={[s.stepBadge, { backgroundColor: completedSteps === TOTAL_STEPS ? '#10B98118' : c.primary + '18', borderColor: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
+              <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
+                {completedSteps}/{TOTAL_STEPS}
+              </Text>
+            </View>
+          ) : (
+            <View style={s.backBtn} />
+          )}
+        </View>
 
         {isDriver && (
           <>
@@ -814,7 +869,7 @@ export default function FieldOpsScreen() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
-  employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors;
+  employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors;
 }) {
   const [acting, setActing] = useState<'confirming' | 'declining' | null>(null);
   const submitting = useRef(false);
@@ -862,7 +917,7 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
     );
   }
 
-  // Extract truck name from message for display (bold text between **)
+  // Extract truck name from message (bold text between **)
   const truckMatch = shift.dispatchMessage?.match(/\*\*(.+?)\*\*/);
   const truckName  = truckMatch ? truckMatch[1] : null;
   const cleanMsg   = shift.dispatchMessage?.replace(/\*\*(.*?)\*\*/g, '$1') ?? null;
@@ -872,81 +927,75 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
   });
 
   return (
-    <View style={{ backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1,
-      borderColor: c.border, marginBottom: spacing.md, overflow: 'hidden' }}>
-      {/* Accent top bar */}
-      <View style={{ height: 3, backgroundColor: c.primary }} />
+    <View style={{ backgroundColor: c.card, borderRadius: radius.xl, borderWidth: 1.5,
+      borderColor: c.warning + '60', marginBottom: spacing.md, overflow: 'hidden' }}>
 
-      <View style={{ padding: spacing.md }}>
-        {/* Header row */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
-          <View style={{ width: 42, height: 42, borderRadius: radius.md,
-            backgroundColor: c.primaryLight, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ fontSize: 20 }}>📋</Text>
+      {/* Amber accent stripe — signals action required */}
+      <View style={{ height: 4, backgroundColor: c.warning }} />
+
+      <View style={{ padding: spacing.md, gap: spacing.md }}>
+
+        {/* Header */}
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm }}>
+          <View style={{ width: 48, height: 48, borderRadius: radius.lg,
+            backgroundColor: c.warning + '18', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Text style={{ fontSize: 22 }}>📋</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.medium,
-              textTransform: 'uppercase', letterSpacing: 0.5 }}>Awaiting Response</Text>
-            <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground }}>
-              {truckName ? `Assigned to ${truckName}` : 'Dispatch Assignment'}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 3 }}>
+              <View style={{ backgroundColor: c.warning + '20', paddingHorizontal: spacing.sm,
+                paddingVertical: 2, borderRadius: radius.full, borderWidth: 1, borderColor: c.warning + '50' }}>
+                <Text style={{ fontSize: 10, fontWeight: fontWeight.bold, color: c.warning,
+                  textTransform: 'uppercase', letterSpacing: 0.7 }}>Action Required</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.extrabold, color: c.foreground, letterSpacing: -0.3 }}>
+              {truckName ?? 'Dispatch Assignment'}
             </Text>
+            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>📅 {dateLabel}</Text>
           </View>
         </View>
 
-        {/* Date chip */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.sm }}>
-          <View style={{ backgroundColor: c.surfaceMuted, paddingHorizontal: spacing.sm,
-            paddingVertical: 3, borderRadius: radius.full, borderWidth: 1, borderColor: c.border }}>
-            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.medium }}>
-              📅 {dateLabel}
-            </Text>
-          </View>
+        {/* Message body */}
+        <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.md,
+          padding: spacing.sm + 2, borderWidth: 1, borderColor: c.border }}>
+          <Text style={{ fontSize: fontSize.sm, color: c.foreground, lineHeight: 21 }}>
+            {cleanMsg ?? 'Confirm your attendance to begin the check-in process.'}
+          </Text>
         </View>
-
-        {/* Message */}
-        {cleanMsg ? (
-          <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, lineHeight: 20, marginBottom: spacing.md }}>
-            {cleanMsg}
-          </Text>
-        ) : (
-          <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, lineHeight: 20, marginBottom: spacing.md }}>
-            Confirm your attendance to begin the check-in process.
-          </Text>
-        )}
 
         {/* Action buttons */}
         <View style={{ flexDirection: 'row', gap: spacing.sm }}>
           <TouchableOpacity
             onPress={() => respond('declined')}
             disabled={!!acting}
-            style={{ flex: 1, paddingVertical: spacing.sm + 3, borderRadius: radius.md,
+            style={{ flex: 1, paddingVertical: spacing.sm + 4, borderRadius: radius.lg,
               borderWidth: 1.5, alignItems: 'center', justifyContent: 'center',
-              borderColor: c.danger, backgroundColor: c.danger + '08',
-              opacity: acting === 'confirming' ? 0.35 : 1 }}>
+              borderColor: c.danger, backgroundColor: c.danger + '10',
+              opacity: acting === 'confirming' ? 0.3 : 1 }}>
             {acting === 'declining'
               ? <ActivityIndicator size="small" color={c.danger} />
-              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.danger }}>Decline</Text>
-            }
+              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.danger }}>Decline</Text>}
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => respond('confirmed')}
             disabled={!!acting}
-            style={{ flex: 2, paddingVertical: spacing.sm + 3, borderRadius: radius.md,
-              borderWidth: 1.5, alignItems: 'center', justifyContent: 'center',
-              borderColor: c.success, backgroundColor: c.success,
-              opacity: acting === 'declining' ? 0.35 : 1 }}>
+            style={{ flex: 2, paddingVertical: spacing.sm + 4, borderRadius: radius.lg,
+              alignItems: 'center', justifyContent: 'center',
+              backgroundColor: c.success,
+              opacity: acting === 'declining' ? 0.3 : 1 }}>
             {acting === 'confirming'
               ? <ActivityIndicator size="small" color="#fff" />
-              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: '#fff' }}>Confirm Attendance</Text>
-            }
+              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: '#fff' }}>✓  Confirm Attendance</Text>}
           </TouchableOpacity>
         </View>
+
       </View>
     </View>
   );
 }
 
-function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const [acting, setActing] = useState(false);
   const act = async () => {
     setActing(true);
@@ -968,7 +1017,7 @@ function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shi
   );
 }
 
-function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: typeof lightColors }) {
+function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: ThemeColors }) {
   // Only collapse once we're past the offsite section (i.e. departed). While still offsite,
   // keep it visible so the driver can see their gate.
   return (
@@ -1000,7 +1049,7 @@ function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: typeo
 
 function StepInspection({ employeeId, shift, inspType, stepNum, title, subtitle, onDone, c }: {
   employeeId: string; shift: ShiftState; inspType: 'pre_trip' | 'eod';
-  stepNum: string; title: string; subtitle: string; onDone: () => void; c: typeof lightColors;
+  stepNum: string; title: string; subtitle: string; onDone: () => void; c: ThemeColors;
 }) {
   const done = inspType === 'pre_trip' ? shift.preTripDone : shift.eodDone;
   const data = inspType === 'pre_trip' ? shift.preTripData : shift.eodData;
@@ -1016,7 +1065,7 @@ function StepInspection({ employeeId, shift, inspType, stepNum, title, subtitle,
   );
 }
 
-function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const [unit, setUnit] = useState<Unit>('imperial');
   const [val,  setVal]  = useState('');
   const [saving, setSaving] = useState(false);
@@ -1029,7 +1078,7 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
     try {
       await apiClient.post('/field-ops/fuel-log', { driver_id: employeeId, date: localToday(), odometer_start: toMi(n, unit) });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not log odometer reading. Try again.'); }
     finally { setSaving(false); }
   };
   if (done) {
@@ -1060,7 +1109,7 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
   );
 }
 
-function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationLoadArrived;
   const [staged,   setStaged]   = useState<boolean | null>(null);
   const [missing,  setMissing]  = useState<Record<string, boolean>>({});
@@ -1081,7 +1130,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
         missing_items: staged ? [] : Object.keys(missing).filter(k => missing[k]),
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record station arrival. Try again.'); }
     finally { setSaving(false); }
   };
 
@@ -1139,7 +1188,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
 }
 
 function StepManifest({ truckId, shift, employeeId, onDone, c }: {
-  truckId: string | null; shift: ShiftState; employeeId: string; onDone: () => void; c: typeof lightColors;
+  truckId: string | null; shift: ShiftState; employeeId: string; onDone: () => void; c: ThemeColors;
 }) {
   const m = shift.manifest;
   const [acking, setAcking] = useState(false);
@@ -1150,7 +1199,7 @@ function StepManifest({ truckId, shift, employeeId, onDone, c }: {
     try {
       await apiClient.patch(`/field-ops/manifest/${truckId}/acknowledge`);
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not confirm manifest. Try again.'); }
     finally { setAcking(false); }
   };
 
@@ -1199,14 +1248,14 @@ function StepManifest({ truckId, shift, employeeId, onDone, c }: {
   );
 }
 
-function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const [acting, setActing] = useState(false);
   const act = async () => {
     setActing(true);
     try {
       await apiClient.post('/field-ops/departure', { employee_id: employeeId, date: localToday() });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record departure. Try again.'); }
     finally { setActing(false); }
   };
   if (shift.departed) {
@@ -1222,7 +1271,7 @@ function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; s
 }
 
 function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
-  employeeId: string; truckId: string | null; shift: ShiftState; onDone: () => void; c: typeof lightColors;
+  employeeId: string; truckId: string | null; shift: ShiftState; onDone: () => void; c: ThemeColors;
 }) {
   const ap = shift.activeAP;
   const done = !!ap;
@@ -1248,7 +1297,7 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
         location: location.trim(), eta: etaLabel ?? null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not post anchor point. Try again.'); }
     finally { setSaving(false); submitting.current = false; }
   };
 
@@ -1306,7 +1355,7 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
   );
 }
 
-function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: typeof lightColors }) {
+function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeColors }) {
   const [location, setLocation] = useState(ap.location);
   const [notes,    setNotes]    = useState('');
   const [acting,   setActing]   = useState(false);
@@ -1319,7 +1368,7 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: typeof
         notes: notes.trim() || undefined,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not confirm AP arrival. Try again.'); }
     finally { setActing(false); }
   };
 
@@ -1339,7 +1388,7 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: typeof
 }
 
 function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
-  employeeId: string; shift: ShiftState; crew: CrewMember[]; onDone: () => void; c: typeof lightColors;
+  employeeId: string; shift: ShiftState; crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
   const done = !!shift.checkIn1;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
@@ -1394,7 +1443,7 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
         ncns_count: ncns,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit check-in. Try again.'); }
     finally { setSaving(false); }
   };
 
@@ -1457,7 +1506,7 @@ function StepWalkerRatings({ walkers, drafts, submitted, onUpdateDraft, c }: {
   drafts: Record<string, WalkerDraft>;
   submitted: Record<string, boolean>;
   onUpdateDraft: (id: string, patch: Partial<WalkerDraft>) => void;
-  c: typeof lightColors;
+  c: ThemeColors;
 }) {
   const pending = walkers.filter(w => !submitted[w.id]);
   const done    = walkers.filter(w => submitted[w.id]);
@@ -1512,7 +1561,7 @@ function StepWalkerRatings({ walkers, drafts, submitted, onUpdateDraft, c }: {
 function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, onDone, c }: {
   employeeId: string; shift: ShiftState; num: 2 | 3;
   time: string; record: CheckInRecord | null; prevRecord: CheckInRecord | null;
-  crew: CrewMember[]; onDone: () => void; c: typeof lightColors;
+  crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
   const maxWorking = prevRecord?.working_crew_count ?? shift.checkIn1?.working_crew_count ?? 0;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
@@ -1560,7 +1609,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
         ncns_count: shift.checkIn1?.ncns_count ?? 0,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit check-in. Try again.'); }
     finally { setSaving(false); setPending(null); }
   };
 
@@ -1694,7 +1743,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
   );
 }
 
-function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const rts = shift.rtsReport;
   const done = !!rts;
   const [crewCount,  setCrewCount]  = useState('');
@@ -1720,7 +1769,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
         crew_confirmed: cc, rts_packages: pkgs,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Submission failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit departure request. Try again.'); }
     finally { setSaving(false); }
   };
 
@@ -1791,7 +1840,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
   );
 }
 
-function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationReturnArrived;
   const [acting, setActing] = useState(false);
   const act = async () => {
@@ -1801,7 +1850,7 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
         employee_id: employeeId, date: localToday(), arrival_type: 'return',
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record station return. Try again.'); }
     finally { setActing(false); }
   };
   if (done) {
@@ -1816,7 +1865,7 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
   );
 }
 
-function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationHandoff;
   const [totes,  setTotes]  = useState('');
   const [rtsN,   setRtsN]   = useState('');
@@ -1833,7 +1882,7 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
         totes_returned: t, rts_count: r, notes: notes.trim() || null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit station handoff. Try again.'); }
     finally { setSaving(false); }
   };
 
@@ -1873,7 +1922,7 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
 function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings, onDone, c }: {
   employeeId: string; shift: ShiftState; walkers: CrewMember[];
   drafts: Record<string, WalkerDraft>; submittedRatings: Record<string, boolean>;
-  onDone: () => void; c: typeof lightColors;
+  onDone: () => void; c: ThemeColors;
 }) {
   const done = shift.fuelLog?.odometer_end != null;
   const [unit,   setUnit]   = useState<Unit>('imperial');
@@ -1912,7 +1961,7 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
       // Clear drafts from storage
       await AsyncStorage.removeItem(`asheflow_walker_drafts_${employeeId}_${localToday()}`);
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not log end odometer. Try again.'); }
     finally { setSaving(false); }
   };
 
@@ -1976,7 +2025,7 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
   );
 }
 
-function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: typeof lightColors }) {
+function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.returned;
   const [acting, setActing] = useState(false);
   const act = async () => {
@@ -1984,7 +2033,7 @@ function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shi
     try {
       await apiClient.post(`/field-ops/return/${employeeId}`, {});
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Failed.'); }
+    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not sign out. Try again.'); }
     finally { setActing(false); }
   };
   if (done) {
@@ -1999,7 +2048,7 @@ function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shi
   );
 }
 
-function WalkerPerformanceView({ employeeId, c }: { employeeId: string; c: typeof lightColors }) {
+function WalkerPerformanceView({ employeeId, c }: { employeeId: string; c: ThemeColors }) {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const GRADE_COLOR: Record<string, string> = { A: c.success, B: c.info, C: c.warning, D: c.warning, F: c.danger };
@@ -2047,11 +2096,24 @@ function WalkerPerformanceView({ employeeId, c }: { employeeId: string; c: typeo
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
-  safe:      { flex: 1, backgroundColor: c.background },
-  scroll:    { flex: 1 },
-  content:   { padding: spacing.lg, paddingBottom: 100 },
-  center:    { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  pageTitle: { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, color: c.foreground },
-  subtitle:  { fontSize: fontSize.sm, color: c.mutedForeground, marginBottom: spacing.lg },
+const styles = (c: ThemeColors) => StyleSheet.create({
+  safe:               { flex: 1, backgroundColor: c.background },
+  scroll:             { flex: 1 },
+  content:            { padding: spacing.lg, paddingBottom: 100 },
+  center:             { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  screenHeader:       {
+    flexDirection: 'row', alignItems: 'center',
+    marginBottom: spacing.lg,
+    paddingTop: spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border,
+    paddingBottom: spacing.sm,
+    marginHorizontal: -spacing.lg, paddingHorizontal: spacing.md,
+  },
+  screenHeaderCenter: { flex: 1, alignItems: 'center' },
+  backBtn:            { width: 44, alignItems: 'center' },
+  backChevron:        { fontSize: 30, lineHeight: 32, fontWeight: '300' },
+  pageTitle:          { fontSize: fontSize.xl, fontWeight: fontWeight.extrabold, color: c.foreground },
+  subtitle:           { fontSize: fontSize.xs, color: c.mutedForeground },
+  stepBadge:          { width: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: radius.sm, paddingVertical: 3 },
+  stepBadgeText:      { fontSize: 11, fontWeight: fontWeight.bold },
 });

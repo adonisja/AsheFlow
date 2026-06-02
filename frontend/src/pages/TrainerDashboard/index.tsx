@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
+import NotificationBanner from '../../components/NotificationBanner';
 import { getLocalYMD } from '../../utils/date';
 import {
   Loader2, Users, ClipboardList, History, MessageSquare,
@@ -419,7 +420,7 @@ function MyPerformanceTab() {
         setSummary(sRes.data);
         setMarks(mRes.data);
       })
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load trainer marks:', e); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -574,6 +575,7 @@ export default function TrainerDashboard() {
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
       </div>
+      {trainerId && <NotificationBanner employeeId={trainerId} />}
 
       <ErrorBanner message={error} />
 

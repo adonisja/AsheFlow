@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, useColorScheme,
+  View, Text, TouchableOpacity, StyleSheet,
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // Backend: [{ trainee: {id, name}, sessions: [{record, tasks}] }]
 type Task = {
@@ -33,8 +35,7 @@ type TraineeGroup = {
 };
 
 export default function TrainerHistoryScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const [groups,     setGroups]     = useState<TraineeGroup[]>([]);
@@ -45,10 +46,13 @@ export default function TrainerHistoryScreen() {
   // Which session card is expanded within a group
   const [openSession, setOpenSession] = useState<string | null>(null);
 
+  const { fetchId } = useEmployeeId();
+
   const load = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     try {
-      const res = await apiClient.get(`/training/trainer/${user.id}/history`);
+      const res = await apiClient.get(`/training/trainer/${eid}/history`);
       setGroups(res.data ?? []);
     } catch {
       setGroups([]);
@@ -56,7 +60,7 @@ export default function TrainerHistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -258,7 +262,7 @@ export default function TrainerHistoryScreen() {
 }
 
 function NoteBox({ label, text, labelColor, bg, c }: {
-  label: string; text: string; labelColor: string; bg: string; c: typeof lightColors;
+  label: string; text: string; labelColor: string; bg: string; c: ThemeColors;
 }) {
   const s = styles(c);
   return (
@@ -274,13 +278,13 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function rateColor(rate: number, c: typeof lightColors) {
+function rateColor(rate: number, c: ThemeColors) {
   if (rate >= 0.9) return c.success;
   if (rate >= 0.6) return c.warning;
   return c.danger;
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   empty:         { alignItems: 'center', marginTop: 64, gap: spacing.sm },
   emptyTitle:    { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
   emptySub:      { fontSize: fontSize.sm },

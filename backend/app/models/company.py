@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey, BigInteger
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey, BigInteger, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from app.models.base import Base
@@ -41,6 +41,7 @@ class CompanyConfig(Base):
     shift_end      = Column(Time, nullable=True)   # e.g. 18:00
     checkin_open   = Column(Time, nullable=True)   # earliest accepted check-in
     checkin_close  = Column(Time, nullable=True)   # latest accepted check-in
+    dispatch_confirmation_cutoff = Column(Time, nullable=True)  # default 09:00 — pending notifications expire after this
 
     # ── Walker rating window ──────────────────────────────────────────────────
     # Hours after driver departure that walker ratings are accepted.
@@ -83,6 +84,12 @@ class CompanyConfig(Base):
     # ── Location profile verification ─────────────────────────────────────────
     location_profile_lock_threshold = Column(Integer, nullable=True)   # default 3 agreements to lock
 
+    # ── Manifest ingestion mode ───────────────────────────────────────────────
+    ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
+
+    # ── GeoClient address enrichment ─────────────────────────────────────────
+    geoclient_borough = Column(String(30), nullable=True)              # e.g. "manhattan", "brooklyn", "queens"
+
     # ── Discord guild integration (optional — all nullable) ───────────────────
     discord_guild_id            = Column(BigInteger, nullable=True)
     discord_drivers_channel_id  = Column(BigInteger, nullable=True)
@@ -101,6 +108,16 @@ class CompanyConfig(Base):
     # True once the admin has completed the initial setup form.
     # Every protected endpoint checks this via require_configured.
     is_configured = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        CheckConstraint("dispatch_weight_driver    IS NULL OR (dispatch_weight_driver    BETWEEN 0 AND 1)", name="ck_company_configs_weight_driver"),
+        CheckConstraint("dispatch_weight_trainer   IS NULL OR (dispatch_weight_trainer   BETWEEN 0 AND 1)", name="ck_company_configs_weight_trainer"),
+        CheckConstraint("dispatch_weight_walker    IS NULL OR (dispatch_weight_walker    BETWEEN 0 AND 1)", name="ck_company_configs_weight_walker"),
+        CheckConstraint("dispatch_mutual_bonus     IS NULL OR (dispatch_mutual_bonus     BETWEEN 0 AND 1)", name="ck_company_configs_mutual_bonus"),
+        CheckConstraint("dispatch_tridirectional_bonus IS NULL OR (dispatch_tridirectional_bonus BETWEEN 0 AND 1)", name="ck_company_configs_tridirectional_bonus"),
+        CheckConstraint("dispatch_consecutive_penalty IS NULL OR (dispatch_consecutive_penalty  BETWEEN 0 AND 1)", name="ck_company_configs_consecutive_penalty"),
+        CheckConstraint("dispatch_weight_cap       IS NULL OR (dispatch_weight_cap       BETWEEN 0 AND 1)", name="ck_company_configs_weight_cap"),
+    )
 
     company = relationship("Company", back_populates="config")
 

@@ -98,6 +98,10 @@ Thumbs.db
 docs/decisions/
 docs/journals/
 
+# Claude working protocol — contains internal infrastructure details
+# Will move to private repo (AsheFlow-private)
+CLAUDE.md
+
 # Personal records and scratch files
 .claude/
 discussion.md
@@ -116,6 +120,9 @@ celerybeat-schedule
 celerybeat.pid
 
 # Proprietary business logic — not included in public repository
+# Black-box registration package (lives in AsheFlow-private, injected at deploy time)
+backend/asheflow_private/
+# Individual proprietary modules
 backend/app/services/calculate_weights.py
 backend/app/services/run_dispatch.py
 backend/app/services/assign_drivers.py
@@ -130,6 +137,7 @@ backend/app/services/score_phase4.py
 backend/app/routers/dispatch.py
 backend/app/routers/training.py
 backend/app/routers/field_ops.py
+backend/app/routers/walker_routes.py
 
 # Auth tokens and credentials (never commit these)
 .claude/token.json
