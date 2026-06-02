@@ -5597,3 +5597,258 @@ today?" The answer is not simply "who is active and not on leave." It must exclu
 Each exclusion uses an `EXISTS` subquery so the filter composes cleanly and
 evaluates in a single DB round-trip. Never filter in Python after fetching — push
 all exclusion logic into the query.
+
+---
+
+## 2026-06-01 — Pagination envelopes: why shape changes need rollout care
+
+### The problem with bare arrays
+
+Early endpoints returned bare arrays: `GET /field-ops/walker-leaderboard` returned `[{...}, {...}]`. This makes it impossible for the client to know the total count without fetching everything, and makes adding a second piece of metadata (total, cursor, page info) a breaking change.
+
+### The envelope pattern
+
+The new shape is:
+```json
+{ "total": 47, "items": [{...}, {...}] }
+```
+
+`total` is always the unfiltered count (before limit/offset). `items` is the page. This lets the frontend display "Showing 20 of 47" and build paginators without a separate count query.
+
+### Rollout safety: the `?? r.data` fallback
+
+When you change a response shape, every consumer must be updated atomically or you need a fallback. Because some consumers call the old endpoint format and some call the new one depending on which code was deployed last:
+
+```js
+setWalkers(r.data.items ?? r.data)
+```
+
+`r.data.items` is undefined on a bare array (since arrays don't have an `.items` property), so `?? r.data` gives the old array. Once all deployments are on the new shape, the fallback is harmless.
+
+**Never break a consumer silently.** A shape change that turns a valid response into `undefined` will render a blank list with no error — worse than a thrown error.
+
+### DB-level vs Python-level pagination
+
+Prefer DB-level pagination (`.offset(offset).limit(limit)` in the query) over Python-level slicing (`result[offset:offset+limit]` after `.all()`). The DB variant avoids loading all rows into memory. Python slicing is acceptable only when the result set is already small and bounded (e.g. a per-employee list capped at 50 rows).
+
+---
+
+## 2026-06-01 — AbortController pattern for race-condition-safe data loading
+
+### The problem
+
+A component that fires a network request on mount (or on a dependency change) can have multiple in-flight requests when the user navigates away and back rapidly. If request B completes before request A, request A's stale data overwrites B's fresh data. The user sees yesterday's shift state while actually viewing today's.
+
+### The pattern
+
+```tsx
+const loadAbortRef = useRef<AbortController | null>(null);
+
+const loadShift = useCallback(async () => {
+  loadAbortRef.current?.abort();             // cancel any in-flight request
+  const ctrl = new AbortController();
+  loadAbortRef.current = ctrl;
+
+  try {
+    const [r1, r2] = await Promise.allSettled([
+      apiClient.get('/field-ops/shift', { signal: ctrl.signal }),
+      apiClient.get('/field-ops/crew',  { signal: ctrl.signal }),
+    ]);
+    if (ctrl.signal.aborted) return;         // component unmounted mid-flight
+    // process results...
+  } finally {
+    setLoading(false);
+  }
+}, []);
+
+useEffect(() => {
+  loadShift();
+  return () => { loadAbortRef.current?.abort(); };  // cleanup on unmount
+}, [loadShift]);
+```
+
+### Key points
+
+- `abort()` on the previous controller before creating a new one — not after. This ensures there is never a window where both are active.
+- The `if (ctrl.signal.aborted) return` guard after `Promise.allSettled` is necessary because `allSettled` does not throw when the signal is aborted — it resolves with rejected entries. Without the guard, you set state after unmount.
+- Pass the **same** `signal` to every parallel request. If you create separate controllers per request, aborting one does not abort the others.
+- Axios supports `{ signal: controller.signal }` natively — no adapter needed.
+
+### When not to use it
+
+For screens that are not in a navigator stack (tab-level screens always mounted), unmount-based race conditions don't apply. Use `RefreshControl` instead. AbortController is primarily valuable for screens that mount/unmount on navigation (stack screens) and for screens with expensive parallel fan-out loads like `FieldOpsScreen`.
+
+---
+
+## 2026-06-01 — Pull-to-refresh in React Native
+
+### The pattern
+
+```tsx
+const [refreshing, setRefreshing] = useState(false);
+
+const load = useCallback(async (opts?: { refresh?: boolean }) => {
+  if (opts?.refresh) setRefreshing(true);
+  else setLoading(true);
+  try {
+    // ...fetch
+  } finally {
+    setLoading(false);
+    setRefreshing(false);    // always clear both
+  }
+}, []);
+
+<ScrollView
+  refreshControl={
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={() => load({ refresh: true })}
+      tintColor={c.primary}
+    />
+  }
+>
+```
+
+### The opts parameter pitfall
+
+When you add `opts?: { refresh?: boolean }` to a function that was previously `() => void`, any `onPress={load}` or `onPress={fn}` binding that previously worked will now receive the native event object as the first argument. React Native's `TouchableOpacity.onPress` passes a `GestureResponderEvent`, which has no overlap with `{ refresh?: boolean }`. TypeScript will catch this, but only if the function signature is typed:
+
+```tsx
+// WRONG — passes GestureResponderEvent as opts
+<TouchableOpacity onPress={load}>
+
+// CORRECT
+<TouchableOpacity onPress={() => load()}>
+```
+
+Always wrap with an arrow function when the handler has a non-event parameter signature.
+
+---
+
+## 2026-06-01 — Classifying silent catches: a decision framework
+
+When auditing `.catch(() => {})` calls, the question is not "should this throw?" but "who needs to know, and how urgently?"
+
+### Category 1 — Keep silent (fire-and-forget side effects)
+
+These are operations where:
+- The user already got the feedback they need (UI updated optimistically)
+- Failure has no meaningful consequence (a notification stays "unread" server-side — the user dismissed it locally)
+- Showing an error would be actively confusing ("You dismissed this notification" → error → "What did I do wrong?")
+
+Examples: mark-as-read, bulk-dismiss, sign-out cleanup after navigation.
+
+### Category 2 — Add `console.error` (background data loads)
+
+These are `useEffect` fetches that populate UI sections. The component already handles empty/null state gracefully. Failure just means the section stays empty. No user action depends on the result in the moment it fires.
+
+The right fix is `console.error('Failed to load X:', e)` — visible in DevTools for diagnosis, not surfaced to the user.
+
+**Do not add a toast or modal for these.** A background load failing silently (empty section) is less disruptive than an error notification that fires before the user has even scrolled to that section.
+
+### Category 3 — User-visible error (user-triggered mutations)
+
+These are click handlers and form submits. The user took an action and expects a result. If the action fails silently, the user doesn't know whether it succeeded. They may retry (causing duplicates) or assume success (causing data loss).
+
+The right fix is to surface the error near the action that failed — either via existing `setError` state, or by adding a localized error state for that section. A component-level error state (rather than a global toast) keeps the error co-located with the failed action.
+
+### The `.bak` file problem
+
+`frontend/src/pages/DispatchDashboard.tsx.bak` is committed to the repo and contains stale code with `console.error(e)` calls. It should be deleted — tracked backup files create confusion about which version is authoritative and can be accidentally imported.
+
+---
+
+## 2026-06-01 — DB CHECK constraints on nullable float columns
+
+Dispatch weight columns (`dispatch_weight_driver`, etc.) are nullable — `NULL` means "use the system default." But when a value is present, it must be between 0 and 1 (they are fractional weights that sum to 1.0 in the algorithm).
+
+A `CHECK (col BETWEEN 0 AND 1)` constraint rejects `NULL` in most databases because `NULL BETWEEN 0 AND 1` evaluates to `NULL` (unknown), not `TRUE`. This is not what we want — `NULL` should be allowed.
+
+The correct pattern:
+```sql
+CHECK (col IS NULL OR (col BETWEEN 0 AND 1))
+```
+
+In SQLAlchemy:
+```python
+CheckConstraint(
+  "dispatch_weight_driver IS NULL OR (dispatch_weight_driver BETWEEN 0 AND 1)",
+  name="ck_company_configs_weight_driver",
+)
+```
+
+Always use this pattern for nullable columns with value constraints. A plain `BETWEEN` constraint on a nullable column will reject all NULL values, blocking any row where the column is not set.
+
+---
+
+## 2026-06-01 — Audit findings: always verify current state before fixing
+
+The four-agent audit on 2026-06-01 produced 5 Critical and 7 High findings. All 12 were already fixed by the time remediation began — the audit captured a snapshot taken before an active remediation cycle.
+
+**The lesson:** An audit finding is a claim that a problem existed at a specific point in time. Before writing any fix:
+
+1. Read the current state of the file
+2. Grep for the exact pattern the audit flagged
+3. Check recent git history (`git log -p -- path/to/file`) for the fix
+
+"The audit said it's broken" is not sufficient justification to write code. Writing a fix for something already fixed introduces a regression (you may overwrite the correct version with a broken one), wasted effort, and noise in the PR diff.
+
+This is especially important when audits and remediation happen in overlapping sessions — the audit snapshot may be minutes old but the code may have already moved.
+
+---
+
+## 2026-06-01 — Multi-tenancy applies to service-layer helpers too
+
+Service-layer functions that fan out notifications to management (e.g. `_notify_management` in `record_trainer_mark.py`, `_notify_management_phase4_fail` in `score_phase4.py`) are not exempt from the multi-tenancy invariant.
+
+The pattern to watch for: a helper that queries `Employee` by role without a `company_id` filter:
+
+```python
+# BAD — notifies management across all companies
+recipients = db.query(Employee).filter(
+    Employee.role.in_(["management", "admin"]),
+    Employee.is_active == True,
+).all()
+for recipient in recipients:
+    db.add(Notification(employee_id=recipient.id, type="x", message="..."))
+```
+
+```python
+# GOOD — scoped to the correct company
+recipients = db.query(Employee).filter(
+    Employee.company_id == company_id,
+    Employee.role.in_(["management", "admin"]),
+    Employee.is_active == True,
+).all()
+for recipient in recipients:
+    db.add(Notification(company_id=company_id, employee_id=recipient.id, type="x", message="..."))
+```
+
+The `company_id` must come from somewhere in the call chain — usually from the ORM model that triggered the event (e.g. `record.company_id` on a `TrainingRecord`). Thread it explicitly; never assume a global or session-level scope.
+
+**Scanner:** after writing any notification fan-out, search for `db.add(Notification(` in the file and verify every call includes `company_id=`.
+
+---
+
+## 2026-06-01 — Notification gaps: the "else" branch pattern
+
+When a notification update path only handles the case where an existing notification exists, an employee who never received the original notification gets nothing at all.
+
+Example from `dispatch.py::manual_assignment`:
+
+```python
+# Before: only the if branch existed
+existing_notif = db.query(Notification).filter(..., type="dispatch_assignment", dispatch_date=date).first()
+if existing_notif:
+    existing_notif.message = "You have been reassigned..."
+    existing_notif.is_read = False
+# If no prior notification: silent. Employee never knows about the assignment.
+```
+
+The fix is an `else` branch that creates the notification from scratch using the same message format and fields (`dispatch_date` populated) as the original publish path.
+
+This pattern appears whenever:
+- A feature was built assuming a prior flow always runs first (publish before reassign)
+- A new code path bypasses the original flow (manual-only dispatch)
+
+When reviewing any "update existing X" pattern, always ask: what happens if X doesn't exist yet?
