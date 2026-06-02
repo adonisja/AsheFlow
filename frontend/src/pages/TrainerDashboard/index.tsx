@@ -420,7 +420,7 @@ function MyPerformanceTab() {
         setSummary(sRes.data);
         setMarks(mRes.data);
       })
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load trainer marks:', e); })
       .finally(() => setLoading(false));
   }, []);
 

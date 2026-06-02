@@ -15,6 +15,8 @@ from statistics import median
 from typing import List
 from uuid import UUID
 
+from app.services.local_date import company_today
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
@@ -145,7 +147,7 @@ def get_ban_override_freq(
     _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
 ):
-    today = date.today()
+    today = company_today(db, caller.company_id)
     range_start = today - timedelta(weeks=weeks)
 
     rows = (

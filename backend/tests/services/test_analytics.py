@@ -47,6 +47,7 @@ from app.models.assignment_member import AssignmentMember
 from app.models.training import TrainingRecord
 from app.models.notification import Notification
 from app.models.dispatch_confirmation import DispatchConfirmation
+from app.models.company import Company, CompanyConfig
 
 # The four analytics functions under test
 from app.routers.analytics import (
@@ -61,6 +62,8 @@ from app.routers.analytics import (
 # ---------------------------------------------------------------------------
 
 ANALYTICS_TABLES = [
+    Company.__table__,
+    CompanyConfig.__table__,
     Employee.__table__,
     Truck.__table__,
     TruckAssignment.__table__,
@@ -83,6 +86,36 @@ def db():
     meta.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
+
+    session.add(Company(
+        id=SEED_COMPANY_ID,
+        name="Test Company",
+        slug="test-company",
+        is_active=True,
+    ))
+    session.flush()
+    session.add(CompanyConfig(
+        id=uuid.UUID("b0000000-0000-0000-0000-000000000001"),
+        company_id=SEED_COMPANY_ID,
+        is_configured=True,
+        rating_window_hours=6,
+        invite_expiry_days=7,
+        graduation_assignments=5,
+        debt_escalation_threshold=3,
+        phase4_pass_score=90.0,
+        underperforming_trainer_threshold=3,
+        max_training_phase=4,
+        dispatch_weight_driver=0.70,
+        dispatch_weight_trainer=0.50,
+        dispatch_weight_walker=0.30,
+        dispatch_mutual_bonus=0.10,
+        dispatch_tridirectional_bonus=0.20,
+        dispatch_consecutive_penalty=0.05,
+        dispatch_weight_cap=0.85,
+        flag_threshold=1.0,
+    ))
+    session.commit()
+
     yield session
     session.close()
     engine.dispose()

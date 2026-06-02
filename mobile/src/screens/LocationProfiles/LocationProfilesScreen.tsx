@@ -66,6 +66,7 @@ export default function LocationProfilesScreen() {
   const [tab,          setTab]          = useState<'browse' | 'submit'>('browse');
   const [profiles,     setProfiles]     = useState<Profile[]>([]);
   const [loading,      setLoading]      = useState(true);
+  const [refreshing,   setRefreshing]   = useState(false);
   const [searchKey,    setSearchKey]    = useState('');
 
   // Submit form
@@ -74,8 +75,8 @@ export default function LocationProfilesScreen() {
   const [rawNotes,     setRawNotes]     = useState('');
   const [submitting,   setSubmitting]   = useState(false);
 
-  const loadProfiles = useCallback(async (bk?: string) => {
-    setLoading(true);
+  const loadProfiles = useCallback(async (bk?: string, opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) setRefreshing(true); else setLoading(true);
     try {
       const params: Record<string, string> = { limit: '50' };
       if (bk?.trim()) params.block_key = bk.trim();
@@ -85,6 +86,7 @@ export default function LocationProfilesScreen() {
       setProfiles([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -180,6 +182,8 @@ export default function LocationProfilesScreen() {
               data={profiles}
               keyExtractor={p => p.id}
               contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
+              onRefresh={() => loadProfiles(searchKey || undefined, { refresh: true })}
+              refreshing={refreshing}
               renderItem={({ item: p }) => {
                 const col = statusColor(p.building_type_status, c.primary);
                 const typeLabel = BUILDING_TYPES.find(b => b.value === p.building_type)?.label ?? p.building_type;

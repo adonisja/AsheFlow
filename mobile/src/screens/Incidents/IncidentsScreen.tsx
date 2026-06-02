@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, ScrollView,
+  ActivityIndicator, Alert, ScrollView, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import apiClient from '@api/client';
@@ -63,10 +63,11 @@ export default function IncidentsScreen() {
   // History state
   const [incidents,   setIncidents]   = useState<Incident[]>([]);
   const [loading,     setLoading]     = useState(false);
+  const [refreshing,  setRefreshing]  = useState(false);
   const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
 
-  const fetchHistory = useCallback(async () => {
-    setLoading(true);
+  const fetchHistory = useCallback(async (opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) setRefreshing(true); else setLoading(true);
     try {
       const res = await apiClient.get('/incidents/my');
       setIncidents(res.data ?? []);
@@ -74,6 +75,7 @@ export default function IncidentsScreen() {
       setIncidents([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -128,7 +130,16 @@ export default function IncidentsScreen() {
         ))}
       </View>
 
-      <ScrollView style={s.scroll} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        style={s.scroll}
+        contentContainerStyle={s.content}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          tab === 'history'
+            ? <RefreshControl refreshing={refreshing} onRefresh={() => fetchHistory({ refresh: true })} tintColor={c.primary} />
+            : undefined
+        }
+      >
         {tab === 'report' ? (
           <>
             <Text style={s.pageTitle}>Report Incident</Text>

@@ -213,7 +213,7 @@ jobs:
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
+              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 2 SSM (migrations): $CID"
@@ -360,7 +360,7 @@ jobs:
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade head"
+              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 2 SSM (migrations): $CID"

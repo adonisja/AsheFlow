@@ -588,6 +588,20 @@ def update_company_config_super_admin(
 company_admin_router = APIRouter(prefix="/companies", tags=["company-config"])
 
 allow_admin = RoleChecker(["admin"])
+allow_management = RoleChecker(["management", "admin"])
+
+
+@company_admin_router.get("/my-info")
+def get_my_company_info(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+    db: Session = Depends(get_db),
+):
+    """Return name and timezone for the caller's company. Management and admin."""
+    company = db.query(Company).filter(Company.id == caller.company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    return {"name": company.name, "timezone": company.timezone}
 
 
 @company_admin_router.get("/my-config", response_model=CompanyConfigResponse)

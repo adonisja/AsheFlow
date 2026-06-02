@@ -7,6 +7,7 @@ import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Record_ = {
@@ -25,6 +26,7 @@ type Record_ = {
 export default function TraineeHistoryScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
 
   const [records,    setRecords]    = useState<Record_[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -33,9 +35,10 @@ export default function TraineeHistoryScreen() {
   const [reviewState, setReviewState] = useState<Record<string, { stars: number; comment: string; submitting: boolean }>>({});
 
   const fetch = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     try {
-      const res = await apiClient.get(`/training/trainee/${user.id}`);
+      const res = await apiClient.get(`/training/trainee/${eid}`);
       const raw: any[] = res.data ?? [];
       // Backend returns newest-first; skip index 0 (today's record) — show history
       const history = raw.slice(1);
@@ -70,7 +73,7 @@ export default function TraineeHistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { fetch(); }, [fetch]);
 

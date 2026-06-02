@@ -12,7 +12,7 @@ from app.models.training import TrainingRecord, TrainingTask
 logger = logging.getLogger(__name__)
 
 
-def graduate_eligible_trainees(db: Session, target_date, cfg=None):
+def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
     """
     Check all active trainees for a passed graduation quiz (status='passed').
 
@@ -34,11 +34,13 @@ def graduate_eligible_trainees(db: Session, target_date, cfg=None):
     trainees = db.query(Employee).filter(
         Employee.role == "trainee",
         Employee.is_active == True,
+        Employee.company_id == company_id,
     ).all()
 
     recipients = db.query(Employee).filter(
         Employee.role.in_(["management", "admin", "dispatch"]),
         Employee.is_active == True,
+        Employee.company_id == company_id,
     ).all()
 
     for trainee in trainees:

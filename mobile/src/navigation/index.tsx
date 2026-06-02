@@ -111,7 +111,7 @@ function HomeNavigator() {
       }}
     >
       <HomeStack.Screen name="HomeMain"         component={HomeScreen}            options={{ headerShown: false }} />
-      <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ title: "Today's Assignment" }} />
+      <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ headerShown: false }} />
       <HomeStack.Screen name="Profile"          component={ProfileScreen}         options={{ headerShown: false }} />
     </HomeStack.Navigator>
   );

@@ -20,33 +20,41 @@ export default function DispatchView() {
   const [urgentIncidents, setUrgentIncidents]         = useState<any[]>([]);
   const [fleetAssignments, setFleetAssignments]       = useState<any[]>([]);
   const [pendingRTS, setPendingRTS]                   = useState<any[]>([]);
+  const [loadErrors, setLoadErrors]                   = useState<string[]>([]);
+  const [actionError, setActionError]                 = useState<string | null>(null);
 
   useEffect(() => {
-    axiosClient.get('/time-off-requests/').then(res =>
-      setPendingRequests(res.data.filter((r: any) => r.status === 'pending'))
-    ).catch(() => {});
+    const errors: string[] = [];
+    const fetches = [
+      axiosClient.get('/time-off-requests/').then(res =>
+        setPendingRequests(res.data.filter((r: any) => r.status === 'pending'))
+      ).catch(() => { errors.push('time-off requests'); }),
 
-    axiosClient.get('/employee-off-days/').then(res =>
-      setPendingOffDays(res.data.filter((r: any) => r.status === 'pending'))
-    ).catch(() => {});
+      axiosClient.get('/employee-off-days/').then(res =>
+        setPendingOffDays(res.data.filter((r: any) => r.status === 'pending'))
+      ).catch(() => { errors.push('off-day requests'); }),
 
-    axiosClient.get('/assignment-change-requests/pending').then(res =>
-      setPendingChangeRequests(res.data)
-    ).catch(() => {});
+      axiosClient.get('/assignment-change-requests/pending').then(res =>
+        setPendingChangeRequests(res.data)
+      ).catch(() => { errors.push('reassignment requests'); }),
 
-    axiosClient.get('/incidents/unresolved-urgent').then(res =>
-      setUrgentIncidents(res.data)
-    ).catch(() => {});
+      axiosClient.get('/incidents/unresolved-urgent').then(res =>
+        setUrgentIncidents(res.data)
+      ).catch(() => { errors.push('incidents'); }),
 
-    // Fleet status from TruckAssignment status (wired since 2026-05-02)
-    axiosClient.get(`/dispatch/${today}`).then(res => {
-      const assignments = res.data?.truck_assignments ?? [];
-      setFleetAssignments(assignments);
-    }).catch(() => {});
+      // Fleet status from TruckAssignment status (wired since 2026-05-02)
+      axiosClient.get(`/dispatch/${today}`).then(res => {
+        const assignments = res.data?.truck_assignments ?? [];
+        setFleetAssignments(assignments);
+      }).catch(() => { errors.push('fleet status'); }),
 
-    axiosClient.get('/shift-ops/rts-reports/pending').then(res =>
-      setPendingRTS(res.data)
-    ).catch(() => {});
+      axiosClient.get('/shift-ops/rts-reports/pending').then(res =>
+        setPendingRTS(res.data)
+      ).catch(() => { errors.push('RTS requests'); }),
+    ];
+    Promise.allSettled(fetches).then(() => {
+      if (errors.length > 0) setLoadErrors(errors);
+    });
   }, []);
 
   const handleApprove = async (type: 'request' | 'offDay', id: string) => {
@@ -54,10 +62,13 @@ export default function DispatchView() {
     const ok = await confirm({ title: 'Approve Request', message: `Approve this ${label}?`, confirmLabel: 'Approve', variant: 'default' });
     if (!ok) return;
     const url = type === 'request' ? `/time-off-requests/${id}/approve` : `/employee-off-days/${id}/approve`;
-    axiosClient.patch(url).then(() => {
+    try {
+      await axiosClient.patch(url);
       if (type === 'request') setPendingRequests(p => p.filter(r => r.id !== id));
       else setPendingOffDays(p => p.filter(r => r.id !== id));
-    }).catch(() => {});
+    } catch {
+      setActionError(`Failed to approve ${label}. Please try again.`);
+    }
   };
 
   const handleReject = async (type: 'request' | 'offDay', id: string) => {
@@ -65,42 +76,57 @@ export default function DispatchView() {
     const ok = await confirm({ title: 'Reject Request', message: `Reject this ${label}? The employee will be notified.`, confirmLabel: 'Reject', variant: 'danger' });
     if (!ok) return;
     const url = type === 'request' ? `/time-off-requests/${id}/reject` : `/employee-off-days/${id}/reject`;
-    axiosClient.patch(url).then(() => {
+    try {
+      await axiosClient.patch(url);
       if (type === 'request') setPendingRequests(p => p.filter(r => r.id !== id));
       else setPendingOffDays(p => p.filter(r => r.id !== id));
-    }).catch(() => {});
+    } catch {
+      setActionError(`Failed to reject ${label}. Please try again.`);
+    }
   };
 
   const handleApproveChange = async (id: string) => {
     const ok = await confirm({ title: 'Approve Reassignment', message: 'Approve this truck reassignment request?', confirmLabel: 'Approve', variant: 'default' });
     if (!ok) return;
-    axiosClient.patch(`/assignment-change-requests/${id}/approve`).then(() =>
-      setPendingChangeRequests(p => p.filter(r => r.id !== id))
-    ).catch(() => {});
+    try {
+      await axiosClient.patch(`/assignment-change-requests/${id}/approve`);
+      setPendingChangeRequests(p => p.filter(r => r.id !== id));
+    } catch {
+      setActionError('Failed to approve reassignment. Please try again.');
+    }
   };
 
   const handleRejectChange = async (id: string) => {
     const ok = await confirm({ title: 'Reject Reassignment', message: 'Reject this reassignment request?', confirmLabel: 'Reject', variant: 'danger' });
     if (!ok) return;
-    axiosClient.patch(`/assignment-change-requests/${id}/reject`).then(() =>
-      setPendingChangeRequests(p => p.filter(r => r.id !== id))
-    ).catch(() => {});
+    try {
+      await axiosClient.patch(`/assignment-change-requests/${id}/reject`);
+      setPendingChangeRequests(p => p.filter(r => r.id !== id));
+    } catch {
+      setActionError('Failed to reject reassignment. Please try again.');
+    }
   };
 
   const handleApproveRTS = async (driverId: string, driverName: string) => {
     const ok = await confirm({ title: 'Approve RTS Return', message: `Approve ${driverName}'s return-to-station request? They will be cleared to leave the field.`, confirmLabel: 'Approve Return', variant: 'default' });
     if (!ok) return;
-    axiosClient.patch(`/shift-ops/rts-report/${driverId}`, { status: 'approved' }).then(() =>
-      setPendingRTS(p => p.filter(r => r.driver_id !== driverId))
-    ).catch(() => {});
+    try {
+      await axiosClient.patch(`/shift-ops/rts-report/${driverId}`, { status: 'approved' });
+      setPendingRTS(p => p.filter(r => r.driver_id !== driverId));
+    } catch {
+      setActionError(`Failed to approve RTS return for ${driverName}. Please try again.`);
+    }
   };
 
   const handleRejectRTS = async (driverId: string, driverName: string) => {
     const ok = await confirm({ title: 'Reject RTS Return', message: `Reject ${driverName}'s return request? They will remain in the field.`, confirmLabel: 'Reject', variant: 'danger' });
     if (!ok) return;
-    axiosClient.patch(`/shift-ops/rts-report/${driverId}`, { status: 'rejected' }).then(() =>
-      setPendingRTS(p => p.filter(r => r.driver_id !== driverId))
-    ).catch(() => {});
+    try {
+      await axiosClient.patch(`/shift-ops/rts-report/${driverId}`, { status: 'rejected' });
+      setPendingRTS(p => p.filter(r => r.driver_id !== driverId));
+    } catch {
+      setActionError(`Failed to reject RTS return for ${driverName}. Please try again.`);
+    }
   };
 
   const quickLinks = [
@@ -117,6 +143,21 @@ export default function DispatchView() {
   return (
     <div className="space-y-6">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+      {loadErrors.length > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>Some data failed to load: {loadErrors.join(', ')}. Refresh to retry.</span>
+        </div>
+      )}
+      {actionError && (
+        <div className="flex items-center justify-between gap-2 px-4 py-2 rounded-lg bg-danger/10 border border-danger/30 text-danger text-sm">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button onClick={() => setActionError(null)} className="text-danger/60 hover:text-danger shrink-0"><X className="w-4 h-4" /></button>
+        </div>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Quick links */}
         <div className="card h-full">

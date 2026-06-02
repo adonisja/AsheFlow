@@ -3,22 +3,22 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
-from app.models.company import CompanyConfig
+from app.models.company import Company
 
 
 def company_today(db: Session, company_id) -> date:
     """Return today's date in the company's configured timezone.
 
     Falls back to UTC if the timezone string is invalid or the company has
-    no config row. Always prefer this over date.today() in any endpoint
+    no Company row. Always prefer this over date.today() in any endpoint
     that gates on 'today' (dispatch, field ops, shift sessions, etc.).
     """
     tz_str = "UTC"
-    config = db.query(CompanyConfig).filter(
-        CompanyConfig.company_id == company_id
+    company = db.query(Company).filter(
+        Company.id == company_id
     ).first()
-    if config and config.timezone:
-        tz_str = config.timezone
+    if company and company.timezone:
+        tz_str = company.timezone
     try:
         tz = ZoneInfo(tz_str)
     except ZoneInfoNotFoundError:

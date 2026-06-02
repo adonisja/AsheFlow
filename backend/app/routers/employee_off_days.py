@@ -9,6 +9,7 @@ from app.models.employee import Employee
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.notification import Notification
 from app.schemas.employee_off_day import EmployeeOffDayCreate, EmployeeOffDayResponse
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/employee-off-days", tags=["employee-off-days"])
 allow_mgmt       = RoleChecker(["management", "admin", "dispatch"])
@@ -137,6 +138,16 @@ def approve_employee_off_day(
         type="offday_approved",
         message=f"Your request to have {off_day.day_of_week}s off has been approved.",
     ))
+    write_audit(
+        db,
+        action_type="off_day.approved",
+        target_table="employee_off_days",
+        target_id=str(off_day.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"status": "pending"},
+        after={"status": "approved"},
+    )
     db.commit()
     db.refresh(off_day)
     return off_day
@@ -164,6 +175,16 @@ def reject_employee_off_day(
         type="offday_rejected",
         message=f"Your request to have {off_day.day_of_week}s off was not approved.",
     ))
+    write_audit(
+        db,
+        action_type="off_day.rejected",
+        target_table="employee_off_days",
+        target_id=str(off_day.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"status": "pending"},
+        after={"status": "rejected"},
+    )
     db.commit()
     db.refresh(off_day)
     return off_day
