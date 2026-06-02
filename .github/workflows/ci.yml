@@ -348,8 +348,8 @@ jobs:
               "cp -r /tmp/asheflow-private/asheflow_private /home/ubuntu/AsheFlow/backend/asheflow_private",
               "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
               "touch /home/ubuntu/AsheFlow/bot/.env",
-              "cd /home/ubuntu/AsheFlow && docker compose build backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy"
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 1 SSM: $CID"
@@ -360,7 +360,7 @@ jobs:
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend alembic upgrade heads"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 2 SSM (migrations): $CID"
