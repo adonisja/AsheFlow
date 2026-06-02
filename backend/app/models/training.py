@@ -45,7 +45,7 @@ class TrainingRecord(Base):
 
     submitted_at: set when the trainer explicitly submits the record (by midnight).
     phase_closed: set True when all mandatory coverage tasks are complete.
-    extended: set True if Phase 4 failed and a Phase 5 remediation record was generated.
+    extended: set True if Phase 4 failed and a Phase 6 remediation record was generated.
     """
     __tablename__ = "training_records"
 
@@ -55,7 +55,7 @@ class TrainingRecord(Base):
     trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
 
     record_date        = Column(Date, nullable=False, index=True)
-    current_day_number = Column(Integer, nullable=False)  # phase number: 1–4 (5 = remediation)
+    current_day_number = Column(Integer, nullable=False)  # phase: 1–4 normal, 5 = quiz day, 6+ = remediation
 
     trainer_comments  = Column(Text, nullable=True)
     manager_comments  = Column(Text, nullable=True)

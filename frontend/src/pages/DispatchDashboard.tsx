@@ -28,7 +28,9 @@ export default function DispatchDashboard() {
   // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
   const [confirmations, setConfirmations] = useState<Record<string, string>>({});
   const [isPollingConfirmations, setIsPollingConfirmations] = useState(false);
+  const [confirmingEmployee, setConfirmingEmployee] = useState<string | null>(null);
   const [confirmationsStale, setConfirmationsStale] = useState(false);
+  const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailureCount = useRef(0);
 
@@ -73,6 +75,7 @@ export default function DispatchDashboard() {
 
   useEffect(() => {
     fetchTrucksAndEmployees();
+    axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {});
     return () => stopConfirmationPolling();
   }, []);
 
@@ -107,7 +110,7 @@ export default function DispatchDashboard() {
         setError(null);
         try {
           await axiosClient.post(`/dispatch/${selectedDate}/publish`);
-          await fetchConfirmations();
+          await Promise.all([fetchDispatchData(), fetchConfirmations()]);
           startConfirmationPolling(selectedDate);
         } catch (err: any) {
           setError(err.response?.data?.detail || 'Failed to publish to Discord.');
@@ -132,6 +135,7 @@ export default function DispatchDashboard() {
         stopConfirmationPolling();
         try {
           await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
+          await fetchDispatchData();
         } catch (err: any) {
           setError(err.response?.data?.detail || 'Failed to post final assignments to Discord.');
         } finally {
@@ -139,6 +143,21 @@ export default function DispatchDashboard() {
         }
       },
     });
+  };
+
+  const handleConfirmEmployee = async (employeeId: string) => {
+    setConfirmingEmployee(employeeId);
+    try {
+      await axiosClient.post(`/dispatch/${selectedDate}/confirmations`, {
+        employee_id: employeeId,
+        status: 'confirmed',
+      });
+      setConfirmations(prev => ({ ...prev, [employeeId]: 'confirmed' }));
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to confirm employee.');
+    } finally {
+      setConfirmingEmployee(null);
+    }
   };
 
   const fetchUnavailableStaff = async () => {
@@ -319,7 +338,7 @@ export default function DispatchDashboard() {
         setIsLoading(true);
         try {
           await axiosClient.delete(`/dispatch/assign/${selectedDate}/${employeeId}`);
-          await fetchDispatchData();
+          await Promise.all([fetchDispatchData(), fetchAvailablePool()]);
         } catch (err: any) {
           console.error(err);
           setError(err.response?.data?.detail || 'Failed to remove employee.');
@@ -388,6 +407,16 @@ export default function DispatchDashboard() {
     ? Object.values(dispatchData.assigned_crews).reduce((max: number, crew: any) => Math.max(max, crew.length), 0) || 3
     : 3;
 
+  // Workflow step derived from durable backend status — never from local flag
+  type WorkflowStep = 'none' | 'dispatched' | 'published' | 'finalized';
+  const workflowStep: WorkflowStep = !dispatchData
+    ? 'none'
+    : dispatchData.workflow_status === 'finalized'
+    ? 'finalized'
+    : dispatchData.workflow_status === 'published'
+    ? 'published'
+    : 'dispatched';
+
   return (
     <div className="space-y-6 animate-slide-up">
       <div className="flex flex-col gap-4">
@@ -435,12 +464,17 @@ export default function DispatchDashboard() {
             className="w-36 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary outline-none"
             min="1"
           />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
-          />
+          <div className="flex items-center gap-1.5">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+            />
+            {companyTimezone && (
+              <span className="text-xs text-muted-foreground whitespace-nowrap">({companyTimezone})</span>
+            )}
+          </div>
           {isAdmin && (
             <button
               onClick={handleClearDispatch}
@@ -458,7 +492,7 @@ export default function DispatchDashboard() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={handleRunDispatch}
-            disabled={isLoading}
+            disabled={isLoading || workflowStep !== 'none'}
             className="btn-primary flex items-center gap-2"
           >
             {isLoading ? (
@@ -470,7 +504,7 @@ export default function DispatchDashboard() {
           </button>
           <button
             onClick={handlePublishToDiscord}
-            disabled={isPublishing || isLoading || !dispatchData}
+            disabled={isPublishing || isLoading || workflowStep !== 'dispatched'}
             className="bg-success text-white hover:bg-success/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title="DM each crew member their assignment and open the confirmation window"
           >
@@ -483,7 +517,7 @@ export default function DispatchDashboard() {
           </button>
           <button
             onClick={handleFinalize}
-            disabled={isFinalizing || isLoading || !dispatchData || Object.keys(confirmations).length === 0}
+            disabled={isFinalizing || isLoading || workflowStep !== 'published'}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title="Post confirmed crew lists to each truck channel and #drivers-chat"
           >
@@ -621,8 +655,8 @@ export default function DispatchDashboard() {
                         <div className="h-px bg-border/60 flex-1"></div>
                       </div>
                     )}
-                    <div 
-                      draggable
+                    <div
+                      draggable={!isLoading}
                       onDragStart={(e) => handleDragStart(e, emp.id)}
                       className="flex items-center gap-2 bg-accent/50 p-2 rounded border border-transparent hover:border-primary/30 cursor-grab active:cursor-grabbing"
                     >
@@ -702,7 +736,7 @@ export default function DispatchDashboard() {
                                </div>
                              )}
                              <div
-                               draggable
+                               draggable={!isLoading}
                                onDragStart={(e) => handleDragStart(e, member.employee_id, truckId)}
                                className="flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm"
                              >
@@ -716,10 +750,25 @@ export default function DispatchDashboard() {
                                <div className="flex items-center gap-1">
                                  {(() => {
                                    const conf = confirmations[member.employee_id];
-                                   if (!conf) return null;
                                    if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" aria-label="Confirmed" />;
                                    if (conf === 'declined')  return <XCircle className="w-4 h-4 text-danger" aria-label="Declined" />;
-                                   return <Clock className="w-4 h-4 text-warning" aria-label="Pending confirmation" />;
+                                   if (conf === 'pending' && isAdmin && workflowStep === 'published') {
+                                     return (
+                                       <button
+                                         onClick={() => handleConfirmEmployee(member.employee_id)}
+                                         disabled={confirmingEmployee === member.employee_id}
+                                         className="flex items-center gap-1 text-[10px] font-semibold bg-warning/15 text-warning hover:bg-warning/30 px-1.5 py-0.5 rounded transition-colors disabled:opacity-50"
+                                         title="Confirm on behalf of employee"
+                                       >
+                                         {confirmingEmployee === member.employee_id
+                                           ? <div className="w-3 h-3 border border-warning border-t-transparent rounded-full animate-spin" />
+                                           : <Clock className="w-3 h-3" />}
+                                         Confirm
+                                       </button>
+                                     );
+                                   }
+                                   if (conf === 'pending') return <Clock className="w-4 h-4 text-warning" aria-label="Pending confirmation" />;
+                                   return null;
                                  })()}
                                  <button
                                    onClick={() => handleRemoveFromTruck(member.employee_id)}

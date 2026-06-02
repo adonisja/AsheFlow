@@ -46,6 +46,7 @@ export default function DispatchHome() {
   const [incidents, setIncidents] = useState<any[]>([]);
   const [pendingRTS, setPendingRTS] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rtsActionError, setRtsActionError] = useState<string | null>(null);
 
   const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
 
@@ -60,20 +61,20 @@ export default function DispatchHome() {
         .then(r => setTruckNameMap(
           Object.fromEntries((r.data as { id: string; name: string }[]).map(t => [t.id, t.name]))
         ))
-        .catch(() => {}),
+        .catch((e) => { console.error('Failed to load truck names:', e); }),
       axiosClient.get(`/dispatch/${today}/confirmations`)
         .then(r => setConfirmations(r.data.confirmations || {})),
       axiosClient.get(`/dispatch/unavailable-staff/${today}`)
         .then(r => setUnavailable(r.data.unavailable_staff || [])),
       axiosClient.get('/schedule-change-requests/?status=pending&limit=10')
         .then(r => setChangeRequests(r.data))
-        .catch(() => {}),
+        .catch((e) => { console.error('Failed to load change requests:', e); }),
       axiosClient.get('/incidents/?resolved=false&limit=5')
         .then(r => setIncidents(r.data))
-        .catch(() => {}),
+        .catch((e) => { console.error('Failed to load incidents:', e); }),
       axiosClient.get('/shift-ops/rts-reports/pending')
         .then(r => setPendingRTS(r.data))
-        .catch(() => {}),
+        .catch((e) => { console.error('Failed to load RTS reports:', e); }),
     ]);
     setLoading(false);
   };
@@ -369,6 +370,12 @@ export default function DispatchHome() {
           Approve to release them, or reject if their counts need follow-up.
         </p>
 
+        {rtsActionError && (
+          <p className="text-xs text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2 mb-3">
+            {rtsActionError}
+          </p>
+        )}
+
         {pendingRTS.length === 0 ? (
           <div className="text-center py-6 opacity-60">
             <CheckCircle2 className="w-8 h-8 mb-2 text-success mx-auto" />
@@ -394,9 +401,10 @@ export default function DispatchHome() {
                 <div className="flex gap-2 shrink-0">
                   <button
                     onClick={() => {
+                      setRtsActionError(null);
                       axiosClient.patch(`/shift-ops/rts-report/${r.driver_id}`, { status: 'approved' })
                         .then(() => setPendingRTS(prev => prev.filter(x => x.driver_id !== r.driver_id)))
-                        .catch(() => {});
+                        .catch(() => { setRtsActionError(`Failed to approve RTS return for ${r.driver_name ?? 'driver'}. Try again.`); });
                     }}
                     className="p-1.5 rounded-lg bg-success/10 hover:bg-success/20 text-success transition-colors"
                     title="Clear to return"
@@ -405,9 +413,10 @@ export default function DispatchHome() {
                   </button>
                   <button
                     onClick={() => {
+                      setRtsActionError(null);
                       axiosClient.patch(`/shift-ops/rts-report/${r.driver_id}`, { status: 'rejected' })
                         .then(() => setPendingRTS(prev => prev.filter(x => x.driver_id !== r.driver_id)))
-                        .catch(() => {});
+                        .catch(() => { setRtsActionError(`Failed to hold RTS request for ${r.driver_name ?? 'driver'}. Try again.`); });
                     }}
                     className="p-1.5 rounded-lg bg-danger/10 hover:bg-danger/20 text-danger transition-colors"
                     title="Hold — needs follow-up"

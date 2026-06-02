@@ -15,6 +15,8 @@ from statistics import median
 from typing import List
 from uuid import UUID
 
+from app.services.local_date import company_today
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
@@ -112,7 +114,7 @@ def get_trainer_load(
     trainer_ids = list({r.trainer_id for r in open_records})
     trainers = {
         e.id: e
-        for e in db.query(EmployeeModel).filter(EmployeeModel.id.in_(trainer_ids)).all()
+        for e in db.query(EmployeeModel).filter(EmployeeModel.id.in_(trainer_ids), EmployeeModel.company_id == caller.company_id).all()
     }
 
     # Aggregate
@@ -145,7 +147,7 @@ def get_ban_override_freq(
     _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
 ):
-    today = date.today()
+    today = company_today(db, caller.company_id)
     range_start = today - timedelta(weeks=weeks)
 
     rows = (

@@ -50,9 +50,9 @@ export default function TrainerMarks() {
   const loadMarks = (trainerId: string | null) => {
     const url = trainerId
       ? `/trainer-marks/trainer/${trainerId}`
-      : '/trainer-marks/';
+      : '/trainer-marks/?limit=200&offset=0';
     axiosClient.get(url)
-      .then(r => setMarks(r.data))
+      .then(r => setMarks(r.data.items ?? r.data))
       .catch(() => setError('Failed to load trainer marks.'));
   };
 

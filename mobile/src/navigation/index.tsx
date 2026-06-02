@@ -5,12 +5,13 @@ import {
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
-  useColorScheme, ActivityIndicator, SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
-import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 import LoginScreen              from '@screens/Auth/LoginScreen';
@@ -25,16 +26,25 @@ import TrainerDashboard         from '@screens/Trainer/TrainerDashboard';
 import TraineeDashboard         from '@screens/Trainee/TraineeDashboard';
 import AnchorPointsScreen       from '@screens/AnchorPoints/AnchorPointsScreen';
 import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
+import ScheduleChangesScreen    from '@screens/ScheduleChanges/ScheduleChangesScreen';
+import WalkerDashboard          from '@screens/Walker/WalkerDashboard';
+import LocationProfilesScreen   from '@screens/LocationProfiles/LocationProfilesScreen';
+import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
+import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
 
 // ── Role constants ────────────────────────────────────────────────────────────
-export const FIELD_ROLES        = ['driver', 'trainer', 'trainee', 'walker'] as const;
-export const FIELD_OPS_ROLES    = ['driver'] as const;
-export const ANCHOR_POINT_ROLES = ['driver'] as const;
-export const PREFERENCES_ROLES  = ['driver', 'walker', 'trainer'] as const;
-export const SCHEDULE_ROLES     = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const INCIDENT_ROLES     = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const TRAINER_ROLES      = ['trainer'] as const;
-export const TRAINEE_ROLES      = ['trainee'] as const;
+export const FIELD_ROLES              = ['driver', 'trainer', 'trainee', 'walker'] as const;
+export const FIELD_OPS_ROLES          = ['driver'] as const;
+export const ANCHOR_POINT_ROLES       = ['driver'] as const;
+export const PREFERENCES_ROLES        = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const SCHEDULE_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const SCHEDULE_CHANGE_ROLES    = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'] as const;
+export const INCIDENT_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const TRAINER_ROLES            = ['trainer'] as const;
+export const TRAINEE_ROLES            = ['trainee'] as const;
+export const WALKER_ROLES             = ['walker'] as const;
+export const LOCATION_PROFILE_ROLES   = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const ROUTE_SORT_ROLES         = ['driver'] as const;
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -72,21 +82,25 @@ type TabDef = {
 };
 
 const ALL_TABS: TabDef[] = [
-  { key: 'Home',          label: 'Home',          icon: '⌂',  roles: [],               component: HomeNavigator },
-  { key: 'FieldOps',      label: 'Field Ops',      icon: '🔧', roles: FIELD_OPS_ROLES,    component: FieldOpsScreen },
-  { key: 'AnchorPoints',  label: 'Anchor Points',  icon: '📍', roles: ANCHOR_POINT_ROLES, component: AnchorPointsScreen },
-  { key: 'Training',      label: 'Training',       icon: '📋', roles: TRAINER_ROLES,      component: TrainerNavigator },
-  { key: 'MyTraining',    label: 'My Training',    icon: '📚', roles: TRAINEE_ROLES,      component: TraineeNavigator },
-  { key: 'Schedule',      label: 'Schedule',       icon: '📅', roles: SCHEDULE_ROLES,     component: ScheduleScreen },
-  { key: 'Incidents',     label: 'Incidents',      icon: '⚠️', roles: INCIDENT_ROLES,     component: IncidentsScreen },
-  { key: 'Preferences',   label: 'Preferences',    icon: '⚙️', roles: PREFERENCES_ROLES,  component: PreferencesScreen },
-  { key: 'Notifications', label: 'Notifications',  icon: '🔔', roles: [],                 component: NotificationsScreen },
+  { key: 'Home',            label: 'Home',            icon: '🏠', roles: [],                     component: HomeNavigator },
+  { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
+  { key: 'AnchorPoints',    label: 'Anchor Points',    icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointsScreen },
+  { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
+  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortScreen },
+  { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
+  { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
+  { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
+  { key: 'SchChanges',      label: 'Sch. Changes',     icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
+  { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
+  { key: 'Locations',       label: 'Locations',        icon: '📍', roles: LOCATION_PROFILE_ROLES,  component: LocationProfilesScreen },
+  { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', roles: PREFERENCES_ROLES,       component: PreferencesScreen },
+  { key: 'Notifications',   label: 'Notifications',    icon: '🔔', roles: [],                      component: NotificationsScreen },
+  { key: 'Account',         label: 'Account',          icon: '👤', roles: [],                      component: MyAccountScreen },
 ];
 
 // ── Home stack navigator ──────────────────────────────────────────────────────
 function HomeNavigator() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   return (
     <HomeStack.Navigator
       screenOptions={{
@@ -97,7 +111,7 @@ function HomeNavigator() {
       }}
     >
       <HomeStack.Screen name="HomeMain"         component={HomeScreen}            options={{ headerShown: false }} />
-      <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ title: "Today's Assignment" }} />
+      <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ headerShown: false }} />
       <HomeStack.Screen name="Profile"          component={ProfileScreen}         options={{ headerShown: false }} />
     </HomeStack.Navigator>
   );
@@ -131,8 +145,7 @@ function HorizontalTabBar({
   activeKey: string;
   onSelect: (key: string) => void;
 }) {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const insets = useSafeAreaInsets();
   const s = tabBarStyles(c);
 
@@ -163,7 +176,7 @@ function HorizontalTabBar({
   );
 }
 
-const tabBarStyles = (c: typeof lightColors) => StyleSheet.create({
+const tabBarStyles = (c: ThemeColors) => StyleSheet.create({
   container: {
     backgroundColor: c.surface,
     borderTopWidth: 1,
@@ -217,8 +230,7 @@ function MainShell() {
 // ── Root navigator ────────────────────────────────────────────────────────────
 export default function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
 
   if (isLoading) {
     return (

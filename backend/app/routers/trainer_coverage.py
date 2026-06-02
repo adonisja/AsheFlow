@@ -37,7 +37,7 @@ def get_coverage_for_record(
     )
 
     trainer_ids = {r.trainer_id for r in rows}
-    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(trainer_ids)).all()}
+    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(trainer_ids), Employee.company_id == caller.company_id).all()}
 
     return [
         {

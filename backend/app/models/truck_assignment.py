@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -26,8 +26,10 @@ class TruckAssignment(Base):
         CheckConstraint("status IN ('planned', 'active', 'completed')", name="ck_truck_assignments_status"),
     )
 
-    id       = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    truck_id = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False, index=True)
-    date     = Column(Date,               nullable=False, index=True)
-    status   = Column(String(50),         nullable=False, default="planned")
+    id                  = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id          = Column(UUID(as_uuid=True), nullable=False, index=True)
+    truck_id            = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False, index=True)
+    date                = Column(Date,               nullable=False, index=True)
+    status              = Column(String(50),         nullable=False, default="planned")
+    sort_initiated_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
+    sort_committed_at   = Column(DateTime(timezone=True), nullable=True)

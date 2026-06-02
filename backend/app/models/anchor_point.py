@@ -38,8 +38,14 @@ class AnchorPoint(Base):
     location     = Column(String(255),        nullable=False)
     eta          = Column(String(20),         nullable=True)
     notes        = Column(Text,               nullable=True)
-    submitted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    arrived_at   = Column(DateTime(timezone=True), nullable=True)
+    submitted_at           = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    arrived_at             = Column(DateTime(timezone=True), nullable=True)
+    # Departure tracking — set when driver submits a relocation
+    expected_departure_at  = Column(DateTime(timezone=True), nullable=True)   # driver's stated departure time
+    actual_departed_at     = Column(DateTime(timezone=True), nullable=True)   # stamped on "I'm leaving now"
+    # Running-late flag — set once ETA + 15 min passes with no arrival
+    is_running_late        = Column(Boolean, nullable=False, default=False)
+    running_late_flagged_at = Column(DateTime(timezone=True), nullable=True)
     confirmed_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     confirmed_by_name = Column(String(100), nullable=True)
     confirmed_at      = Column(DateTime(timezone=True), nullable=True)

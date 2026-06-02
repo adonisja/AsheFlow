@@ -2,6 +2,8 @@ from datetime import date, datetime, timezone
 from typing import List
 from uuid import UUID
 
+from app.services.local_date import company_today
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -49,7 +51,7 @@ def submit_change_request(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found or not eligible to submit reassignment requests.")
 
-    today = date.today()
+    today = company_today(db, caller.company_id)
     if payload.requested_date != today:
         raise HTTPException(status_code=400, detail="Reassignment requests can only be submitted for today.")
 
@@ -71,6 +73,7 @@ def submit_change_request(
 
     existing = db.query(AssignmentChangeRequest).filter(
         AssignmentChangeRequest.employee_id == payload.employee_id,
+        AssignmentChangeRequest.company_id == caller.company_id,
         AssignmentChangeRequest.requested_date == payload.requested_date,
         AssignmentChangeRequest.status == "pending",
     ).first()
@@ -82,6 +85,7 @@ def submit_change_request(
 
     new_req = AssignmentChangeRequest(
         employee_id=payload.employee_id,
+        company_id=caller.company_id,
         requested_date=payload.requested_date,
         reason=payload.reason,
     )
@@ -135,7 +139,7 @@ def get_pending_requests(
 
     result = []
     for req in pending:
-        employee = db.query(Employee).filter(Employee.id == req.employee_id).first()
+        employee = db.query(Employee).filter(Employee.id == req.employee_id, Employee.company_id == caller.company_id).first()
         result.append({
             "id": str(req.id),
             "employee": {

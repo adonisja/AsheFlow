@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, useColorScheme,
+  View, Text, TouchableOpacity, StyleSheet,
   TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type Record_ = {
   record_id: string;
@@ -22,9 +24,9 @@ type Record_ = {
 };
 
 export default function TraineeHistoryScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
 
   const [records,    setRecords]    = useState<Record_[]>([]);
   const [loading,    setLoading]    = useState(true);
@@ -33,9 +35,10 @@ export default function TraineeHistoryScreen() {
   const [reviewState, setReviewState] = useState<Record<string, { stars: number; comment: string; submitting: boolean }>>({});
 
   const fetch = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     try {
-      const res = await apiClient.get(`/training/trainee/${user.id}`);
+      const res = await apiClient.get(`/training/trainee/${eid}`);
       const raw: any[] = res.data ?? [];
       // Backend returns newest-first; skip index 0 (today's record) — show history
       const history = raw.slice(1);
@@ -70,7 +73,7 @@ export default function TraineeHistoryScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [fetchId]);
 
   useEffect(() => { fetch(); }, [fetch]);
 
@@ -192,13 +195,13 @@ export default function TraineeHistoryScreen() {
   );
 }
 
-function rateColor(rate: number, c: typeof lightColors) {
+function rateColor(rate: number, c: ThemeColors) {
   if (rate >= 0.9) return c.success;
   if (rate >= 0.7) return c.warning;
   return c.danger;
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   card:       { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   dateText:   { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground },

@@ -1,23 +1,27 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, useColorScheme, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { lightColors, darkColors, spacing, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
-import TraineeTodayScreen   from './TraineeTodayScreen';
-import TraineeHistoryScreen from './TraineeHistoryScreen';
+import TraineeTodayScreen    from './TraineeTodayScreen';
+import TraineeHistoryScreen  from './TraineeHistoryScreen';
+import MyRouteScreen         from './MyRouteScreen';
+import GraduationQuizScreen  from './GraduationQuizScreen';
 
-type Tab = 'today' | 'history';
+type Tab = 'today' | 'history' | 'myroute' | 'quiz';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: 'today',   label: 'Today',   icon: '📚' },
-  { key: 'history', label: 'History', icon: '📂' },
+  { key: 'today',   label: 'Today',    icon: '📚' },
+  { key: 'history', label: 'History',  icon: '📂' },
+  { key: 'myroute', label: 'My Route', icon: '🗺️' },
+  { key: 'quiz',    label: 'Quiz',     icon: '🎓' },
 ];
 
 export default function TraineeDashboard() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const [activeTab, setActiveTab] = useState<Tab>('today');
   const s = styles(c);
 
@@ -56,12 +60,14 @@ export default function TraineeDashboard() {
       <View style={{ flex: 1 }}>
         {activeTab === 'today'   && <TraineeTodayScreen />}
         {activeTab === 'history' && <TraineeHistoryScreen />}
+        {activeTab === 'myroute' && <MyRouteScreen />}
+        {activeTab === 'quiz'    && <GraduationQuizScreen />}
       </View>
     </SafeAreaView>
   );
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:         { flex: 1, backgroundColor: c.background },
   header:       {
     paddingHorizontal: spacing.lg,
