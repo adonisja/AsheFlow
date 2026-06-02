@@ -48,14 +48,28 @@ services:
       - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
       - DISCORD_DRIVERS_CHANNEL_ID=${DISCORD_DRIVERS_CHANNEL_ID:-}
       - TZ=America/New_York
-    ports:
-      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: asheflow_caddy
+    environment:
+      - API_DOMAIN=${API_DOMAIN:?API_DOMAIN must be set in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+    restart: unless-stopped
 
   celery_worker:
     build:
@@ -94,3 +108,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  caddy_data:
+  caddy_config:

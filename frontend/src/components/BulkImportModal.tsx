@@ -250,6 +250,10 @@ function UploadStep({ onParsed, onClose }: {
   const [error,    setError]    = useState('');
 
   const handle = useCallback(async (file: File) => {
+    if (file.size > 2 * 1024 * 1024) {
+      setError('File too large. Maximum file size is 2 MB.');
+      return;
+    }
     setParsing(true);
     setError('');
     try {
@@ -287,7 +291,7 @@ function UploadStep({ onParsed, onClose }: {
         </div>
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">Drop your file here or click to browse</p>
-          <p className="text-xs text-muted-foreground mt-1">Supports CSV, Excel (.xlsx / .xls), JSON · max 200 rows</p>
+          <p className="text-xs text-muted-foreground mt-1">Supports CSV, Excel (.xlsx / .xls), JSON · max 200 rows · max 2 MB</p>
         </div>
         {parsing && (
           <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />

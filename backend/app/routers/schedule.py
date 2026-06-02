@@ -11,6 +11,7 @@ from app.models.time_off_request import TimeOffRequest
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.truck import Truck
+from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.employee import Employee
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
@@ -169,6 +170,28 @@ def get_available_employees(
         .exists()
     )
 
+    is_already_assigned = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == Employee.id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == caller.company_id,
+        )
+        .exists()
+    )
+
+    has_declined = (
+        db.query(DispatchConfirmation)
+        .filter(
+            DispatchConfirmation.employee_id == Employee.id,
+            DispatchConfirmation.date == target_date,
+            DispatchConfirmation.company_id == caller.company_id,
+            DispatchConfirmation.status == 'declined',
+        )
+        .exists()
+    )
+
     available_employees = (
         db.query(Employee)
         .filter(
@@ -176,6 +199,8 @@ def get_available_employees(
             Employee.is_active == True,
             ~has_recurring_off,
             ~has_specific_off,
+            ~is_already_assigned,
+            ~has_declined,
         )
         .order_by(Employee.role, Employee.name)
         .all()

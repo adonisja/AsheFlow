@@ -6,13 +6,14 @@ from sqlalchemy.orm import Session
 from app.models.employee import Employee
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.time_off_request import TimeOffRequest
+from app.services.local_date import company_today
 
 
 def get_available_pool(db: Session, target_date: date = None, company_id: UUID = None) -> dict:
     """Return active employees grouped by role who are available on target_date, scoped to company."""
     if company_id is None:
         raise ValueError("company_id is required for get_available_pool")
-    target_date = target_date or date.today()
+    target_date = target_date or company_today(db, company_id)
 
     has_off_day_today = (
         db.query(EmployeeOffDay)
@@ -70,7 +71,7 @@ def get_unavailable_staff(db: Session, target_date: date = None, roles: list = N
     """
     if company_id is None:
         raise ValueError("company_id is required for get_unavailable_staff")
-    target_date = target_date or date.today()
+    target_date = target_date or company_today(db, company_id)
     day_name = target_date.strftime("%A")
 
     allowed_roles = [r for r in (roles or ["driver", "trainer", "walker"]) if r != "trainee"]

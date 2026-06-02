@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award } from 'lucide-react';
+import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
+import NotificationBanner from '../components/NotificationBanner';
 import { getLocalYMD as todayStr } from '../utils/date';
 import { fileToDataUrl } from '../utils/file';
 
@@ -49,7 +50,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
         setSubmitted(true);
         setSubmittedData({ has_failures: todayRecord.has_failures, items: todayRecord.items, notes: todayRecord.notes });
       }
-    }).catch(() => {});
+    }).catch((e) => { console.error('Failed to load inspection data:', e); });
   }, [employeeId]);
 
   const setResult = (item: string, pass: boolean) => {
@@ -181,7 +182,7 @@ function CheckInPanel({ employeeId }: { employeeId: string }) {
           }
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load check-in status:', e); });
   }, [employeeId]);
 
   const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -277,7 +278,7 @@ function DeparturePanel({ employeeId }: { employeeId: string }) {
           if (todayRecord.itinerary_photo_url) setPreviewUrl(todayRecord.itinerary_photo_url);
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load departure status:', e); });
   }, [employeeId]);
 
   const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -373,7 +374,7 @@ function ReturnPanel({ employeeId }: { employeeId: string }) {
           }
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load return status:', e); });
   }, [employeeId]);
 
   const handleReturn = async () => {
@@ -486,7 +487,7 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
         const todayRecord = res.data.find((r: any) => r.date === today);
         if (todayRecord) setLog(todayRecord);
       })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load fuel log:', e); });
   }, [employeeId]);
 
   // When the driver flips units, convert displayed input values automatically
@@ -706,7 +707,7 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
         }
         setEntries(pre);
       })
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load walker ratings:', e); })
       .finally(() => setCrewLoading(false));
   }, [employeeId]);
 
@@ -840,6 +841,225 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Truck AP Card — shown to trainers, trainees, walkers
+// Polls GET /anchor-points/truck/{truck_id}/active every 60s, but only
+// while an active AP exists. Polling stops once the AP is departed/arrived
+// with no pending departure, and restarts if a new notification arrives.
+// ---------------------------------------------------------------------------
+interface ActiveAP {
+  id: string;
+  driver_id: string;
+  location: string;
+  eta: string | null;
+  status: string;
+  is_running_late: boolean;
+  expected_departure_at: string | null;
+  actual_departed_at: string | null;
+  arrived_at: string | null;
+}
+
+const AP_POLL_MS = 60_000;
+
+function shouldPoll(ap: ActiveAP | null): boolean {
+  if (!ap) return false;
+  // Stop once arrived with no pending departure
+  if (ap.status === 'arrived' && !ap.expected_departure_at) return false;
+  // Stop once actually departed (crew has moved, next AP will be preliminary)
+  if (ap.actual_departed_at) return false;
+  return true;
+}
+
+function TruckAPCard({ employeeId, refreshTrigger = 0 }: { employeeId: string; refreshTrigger?: number }) {
+  const [truckId, setTruckId]       = useState<string | null>(null);
+  const [driverName, setDriverName] = useState<string | null>(null);
+  const [ap, setAp]                 = useState<ActiveAP | null>(null);
+  const [noAssignment, setNoAssignment] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const apRef = useRef<ActiveAP | null>(null);
+  const truckIdRef = useRef<string | null>(null);
+
+  const clearPoll = () => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+  };
+
+  const fetchAP = useCallback(async (tid: string) => {
+    try {
+      const res = await axiosClient.get<ActiveAP>(`/anchor-points/truck/${tid}/active`);
+      apRef.current = res.data;
+      setAp(res.data);
+      if (!shouldPoll(res.data)) clearPoll();
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        apRef.current = null;
+        setAp(null);
+        clearPoll();
+      }
+    }
+  }, []);
+
+  const startPoll = useCallback((tid: string) => {
+    clearPoll();
+    intervalRef.current = setInterval(() => fetchAP(tid), AP_POLL_MS);
+  }, [fetchAP]);
+
+  useEffect(() => {
+    axiosClient.get(`/field-ops/crew/${employeeId}`)
+      .then(res => {
+        const tid: string | null = res.data.truck_id ?? null;
+        const dname: string | null = res.data.driver_name ?? null;
+        truckIdRef.current = tid;
+        setTruckId(tid);
+        setDriverName(dname);
+        if (!tid) { setNoAssignment(true); return; }
+        // Initial fetch — start polling only if there's an active AP to watch
+        axiosClient.get<ActiveAP>(`/anchor-points/truck/${tid}/active`)
+          .then(r => {
+            apRef.current = r.data;
+            setAp(r.data);
+            if (shouldPoll(r.data)) startPoll(tid);
+          })
+          .catch(err => {
+            if (err.response?.status === 404) { apRef.current = null; setAp(null); }
+          });
+      })
+      .catch(() => setNoAssignment(true));
+    return () => clearPoll();
+  }, [employeeId, fetchAP, startPoll]);
+
+  // Re-fetch and restart polling when a relevant notification arrives
+  useEffect(() => {
+    if (refreshTrigger === 0 || !truckIdRef.current) return;
+    const tid = truckIdRef.current;
+    fetchAP(tid);
+    if (shouldPoll(apRef.current)) startPoll(tid);
+  }, [refreshTrigger, fetchAP, startPoll]);
+
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (noAssignment) {
+    return (
+      <div className="card">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent shrink-0">
+            <Truck className="w-4 h-4 text-muted-foreground" />
+          </div>
+          <h2 className="section-title">Driver Anchor Point</h2>
+        </div>
+        <p className="text-sm text-subtle">No truck assignment found for today.</p>
+      </div>
+    );
+  }
+
+  if (truckId === null) {
+    return (
+      <div className="card animate-pulse py-8 text-center text-subtle text-sm">Loading truck info…</div>
+    );
+  }
+
+  // No AP yet
+  if (!ap) {
+    return (
+      <div className="card">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent shrink-0">
+            <Truck className="w-4 h-4 text-info" />
+          </div>
+          <h2 className="section-title">Driver Anchor Point</h2>
+        </div>
+        <div className="py-4 text-center text-sm text-subtle bg-accent/20 rounded-xl border border-border/50">
+          {driverName ? `${driverName} hasn't set an anchor point yet.` : 'No anchor point set yet.'}
+        </div>
+      </div>
+    );
+  }
+
+  const isArrived   = ap.status === 'arrived';
+  const isDeparting = !ap.actual_departed_at && !!ap.expected_departure_at;
+  const isDeparted  = !!ap.actual_departed_at;
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center gap-3">
+        <div className={`flex items-center justify-center w-8 h-8 rounded-lg shrink-0 ${
+          isArrived ? 'bg-success/10' : ap.is_running_late ? 'bg-danger/10' : 'bg-info/10'
+        }`}>
+          <Truck className={`w-4 h-4 ${isArrived ? 'text-success' : ap.is_running_late ? 'text-danger' : 'text-info'}`} />
+        </div>
+        <h2 className="section-title">Driver Anchor Point</h2>
+        {ap.is_running_late && !isArrived && (
+          <span className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-danger bg-danger/10 px-2 py-0.5 rounded-full">
+            <Clock className="w-3 h-3" /> Running Late
+          </span>
+        )}
+        {isArrived && (
+          <span className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-success bg-success/10 px-2 py-0.5 rounded-full">
+            <CheckCircle2 className="w-3 h-3" /> Arrived
+          </span>
+        )}
+      </div>
+
+      <div className={`p-3 rounded-xl border space-y-2 text-sm ${
+        isArrived   ? 'bg-success/8 border-success/25' :
+        ap.is_running_late ? 'bg-danger/8 border-danger/25' :
+        'bg-info/8 border-info/25'
+      }`}>
+        {driverName && (
+          <p className="text-xs text-muted-foreground font-medium">{driverName}</p>
+        )}
+        <p className="font-semibold text-foreground flex items-center gap-1.5">
+          <MapPin className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+          {ap.location}
+        </p>
+        {!isArrived && ap.eta && (
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            <Clock className="w-3 h-3" />
+            ETA: <span className="font-medium text-foreground ml-0.5">{ap.eta}</span>
+            {ap.is_running_late && <span className="text-danger font-medium ml-1">— behind schedule</span>}
+          </p>
+        )}
+        {isArrived && ap.arrived_at && (
+          <p className="text-xs text-muted-foreground">
+            Arrived at <span className="font-medium text-foreground">{fmt(ap.arrived_at)}</span>
+          </p>
+        )}
+        {isDeparting && ap.expected_departure_at && (
+          <div className="flex items-center gap-1.5 text-xs text-warning font-medium mt-1">
+            <Navigation className="w-3 h-3" />
+            Departing at <span className="ml-0.5">{fmt(ap.expected_departure_at)}</span> — catch a ride if you need one
+          </div>
+        )}
+        {isDeparted && ap.actual_departed_at && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-1">
+            <ArrowRight className="w-3 h-3" />
+            Left at <span className="font-medium text-foreground ml-0.5">{fmt(ap.actual_departed_at)}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Field staff view — trainers, trainees, walkers
+// ---------------------------------------------------------------------------
+function FieldStaffView({ employeeId }: { employeeId: string }) {
+  const [apRefreshTrigger, setApRefreshTrigger] = useState(0);
+
+  // Called by NotificationBanner when an anchor_point_* notification arrives
+  const handleNotification = useCallback((type: string) => {
+    if (type.startsWith('anchor_point')) setApRefreshTrigger(n => n + 1);
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <NotificationBanner employeeId={employeeId} onNotification={handleNotification} />
+      <TruckAPCard employeeId={employeeId} refreshTrigger={apRefreshTrigger} />
     </div>
   );
 }
@@ -1095,22 +1315,27 @@ function AdminFieldOpsView() {
 // Anchor Point Panel
 // ---------------------------------------------------------------------------
 function AnchorPointPanel({ employeeId }: { employeeId: string }) {
-  const today = todayStr();
-  const [myTruckId, setMyTruckId] = useState('');
-  const [aps, setAps]             = useState<any[]>([]);
-  const [arriving, setArriving]   = useState(false);
-  const [error, setError]         = useState('');
+  const [myTruckId, setMyTruckId]     = useState('');
+  const [aps, setAps]                 = useState<any[]>([]);
+  const [arriving, setArriving]       = useState(false);
+  const [departing, setDeparting]     = useState(false);
+  const [showReloc, setShowReloc]     = useState(false);
+  const [relocLocation, setRelocLocation] = useState('');
+  const [relocEta, setRelocEta]       = useState('');
+  const [relocDeptTime, setRelocDeptTime] = useState('');
+  const [relocLoading, setRelocLoading] = useState(false);
+  const [error, setError]             = useState('');
 
   const loadAPs = useCallback(() => {
     axiosClient.get('/anchor-points/driver/today')
       .then(res => setAps(Array.isArray(res.data) ? res.data : []))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load anchor points:', e); });
   }, []);
 
   useEffect(() => {
     axiosClient.get(`/field-ops/crew/${employeeId}`)
       .then(res => { if (res.data.truck_id) setMyTruckId(res.data.truck_id); })
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load crew/truck info:', e); });
     loadAPs();
   }, [employeeId, loadAPs]);
 
@@ -1129,6 +1354,53 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
       setArriving(false);
     }
   };
+
+  const handleDepart = async () => {
+    if (!activeAP) return;
+    setDeparting(true);
+    setError('');
+    try {
+      await axiosClient.patch(`/anchor-points/${activeAP.id}/depart`);
+      loadAPs();
+    } catch (e: any) {
+      setError(e.response?.data?.detail || 'Failed to record departure.');
+    } finally {
+      setDeparting(false);
+    }
+  };
+
+  const handleReloc = async () => {
+    if (!relocLocation.trim()) return;
+    setRelocLoading(true);
+    setError('');
+    try {
+      // Build expected_departure_at as a datetime string if time was provided
+      let expectedDeparture: string | undefined;
+      if (relocDeptTime) {
+        const today = todayStr();
+        expectedDeparture = new Date(`${today}T${relocDeptTime}:00`).toISOString();
+      }
+      await axiosClient.post('/anchor-points/', {
+        truck_id: myTruckId,
+        date: todayStr(),
+        location: relocLocation.trim(),
+        eta: relocEta.trim() || undefined,
+        expected_departure_at: expectedDeparture,
+      });
+      setShowReloc(false);
+      setRelocLocation('');
+      setRelocEta('');
+      setRelocDeptTime('');
+      loadAPs();
+    } catch (e: any) {
+      setError(e.response?.data?.detail || 'Failed to submit relocation.');
+    } finally {
+      setRelocLoading(false);
+    }
+  };
+
+  const fmtTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   return (
     <div className="card space-y-4">
@@ -1153,43 +1425,122 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
         <div className="space-y-3">
           {/* Active AP summary */}
           {activeAP && (
-            <div className={`p-3 rounded-xl border text-sm space-y-1 ${
+            <div className={`p-3 rounded-xl border text-sm space-y-1.5 ${
               activeAP.status === 'arrived'
                 ? 'bg-success/8 border-success/25'
                 : 'bg-warning/8 border-warning/25'
             }`}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className={`text-xs font-semibold ${activeAP.status === 'arrived' ? 'text-success' : 'text-warning'}`}>
-                  {activeAP.status === 'arrived' ? '✅ Arrived' : '🕐 Preliminary'}
+                  {activeAP.status === 'arrived' ? '✅ Arrived' : '🕐 En Route'}
                 </span>
                 {activeAP.confirmed_at && (
                   <span className="text-xs text-success">· Dispatch acknowledged</span>
                 )}
               </div>
               <p className="font-medium text-foreground">📍 {activeAP.location}</p>
-              {activeAP.eta && <p className="text-xs text-subtle">ETA: {activeAP.eta}</p>}
+              {activeAP.eta && activeAP.status !== 'arrived' && (
+                <p className="text-xs text-subtle">ETA: {activeAP.eta}</p>
+              )}
+              {activeAP.expected_departure_at && !activeAP.actual_departed_at && (
+                <p className="text-xs text-warning font-medium flex items-center gap-1">
+                  <Navigation className="w-3 h-3" />
+                  Departing at {fmtTime(activeAP.expected_departure_at)}
+                </p>
+              )}
+              {activeAP.actual_departed_at && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <ArrowRight className="w-3 h-3" />
+                  Left at {fmtTime(activeAP.actual_departed_at)}
+                </p>
+              )}
             </div>
           )}
 
-          {/* One-tap arrive */}
+          {error && <p className="text-xs text-danger">{error}</p>}
+
+          {/* Arrive button — preliminary only */}
           {activeAP?.status === 'preliminary' && (
-            <div className="space-y-1">
-              {error && <p className="text-xs text-danger">{error}</p>}
+            <button
+              onClick={handleArrive} disabled={arriving}
+              className="btn-primary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {arriving
+                ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                : <CheckCircle2 className="w-4 h-4" />}
+              {arriving ? 'Confirming…' : 'Arrived at Location'}
+            </button>
+          )}
+
+          {/* "I'm leaving now" — arrived + expected_departure set, not yet departed */}
+          {activeAP?.status === 'arrived' && activeAP.expected_departure_at && !activeAP.actual_departed_at && (
+            <button
+              onClick={handleDepart} disabled={departing}
+              className="btn-primary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-50 bg-warning hover:bg-warning/90"
+            >
+              {departing
+                ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                : <Navigation className="w-4 h-4" />}
+              {departing ? 'Recording…' : "I'm Leaving Now"}
+            </button>
+          )}
+
+          {/* Relocate button — arrived, not yet departed */}
+          {activeAP?.status === 'arrived' && !activeAP.actual_departed_at && (
+            <button
+              onClick={() => setShowReloc(o => !o)}
+              className="w-full text-xs text-center text-primary hover:underline py-1"
+            >
+              {showReloc ? 'Cancel relocation' : 'Moving to a new location? Set relocation →'}
+            </button>
+          )}
+
+          {/* Relocation bottom sheet */}
+          {showReloc && (
+            <div className="rounded-xl border border-border bg-accent/30 p-4 space-y-3 animate-slide-up">
+              <p className="text-sm font-semibold text-foreground">New Anchor Point</p>
+              <div>
+                <label className="block text-xs text-subtle mb-1">Expected Departure Time</label>
+                <input
+                  type="time"
+                  value={relocDeptTime}
+                  onChange={e => setRelocDeptTime(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <p className="text-xs text-subtle mt-0.5">Helps crew members know when to catch a ride.</p>
+              </div>
+              <div>
+                <label className="block text-xs text-subtle mb-1">New Location *</label>
+                <input
+                  type="text"
+                  value={relocLocation}
+                  onChange={e => setRelocLocation(e.target.value)}
+                  placeholder="e.g. Oak St & 5th Ave"
+                  className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-subtle mb-1">ETA at New Location</label>
+                <input
+                  type="text"
+                  value={relocEta}
+                  onChange={e => setRelocEta(e.target.value)}
+                  placeholder="e.g. 2:30 PM"
+                  className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+              </div>
               <button
-                onClick={handleArrive} disabled={arriving}
-                className="btn-primary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-50"
+                onClick={handleReloc}
+                disabled={!relocLocation.trim() || relocLoading}
+                className="btn-primary w-full text-sm disabled:opacity-50"
               >
-                {arriving
-                  ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                  : <CheckCircle2 className="w-4 h-4" />
-                }
-                {arriving ? 'Confirming…' : 'Arrived at Location'}
+                {relocLoading ? 'Submitting…' : 'Submit Relocation'}
               </button>
             </div>
           )}
 
           <a href="/anchor-points" className="block text-center text-xs text-primary hover:underline">
-            {activeAP?.status === 'arrived' ? 'Set new anchor point →' : 'Update or manage anchor points →'}
+            {activeAP?.status === 'arrived' ? 'View all anchor points →' : 'Update or manage anchor points →'}
           </a>
         </div>
       )}
@@ -1228,7 +1579,7 @@ function WalkerSelfPerformancePanel({ employeeId }: { employeeId: string }) {
     if (!employeeId) return;
     axiosClient.get(`/field-ops/walker-profile/${employeeId}`)
       .then(r => setProfile(r.data))
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load walker performance profile:', e); })
       .finally(() => setLoading(false));
   }, [employeeId]);
 
@@ -1313,7 +1664,7 @@ function DriverInspectionHistoryPanel({ employeeId }: { employeeId: string }) {
     if (!employeeId) return;
     axiosClient.get(`/field-ops/inspection/${employeeId}`)
       .then(r => setRecords(r.data))
-      .catch(() => {})
+      .catch((e) => { console.error('Failed to load inspection history:', e); })
       .finally(() => setLoading(false));
   }, [employeeId]);
 
@@ -1641,9 +1992,12 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
 // ---------------------------------------------------------------------------
 export default function FieldOps() {
   const { groups, user } = useAuth();
-  const isOversight = groups.some(r => ['admin', 'management', 'dispatch'].includes(r));
-  const isDriver = groups.includes('driver');
-  const isWalker = groups.includes('walker');
+  const isOversight  = groups.some(r => ['admin', 'management', 'dispatch'].includes(r));
+  const isDriver     = groups.includes('driver');
+  const isWalker     = groups.includes('walker');
+  const isTrainer    = groups.includes('trainer');
+  const isTrainee    = groups.includes('trainee');
+  const isFieldStaff = isTrainer || isTrainee;
 
   const [employeeId, setEmployeeId] = useState('');
 
@@ -1651,7 +2005,7 @@ export default function FieldOps() {
     if (isOversight || !user) return;
     axiosClient.get('/employees/me')
       .then(res => setEmployeeId(res.data.id))
-      .catch(() => {});
+      .catch((e) => { console.error('Failed to load employee identity:', e); });
   }, [user, isOversight]);
 
   if (isOversight) return <AdminFieldOpsView />;
@@ -1668,8 +2022,19 @@ export default function FieldOps() {
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
-      {isDriver && <DriverFieldOpsView employeeId={employeeId} />}
-      {isWalker && <WalkerSelfPerformancePanel employeeId={employeeId} />}
+      {isDriver    && (
+        <>
+          <NotificationBanner employeeId={employeeId} />
+          <DriverFieldOpsView employeeId={employeeId} />
+        </>
+      )}
+      {isWalker    && (
+        <>
+          <NotificationBanner employeeId={employeeId} />
+          <WalkerSelfPerformancePanel employeeId={employeeId} />
+        </>
+      )}
+      {isFieldStaff && <FieldStaffView employeeId={employeeId} />}
     </div>
   );
 }

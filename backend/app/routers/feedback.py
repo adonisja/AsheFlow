@@ -26,6 +26,7 @@ _TYPE_LABELS = {
 def create_feedback(
     feedback: FeedbackCreate,
     db: Session = Depends(get_db),
+    _: dict = Depends(allow_any_authenticated),
     caller: Employee | None = Depends(get_caller_employee_optional),
 ):
     """Submit new feedback. Requires a valid JWT — unauthenticated requests are rejected.
@@ -79,8 +80,10 @@ def get_all_feedback(
     from sqlalchemy import select
 
     rows = pg.apply(
-        db.query(Feedback).order_by(Feedback.created_at.desc())
-    ).filter(Feedback.company_id == caller.company_id).all()
+        db.query(Feedback)
+        .filter(Feedback.company_id == caller.company_id)
+        .order_by(Feedback.created_at.desc())
+    ).all()
 
     # Build employee_id → name map for the fetched page
     emp_ids = [r.employee_id for r in rows if r.employee_id]

@@ -41,7 +41,10 @@ def get_time_off_requests(
     mgmt_roles = {"management", "admin", "dispatch"}
     if caller.role not in mgmt_roles and caller.id != employee_id:
         raise HTTPException(status_code=403, detail="You can only view your own time-off requests.")
-    return db.query(TimeOffRequest).filter(TimeOffRequest.employee_id == employee_id).all()
+    return db.query(TimeOffRequest).filter(
+        TimeOffRequest.employee_id == employee_id,
+        TimeOffRequest.company_id == caller.company_id,
+    ).all()
 
 @router.post("/", response_model=TimeOffRequestResponse, status_code=status.HTTP_201_CREATED)
 def create_time_off_request(
@@ -56,6 +59,7 @@ def create_time_off_request(
     
     recurring_off_day = db.query(EmployeeOffDay).filter(
         EmployeeOffDay.employee_id == request.employee_id,
+        EmployeeOffDay.company_id == caller.company_id,
         EmployeeOffDay.day_of_week == day_of_week,
         EmployeeOffDay.status == "approved"
     ).first()
@@ -68,6 +72,7 @@ def create_time_off_request(
 
     existing_request = db.query(TimeOffRequest).filter(
         TimeOffRequest.employee_id == request.employee_id,
+        TimeOffRequest.company_id == caller.company_id,
         TimeOffRequest.date == request.date
     ).first()
 
@@ -79,6 +84,7 @@ def create_time_off_request(
 
     db_request = TimeOffRequest(
         employee_id=request.employee_id,
+        company_id=caller.company_id,
         date=request.date,
         status="pending"
     )
@@ -93,7 +99,10 @@ def delete_time_off_request(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
-    db_request = db.query(TimeOffRequest).filter(TimeOffRequest.id == request_id).first()
+    db_request = db.query(TimeOffRequest).filter(
+        TimeOffRequest.id == request_id,
+        TimeOffRequest.company_id == caller.company_id,
+    ).first()
     if not db_request:
         raise HTTPException(status_code=404, detail="Time-off request not found")
 

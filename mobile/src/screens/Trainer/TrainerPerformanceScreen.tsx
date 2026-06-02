@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, useColorScheme, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // Backend /mine/summary returns: { total_marks, distinct_trainees_with_marks, underperforming }
 type Summary = {
@@ -23,8 +24,7 @@ type Mark = {
 };
 
 export default function TrainerPerformanceScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
 
   const [summary,    setSummary]    = useState<Summary | null>(null);
   const [marks,      setMarks]      = useState<Mark[]>([]);
@@ -134,7 +134,7 @@ export default function TrainerPerformanceScreen() {
   );
 }
 
-function KpiCard({ label, value, color, c }: { label: string; value: string; color: string; c: typeof lightColors }) {
+function KpiCard({ label, value, color, c }: { label: string; value: string; color: string; c: ThemeColors }) {
   const s = StyleSheet.create({
     card:  { flex: 1, backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, alignItems: 'center', margin: spacing.xs },
     val:   { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, color },
@@ -143,7 +143,7 @@ function KpiCard({ label, value, color, c }: { label: string; value: string; col
   return <View style={s.card}><Text style={s.val}>{value}</Text><Text style={s.lbl}>{label}</Text></View>;
 }
 
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   banner:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md },
   standingLabel:{ fontSize: fontSize.md, fontWeight: fontWeight.bold },
   standingHint: { fontSize: fontSize.sm, marginTop: spacing.xs, lineHeight: 20 },

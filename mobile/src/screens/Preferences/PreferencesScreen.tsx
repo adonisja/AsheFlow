@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  useColorScheme, ActivityIndicator, Alert, ScrollView, Modal,
+  ActivityIndicator, Alert, ScrollView, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Relationship = {
@@ -59,13 +60,13 @@ function favLimitFor(myRole: string, targetRole: string): number {
   return FAV_LIMITS[myRole]?.[targetRole] ?? 0;
 }
 
-function statusColor(status: string, c: typeof lightColors) {
+function statusColor(status: string, c: ThemeColors) {
   if (status === 'approved') return c.success;
   if (status === 'rejected') return c.danger;
   return c.warning;
 }
 
-function gradeColor(grade: string | null, c: typeof lightColors) {
+function gradeColor(grade: string | null, c: ThemeColors) {
   if (grade === 'A' || grade === 'B') return c.success;
   if (grade === 'C') return c.warning;
   return c.danger;
@@ -73,8 +74,7 @@ function gradeColor(grade: string | null, c: typeof lightColors) {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function PreferencesScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user, hasRole } = useAuth();
 
   const isWalker  = hasRole('walker');
@@ -574,7 +574,7 @@ export default function PreferencesScreen() {
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:           { flex: 1, backgroundColor: c.background },
   scroll:         { flex: 1 },
   content:        { padding: spacing.lg, paddingBottom: spacing.xxl },

@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.api.deps import RoleChecker
+from app.api.deps import RoleChecker, get_caller_employee
+from app.models.employee import Employee
 from app.models.truck_assignment import TruckAssignment
 from app.schemas.truck_assignment import TruckAssignmentCreate, TruckAssignmentUpdate, TruckAssignmentResponse
 
@@ -33,54 +34,30 @@ def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(g
 
 
 @router.get("/", response_model=list[TruckAssignmentResponse])
-def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
-    """Return all truck assignments.
-
-    Args:
-        db: Database session.
-
-    Returns:
-        List of all TruckAssignment records.
-    """
-    return db.query(TruckAssignment).all()
+def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth), caller: Employee = Depends(get_caller_employee)):
+    """Return all truck assignments for the caller's company."""
+    return db.query(TruckAssignment).filter(TruckAssignment.company_id == caller.company_id).all()
 
 
 @router.get("/{assignment_id}", response_model=TruckAssignmentResponse)
-def get_assignment(assignment_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth)):
-    """Fetch a single truck assignment by ID.
-
-    Args:
-        assignment_id: UUID of the assignment to retrieve.
-        db: Database session.
-
-    Returns:
-        The matching TruckAssignment record.
-
-    Raises:
-        HTTPException(404): If no assignment with the given ID exists.
-    """
-    assignment = db.query(TruckAssignment).filter(TruckAssignment.id == assignment_id).first()
+def get_assignment(assignment_id: UUID, db: Session = Depends(get_db), _: dict = Depends(allow_any_auth), caller: Employee = Depends(get_caller_employee)):
+    """Fetch a single truck assignment by ID."""
+    assignment = db.query(TruckAssignment).filter(
+        TruckAssignment.id == assignment_id,
+        TruckAssignment.company_id == caller.company_id,
+    ).first()
     if not assignment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     return assignment
 
 
 @router.put("/{assignment_id}", response_model=TruckAssignmentResponse)
-def update_assignment(assignment_id: UUID, assignment: TruckAssignmentUpdate, db: Session = Depends(get_db), _: dict = Depends(allow_dispatch_mgmt)):
-    """Update an existing truck assignment's fields.
-
-    Args:
-        assignment_id: UUID of the assignment to update.
-        assignment: Partial update payload; only provided fields are applied.
-        db: Database session.
-
-    Returns:
-        The updated TruckAssignment record.
-
-    Raises:
-        HTTPException(404): If no assignment with the given ID exists.
-    """
-    db_assignment = db.query(TruckAssignment).filter(TruckAssignment.id == assignment_id).first()
+def update_assignment(assignment_id: UUID, assignment: TruckAssignmentUpdate, db: Session = Depends(get_db), _: dict = Depends(allow_dispatch_mgmt), caller: Employee = Depends(get_caller_employee)):
+    """Update an existing truck assignment's fields."""
+    db_assignment = db.query(TruckAssignment).filter(
+        TruckAssignment.id == assignment_id,
+        TruckAssignment.company_id == caller.company_id,
+    ).first()
     if not db_assignment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
 

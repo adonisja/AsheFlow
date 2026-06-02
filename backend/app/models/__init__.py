@@ -18,6 +18,7 @@ from app.models.audit_log import AuditLog
 from app.models.trainer_coverage import TrainerCoverage
 from app.models.trainer_mark import TrainerMark
 from app.models.anchor_point import AnchorPoint
+from app.models.anchor_point_late_flag import AnchorPointLateFlag
 from app.models.dock_assignment import DockAssignment
 from app.models.station_arrival import StationArrival
 from app.models.package_manifest import PackageManifest

@@ -16,6 +16,9 @@ pytest
 pytest-mock
 hypothesis
 
+openpyxl
+python-multipart
+
 # Geographic clustering — tier 1 tote verification + tier 2 walker routing
 scikit-learn
 alphashape

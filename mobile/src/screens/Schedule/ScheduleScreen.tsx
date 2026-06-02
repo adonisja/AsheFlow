@@ -1,13 +1,14 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  useColorScheme, ActivityIndicator, RefreshControl, Modal,
+  ActivityIndicator, RefreshControl, Modal,
   TextInput, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
-import { lightColors, darkColors, spacing, radius, fontSize, fontWeight } from '@theme/index';
+import { useColors } from '@contexts/ThemeContext';
+import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type CrewMember = { id: string; name: string; role: string };
@@ -46,7 +47,7 @@ const SCR_TYPE_LABELS: Record<string, string> = {
 };
 const OFF_STATUSES = new Set(['Off (Recurring)', 'Time Off', 'Pending Time Off', 'Pending Off (Recurring)']);
 
-function statusColor(status: string, c: typeof lightColors): string {
+function statusColor(status: string, c: ThemeColors): string {
   if (status === 'approved') return c.success;
   if (status === 'rejected') return c.danger;
   return c.warning;
@@ -58,8 +59,7 @@ function formatFullDate(iso: string): string {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function ScheduleScreen() {
-  const scheme = useColorScheme();
-  const c = scheme === 'dark' ? darkColors : lightColors;
+  const c = useColors();
   const { user } = useAuth();
 
   const today    = new Date();
@@ -72,9 +72,11 @@ export default function ScheduleScreen() {
   const [scrList,      setScrList]      = useState<SCR[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
+  const [fetchError,   setFetchError]   = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
-  const employeeId = user?.id ?? null;
+  // Cognito sub != Employee DB id — fetch the real employee UUID once and cache it
+  const employeeDbId = useRef<string | null>(null);
 
   // PTO modal
   const [ptoModal,      setPtoModal]      = useState(false);
@@ -92,8 +94,15 @@ export default function ScheduleScreen() {
   const [subTab, setSubTab] = useState<'pto'|'schedule'>('pto');
 
   const fetchSchedule = useCallback(async () => {
-    if (!employeeId) return;
+    if (!user) return;
     try {
+      // Resolve the employee's database UUID on first load
+      if (!employeeDbId.current) {
+        const meRes = await apiClient.get('/employees/me');
+        employeeDbId.current = meRes.data.id;
+      }
+      const employeeId = employeeDbId.current!;
+
       const firstOfMonth = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`;
       const lastDay      = new Date(viewYear, viewMonth + 1, 0).getDate();
       const lastOfMonth  = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
@@ -105,16 +114,18 @@ export default function ScheduleScreen() {
       setSchedule(schedRes.data ?? []);
       setPtoList(ptoRes.data ?? []);
       setScrList(scrRes.data ?? []);
-    } catch {
+      setFetchError(null);
+    } catch (err: any) {
       setSchedule([]);
+      setFetchError(err?.response?.data?.detail ?? err?.message ?? 'Failed to load schedule.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [employeeId, viewMonth, viewYear]);
+  }, [user, viewMonth, viewYear]);
 
   useEffect(() => {
-    if (employeeId) { setLoading(true); fetchSchedule(); }
+    if (user) { setLoading(true); fetchSchedule(); }
   }, [fetchSchedule]);
 
   const onRefresh = useCallback(() => { setRefreshing(true); fetchSchedule(); }, [fetchSchedule]);
@@ -152,10 +163,10 @@ export default function ScheduleScreen() {
 
   // ── PTO submit ──────────────────────────────────────────────────────────────
   const submitPTO = useCallback(async () => {
-    if (!employeeId) return;
+    if (!employeeDbId.current) return;
     setPtoSubmitting(true);
     try {
-      await apiClient.post('/time-off-requests/', { employee_id: employeeId, date: selectedDate });
+      await apiClient.post('/time-off-requests/', { employee_id: employeeDbId.current, date: selectedDate });
       Alert.alert('Submitted', `PTO request for ${selectedDate} sent to management.`);
       setPtoModal(false);
       fetchSchedule();
@@ -164,7 +175,7 @@ export default function ScheduleScreen() {
     } finally {
       setPtoSubmitting(false);
     }
-  }, [employeeId, selectedDate, fetchSchedule]);
+  }, [selectedDate, fetchSchedule]);
 
   const cancelPTO = useCallback(async (id: string) => {
     Alert.alert('Cancel Request', 'Remove this PTO request?', [
@@ -178,14 +189,14 @@ export default function ScheduleScreen() {
 
   // ── SCR submit ──────────────────────────────────────────────────────────────
   const submitSCR = useCallback(async () => {
-    if (!employeeId) return;
+    if (!employeeDbId.current) return;
     if (scrType === 'add_day'     && scrDaysAdd.length === 0)  { Alert.alert('Required', 'Select at least one day to add.'); return; }
     if (scrType === 'drop_day'    && scrDaysDrop.length === 0) { Alert.alert('Required', 'Select at least one day to drop.'); return; }
     if (scrType === 'full_rework' && scrProposed.length === 0) { Alert.alert('Required', 'Select your proposed schedule days.'); return; }
     setScrSubmitting(true);
     try {
       await apiClient.post('/schedule-change-requests/', {
-        employee_id: employeeId, request_type: scrType,
+        employee_id: employeeDbId.current, request_type: scrType,
         days_to_add: scrType === 'add_day' ? scrDaysAdd : [],
         days_to_drop: scrType === 'drop_day' ? scrDaysDrop : [],
         proposed_schedule: scrType === 'full_rework' ? scrProposed : undefined,
@@ -200,7 +211,7 @@ export default function ScheduleScreen() {
     } finally {
       setScrSubmitting(false);
     }
-  }, [employeeId, scrType, scrDaysAdd, scrDaysDrop, scrProposed, scrReason, fetchSchedule]);
+  }, [scrType, scrDaysAdd, scrDaysDrop, scrProposed, scrReason, fetchSchedule]);
 
   const toggleDay = (day: string, list: string[], setter: (l: string[]) => void) =>
     setter(list.includes(day) ? list.filter(d => d !== day) : [...list, day]);
@@ -299,6 +310,12 @@ export default function ScheduleScreen() {
         </View>
 
         {loading && <ActivityIndicator color={c.primary} style={{ marginVertical: spacing.md }} />}
+
+        {fetchError && (
+          <View style={{ backgroundColor: c.danger + '18', borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm, borderWidth: 1, borderColor: c.danger + '40' }}>
+            <Text style={{ fontSize: fontSize.xs, color: c.danger }}>{fetchError}</Text>
+          </View>
+        )}
 
         {/* Legend */}
         <View style={s.legend}>
@@ -434,7 +451,7 @@ export default function ScheduleScreen() {
 }
 
 // ── Selected day detail card ──────────────────────────────────────────────────
-function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr: string; c: typeof lightColors }) {
+function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr: string; c: ThemeColors }) {
   const s = styles(c);
   const isOff     = OFF_STATUSES.has(entry.status);
   const isWorking = !isOff;
@@ -492,7 +509,7 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
 }
 
 // ── PTO History ───────────────────────────────────────────────────────────────
-function PTOHistory({ list, onCancel, c }: { list: PTORequest[]; onCancel: (id: string) => void; c: typeof lightColors }) {
+function PTOHistory({ list, onCancel, c }: { list: PTORequest[]; onCancel: (id: string) => void; c: ThemeColors }) {
   const s = styles(c);
   if (list.length === 0) {
     return <View style={s.emptyCard}><Text style={s.emptyText}>No time-off requests yet</Text></View>;
@@ -519,7 +536,7 @@ function PTOHistory({ list, onCancel, c }: { list: PTORequest[]; onCancel: (id: 
 }
 
 // ── SCR History ───────────────────────────────────────────────────────────────
-function SCRHistory({ list, c, onNew }: { list: SCR[]; c: typeof lightColors; onNew: () => void }) {
+function SCRHistory({ list, c, onNew }: { list: SCR[]; c: ThemeColors; onNew: () => void }) {
   const s = styles(c);
   return (
     <>
@@ -552,7 +569,7 @@ function SCRHistory({ list, c, onNew }: { list: SCR[]; c: typeof lightColors; on
 }
 
 // ── Day picker ────────────────────────────────────────────────────────────────
-function DayPicker({ selected, onToggle, c }: { selected: string[]; onToggle: (d: string) => void; c: typeof lightColors }) {
+function DayPicker({ selected, onToggle, c }: { selected: string[]; onToggle: (d: string) => void; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginBottom: spacing.sm }}>
       {WEEKDAYS.map(day => {
@@ -589,7 +606,7 @@ function buildWeeks(firstDay: number, daysInMonth: number): (number | null)[][] 
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const styles = (c: typeof lightColors) => StyleSheet.create({
+const styles = (c: ThemeColors) => StyleSheet.create({
   safe:        { flex: 1, backgroundColor: c.background },
   header:      { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm, borderBottomWidth: 1, borderBottomColor: c.border, backgroundColor: c.background },
   pageTitle:   { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: c.foreground },
