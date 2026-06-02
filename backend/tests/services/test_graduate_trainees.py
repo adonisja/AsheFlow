@@ -126,7 +126,7 @@ class TestQuizGate:
         """
         trainee = make_employee(db, role="trainee", name="No Quiz Yet")
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee)
         assert trainee.role == "trainee", "No quiz → should not graduate"
@@ -145,7 +145,7 @@ class TestQuizGate:
         trainee = make_employee(db, role="trainee", name="Failed Quiz")
         make_graduation_quiz(db, trainee, passed=False)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee)
         assert trainee.role == "trainee", "Failed quiz → should not graduate"
@@ -162,7 +162,7 @@ class TestQuizGate:
         trainee = make_employee(db, role="trainee", name="Ready")
         make_graduation_quiz(db, trainee, passed=True)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee)
         assert trainee.role == "walker", "Passed quiz should promote to walker"
@@ -184,7 +184,7 @@ class TestQuizGate:
         make_graduation_quiz(db, trainee, passed=False, reviewed_at=older)
         make_graduation_quiz(db, trainee, passed=True,  reviewed_at=newer)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee)
         assert trainee.role == "walker"
@@ -208,7 +208,7 @@ class TestNormalGraduation:
         trainee = make_employee(db, role="trainee", name="Graduate")
         make_graduation_quiz(db, trainee, passed=True)
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         notifs = db.query(Notification).filter(
             Notification.employee_id == trainee.id,
@@ -229,7 +229,7 @@ class TestNormalGraduation:
         admin   = make_employee(db, role="admin",      name="Admin")
         make_graduation_quiz(db, trainee, passed=True)
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         for emp in [manager, admin]:
             notifs = db.query(Notification).filter(
@@ -246,7 +246,7 @@ class TestNormalGraduation:
         trainee = make_employee(db, role="trainee", name="Count Check")
         make_graduation_quiz(db, trainee, passed=True)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         assert len(warnings) == 1
         assert "graduation quiz" in warnings[0]["message"].lower(), \
@@ -272,7 +272,7 @@ class TestResetOnGraduation:
         db.commit()
         make_graduation_quiz(db, trainee, passed=True)
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee)
         assert trainee.role == "trainee", "reset_on_graduation trainee must stay 'trainee'"
@@ -296,7 +296,7 @@ class TestResetOnGraduation:
         make_training_task(db, record)
         make_training_task(db, record)
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         remaining_records = db.query(TrainingRecord).filter(TrainingRecord.trainee_id == trainee.id).all()
         remaining_tasks   = db.query(TrainingTask).filter(TrainingTask.training_record_id == record.id).all()
@@ -314,7 +314,7 @@ class TestResetOnGraduation:
         db.commit()
         make_graduation_quiz(db, trainee, passed=True)
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         remaining = db.query(GraduationQuiz).filter(
             GraduationQuiz.trainee_id == trainee.id,
@@ -330,7 +330,7 @@ class TestResetOnGraduation:
         db.commit()
         make_graduation_quiz(db, trainee, passed=True)
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         notifs = db.query(Notification).filter(
             Notification.employee_id == trainee.id,
@@ -350,7 +350,7 @@ class TestResetOnGraduation:
         db.commit()
         make_graduation_quiz(db, trainee, passed=True)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         assert len(warnings) == 1
         assert warnings[0]["type"] == "trainee_reset"
@@ -380,7 +380,7 @@ class TestContinuationRequests:
         make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="pending")
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(req)
         assert req.status == "nullified", "Pending continuation request must be nullified"
@@ -391,7 +391,7 @@ class TestContinuationRequests:
         make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="accepted")
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(req)
         assert req.status == "nullified"
@@ -408,7 +408,7 @@ class TestContinuationRequests:
         make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="rejected")
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(req)
         assert req.status == "rejected", "Rejected continuation request must not be modified"
@@ -419,7 +419,7 @@ class TestContinuationRequests:
         make_graduation_quiz(db, trainee, passed=True)
         req = make_continuation_request(db, trainee, trainer, status="nullified")
 
-        graduate_eligible_trainees(db, TARGET)
+        graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(req)
         assert req.status == "nullified"  # unchanged, already in terminal state
@@ -445,7 +445,7 @@ class TestMultipleTrainees:
         make_graduation_quiz(db, eligible, passed=True)
         # not_yet has no quiz at all
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(eligible)
         db.refresh(not_yet)
@@ -463,7 +463,7 @@ class TestMultipleTrainees:
         make_graduation_quiz(db, trainee1, passed=True)
         make_graduation_quiz(db, trainee2, passed=True)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee1)
         db.refresh(trainee2)
@@ -492,7 +492,7 @@ class TestInactiveExclusion:
         db.commit()
         make_graduation_quiz(db, trainee, passed=True)
 
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
 
         db.refresh(trainee)
         assert trainee.role == "trainee", "Inactive trainee must not be promoted"
@@ -508,5 +508,5 @@ class TestEmptyRun:
         """
         With no trainees in the DB, the service should return [] without errors.
         """
-        warnings = graduate_eligible_trainees(db, TARGET)
+        warnings = graduate_eligible_trainees(db, TARGET, SEED_COMPANY_ID)
         assert warnings == []

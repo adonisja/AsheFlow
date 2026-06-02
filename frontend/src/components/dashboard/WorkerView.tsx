@@ -29,7 +29,7 @@ export default function WorkerView() {
           setDockZone(r.data?.dock_zone ?? null);
         }),
       ]);
-    }).catch(() => {}).finally(() => setAssignmentLoading(false));
+    }).catch((e) => { console.error('Failed to load driver assignment:', e); }).finally(() => setAssignmentLoading(false));
   }, [isDriver]);
 
   const links = [

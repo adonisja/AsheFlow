@@ -159,7 +159,7 @@ const ScheduleChanges = () => {
 
   useEffect(() => {
     if (!isPrivileged) {
-      axiosClient.get('/employees/me').then(res => setMyId(res.data.id)).catch(() => {});
+      axiosClient.get('/employees/me').then(res => setMyId(res.data.id)).catch((e) => { console.error('Failed to load employee identity:', e); });
     }
   }, [isPrivileged]);
 

@@ -1,12 +1,15 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
+import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
 type CrewMember = { id: string; name: string; role: string };
@@ -34,6 +37,8 @@ const ROLE_ORDER = ['driver', 'trainer', 'trainee', 'walker'];
 export default function TodayAssignmentScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId, cachedId } = useEmployeeId();
+  const switchTab = useTabSwitch();
 
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -43,15 +48,16 @@ export default function TodayAssignmentScreen() {
   const today = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth() + 1).padStart(2, '0')}-${String(todayLocal.getDate()).padStart(2, '0')}`;
 
   const load = useCallback(async () => {
-    if (!user?.id) return;
+    const eid = await fetchId();
+    if (!eid) return;
     try {
-      const res = await apiClient.get(`/schedule/${user.id}?start_date=${today}&end_date=${today}`);
+      const res = await apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`);
       const entry = (res.data ?? [])[0];
       if (!entry || entry.status !== 'Assigned' || !entry.truck_name) {
         setAssignment(null);
         return;
       }
-      const me = (entry.crew ?? []).find((m: any) => m.id === user.id);
+      const me = (entry.crew ?? []).find((m: any) => m.id === eid);
       setAssignment({
         truck_name: entry.truck_name,
         role: me?.role ?? 'unknown',
@@ -64,15 +70,15 @@ export default function TodayAssignmentScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [today, user?.id]);
+  }, [today, fetchId]);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const s = styles(c);
 
   if (!loading && !assignment) {
     return (
-      <ScreenShell title="Today's Assignment" subtitle={today}>
+      <ScreenShell title="Today's Assignment" subtitle={today} onBack={() => switchTab('Home')}>
         <View style={s.emptyCard}>
           <Text style={s.emptyIcon}>🚚</Text>
           <Text style={s.emptyText}>No assignment for today</Text>
@@ -96,6 +102,7 @@ export default function TodayAssignmentScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}
+      onBack={() => switchTab('Home')}
     >
       {/* Truck + my role */}
       {assignment && (
@@ -140,7 +147,7 @@ export default function TodayAssignmentScreen() {
               style={[
                 s.memberRow,
                 i < grouped[role].length - 1 && s.memberRowBorder,
-                m.id === user?.id && s.memberRowMe,
+                m.id === cachedId.current && s.memberRowMe,
               ]}
             >
               <View style={[s.avatar, { backgroundColor: (ROLE_COLORS[role] ?? c.primary) + '18' }]}>
@@ -148,8 +155,8 @@ export default function TodayAssignmentScreen() {
                   {m.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                 </Text>
               </View>
-              <Text style={[s.memberName, m.id === user?.id && { color: c.primary, fontWeight: fontWeight.semibold }]}>
-                {m.name}{m.id === user?.id ? ' (you)' : ''}
+              <Text style={[s.memberName, m.id === cachedId.current && { color: c.primary, fontWeight: fontWeight.semibold }]}>
+                {m.name}{m.id === cachedId.current ? ' (you)' : ''}
               </Text>
             </View>
           ))}

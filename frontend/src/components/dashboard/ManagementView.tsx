@@ -20,6 +20,7 @@ export default function ManagementView() {
   const [handoffSummary, setHandoffSummary]   = useState<any>(null);
   const [pendingRTS, setPendingRTS]           = useState<any[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
@@ -35,6 +36,7 @@ export default function ManagementView() {
       axiosClient.get('/shift-ops/check-ins/summary').then(r => setCheckInSummary(r.data)).catch(() => {}),
       axiosClient.get('/shift-ops/station-handoffs/summary').then(r => setHandoffSummary(r.data)).catch(() => {}),
       axiosClient.get('/shift-ops/rts-reports/pending').then(r => setPendingRTS(r.data)).catch(() => {}),
+      axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {}),
     ]);
     setIsRefreshing(false);
   }, []);
@@ -55,7 +57,10 @@ export default function ManagementView() {
           </div>
           <div>
             <h1 className="page-title">Good {greeting}, {user?.firstName || user?.displayName || user?.username}</h1>
-            <p className="text-subtle mt-0.5">Management overview for {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.</p>
+            <p className="text-subtle mt-0.5">
+              Management overview for {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}.
+              {companyTimezone && <span className="text-xs ml-1 opacity-60">({companyTimezone})</span>}
+            </p>
           </div>
         </div>
         <button

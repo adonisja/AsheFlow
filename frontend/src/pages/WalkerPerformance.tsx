@@ -393,8 +393,8 @@ export default function WalkerPerformance() {
   const fetchLeaderboard = useCallback((threshold: number) => {
     setLoading(true);
     setError(null);
-    axiosClient.get(`/field-ops/walker-leaderboard?min_shifts=${threshold}`)
-      .then(r => setWalkers(r.data))
+    axiosClient.get(`/field-ops/walker-leaderboard?min_shifts=${threshold}&limit=200&offset=0`)
+      .then(r => setWalkers(r.data.items ?? r.data))
       .catch(() => setError('Failed to load walker leaderboard. Please refresh.'))
       .finally(() => setLoading(false));
   }, []);

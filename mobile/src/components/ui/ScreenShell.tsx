@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  ActivityIndicator,
+  ActivityIndicator, TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
@@ -20,11 +20,15 @@ type Props = {
   edges?: Edge[];
   /** Hide the title/subtitle header bar (e.g. when parent owns the header) */
   noHeader?: boolean;
+  /** Show a back chevron on the left; tapping calls this */
+  onBack?: () => void;
+  /** Extra element rendered on the right side of the header (e.g. refresh button) */
+  headerRight?: React.ReactNode;
 };
 
 export default function ScreenShell({
   title, subtitle, loading, refreshing, onRefresh, children,
-  edges = ['top'], noHeader = false,
+  edges = ['top'], noHeader = false, onBack, headerRight,
 }: Props) {
   const c = useColors();
   const s = styles(c);
@@ -41,8 +45,25 @@ export default function ScreenShell({
     <SafeAreaView style={s.safe} edges={edges}>
       {!noHeader && (
         <View style={s.header}>
-          <Text style={s.title}>{title}</Text>
-          {subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
+          {/* Left — back button or spacer */}
+          <View style={s.headerSide}>
+            {onBack && (
+              <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={s.backBtn}>
+                <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Centre — title + subtitle stacked */}
+          <View style={s.headerCenter}>
+            <Text style={s.title}>{title}</Text>
+            {subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
+          </View>
+
+          {/* Right — slot for action button or spacer */}
+          <View style={s.headerSide}>
+            {headerRight ?? null}
+          </View>
         </View>
       )}
       <ScrollView
@@ -54,9 +75,6 @@ export default function ScreenShell({
             : undefined
         }
       >
-        {!noHeader ? null : subtitle ? (
-          <Text style={[s.inlineSubtitle, { color: c.mutedForeground }]}>{subtitle}</Text>
-        ) : null}
         {children}
       </ScrollView>
     </SafeAreaView>
@@ -66,16 +84,21 @@ export default function ScreenShell({
 const styles = (c: ThemeColors) => StyleSheet.create({
   safe:           { flex: 1, backgroundColor: c.background },
   header:         {
-    paddingHorizontal: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
     paddingBottom: spacing.sm,
     backgroundColor: c.background,
     borderBottomWidth: 1,
     borderBottomColor: c.border,
   },
+  headerSide:     { width: 44, alignItems: 'center' },
+  headerCenter:   { flex: 1, alignItems: 'center' },
+  backBtn:        { padding: spacing.xs },
+  backChevron:    { fontSize: 30, lineHeight: 32, fontWeight: '300' },
   title:          { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: c.foreground },
   subtitle:       { fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 },
-  inlineSubtitle: { fontSize: fontSize.xs, marginBottom: spacing.sm },
   scroll:         { flex: 1 },
   content:        { padding: spacing.md, paddingBottom: 80 },
   center:         { flex: 1, justifyContent: 'center', alignItems: 'center' },

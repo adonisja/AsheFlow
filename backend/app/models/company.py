@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey, BigInteger
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Time, ForeignKey, BigInteger, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from app.models.base import Base
@@ -108,6 +108,16 @@ class CompanyConfig(Base):
     # True once the admin has completed the initial setup form.
     # Every protected endpoint checks this via require_configured.
     is_configured = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        CheckConstraint("dispatch_weight_driver    IS NULL OR (dispatch_weight_driver    BETWEEN 0 AND 1)", name="ck_company_configs_weight_driver"),
+        CheckConstraint("dispatch_weight_trainer   IS NULL OR (dispatch_weight_trainer   BETWEEN 0 AND 1)", name="ck_company_configs_weight_trainer"),
+        CheckConstraint("dispatch_weight_walker    IS NULL OR (dispatch_weight_walker    BETWEEN 0 AND 1)", name="ck_company_configs_weight_walker"),
+        CheckConstraint("dispatch_mutual_bonus     IS NULL OR (dispatch_mutual_bonus     BETWEEN 0 AND 1)", name="ck_company_configs_mutual_bonus"),
+        CheckConstraint("dispatch_tridirectional_bonus IS NULL OR (dispatch_tridirectional_bonus BETWEEN 0 AND 1)", name="ck_company_configs_tridirectional_bonus"),
+        CheckConstraint("dispatch_consecutive_penalty IS NULL OR (dispatch_consecutive_penalty  BETWEEN 0 AND 1)", name="ck_company_configs_consecutive_penalty"),
+        CheckConstraint("dispatch_weight_cap       IS NULL OR (dispatch_weight_cap       BETWEEN 0 AND 1)", name="ck_company_configs_weight_cap"),
+    )
 
     company = relationship("Company", back_populates="config")
 
