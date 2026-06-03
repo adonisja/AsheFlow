@@ -88,7 +88,7 @@ function RoleRedirect() {
   const { groups, isConfigured, isLoading } = useAuth();
   if (isLoading) return null;
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
-  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/dispatch-home' : '/setup'} replace />;
+  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
