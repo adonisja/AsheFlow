@@ -4,6 +4,7 @@ POST /sort/upload            — upload CSV/XLSX manifest, trigger async enrichm
 GET  /sort/manifest/{date}/status — poll enrichment status (ready / enriching / not_found)
 POST /sort/run               — run the full sort pipeline for a given date
 GET  /sort/{date}            — fetch existing zone results for a date
+GET  /sort/{date}/centroids  — fetch route cluster centroids for the Deck.gl density layer
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from app.models.company import CompanyConfig
 from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_zone import TruckZone
+from app.models.walker_route import RouteClusterCentroid
 from app.services.manifest_ingestor import FileManifestIngestor
 from app.services.run_sort import run_sort, SortError
 from app.tasks.enrich_manifest import enrich_manifest_packages
@@ -445,6 +447,38 @@ def run_sort_endpoint(
         assignments   = assignments_out,
         flagged_totes = flagged_out,
     )
+
+
+class CentroidOut(BaseModel):
+    centroid_lat: float
+    centroid_lng: float
+    package_count: int
+    truck_zone_label: str | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CentroidsResponse(BaseModel):
+    sort_date: date
+    centroids: list[CentroidOut]
+
+
+@router.get("/{sort_date}/centroids", response_model=CentroidsResponse)
+def get_sort_centroids(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Route cluster centroids for the Deck.gl density layer."""
+    centroids = (
+        db.query(RouteClusterCentroid)
+        .filter(
+            RouteClusterCentroid.company_id == caller.company_id,
+            RouteClusterCentroid.route_date == sort_date,
+        )
+        .all()
+    )
+    return CentroidsResponse(sort_date=sort_date, centroids=centroids)
 
 
 @router.get("/{sort_date}", response_model=SortStatusResponse)
