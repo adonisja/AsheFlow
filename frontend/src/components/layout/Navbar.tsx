@@ -30,6 +30,7 @@ import {
   Building2,
   Route,
   Activity,
+  ShoppingBag,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -355,6 +356,7 @@ const Navbar = () => {
           <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
           <NavLink to="/field-ops" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Field Ops</NavLink>
           <NavLink to="/feedback" className={linkClass}><MessageSquare className="w-3.5 h-3.5" /> Feedback</NavLink>
+          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
           <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
@@ -395,6 +397,7 @@ const Navbar = () => {
             <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Point</NavLink>
           )}
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
+          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
           {isDispatch && (
             <>
               <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
@@ -506,6 +509,7 @@ function MobileLinks({
         <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
         <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>
         <NavLink to="/feedback" onClick={onNav} className={cls}><MessageSquare className="w-4 h-4" /> Feedback</NavLink>
+        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
         <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
@@ -524,6 +528,7 @@ function MobileLinks({
         {canAccessFieldOps && <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>}
         {groups.includes('driver') && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Point</NavLink>}
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
+        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
         {isDispatch && <>
           <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>
           <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>

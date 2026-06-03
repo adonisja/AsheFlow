@@ -22,6 +22,7 @@ import TrainerMarks from './pages/TrainerMarks';
 import Phase4Observation from './pages/Phase4Observation';
 import TrainingCurriculum from './pages/TrainingCurriculum';
 import GraduationQuiz from './pages/GraduationQuiz';
+import GearRequest from './pages/GearRequest';
 import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
@@ -409,6 +410,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'admin']}>
                   <WalkerSortMonitor />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/gear"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                  <GearRequest />
                 </ProtectedRoute>
               }
             />
