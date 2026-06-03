@@ -6024,3 +6024,79 @@ Always check EC2 backend logs directly after a model-level change:
 aws ssm send-command --instance-ids <id> \
   --parameters 'commands=["cd /home/ubuntu/AsheFlow && docker compose logs backend --tail=50"]'
 ```
+
+---
+
+## The 3-Segment Route Shape Model — Contiguous Windows (ADR-119, 2026-06-03)
+
+The first implementation of `_build_routes` used a greedy adjacency absorber:
+for each seed block, scan all unassigned blocks and absorb any that are adjacent
+to *any* existing block in the route. This produced non-contiguous routes like
+[400s, 300s, 500s] where the walker has to backtrack to the 300s before
+continuing to the 500s — a real operational problem, not just an aesthetic one.
+
+### Why contiguity matters
+
+A route is one cart trip. The walker loads a cart, walks a path, and returns.
+If the route spans [300s, 400s, 500s] the walker walks the 500s, backtracks to
+the 300s, then forward to the 400s — three segment traversal with two direction
+changes. The correct model: a walking path that can be traversed without
+doubling back.
+
+The constraint that makes this tractable: **a route has at most 3 segments**,
+where one segment = one hundred-block range on one street or avenue.
+
+### The contiguous window guarantee
+
+For blocks on the same street, the algorithm builds a contiguous window:
+
+1. Sort all same-street blocks by range value (300, 400, 500…)
+2. Identify maximal contiguous runs (neighbouring ranges differ by ≤ 100)
+3. Pivot = densest block in the run
+4. Try all sub-windows of the run that contain the pivot, length ≤ 3
+5. Pick the window maximising package count within capacity
+6. Fill in density order; blocks that don't fit stay for the next window
+
+Result: [300s, 400s, 500s] produces exactly that window, never [300s, 500s].
+
+### Cross-street shapes (L, T, U, cross/plus)
+
+After seeding from a linear window, the route has remaining segment budget
+(3 - segments_used). The algorithm then tries to absorb blocks from other
+streets whose centroid is within 0.25 km of any block already in the route.
+This produces:
+
+- **L-shape:** one avenue segment joins one end of a street run
+- **T-shape:** one perpendicular segment joins mid-run
+- **U-shape:** three segments forming an open rectangle across a corner
+- **Cross/plus:** one avenue runs through the middle of a street run
+
+All are valid. Walk order within the shape is always left to the walker.
+
+### Capacity always beats segment count
+
+If a 3-segment window would exceed capacity, totes are added until capacity
+is hit. The remaining totes become the input for the next route iteration.
+A route may have 1 or 2 segments if capacity is exhausted before all 3 are
+filled. An oversize single block (more totes than capacity) gets its own route
+— it is never silently dropped.
+
+### The `"types"` field in tsconfig is an exclusive allowlist
+
+`tsconfig.app.json` had `"types": ["vite/client"]`. This seems harmless — it
+just specifies which types to use. But it is an **exclusive allowlist**. Any
+`@types/*` package not listed is silently ignored by the TypeScript compiler,
+even if it is installed in `node_modules`.
+
+`@types/google.maps` injects `google` as a global namespace. When it was left
+off the list, the compiler couldn't find the `google` namespace anywhere, and
+every reference to `window.google.maps` in `ZoneDensityMap.tsx` failed with
+`error TS2339`. The fix is a one-character list addition:
+
+```json
+"types": ["vite/client", "google.maps"]
+```
+
+Rule: any time you install `@types/something` that injects globals (not just
+module types), check whether your tsconfig has an explicit `"types"` list. If
+it does, add the package name to the list.
