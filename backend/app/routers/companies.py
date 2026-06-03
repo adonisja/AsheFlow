@@ -108,27 +108,37 @@ class EmployeeSummaryResponse(BaseModel):
 class CompanyConfigResponse(BaseModel):
     id: UUID
     company_id: UUID
-    shift_start: Optional[str]
-    shift_end: Optional[str]
-    checkin_open: Optional[str]
-    checkin_close: Optional[str]
-    rating_window_hours: Optional[int]
-    invite_expiry_days: Optional[int]
-    is_configured: bool
-    graduation_assignments: Optional[int]
-    debt_escalation_threshold: Optional[int]
-    phase4_pass_score: Optional[float]
+    shift_start:                      Optional[str]
+    shift_end:                        Optional[str]
+    checkin_open:                     Optional[str]
+    checkin_close:                    Optional[str]
+    dispatch_confirmation_cutoff:     Optional[str]
+    rating_window_hours:              Optional[int]
+    invite_expiry_days:               Optional[int]
+    is_configured:                    bool
+    graduation_assignments:           Optional[int]
+    debt_escalation_threshold:        Optional[int]
+    phase4_pass_score:                Optional[float]
     underperforming_trainer_threshold: Optional[int]
-    max_training_phase: Optional[int]
-    dispatch_weight_driver: Optional[float]
-    dispatch_weight_trainer: Optional[float]
-    dispatch_weight_walker: Optional[float]
-    dispatch_mutual_bonus: Optional[float]
-    dispatch_tridirectional_bonus: Optional[float]
-    dispatch_consecutive_penalty: Optional[float]
-    dispatch_weight_cap: Optional[float]
-    flag_threshold: Optional[float]
-    driver_checkin_count: Optional[int]
+    max_training_phase:               Optional[int]
+    dispatch_weight_driver:           Optional[float]
+    dispatch_weight_trainer:          Optional[float]
+    dispatch_weight_walker:           Optional[float]
+    dispatch_mutual_bonus:            Optional[float]
+    dispatch_tridirectional_bonus:    Optional[float]
+    dispatch_consecutive_penalty:     Optional[float]
+    dispatch_weight_cap:              Optional[float]
+    flag_threshold:                   Optional[float]
+    driver_checkin_count:             Optional[int]
+    tier1_dbscan_eps:                 Optional[float]
+    tier1_dbscan_min_samples:         Optional[int]
+    tier1_small_tote_cutoff:          Optional[int]
+    tier1_small_stray_max:            Optional[int]
+    tier1_small_uncertain_max:        Optional[int]
+    tier1_stray_pct:                  Optional[float]
+    tier1_uncertain_pct:              Optional[float]
+    location_profile_lock_threshold:  Optional[int]
+    ingestion_mode:                   Optional[str]
 
     model_config = {"from_attributes": True}
 
@@ -145,6 +155,7 @@ class CompanyConfigResponse(BaseModel):
             shift_end=cls._fmt_time(obj.shift_end),
             checkin_open=cls._fmt_time(obj.checkin_open),
             checkin_close=cls._fmt_time(obj.checkin_close),
+            dispatch_confirmation_cutoff=cls._fmt_time(obj.dispatch_confirmation_cutoff),
             rating_window_hours=obj.rating_window_hours,
             invite_expiry_days=obj.invite_expiry_days,
             is_configured=obj.is_configured,
@@ -162,10 +173,53 @@ class CompanyConfigResponse(BaseModel):
             dispatch_weight_cap=obj.dispatch_weight_cap,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
+            tier1_dbscan_eps=obj.tier1_dbscan_eps,
+            tier1_dbscan_min_samples=obj.tier1_dbscan_min_samples,
+            tier1_small_tote_cutoff=obj.tier1_small_tote_cutoff,
+            tier1_small_stray_max=obj.tier1_small_stray_max,
+            tier1_small_uncertain_max=obj.tier1_small_uncertain_max,
+            tier1_stray_pct=obj.tier1_stray_pct,
+            tier1_uncertain_pct=obj.tier1_uncertain_pct,
+            location_profile_lock_threshold=obj.location_profile_lock_threshold,
+            ingestion_mode=obj.ingestion_mode,
         )
 
 
 CompanyDetailResponse.model_rebuild()
+
+
+class DiscordConfigUpdate(BaseModel):
+    discord_guild_id:            Optional[int] = None
+    discord_drivers_channel_id:  Optional[int] = None
+    discord_trainers_channel_id: Optional[int] = None
+    discord_general_channel_id:  Optional[int] = None
+    discord_invite_channel_id:   Optional[int] = None
+    discord_role_admin:          Optional[int] = None
+    discord_role_manager:        Optional[int] = None
+    discord_role_asheflow:       Optional[int] = None
+    discord_role_bot:            Optional[int] = None
+    discord_role_dispatch:       Optional[int] = None
+    discord_role_driver:         Optional[int] = None
+    discord_role_captain:        Optional[int] = None
+    discord_role_walker:         Optional[int] = None
+
+
+class DiscordConfigResponse(BaseModel):
+    discord_guild_id:            Optional[int]
+    discord_drivers_channel_id:  Optional[int]
+    discord_trainers_channel_id: Optional[int]
+    discord_general_channel_id:  Optional[int]
+    discord_invite_channel_id:   Optional[int]
+    discord_role_admin:          Optional[int]
+    discord_role_manager:        Optional[int]
+    discord_role_asheflow:       Optional[int]
+    discord_role_bot:            Optional[int]
+    discord_role_dispatch:       Optional[int]
+    discord_role_driver:         Optional[int]
+    discord_role_captain:        Optional[int]
+    discord_role_walker:         Optional[int]
+
+    model_config = {"from_attributes": True}
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +536,7 @@ def bootstrap_company_admin(
 _SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"})
 
 # All editable config fields with their types (used for validation messaging)
-_TIME_FIELDS = frozenset({"shift_start", "shift_end", "checkin_open", "checkin_close"})
+_TIME_FIELDS = frozenset({"shift_start", "shift_end", "checkin_open", "checkin_close", "dispatch_confirmation_cutoff"})
 
 
 def _parse_time(value: str, field: str) -> dt_time:
@@ -502,10 +556,11 @@ class CompanyConfigUpdate(BaseModel):
     at the endpoint layer.
     """
     # Shift timing
-    shift_start:   Optional[str] = None
-    shift_end:     Optional[str] = None
-    checkin_open:  Optional[str] = None
-    checkin_close: Optional[str] = None
+    shift_start:                     Optional[str]   = None
+    shift_end:                       Optional[str]   = None
+    checkin_open:                    Optional[str]   = None
+    checkin_close:                   Optional[str]   = None
+    dispatch_confirmation_cutoff:    Optional[str]   = None
 
     # Operational
     rating_window_hours:             Optional[int]   = Field(None, ge=1, le=48)
@@ -532,6 +587,21 @@ class CompanyConfigUpdate(BaseModel):
 
     # Driver check-ins
     driver_checkin_count:            Optional[int]   = Field(None, ge=0, le=10)
+
+    # Tier 1 manifest verify (DBSCAN tote classification)
+    tier1_dbscan_eps:                Optional[float] = Field(None, ge=0.001, le=1.0)
+    tier1_dbscan_min_samples:        Optional[int]   = Field(None, ge=1, le=200)
+    tier1_small_tote_cutoff:         Optional[int]   = Field(None, ge=1, le=100)
+    tier1_small_stray_max:           Optional[int]   = Field(None, ge=0, le=20)
+    tier1_small_uncertain_max:       Optional[int]   = Field(None, ge=0, le=20)
+    tier1_stray_pct:                 Optional[float] = Field(None, ge=0.0, le=1.0)
+    tier1_uncertain_pct:             Optional[float] = Field(None, ge=0.0, le=1.0)
+
+    # Location profiles
+    location_profile_lock_threshold: Optional[int]  = Field(None, ge=1, le=50)
+
+    # Manifest ingestion
+    ingestion_mode:                  Optional[str]   = None
 
 
 def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, allow_super_admin_fields: bool = False) -> None:
@@ -641,42 +711,48 @@ def update_my_company_config(
 
 
 # ---------------------------------------------------------------------------
-# Discord config — super admin only read/write
+# Company admin: read + update their own Discord config
 # ---------------------------------------------------------------------------
 
-class DiscordConfigUpdate(BaseModel):
-    discord_guild_id:            Optional[int] = None
-    discord_drivers_channel_id:  Optional[int] = None
-    discord_trainers_channel_id: Optional[int] = None
-    discord_general_channel_id:  Optional[int] = None
-    discord_invite_channel_id:   Optional[int] = None
-    discord_role_admin:          Optional[int] = None
-    discord_role_manager:        Optional[int] = None
-    discord_role_asheflow:       Optional[int] = None
-    discord_role_bot:            Optional[int] = None
-    discord_role_dispatch:       Optional[int] = None
-    discord_role_driver:         Optional[int] = None
-    discord_role_captain:        Optional[int] = None
-    discord_role_walker:         Optional[int] = None
+@company_admin_router.get("/my-discord-config", response_model=DiscordConfigResponse)
+def get_my_discord_config(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Return the calling company admin's Discord integration config."""
+    config = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Company config not found.")
+    return DiscordConfigResponse.model_validate(config)
 
 
-class DiscordConfigResponse(BaseModel):
-    discord_guild_id:            Optional[int]
-    discord_drivers_channel_id:  Optional[int]
-    discord_trainers_channel_id: Optional[int]
-    discord_general_channel_id:  Optional[int]
-    discord_invite_channel_id:   Optional[int]
-    discord_role_admin:          Optional[int]
-    discord_role_manager:        Optional[int]
-    discord_role_asheflow:       Optional[int]
-    discord_role_bot:            Optional[int]
-    discord_role_dispatch:       Optional[int]
-    discord_role_driver:         Optional[int]
-    discord_role_captain:        Optional[int]
-    discord_role_walker:         Optional[int]
+@company_admin_router.patch("/my-discord-config", response_model=DiscordConfigResponse)
+def update_my_discord_config(
+    payload: DiscordConfigUpdate,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Update the calling company admin's Discord integration config.
 
-    model_config = {"from_attributes": True}
+    All fields are optional — only provided fields are written.
+    """
+    config = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Company config not found.")
 
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(config, field, value)
+
+    db.commit()
+    db.refresh(config)
+    return DiscordConfigResponse.model_validate(config)
+
+
+# ---------------------------------------------------------------------------
+# Discord config — super admin only read/write
+# ---------------------------------------------------------------------------
 
 @router.get("/{company_id}/discord-config", response_model=DiscordConfigResponse)
 def get_company_discord_config(
