@@ -106,6 +106,9 @@ class ResolvedConfig:
     # Driver check-ins (optional)
     driver_checkin_count: int | None
 
+    # Dispatch confirmation cutoff (optional — None means no cutoff enforced)
+    dispatch_confirmation_cutoff: time | None
+
 
 # ---------------------------------------------------------------------------
 # Discord guild config — separate from ResolvedConfig (optional integration)
@@ -218,4 +221,5 @@ def get_company_config(db: Session, company_id: UUID) -> ResolvedConfig:
         checkin_open                      = row.checkin_open,
         checkin_close                     = row.checkin_close,
         driver_checkin_count              = row.driver_checkin_count,
+        dispatch_confirmation_cutoff      = row.dispatch_confirmation_cutoff,
     )
