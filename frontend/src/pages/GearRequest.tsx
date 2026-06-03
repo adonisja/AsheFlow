@@ -11,7 +11,7 @@ import ErrorBanner from '../components/ui/ErrorBanner';
 
 interface CatalogueItem {
   item: string;
-  season: 'summer' | 'winter';
+  season: 'summer' | 'winter' | 'all';
   available: boolean;
   sizes: string[];
   no_size: boolean;
@@ -184,9 +184,59 @@ export default function GearRequest() {
     return <ErrorBanner message={error ?? 'Failed to load catalogue.'} />;
   }
 
-  const summerItems = catalogue.items.filter(i => i.season === 'summer');
-  const winterItems = catalogue.items.filter(i => i.season === 'winter');
-  const currentSeason = catalogue.current_season;
+  const summerItems    = catalogue.items.filter(i => i.season === 'summer');
+  const winterItems    = catalogue.items.filter(i => i.season === 'winter');
+  const allSeasonItems = catalogue.items.filter(i => i.season === 'all');
+  const currentSeason  = catalogue.current_season;
+
+  const unavailableLabel = (season: CatalogueItem['season']) => {
+    if (season === 'summer') return 'Winter only';
+    if (season === 'winter') return 'Summer only';
+    return '';
+  };
+
+  const renderGrid = (items: CatalogueItem[]) => (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+      {items.map(catItem => {
+        const inCart    = cartItemKeys.has(catItem.item);
+        const available = catItem.available;
+        return (
+          <div
+            key={catItem.item}
+            className={`card flex flex-col items-center gap-3 p-4 transition-all ${
+              !available ? 'opacity-40 select-none' : inCart ? 'ring-2 ring-primary' : 'hover:ring-1 hover:ring-primary/40 cursor-pointer'
+            }`}
+            onClick={() => available && !inCart && addToCart(catItem)}
+          >
+            <div className="w-full aspect-square rounded-lg overflow-hidden bg-accent flex items-center justify-center">
+              <img
+                src={ITEM_IMAGES[catItem.item]}
+                alt={ITEM_LABELS[catItem.item]}
+                className="object-contain w-full h-full"
+              />
+            </div>
+            <p className="text-xs font-medium text-center text-foreground">{ITEM_LABELS[catItem.item]}</p>
+
+            {!available && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                {unavailableLabel(catItem.season)}
+              </span>
+            )}
+            {available && inCart && (
+              <span className="text-xs text-primary font-medium flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" />
+                In cart
+              </span>
+            )}
+            {available && !inCart && (
+              <span className="text-xs text-muted-foreground">Tap to add</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className="space-y-8 animate-slide-up">
@@ -196,56 +246,20 @@ export default function GearRequest() {
       />
 
       {/* ---- Season grid ---- */}
-      {[
-        { label: 'Summer Gear', items: summerItems, season: 'summer' as const },
-        { label: 'Winter Gear', items: winterItems, season: 'winter' as const },
-      ].map(({ label, items, season }) => (
-        <div key={season} className="space-y-3">
-          <h2 className="text-sm font-semibold text-foreground">{label}</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {items.map(catItem => {
-              const inCart    = cartItemKeys.has(catItem.item);
-              const available = catItem.available;
-              return (
-                <div
-                  key={catItem.item}
-                  className={`card flex flex-col items-center gap-3 p-4 transition-all ${
-                    !available ? 'opacity-40 select-none' : inCart ? 'ring-2 ring-primary' : 'hover:ring-1 hover:ring-primary/40 cursor-pointer'
-                  }`}
-                  onClick={() => available && !inCart && addToCart(catItem)}
-                >
-                  <div className="w-full aspect-square rounded-lg overflow-hidden bg-accent flex items-center justify-center">
-                    <img
-                      src={ITEM_IMAGES[catItem.item]}
-                      alt={ITEM_LABELS[catItem.item]}
-                      className="object-contain w-full h-full"
-                    />
-                  </div>
-                  <p className="text-xs font-medium text-center text-foreground">{ITEM_LABELS[catItem.item]}</p>
-
-                  {!available && (
-                    <span className="text-xs text-muted-foreground flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" />
-                      {season === 'summer' ? 'Winter' : 'Summer'} only
-                    </span>
-                  )}
-
-                  {available && inCart && (
-                    <span className="text-xs text-primary font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      In cart
-                    </span>
-                  )}
-
-                  {available && !inCart && (
-                    <span className="text-xs text-muted-foreground">Tap to add</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold text-foreground">Summer Gear</h2>
+        {renderGrid(summerItems)}
+      </div>
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold text-foreground">Winter Gear</h2>
+        {renderGrid(winterItems)}
+      </div>
+      {allSeasonItems.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-foreground">All-Season Gear</h2>
+          {renderGrid(allSeasonItems)}
         </div>
-      ))}
+      )}
 
       {/* ---- Cart ---- */}
       <AnimatePresence>
