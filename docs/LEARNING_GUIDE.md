@@ -5852,3 +5852,122 @@ This pattern appears whenever:
 - A new code path bypasses the original flow (manual-only dispatch)
 
 When reviewing any "update existing X" pattern, always ask: what happens if X doesn't exist yet?
+
+---
+
+## The Route Model — Totes, Capacity, and Geographic Adjacency (ADR-118)
+
+### Why the atomic unit matters
+
+When designing a distribution algorithm, the choice of atomic unit determines
+everything downstream: how capacity is measured, how misroutes are defined, and
+what "reassignment" means.
+
+In the AsheFlow walker sort, the atomic unit is the **tote** (a physical bag),
+not the package. Totes are pre-assembled at Amazon's station before the sort
+runs. Each tote holds packages going to a dominant block_key. The sort operates
+on totes as whole units — it decides which totes go on which cart.
+
+Individual packages only become relevant in one case: when a package's
+block_key doesn't match its tote's dominant block_key. That package is a
+misroute — it was physically placed in the wrong tote at Amazon's sort. The
+system surfaces it for physical extraction and placement into the correct tote
+at the anchor point.
+
+**Why this matters:** If you model at the package level, you need to track
+hundreds of individual items through the sort. If you model at the tote level,
+you track tens of totes and only surface exceptions.
+
+### Route = one cart trip, not one person's day
+
+A route is a geographic cluster of totes whose combined slot cost fits within
+the capacity limit for the effort class of those block_keys. One route = one
+cart = one trip. It is not a person's full day assignment.
+
+The operational sequence is:
+1. Compute routes (geographic, capacity-constrained) — person-independent
+2. Count confirmed staff at anchor point
+3. Distribute routes to people (wave distribution)
+4. Handle reassignment when attendance differs from confirmation
+
+This separation is critical. If you conflate route computation with person
+assignment (as the original `WalkerRoute`/`WalkerTrip` model did), you cannot
+reassign routes without re-running the entire sort.
+
+### Half-slot integer arithmetic
+
+Capacity involves fractional values (OV size S = 0.5 slots, L = 1.5 slots).
+Floating point arithmetic for capacity comparisons introduces precision bugs
+(e.g. 6.0000000001 > 6.0). The solution is to scale all values by 2 and work
+entirely in integers:
+
+```python
+_HALF_SLOTS = {"tote": 2, "OV_S": 1, "OV_M": 2, "OV_L": 3, "OV_XL": 4}
+_CAPACITY   = {"standard": 12, "heavy": 8}            # 6 and 4 slots × 2
+_CAP_PAIRED = {"standard": 18, "heavy": 12}           # 9 and 6 slots × 2
+```
+
+All comparisons are then integer-safe: `slot_cost <= capacity_limit`.
+
+### Spatial adjacency vs. string matching
+
+String-matching block_keys (`W_37_St_300s_odd`) looks like a reasonable way to
+group packages by location. It is not. These two block_keys are string-different
+but physically adjacent:
+- `W_37_St_300s_odd` and `W_37_St_400s_odd` — contiguous hundred-block ranges
+- `W_37_St_300s_odd` and `9_Ave_400s_even` — perpendicular streets sharing a
+  corner intersection
+
+A route that follows W 37th St through the 300s then turns onto 9th Ave is a
+natural walking path — one cart trip, no backtracking. String matching would
+treat these as unrelated blocks and put them on separate routes.
+
+The correct approach is a **spatial adjacency graph** built from actual lat/lng
+coordinates. DBSCAN clustering (already used for truck zones in
+`cluster_packages.py`) is applied at tighter `eps` for block-level clustering.
+Geographic adjacency rules are encoded as graph edges, not inferred from string
+comparison.
+
+### Two-source difficulty model — override, not average
+
+Route capacity is determined by effort class, derived from two sources:
+
+```
+LocationDifficultyFlag (field-raised, subsequent sorts only)
+    → overrides →
+LocationProfile.workload_class (verified, persistent)
+    → falls back to →
+standard
+```
+
+These are not averaged. The flag is a pure override. The reasoning: they
+describe the same thing (how hard is this block) from different reliability
+levels. A flag raised by one walker on one day should not dilute a workload
+classification verified by multiple drivers over months. It should replace it
+for the next sort, where conditions may still apply.
+
+Important timing constraint: `LocationDifficultyFlag` is raised *during
+delivery*. The route sort runs *before delivery* at the anchor point. A flag
+raised today cannot affect today's sort — it affects tomorrow's.
+
+### The 1.5× trainer+trainee capacity rule and timing
+
+When a trainer and Phase 1–3 trainee work shared routes together, the capacity
+limit increases to 1.5×. This cannot be baked in at sort time because:
+- Sort runs before anyone arrives (based on confirmed headcount)
+- The 1.5× only applies when both are *physically present*
+
+The solution is two-pass:
+1. Sort at base capacity — result is always valid
+2. At arrival, trainer confirms trainee present → system offers local rebalance
+   (absorb adjacent totes up to paired capacity limit)
+
+The rebalance is an opportunity, not a requirement. The base sort stands as-is
+if no rebalance is triggered.
+
+### Phase 4 trainer opt-in route
+
+Phase 4 is observation, not active instruction. The trainer may opt in to one
+additional adjacent solo route. "Adjacent" means the additional route shares at
+least one block_key boundary with the shared trainee route — the trainer stays
+in visual range. This is blocked for Phases 1–3 where full attention is required.
