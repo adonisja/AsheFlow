@@ -690,9 +690,8 @@ export default function SortPage() {
         <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
       )}
 
-      {/* Zone density map — only render when there's data; avoids loading the
-          Google Maps script (and billing a map load) on days with no assignments */}
-      {(zones.length > 0 || centroids.length > 0) && (
+      {/* Zone density map — only render when truck assignments exist for today */}
+      {assignments.length > 0 && (
         <ZoneDensityMap zones={zones} centroids={centroids} className="h-80" />
       )}
 
