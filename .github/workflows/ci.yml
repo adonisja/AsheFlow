@@ -243,6 +243,7 @@ jobs:
           VITE_AWS_REGION: ${{ secrets.STAGING_VITE_AWS_REGION }}
           VITE_AWS_CLIENT_ID: ${{ secrets.STAGING_VITE_AWS_CLIENT_ID }}
           VITE_AWS_DOMAIN: ${{ secrets.STAGING_VITE_AWS_DOMAIN }}
+          VITE_GOOGLE_MAPS_KEY: ${{ secrets.STAGING_VITE_GOOGLE_MAPS_KEY }}
 
       - name: Sync to staging S3
         working-directory: frontend
@@ -391,6 +392,7 @@ jobs:
           VITE_AWS_REGION: ${{ secrets.PROD_VITE_AWS_REGION }}
           VITE_AWS_CLIENT_ID: ${{ secrets.PROD_VITE_AWS_CLIENT_ID }}
           VITE_AWS_DOMAIN: ${{ secrets.PROD_VITE_AWS_DOMAIN }}
+          VITE_GOOGLE_MAPS_KEY: ${{ secrets.PROD_VITE_GOOGLE_MAPS_KEY }}
 
       - name: Sync to prod S3
         working-directory: frontend
