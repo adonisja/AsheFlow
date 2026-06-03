@@ -28,6 +28,8 @@ import {
   BarChart2,
   UserCircle2,
   Building2,
+  Route,
+  Activity,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -375,6 +377,12 @@ const Navbar = () => {
         <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
       )}
       {(isDispatch || isAdmin) && (
+        <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
+      )}
+      {(isDispatch || isAdmin) && (
+        <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
+      )}
+      {(isDispatch || isAdmin) && (
         <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
       )}
       {(isDispatch || isMgmt || isAdmin) && (
@@ -493,6 +501,8 @@ function MobileLinks({
       {groups.includes('driver') && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Point</NavLink>}
       <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
       {(isDispatch || isAdmin) && <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>}
+      {(isDispatch || isAdmin) && <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>}
+      {(isDispatch || isAdmin) && <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>}
       {(isDispatch || isAdmin) && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>}
       {(isDispatch || isMgmt || isAdmin) && <NavLink to="/location-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>}
       {isMgmt && <>
