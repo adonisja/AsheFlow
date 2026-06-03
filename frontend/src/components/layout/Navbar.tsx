@@ -325,7 +325,7 @@ const Navbar = () => {
   }, [isAuthenticated, isTrainee]);
 
   const homeRoute = (() => {
-    if (isAdmin)      return '/dispatch-home';
+    if (isAdmin)      return '/admin';
     if (isDispatch)   return '/dispatch-home';
     if (isMgmt)       return '/management';
     if (isTrainer)    return '/trainer-dashboard';
@@ -348,7 +348,6 @@ const Navbar = () => {
       {/* Admin nav — Dashboard + alphabetical */}
       {isAdmin && (
         <>
-          <NavLink to="/admin" className={linkClass}><Shield className="w-3.5 h-3.5" /> Admin</NavLink>
           <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
           <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
           <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
@@ -500,7 +499,6 @@ function MobileLinks({
     <>
       <NavLink to={homeRoute} onClick={onNav} className={cls}><Home className="w-4 h-4" /> Dashboard</NavLink>
       {isAdmin && <>
-        <NavLink to="/admin" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Admin</NavLink>
         <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
         <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
