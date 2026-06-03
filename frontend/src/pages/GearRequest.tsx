@@ -190,8 +190,8 @@ export default function GearRequest() {
   const currentSeason  = catalogue.current_season;
 
   const unavailableLabel = (season: CatalogueItem['season']) => {
-    if (season === 'summer') return 'Winter only';
-    if (season === 'winter') return 'Summer only';
+    if (season === 'summer') return 'Summer season only';
+    if (season === 'winter') return 'Winter season only';
     return '';
   };
 
