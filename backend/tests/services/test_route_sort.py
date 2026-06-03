@@ -411,3 +411,82 @@ class TestRunSort:
         result = run_sort(_request(pkgs), {}, {})
         for r in result.routes:
             assert r.slot_cost <= r.capacity_limit
+
+
+# ---------------------------------------------------------------------------
+# Segment counting — odd+even on the same range = 1 segment, not 2
+# (regression tests for the segments_used overcounting fix, ADR-120)
+# ---------------------------------------------------------------------------
+
+class TestSegmentCounting:
+    """
+    The 3-segment budget must count distinct (street, hundred-block range) pairs,
+    not individual block_keys. W_36_St_350s_odd and W_36_St_350s_even are the
+    same segment — they should not consume two budget slots.
+
+    Before the fix, segments_used was a plain counter incremented per block.
+    Two odd/even blocks on the same range would use 2 slots instead of 1,
+    causing premature rejection of valid cross-street absorptions and producing
+    extra orphan routes.
+    """
+
+    def test_odd_and_even_same_range_cluster_together(self):
+        # Both sides of W 36th St 350s should land in one route, not two.
+        pkgs = [
+            _pkg("TBA001", "351 W 36th St", "BagA", lat=40.750, lng=-73.993),  # 350s odd
+            _pkg("TBA002", "352 W 36th St", "BagB", lat=40.750, lng=-73.993),  # 350s even
+        ]
+        result = run_sort(_request(pkgs), {}, {})
+        assert len(result.routes) == 1
+        assert set(result.routes[0].tba_numbers) == {"TBA001", "TBA002"}
+
+    def test_odd_even_pair_consumes_only_one_segment_of_budget(self):
+        # Odd + even on range 350s = 1 segment. Should still be able to absorb
+        # a second range (400s) since budget allows 3 segments.
+        pkgs = [
+            _pkg("TBA001", "351 W 36th St", "BagA", lat=40.750, lng=-73.993),  # 350s odd
+            _pkg("TBA002", "352 W 36th St", "BagB", lat=40.750, lng=-73.993),  # 350s even
+            _pkg("TBA003", "410 W 36th St", "BagC", lat=40.750, lng=-73.991),  # 400s even
+        ]
+        result = run_sort(_request(pkgs), {}, {})
+        # All three should be in one route — 350s_odd + 350s_even = 1 segment,
+        # 400s = 2nd segment; budget not exhausted.
+        assert len(result.routes) == 1
+        assert set(result.routes[0].tba_numbers) == {"TBA001", "TBA002", "TBA003"}
+
+    def test_three_ranges_with_odd_even_pairs_all_fit(self):
+        # 300s_odd + 300s_even = segment 1
+        # 400s_odd + 400s_even = segment 2
+        # 500s_even            = segment 3
+        # Total: 3 segments. All should land in one route.
+        pkgs = [
+            _pkg("TBA001", "301 W 36th St", "Bag1", lat=40.750, lng=-73.995),
+            _pkg("TBA002", "302 W 36th St", "Bag2", lat=40.750, lng=-73.995),
+            _pkg("TBA003", "401 W 36th St", "Bag3", lat=40.750, lng=-73.992),
+            _pkg("TBA004", "402 W 36th St", "Bag4", lat=40.750, lng=-73.992),
+            _pkg("TBA005", "502 W 36th St", "Bag5", lat=40.750, lng=-73.989),
+        ]
+        result = run_sort(_request(pkgs), {}, {})
+        all_tbas = {tba for r in result.routes for tba in r.tba_numbers}
+        assert all_tbas == {"TBA001", "TBA002", "TBA003", "TBA004", "TBA005"}
+        # Should be at most 2 routes given capacity (5 totes × 2 half-slots = 10 ≤ 12)
+        assert len(result.routes) <= 2
+
+    def test_four_ranges_split_at_segment_boundary_not_block_count(self):
+        # 300s + 400s + 500s = 3 segments → max window; 600s must start a new route.
+        # Before the fix, 300s_odd + 300s_even + 400s = 3 blocks consumed 3 segments,
+        # causing 500s to also get a separate route — 3 routes instead of 2.
+        pkgs = [
+            _pkg("TBA001", "301 W 36th St", "Bag1", lat=40.750, lng=-73.995),
+            _pkg("TBA002", "302 W 36th St", "Bag2", lat=40.750, lng=-73.995),
+            _pkg("TBA003", "402 W 36th St", "Bag3", lat=40.750, lng=-73.992),
+            _pkg("TBA004", "502 W 36th St", "Bag4", lat=40.750, lng=-73.989),
+            _pkg("TBA005", "602 W 36th St", "Bag5", lat=40.750, lng=-73.986),
+        ]
+        result = run_sort(_request(pkgs), {}, {})
+        # All packages present in output
+        all_tbas = {tba for r in result.routes for tba in r.tba_numbers}
+        assert all_tbas == {"TBA001", "TBA002", "TBA003", "TBA004", "TBA005"}
+        # Should produce exactly 2 routes: [300s, 400s, 500s] and [600s]
+        # (not 3 routes as the broken counter would produce)
+        assert len(result.routes) == 2
