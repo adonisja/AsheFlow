@@ -37,9 +37,10 @@ allow_management = RoleChecker(["management", "admin"])
 # Gear catalogue — source of truth for items, sizes, and seasons
 # ---------------------------------------------------------------------------
 
-SUMMER_ITEMS = frozenset({"shirt_short", "shorts", "cap"})
-WINTER_ITEMS = frozenset({"shirt_long", "pants", "jacket", "vest", "gloves"})
-ALL_ITEMS    = SUMMER_ITEMS | WINTER_ITEMS
+SUMMER_ITEMS     = frozenset({"shirt_short", "shorts", "cap"})
+WINTER_ITEMS     = frozenset({"shirt_long", "pants", "jacket"})
+ALL_SEASON_ITEMS = frozenset({"vest", "gloves"})  # available year-round
+ALL_ITEMS        = SUMMER_ITEMS | WINTER_ITEMS | ALL_SEASON_ITEMS
 
 STANDARD_SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL"]
 GLOVE_SIZES    = ["S", "M", "L"]
@@ -83,6 +84,8 @@ def _current_season(db: Session, company_id: UUID) -> str:
 def _season_for_item(item: str) -> str:
     if item in SUMMER_ITEMS:
         return "summer"
+    if item in ALL_SEASON_ITEMS:
+        return "all"
     return "winter"
 
 
@@ -238,10 +241,11 @@ def get_catalogue(
     catalogue = []
     for item in sorted(ALL_ITEMS):
         item_season = _season_for_item(item)
+        available = item_season == "all" or item_season == current_season
         catalogue.append({
             "item":      item,
             "season":    item_season,
-            "available": item_season == current_season,
+            "available": available,
             "sizes":     VALID_SIZES[item],
             "no_size":   item in NO_SIZE_ITEMS,
         })
@@ -266,8 +270,8 @@ def submit_gear_order(
     for gear_item in payload.items:
         item_season = _season_for_item(gear_item.item)
 
-        # Season hard-block
-        if item_season != current_season:
+        # Season hard-block (all-season items always pass)
+        if item_season != "all" and item_season != current_season:
             errors.append(
                 f"'{gear_item.item}' is a {item_season} item and is not available in {current_season}."
             )
