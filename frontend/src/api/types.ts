@@ -420,6 +420,7 @@ export interface RouteResponse {
   tag_numbers: string[];
   slot_cost: number;
   capacity_limit: number;
+  package_count: number;
   capacity_limit_paired: number | null;
   effort_class: 'easy' | 'standard' | 'heavy';
   workload_source: 'profile' | 'flag' | 'default';
