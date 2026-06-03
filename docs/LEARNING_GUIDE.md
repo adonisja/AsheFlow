@@ -5971,3 +5971,56 @@ Phase 4 is observation, not active instruction. The trainer may opt in to one
 additional adjacent solo route. "Adjacent" means the additional route shares at
 least one block_key boundary with the shared trainee route — the trainer stays
 in visual range. This is blocked for Phases 1–3 where full attention is required.
+
+---
+
+## Migration DAG Ordering — Table Before Index (2026-06-02)
+
+When two migration branches both touch the same table — one creates it, one
+indexes it — the index migration MUST declare the table-creation migration as
+a parent. If they are on separate branches with no dependency, Alembic may
+process them in parallel and attempt to create the index before the table exists.
+
+The symptom: `relation "table_name" does not exist` during `alembic upgrade head`
+on a database that has never seen the table-creation migration.
+
+The fix: change the index migration's `down_revision` from a single parent to a
+tuple that includes both its natural parent AND the table-creation migration:
+
+```python
+# Before — races against table creation
+down_revision = 'g4b5c6d7e8f9'
+
+# After — explicitly requires table to exist first
+down_revision = ('g4b5c6d7e8f9', 'c6d7e8f9a0b1')
+```
+
+This is a specific case of the general rule: if migration B assumes something
+migration A created, B must declare A as an ancestor — regardless of which
+branch they're on.
+
+---
+
+## Removing a Model — Check All Import Sites Including Private Repo (2026-06-02)
+
+When removing or renaming a model class (e.g. replacing `WalkerTrip` with
+`Route`), the sequence is:
+
+1. Update the model file
+2. Update `models/__init__.py`
+3. **Grep all routers for the old import — including proprietary files in
+   AsheFlow-private that are not visible in the public repo**
+4. Update schemas that reference the old model
+5. Run tests locally
+6. Push and verify the backend starts (check `docker compose logs backend`)
+
+Skipping step 3 causes an `ImportError` crash-loop on startup. The backend
+container exits immediately and `docker compose exec backend alembic upgrade head`
+fails with "service is not running" — which looks like a deployment issue but is
+actually an import error.
+
+Always check EC2 backend logs directly after a model-level change:
+```bash
+aws ssm send-command --instance-ids <id> \
+  --parameters 'commands=["cd /home/ubuntu/AsheFlow && docker compose logs backend --tail=50"]'
+```

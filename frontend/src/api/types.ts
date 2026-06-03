@@ -377,6 +377,106 @@ export interface AssignmentChangeRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Walker Sort / Route Model
+// ---------------------------------------------------------------------------
+
+export interface MisroutedPackageOut {
+  tba_number: string;
+  tag_number: string | null;
+  current_bag_id: string;
+  destination_block_key: string | null;
+  suggested_route_number: number | null;
+}
+
+export interface RouteOut {
+  route_number: number;
+  block_keys: string[];
+  tote_ids: string[];
+  tba_numbers: string[];
+  tag_numbers: string[];
+  slot_cost: number;
+  capacity_limit: number;
+  effort_class: 'easy' | 'standard' | 'heavy';
+  workload_source: 'profile' | 'flag' | 'default';
+  package_count: number;
+  misrouted_packages: MisroutedPackageOut[];
+}
+
+export interface SortResult {
+  truck_assignment_id: string;
+  route_date: string;
+  routes: RouteOut[];
+  unassigned_misroutes: MisroutedPackageOut[];
+}
+
+export interface RouteResponse {
+  id: string;
+  truck_assignment_id: string;
+  route_date: string;
+  route_number: number;
+  block_keys: string[];
+  tote_ids: string[];
+  tba_numbers: string[];
+  tag_numbers: string[];
+  slot_cost: number;
+  capacity_limit: number;
+  capacity_limit_paired: number | null;
+  effort_class: 'easy' | 'standard' | 'heavy';
+  workload_source: 'profile' | 'flag' | 'default';
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  paired_trainee_id: string | null;
+  trainee_phase: number | null;
+  phase4_solo_opted_in: boolean;
+  status: 'unassigned' | 'assigned' | 'in_progress' | 'completed';
+  departed_at: string | null;
+  returned_at: string | null;
+  created_at: string;
+  misrouted_packages: MisroutedPackageOut[];
+}
+
+export interface WalkerRouteResponse {
+  id: string;
+  truck_assignment_id: string;
+  route_date: string;
+  employee_id: string;
+  total_routes: number;
+  total_packages: number;
+  total_bags: number;
+  total_slot_cost: number;
+  created_at: string;
+  routes: RouteResponse[];
+}
+
+export interface CommitSortResponse {
+  routes: RouteResponse[];
+  packages_sorted: number;
+  packages_dropped: number;
+  dropped_tbas: string[];
+  unassigned_misroutes: MisroutedPackageOut[];
+}
+
+export interface WaveAssignmentEntry {
+  route_number: number;
+  employee_id: string;
+}
+
+export interface RebalanceOffer {
+  route_number: number;
+  effort_class: string;
+  workload_source: string;
+  current_slot_cost: number;
+  paired_capacity_limit: number;
+  absorbable_tote_ids: string[];
+  absorbable_package_count: number;
+}
+
+export interface ArrivalConfirmResponse {
+  rebalanced_route_numbers: number[];
+  heavy_offers: RebalanceOffer[];
+}
+
+// ---------------------------------------------------------------------------
 // Analytics
 // ---------------------------------------------------------------------------
 
