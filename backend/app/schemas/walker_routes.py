@@ -158,7 +158,7 @@ class ArrivalConfirmResponse(BaseModel):
 class AcceptRebalanceRequest(BaseModel):
     route_number: int
     truck_assignment_id: UUID
-    route_date: UUID
+    route_date: date
 
 
 # ---------------------------------------------------------------------------
