@@ -32,3 +32,4 @@ from app.models.walker_route import Route, WalkerRoute, RouteClusterCentroid, Lo
 from app.models.truck_zone import TruckZone
 from app.models.location_profile import LocationProfile
 from app.models.location_profile_library import LocationProfileLibrary
+from app.models.gear_request import GearOrder, GearOrderItem
