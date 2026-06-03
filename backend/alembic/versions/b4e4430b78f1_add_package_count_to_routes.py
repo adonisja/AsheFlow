@@ -1,6 +1,6 @@
 """add_package_count_to_routes
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: b4e4430b78f1
 Revises: j7e8f9a0b1c2
 Create Date: 2026-06-03
 
@@ -13,7 +13,7 @@ DEFAULT 0 handles any existing rows; application code always sets the value.
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'a1b2c3d4e5f6'
+revision = 'b4e4430b78f1'
 down_revision = 'j7e8f9a0b1c2'
 branch_labels = None
 depends_on = None
