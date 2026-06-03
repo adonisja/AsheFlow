@@ -3,6 +3,8 @@ import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import ZoneDensityMap from '../components/ZoneDensityMap';
+import type { ZonePolygon, Centroid } from '../components/ZoneDensityMap';
 import {
   Package, Users, AlertTriangle, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, Send, UserCheck, Shuffle,
@@ -508,6 +510,8 @@ export default function SortPage() {
   const [truckStates, setTruckStates] = useState<TruckSortState[]>([]);
   const [walkers, setWalkers] = useState<Employee[]>([]);
   const [trainers, setTrainers] = useState<Employee[]>([]);
+  const [zones, setZones] = useState<ZonePolygon[]>([]);
+  const [centroids, setCentroids] = useState<Centroid[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -532,12 +536,22 @@ export default function SortPage() {
     setLoading(true);
     setError(null);
     try {
-      const [taRes, empRes] = await Promise.all([
+      const [taRes, empRes, zoneRes, centroidRes] = await Promise.allSettled([
         axiosClient.get<TruckAssignment[]>('/truck-assignments/', { params: { date: today } }),
         axiosClient.get<Employee[]>('/employees/', { params: { is_active: true } }),
+        axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
+        axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
       ]);
-      const tas = taRes.data;
-      const emps = empRes.data;
+      // Unpack settled results — zones/centroids fail silently if sort hasn't run yet
+      if (zoneRes.status === 'fulfilled') setZones(zoneRes.value.data.zones ?? []);
+      if (centroidRes.status === 'fulfilled') setCentroids(centroidRes.value.data.centroids ?? []);
+      if (taRes.status === 'rejected') throw taRes.reason;
+      if (empRes.status === 'rejected') throw empRes.reason;
+      // Re-assign for downstream use
+      const taResVal = taRes.value;
+      const empResVal = empRes.value;
+      const tas = taResVal.data;
+      const emps = empResVal.data;
       setAssignments(tas);
       setWalkers(emps.filter(e => ['walker', 'trainee', 'trainer'].includes(e.role)));
       setTrainers(emps.filter(e => e.role === 'trainer'));
@@ -578,6 +592,10 @@ export default function SortPage() {
       packages_dropped: res.data.packages_dropped,
       dropped_tbas: res.data.dropped_tbas,
     });
+    // Refresh centroids after commit — route_sort persists new centroids
+    axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`)
+      .then(r => setCentroids(r.data.centroids ?? []))
+      .catch(() => {});
   };
 
   const handleDistribute = async (
@@ -672,20 +690,8 @@ export default function SortPage() {
         <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
       )}
 
-      {/* Map placeholder — activates once VITE_GOOGLE_MAPS_KEY is set */}
-      {import.meta.env.VITE_GOOGLE_MAPS_KEY ? (
-        <div className="card p-4 flex items-center justify-center h-64 bg-accent/20">
-          <p className="text-muted-foreground text-sm">Zone density map — Deck.gl integration pending</p>
-        </div>
-      ) : (
-        <div className="card p-4 flex items-center justify-center h-24 border-dashed">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <MapPin className="w-4 h-4" />
-            Zone density map available after Google Maps API key is provisioned
-            (<code className="text-xs bg-accent px-1 py-0.5 rounded">VITE_GOOGLE_MAPS_KEY</code>)
-          </div>
-        </div>
-      )}
+      {/* Zone density map */}
+      <ZoneDensityMap zones={zones} centroids={centroids} className="h-80" />
 
       {/* Truck panels */}
       {loading ? (
