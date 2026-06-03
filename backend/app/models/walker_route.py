@@ -28,6 +28,7 @@ class Route(Base):
     tote_ids              = Column(ARRAY(Text()), nullable=False, default=list)
     tba_numbers           = Column(ARRAY(Text()), nullable=False, default=list)
     tag_numbers           = Column(ARRAY(Text()), nullable=False, default=list)
+    package_count         = Column(Integer(), nullable=False, default=0)
 
     # Capacity in half-slots (scale ×2: standard=12, heavy=8, paired=18/12)
     slot_cost             = Column(Integer(), nullable=False, default=0)
