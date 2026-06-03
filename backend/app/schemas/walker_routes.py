@@ -177,6 +177,7 @@ class RouteResponse(BaseModel):
     slot_cost: int
     capacity_limit: int
     capacity_limit_paired: Optional[int] = None
+    package_count: int
     effort_class: str
     workload_source: str
     assigned_to: Optional[UUID] = None

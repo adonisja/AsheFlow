@@ -6100,3 +6100,69 @@ every reference to `window.google.maps` in `ZoneDensityMap.tsx` failed with
 Rule: any time you install `@types/something` that injects globals (not just
 module types), check whether your tsconfig has an explicit `"types"` list. If
 it does, add the package name to the list.
+
+---
+
+## Post-Implementation Audit — What Unit Tests Cannot Catch (ADR-120, 2026-06-03)
+
+The sort pipeline had three bugs that survived 54 passing unit tests. Understanding
+*why* they survived is more valuable than the fixes themselves.
+
+### nullable=False columns not set in constructors
+
+The `Route` model has `package_count = Column(Integer(), nullable=False)`. The
+`_persist_routes` function that creates `Route` rows never set this field. Every
+`POST /walker-routes/commit` call would fail with a database `IntegrityError`.
+
+The 54 unit tests call `run_sort()` directly. `run_sort()` returns a `SortResult`
+Pydantic object — it never touches the database. So the tests exercised the
+algorithm perfectly but never reached the persistence layer where the violation
+lives.
+
+**Rule:** After writing any `_persist_*` or `_create_*` helper, cross-reference
+every `nullable=False` column on the SQLAlchemy model against the constructor
+call in that function. Do this during audit, not just when tests fail.
+
+### Counting the wrong unit
+
+`segments_used` was a counter incremented once per block added to a route. But
+the 3-segment model defines a "segment" as one hundred-block range on one street
+— not one block_key. `W_36_St_350s_odd` and `W_36_St_350s_even` are two block
+keys on the same segment. The counter counted them as 2, the set would count them
+as 1.
+
+The tests didn't catch this because they used single blocks per range. An odd+even
+pair on the same range would expose the bug, but no test had that structure.
+
+**Rule:** When an algorithm accumulates a "count" of something, ask: what is the
+unit I'm actually counting? Is it the same unit the model is describing? Write
+the accumulation as a set (deduplicated) whenever the unit could have multiple
+keys that map to the same logical entity.
+
+### Anchoring to `created[0]` — arbitrary first element
+
+Unassigned misroutes needed a `route_id` FK because the column is `nullable=False`.
+The code used `created[0]` as a fallback. `created[0]` is the densest route from
+the sort — completely unrelated to the misroute's actual destination. This caused
+all unassigned misroutes to appear under Route 1 in the UI.
+
+The fix: build a `block_key → Route` lookup from all persisted routes, anchor
+each misroute to the route whose `block_keys` contains its destination, fall back
+to `created[0]` only if no match.
+
+**Rule:** When you use an element from a list as a "default anchor" for a FK, ask:
+is this the semantically correct anchor, or just the first convenient one? If it's
+the latter, build the right lookup.
+
+### The post-implementation audit checklist
+
+After every implementation session, before writing the ADR:
+
+1. Multi-tenancy: every query filters by `caller.company_id`
+2. Role guards: every endpoint has a `Depends(RoleChecker([...]))`
+3. Schema↔Model: every `nullable=False` column set in every constructor
+4. Schema↔Frontend: Pydantic response schema fields match TypeScript types
+5. Algorithm invariants: no silent drops, no infinite loops, counting the right unit
+6. Error exposure: no `str(e)` in HTTPException details
+7. PII/privacy: no addresses or personal data in logs or outputs
+8. CI secrets: new env vars set in all CI steps
