@@ -6226,13 +6226,26 @@ _fire_redis_cancel(str(date), str(employee_id))
 
 ## Side-effects of assignment mutations must match the original assignment flow (ADR-122, 2026-06-04)
 
-When `publish_dispatch` runs, every assigned employee gets three things: a `DispatchConfirmation` DB row, a Redis `pending` entry, and a Discord DM.
+When `publish_dispatch` runs, every assigned employee gets three things: a `DispatchConfirmation` DB row seeded as `pending`, a Redis entry, an in-app `dispatch_assignment` notification with Confirm/Decline buttons, and a Discord DM.
 
-`manual_assignment` (post-publish add) seeded the DB row and Redis correctly but skipped the Discord DM. The new employee was never asked to confirm.
+Any post-publish mutation must replicate or reverse the appropriate subset of that flow:
 
-**Rule:** If a mutation endpoint (add/remove/swap) changes who is assigned, audit what the original assignment flow did for each person affected and replicate those steps:
-- Added? → Seed confirmation + Redis + DM (if discord_id set)
-- Removed? → Delete confirmation + Redis cancel + notification delete
-- Swapped? → Confirmation stays (person is still assigned); update notification message with new truck name
+**Removed:**
+- `DispatchConfirmation`: hard delete (no `cancelled` status — DB CHECK constraint).
+- Notification: do NOT delete — update message to "Your assignment has been removed" and mark `is_read = True`. The unread banner hides it; the employee still has context if they look.
+- Redis: fire `_fire_redis_cancel()` after commit.
+- Discord: no action (they're off the dispatch).
 
-Guard the DM against double-firing: only fire it when `not existing_conf`, so an employee who was already seeded during publish isn't DM'd again.
+**Added (phase-aware):**
+- `planned` phase → skip everything; publish will seed them when it runs.
+- `active` phase (confirmation window open) → seed `pending` confirmation, `dispatch_assignment` notification with Confirm/Decline, Redis `pending`, Discord DM.
+- `completed` phase (finalized) → seed `confirmed` confirmation directly, `dispatch_assignment_info` notification (informational, no buttons), Redis `confirmed`. No DM.
+
+**Swapped (truck change only):**
+- Confirmation stays (person is still assigned for the date).
+- Update the existing notification message with the new truck name.
+- No new Redis write, no DM.
+
+**Why `dispatch_assignment_info` instead of `dispatch_assignment` for post-finalize?** The frontend renders Confirm/Decline buttons only for `dispatch_assignment` type. A post-finalize add should not present buttons — the employee is already confirmed. A different type lets the banner render it as a plain dismissible card with no frontend changes.
+
+Guard all seeding with `not existing_conf` / `not existing_notif` to stay idempotent.
