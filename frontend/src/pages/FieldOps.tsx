@@ -1793,18 +1793,21 @@ type ShiftSession = {
 };
 
 function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
-  const [session,       setSession]       = useState<ShiftSession | null>(null);
+  const [session,        setSession]        = useState<ShiftSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
-  const [advancing,     setAdvancing]     = useState(false);
-  const [skipOpen,      setSkipOpen]      = useState(false);
-  const [error,         setError]         = useState('');
+  const [hasAssignment,  setHasAssignment]  = useState(false);
+  const [advancing,      setAdvancing]      = useState(false);
+  const [skipOpen,       setSkipOpen]       = useState(false);
+  const [error,          setError]          = useState('');
 
   const loadSession = useCallback(async () => {
     try {
-      const res = await axiosClient.get<ShiftSession | null>('/shift-sessions/me/active');
-      setSession(res.data ?? null);
-    } catch {
-      setSession(null);
+      const [sessionRes, eligRes] = await Promise.allSettled([
+        axiosClient.get<ShiftSession | null>('/shift-sessions/me/active'),
+        axiosClient.get<boolean>('/shift-sessions/me/eligible'),
+      ]);
+      setSession(sessionRes.status === 'fulfilled' ? (sessionRes.value.data ?? null) : null);
+      setHasAssignment(eligRes.status === 'fulfilled' && eligRes.value.data === true);
     } finally {
       setSessionLoading(false);
     }
@@ -1859,6 +1862,19 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
 
   // No active session — prompt to start shift
   if (!session) {
+    if (!hasAssignment) {
+      return (
+        <div className="card text-center py-10 space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-warning/10 flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-7 h-7 text-warning" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-foreground">No assignment today</h2>
+            <p className="text-sm text-subtle mt-1">You are not assigned to a truck for today. Contact your dispatcher.</p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="card text-center py-10 space-y-4">
         <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto">
