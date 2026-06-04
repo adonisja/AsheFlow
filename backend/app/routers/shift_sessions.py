@@ -16,6 +16,7 @@ router = APIRouter(prefix="/shift-sessions", tags=["shift-sessions"])
 
 allow_driver = RoleChecker(["driver"])
 allow_mgmt   = RoleChecker(["management", "admin"])
+allow_admin  = RoleChecker(["admin"])
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +221,49 @@ def skip_to_gate(
 
 
 # ---------------------------------------------------------------------------
+# List active sessions — management/admin view
+# ---------------------------------------------------------------------------
+
+class ActiveSessionSummary(BaseModel):
+    session_id: UUID
+    driver_id: UUID
+    driver_name: str
+    current_gate: int
+    started_at: datetime
+    model_config = {"from_attributes": True}
+
+
+@router.get("/active", response_model=list[ActiveSessionSummary])
+def list_active_sessions(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    """Return all active (incomplete) shift sessions for the company today."""
+    today = date.today()
+    rows = (
+        db.query(ShiftSession, Employee)
+        .join(Employee, Employee.id == ShiftSession.driver_id)
+        .filter(
+            ShiftSession.company_id == caller.company_id,
+            ShiftSession.completed_at.is_(None),
+            ShiftSession.started_at >= datetime(today.year, today.month, today.day, tzinfo=timezone.utc),
+        )
+        .all()
+    )
+    return [
+        ActiveSessionSummary(
+            session_id=s.id,
+            driver_id=s.driver_id,
+            driver_name=e.name,
+            current_gate=s.current_gate,
+            started_at=s.started_at,
+        )
+        for s, e in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Abandon — management can force-close a stuck session
 # ---------------------------------------------------------------------------
 
@@ -240,4 +284,33 @@ def abandon_session(
         raise HTTPException(status_code=404, detail="No active session found for this driver.")
 
     session.completed_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Wipe — admin deletes the active session entirely (testing / data correction)
+# ---------------------------------------------------------------------------
+
+@router.delete("/driver/{driver_id}/active/wipe", status_code=status.HTTP_204_NO_CONTENT)
+def wipe_session(
+    driver_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete a driver's active shift session. Admin only.
+
+    Used to reset a driver's session during testing or to correct a data entry
+    error. Unlike abandon (which force-completes), this removes the row entirely
+    so the driver can start fresh.
+    """
+    session = db.query(ShiftSession).filter(
+        ShiftSession.driver_id == driver_id,
+        ShiftSession.company_id == caller.company_id,
+        ShiftSession.completed_at.is_(None),
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="No active session found for this driver.")
+
+    db.delete(session)
     db.commit()
