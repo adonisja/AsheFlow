@@ -1081,13 +1081,28 @@ function FieldStaffView({ employeeId }: { employeeId: string }) {
 // ---------------------------------------------------------------------------
 // Admin Analytics View
 // ---------------------------------------------------------------------------
+interface ActiveSession {
+  session_id: string;
+  driver_id: string;
+  driver_name: string;
+  current_gate: number;
+  started_at: string;
+}
+
+const GATE_NAMES = ['', 'Pre-Shift', 'Station Loading', 'Route', 'Return', 'EOD'];
+
 function AdminFieldOpsView() {
+  const { groups } = useAuth();
+  const isAdmin = groups.includes('admin');
+
   const [checkIns, setCheckIns]         = useState<any[]>([]);
   const [departures, setDepartures]     = useState<any[]>([]);
   const [inspections, setInspections]   = useState<any[]>([]);
   const [fuelLogs, setFuelLogs]         = useState<any[]>([]);
   const [noShows, setNoShows]           = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
+  const [sessions, setSessions]         = useState<ActiveSession[]>([]);
+  const [wipingId, setWipingId]         = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -1097,7 +1112,20 @@ function AdminFieldOpsView() {
       axiosClient.get('/field-ops/inspections/summary').then(r => setInspections(r.data)),
       axiosClient.get('/field-ops/fuel-logs/summary').then(r => setFuelLogs(r.data)),
       axiosClient.get('/field-ops/no-shows').then(r => setNoShows(r.data)),
+      axiosClient.get<ActiveSession[]>('/shift-sessions/active').then(r => setSessions(r.data)),
     ]).finally(() => setLoading(false));
+  };
+
+  const handleWipe = async (driverId: string) => {
+    setWipingId(driverId);
+    try {
+      await axiosClient.delete(`/shift-sessions/driver/${driverId}/active/wipe`);
+      setSessions(prev => prev.filter(s => s.driver_id !== driverId));
+    } catch (e: any) {
+      alert(e?.response?.data?.detail ?? 'Failed to wipe session.');
+    } finally {
+      setWipingId(null);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -1321,6 +1349,42 @@ function AdminFieldOpsView() {
           </div>
         )}
       </div>
+
+      {/* Active shift sessions — admin wipe */}
+      {isAdmin && (
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <Clock className="w-5 h-5 text-warning" />
+            <h2 className="text-base font-semibold text-foreground">Active Shift Sessions</h2>
+            <span className="ml-auto text-xs text-subtle">{sessions.length} active</span>
+          </div>
+          {sessions.length === 0 ? (
+            <p className="text-sm text-subtle text-center py-6">No active sessions right now.</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {sessions.map(s => (
+                <div key={s.session_id} className="py-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{s.driver_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Gate {s.current_gate} — {GATE_NAMES[s.current_gate] ?? ''}
+                      {' · '}
+                      Started {new Date(s.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleWipe(s.driver_id)}
+                    disabled={wipingId === s.driver_id}
+                    className="text-xs font-medium text-danger hover:bg-danger/10 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 shrink-0"
+                  >
+                    {wipingId === s.driver_id ? 'Wiping…' : 'Wipe Session'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
