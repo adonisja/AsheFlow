@@ -6241,11 +6241,15 @@ Any post-publish mutation must replicate or reverse the appropriate subset of th
 - `active` phase (confirmation window open) → seed `pending` confirmation, `dispatch_assignment` notification with Confirm/Decline, Redis `pending`, Discord DM.
 - `completed` phase (finalized) → seed `confirmed` confirmation directly, `dispatch_assignment_info` notification (informational, no buttons), Redis `confirmed`. No DM.
 
-**Swapped (truck change only):**
-- Confirmation stays (person is still assigned for the date).
-- Update the existing notification message with the new truck name.
-- No new Redis write, no DM.
+**Swapped — phase-aware (ADR-123):**
+- `active` phase: confirmation reset to `pending` (truck changed → employee must re-confirm the new placement). Notification updated to `dispatch_assignment` type with reassignment message + deadline. Redis reset to `pending`. Discord DM sent.
+- `completed` phase: confirmation stays `confirmed`. Notification updated to `dispatch_assignment_info` (informational only). Redis unchanged. Bot called via `/internal/swap`: removes member from old truck channel, grants access to new truck channel, posts `@mention` announcement in new channel.
+- `planned` phase: no-op — publish handles all seeding.
 
-**Why `dispatch_assignment_info` instead of `dispatch_assignment` for post-finalize?** The frontend renders Confirm/Decline buttons only for `dispatch_assignment` type. A post-finalize add should not present buttons — the employee is already confirmed. A different type lets the banner render it as a plain dismissible card with no frontend changes.
+**Why `dispatch_assignment_info` instead of `dispatch_assignment` for post-finalize?** The frontend renders Confirm/Decline buttons only for `dispatch_assignment` type. A post-finalize add/swap should not present buttons — the employee is already confirmed. A different type lets the banner render it as a plain dismissible card with no frontend changes.
+
+**Capture the source truck before mutating the member.** When swapping, the source truck's `discord_channel_id` is needed to remove the old channel overwrite. Once `target_member.assignment_id` is changed, the original truck is unreachable through the member — must be fetched first.
+
+**Three systems in sync — the invariant.** Every mutation to assignment state must be audited against all three: in-app notification, Redis confirmation state, and Discord (DM and/or channel perms). If any one is missing, the employee sees conflicting information. The phase-aware helpers (`_fire_redis_set`, `_fire_redis_cancel`, `_fire_discord_dm`, `_fire_swap_discord`) enforce this by making each system update a deliberate, named action.
 
 Guard all seeding with `not existing_conf` / `not existing_notif` to stay idempotent.
