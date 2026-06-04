@@ -24,7 +24,7 @@ const ITEM_LABELS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // Vehicle Inspection Panel
 // ---------------------------------------------------------------------------
-function InspectionPanel({ employeeId }: { employeeId: string }) {
+function InspectionPanel({ employeeId, onComplete }: { employeeId: string; onComplete?: () => void }) {
   const [items, setItems] = useState<string[]>([]);
   const [results, setResults] = useState<Record<string, boolean | null>>({});
   const [notes, setNotes] = useState('');
@@ -49,6 +49,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
       if (todayRecord) {
         setSubmitted(true);
         setSubmittedData({ has_failures: todayRecord.has_failures, items: todayRecord.items, notes: todayRecord.notes });
+        onComplete?.();
       }
     }).catch((e) => { console.error('Failed to load inspection data:', e); });
   }, [employeeId]);
@@ -73,6 +74,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
       const has_failures = Object.values(results).some(v => v === false);
       setSubmitted(true);
       setSubmittedData({ has_failures, items: results as Record<string, boolean>, notes: notes.trim() || undefined });
+      onComplete?.();
     } catch (err: any) {
       alert(err.response?.data?.detail || 'Inspection submission failed.');
     } finally {
@@ -158,7 +160,7 @@ function InspectionPanel({ employeeId }: { employeeId: string }) {
 // ---------------------------------------------------------------------------
 // Check-In Panel
 // ---------------------------------------------------------------------------
-function CheckInPanel({ employeeId }: { employeeId: string }) {
+function CheckInPanel({ employeeId, onComplete }: { employeeId: string; onComplete?: () => void }) {
   const [checkedIn, setCheckedIn] = useState(false);
   const [checkedInAt, setCheckedInAt] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -175,6 +177,7 @@ function CheckInPanel({ employeeId }: { employeeId: string }) {
         const todayRecord = res.data.find((r: any) => r.date === today);
         if (todayRecord) {
           setCheckedIn(true);
+          onComplete?.();
           if (todayRecord.photo_url) setPreviewUrl(todayRecord.photo_url);
           if (todayRecord.checked_in_at) {
             const t = new Date(todayRecord.checked_in_at);
@@ -204,6 +207,7 @@ function CheckInPanel({ employeeId }: { employeeId: string }) {
         photo_url: dataUrl,
       });
       setCheckedIn(true);
+      onComplete?.();
       if (res.data.checked_in_at) {
         const t = new Date(res.data.checked_in_at);
         setCheckedInAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -261,7 +265,7 @@ function CheckInPanel({ employeeId }: { employeeId: string }) {
 // ---------------------------------------------------------------------------
 // Departure Panel
 // ---------------------------------------------------------------------------
-function DeparturePanel({ employeeId }: { employeeId: string }) {
+function DeparturePanel({ employeeId, onComplete }: { employeeId: string; onComplete?: () => void }) {
   const [departed, setDeparted] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
@@ -275,6 +279,7 @@ function DeparturePanel({ employeeId }: { employeeId: string }) {
         const todayRecord = res.data.find((r: any) => r.date === today);
         if (todayRecord) {
           setDeparted(true);
+          onComplete?.();
           if (todayRecord.itinerary_photo_url) setPreviewUrl(todayRecord.itinerary_photo_url);
         }
       })
@@ -298,6 +303,7 @@ function DeparturePanel({ employeeId }: { employeeId: string }) {
         itinerary_photo_url: dataUrl,
       });
       setDeparted(true);
+      onComplete?.();
     } catch (err: any) {
       alert(err.response?.data?.detail || 'Departure record failed.');
     } finally {
@@ -348,7 +354,7 @@ function DeparturePanel({ employeeId }: { employeeId: string }) {
 // ---------------------------------------------------------------------------
 // Return / End-of-Day Panel
 // ---------------------------------------------------------------------------
-function ReturnPanel({ employeeId }: { employeeId: string }) {
+function ReturnPanel({ employeeId, onComplete }: { employeeId: string; onComplete?: () => void }) {
   const [departed, setDeparted] = useState(false);
   const [returned, setReturned] = useState(false);
   const [returnedAt, setReturnedAt] = useState<string | null>(null);
@@ -369,6 +375,7 @@ function ReturnPanel({ employeeId }: { employeeId: string }) {
           }
           if (todayRecord.returned_at) {
             setReturned(true);
+            onComplete?.();
             const t = new Date(todayRecord.returned_at);
             setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
           }
@@ -382,6 +389,7 @@ function ReturnPanel({ employeeId }: { employeeId: string }) {
     try {
       const res = await axiosClient.post(`/field-ops/return/${employeeId}`);
       setReturned(true);
+      onComplete?.();
       if (res.data.returned_at) {
         const t = new Date(res.data.returned_at);
         setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
@@ -462,7 +470,7 @@ const fuelToGallons = (val: number, unit: 'imperial' | 'metric') =>
 // ---------------------------------------------------------------------------
 // Fuel / Mileage Log Panel
 // ---------------------------------------------------------------------------
-function FuelMileagePanel({ employeeId }: { employeeId: string }) {
+function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { employeeId: string; onStartComplete?: () => void; onEndComplete?: () => void }) {
   type LogRecord = {
     id: string;
     odometer_start: number;
@@ -485,7 +493,11 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
       .then(res => {
         const today = todayStr();
         const todayRecord = res.data.find((r: any) => r.date === today);
-        if (todayRecord) setLog(todayRecord);
+        if (todayRecord) {
+          setLog(todayRecord);
+          onStartComplete?.();
+          if (todayRecord.odometer_end != null) onEndComplete?.();
+        }
       })
       .catch((e) => { console.error('Failed to load fuel log:', e); });
   }, [employeeId]);
@@ -523,6 +535,7 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
         odometer_start: miles,  // always stored as miles
       });
       setLog(res.data);
+      onStartComplete?.();
     } catch (err: any) {
       alert(err.response?.data?.detail || 'Failed to save fuel log.');
     } finally {
@@ -544,6 +557,7 @@ function FuelMileagePanel({ employeeId }: { employeeId: string }) {
         notes: notes.trim() || null,
       });
       setLog(res.data);
+      onEndComplete?.();
     } catch (err: any) {
       alert(err.response?.data?.detail || 'Failed to update fuel log.');
     } finally {
@@ -1800,6 +1814,14 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
   const [skipOpen,       setSkipOpen]       = useState(false);
   const [error,          setError]          = useState('');
 
+  // Gate completion tracking — each flag is set by the panel's onComplete callback
+  const [checkedIn,      setCheckedInDone]  = useState(false);
+  const [inspected,      setInspectedDone]  = useState(false);
+  const [fuelStart,      setFuelStartDone]  = useState(false);
+  const [departed,       setDepartedDone]   = useState(false);
+  const [returned,       setReturnedDone]   = useState(false);
+  const [fuelEnd,        setFuelEndDone]    = useState(false);
+
   const loadSession = useCallback(async () => {
     try {
       const [sessionRes, eligRes] = await Promise.allSettled([
@@ -1907,13 +1929,16 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
 
   const gate = session.current_gate;
 
-  const completeGateButton = (label: string) => (
+  const completeGateButton = (label: string, canAdvance: boolean) => (
     <div className="pt-2">
+      {!canAdvance && (
+        <p className="text-xs text-muted-foreground text-center mb-2">Complete all required steps above to continue.</p>
+      )}
       {error && <p className="text-sm text-danger mb-2">{error}</p>}
       <button
         onClick={advanceGate}
-        disabled={advancing}
-        className="btn-primary w-full py-2.5 flex items-center justify-center gap-2"
+        disabled={advancing || !canAdvance}
+        className="btn-primary w-full py-2.5 flex items-center justify-center gap-2 disabled:opacity-50"
       >
         {advancing && <span className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
         {label}
@@ -1953,10 +1978,10 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       {/* Gate 1 — Pre-shift */}
       {gate === 1 && (
         <div className="space-y-4">
-          <CheckInPanel employeeId={employeeId} />
-          <InspectionPanel employeeId={employeeId} />
-          <FuelMileagePanel employeeId={employeeId} />
-          {completeGateButton('Ready — Heading to Station →')}
+          <CheckInPanel employeeId={employeeId} onComplete={() => setCheckedInDone(true)} />
+          <InspectionPanel employeeId={employeeId} onComplete={() => setInspectedDone(true)} />
+          <FuelMileagePanel employeeId={employeeId} onStartComplete={() => setFuelStartDone(true)} />
+          {completeGateButton('Ready — Heading to Station →', checkedIn && inspected && fuelStart)}
           {skipButton()}
         </div>
       )}
@@ -1964,8 +1989,8 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       {/* Gate 2 — Station loading */}
       {gate === 2 && (
         <div className="space-y-4">
-          <DeparturePanel employeeId={employeeId} />
-          {completeGateButton('Departed — On Route →')}
+          <DeparturePanel employeeId={employeeId} onComplete={() => setDepartedDone(true)} />
+          {completeGateButton('Departed — On Route →', departed)}
           {skipButton()}
         </div>
       )}
@@ -1976,7 +2001,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
           <AnchorPointPanel employeeId={employeeId} />
           <CheckInPanel employeeId={employeeId} />
           <WalkerRatingPanel employeeId={employeeId} />
-          {completeGateButton('RTS Approved — Returning to Station →')}
+          {completeGateButton('RTS Approved — Returning to Station →', true)}
           {skipButton()}
         </div>
       )}
@@ -1984,8 +2009,8 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       {/* Gate 4 — Return to station */}
       {gate === 4 && (
         <div className="space-y-4">
-          <ReturnPanel employeeId={employeeId} />
-          {completeGateButton('Handed Off — Finishing Up →')}
+          <ReturnPanel employeeId={employeeId} onComplete={() => setReturnedDone(true)} />
+          {completeGateButton('Handed Off — Finishing Up →', returned)}
           {skipButton()}
         </div>
       )}
@@ -1993,9 +2018,9 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       {/* Gate 5 — EOD */}
       {gate === 5 && (
         <div className="space-y-4">
-          <FuelMileagePanel employeeId={employeeId} />
-          <InspectionPanel employeeId={employeeId} />
-          {completeGateButton('Sign Out — End Shift')}
+          <FuelMileagePanel employeeId={employeeId} onEndComplete={() => setFuelEndDone(true)} />
+          <InspectionPanel employeeId={employeeId} onComplete={() => setInspectedDone(true)} />
+          {completeGateButton('Sign Out — End Shift', fuelEnd && inspected)}
           {skipButton()}
         </div>
       )}
