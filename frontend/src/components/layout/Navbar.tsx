@@ -378,6 +378,9 @@ const Navbar = () => {
           {isTrainer && (
             <NavLink to="/trainer-dashboard" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainer Dash</NavLink>
           )}
+          {isTrainer && (
+            <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
+          )}
           {isTrainer && trainerPhase === 4 && (
             <NavLink to="/phase4-observation" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Phase 4</NavLink>
           )}
@@ -395,6 +398,9 @@ const Navbar = () => {
           )}
           {groups.includes('driver') && (
             <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Point</NavLink>
+          )}
+          {groups.includes('driver') && (
+            <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
           )}
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
           <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
@@ -521,12 +527,14 @@ function MobileLinks({
         {canAccessSchedule && <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>}
         {isFieldStaff && <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>}
         {isTrainer && <NavLink to="/trainer-dashboard" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainer Dash</NavLink>}
+        {isTrainer && <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>}
         {isTrainer && trainerPhase === 4 && <NavLink to="/phase4-observation" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Phase 4</NavLink>}
         {groups.includes('trainee') && <NavLink to="/my-training" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> My Training</NavLink>}
         {groups.includes('trainee') && hasActiveQuiz && <NavLink to="/my-quiz" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Quiz</NavLink>}
         {canAccessScheduleChanges && <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>}
         {canAccessFieldOps && <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>}
         {groups.includes('driver') && <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Point</NavLink>}
+        {groups.includes('driver') && <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>}
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
         <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
         {isDispatch && <>
