@@ -6204,4 +6204,35 @@ A pattern that appears safe but isn't: a multi-panel form where each panel valid
 **Fix:** Add `onComplete` callbacks to each panel. Fire them in two places: in the `useEffect` load (if the record already exists in the DB for today) and after a successful submit POST/PATCH. The parent holds boolean flags per panel and passes a `canAdvance` condition into the advance button.
 
 Firing on load is critical — if the driver reloads the page mid-shift, the completion state must be restored from the backend, not reset to false.
-8. CI secrets: new env vars set in all CI steps
+
+---
+
+## Redis is a read-cache, not the write target — mutations must cancel Redis entries (ADR-122, 2026-06-04)
+
+When a resource is removed from the DB, any cached representation in Redis must also be invalidated. Failing to do so causes the cache to return stale data on subsequent reads.
+
+`remove_assignment` deleted the `DispatchConfirmation` DB row but never touched Redis. The confirmations endpoint reads Redis first and only falls back to DB on a miss. Result: the removed driver kept appearing as `pending` on the board until Redis expired.
+
+**Rule:** Whenever you delete or status-change an authoritative DB row that is mirrored in Redis, pair the DB operation with a Redis invalidation or status update.
+
+The update doesn't need to be synchronous — use fire-and-forget (a daemon thread) to avoid blocking the HTTP response. Redis failure is non-fatal when the DB is authoritative.
+
+```python
+# After db.commit():
+_fire_redis_cancel(str(date), str(employee_id))
+```
+
+---
+
+## Side-effects of assignment mutations must match the original assignment flow (ADR-122, 2026-06-04)
+
+When `publish_dispatch` runs, every assigned employee gets three things: a `DispatchConfirmation` DB row, a Redis `pending` entry, and a Discord DM.
+
+`manual_assignment` (post-publish add) seeded the DB row and Redis correctly but skipped the Discord DM. The new employee was never asked to confirm.
+
+**Rule:** If a mutation endpoint (add/remove/swap) changes who is assigned, audit what the original assignment flow did for each person affected and replicate those steps:
+- Added? → Seed confirmation + Redis + DM (if discord_id set)
+- Removed? → Delete confirmation + Redis cancel + notification delete
+- Swapped? → Confirmation stays (person is still assigned); update notification message with new truck name
+
+Guard the DM against double-firing: only fire it when `not existing_conf`, so an employee who was already seeded during publish isn't DM'd again.
