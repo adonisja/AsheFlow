@@ -186,6 +186,30 @@ class AsheFlowBot(commands.Bot):
             return
         await dispatch_cog.finalize_assignments(dispatch_date, company_id)
 
+    async def trigger_swap(
+        self,
+        company_id: str,
+        discord_id: str | None,
+        employee_name: str,
+        old_channel_id: int | None,
+        new_channel_id: int | None,
+        truck_name: str,
+        dispatch_date: str,
+    ) -> None:
+        dispatch_cog = self.cogs.get("Dispatch")
+        if dispatch_cog is None:
+            logger.error("Dispatch cog not loaded — cannot process swap.")
+            return
+        await dispatch_cog.swap_truck_channel(
+            company_id=company_id,
+            discord_id=discord_id,
+            employee_name=employee_name,
+            old_channel_id=old_channel_id,
+            new_channel_id=new_channel_id,
+            truck_name=truck_name,
+            dispatch_date=dispatch_date,
+        )
+
     async def trigger_dm(self, discord_id: str, message: str) -> None:
         invite_cog = self.cogs.get("Invite")
         if invite_cog is None:
@@ -315,6 +339,50 @@ async def handle_dm(request: web.Request) -> web.Response:
     return web.json_response({"status": "queued", "discord_id": discord_id})
 
 
+async def handle_swap(request: web.Request) -> web.Response:
+    """POST /internal/swap
+
+    body: {
+        "company_id":     "...",
+        "discord_id":     "..." | null,
+        "employee_name":  "...",
+        "old_channel_id": 123 | null,
+        "new_channel_id": 123 | null,
+        "truck_name":     "...",
+        "dispatch_date":  "YYYY-MM-DD"
+    }
+
+    Removes the member from their old truck channel, grants them access to the
+    new one, and posts a tagged announcement in the new channel.
+    Only called for post-finalize swaps (completed phase).
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data = await request.json()
+    company_id    = data.get("company_id")
+    dispatch_date = data.get("dispatch_date")
+    employee_name = data.get("employee_name", "Unknown")
+    truck_name    = data.get("truck_name", "Unknown Truck")
+    if not company_id or not dispatch_date:
+        return web.Response(status=400, text="Missing company_id or dispatch_date")
+
+    discord_id    = data.get("discord_id")
+    old_channel_id = int(data["old_channel_id"]) if data.get("old_channel_id") else None
+    new_channel_id = int(data["new_channel_id"]) if data.get("new_channel_id") else None
+
+    asyncio.create_task(bot.trigger_swap(
+        company_id=company_id,
+        discord_id=discord_id,
+        employee_name=employee_name,
+        old_channel_id=old_channel_id,
+        new_channel_id=new_channel_id,
+        truck_name=truck_name,
+        dispatch_date=dispatch_date,
+    ))
+    return web.json_response({"status": "queued", "employee_name": employee_name})
+
+
 async def handle_post_to_channel(request: web.Request) -> web.Response:
     """POST /internal/post-to-channel  body: { "channel_id": 123, "message": "...", "company_id": "..." }"""
     if not _check_secret(request):
@@ -379,6 +447,7 @@ async def start_webhook_server() -> None:
     app = web.Application()
     app.router.add_post("/internal/publish",          handle_publish)
     app.router.add_post("/internal/finalize",         handle_finalize)
+    app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)
     app.router.add_post("/internal/lockdown-channel", handle_lockdown_channel)
     app.router.add_post("/internal/invite",           handle_invite)

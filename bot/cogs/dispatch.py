@@ -513,5 +513,81 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 logger.warning("Could not find guild member %s for channel perms.", discord_id)
 
 
+    # ------------------------------------------------------------------
+    # POST-FINALIZE SWAP — move an employee between truck channels
+    # ------------------------------------------------------------------
+
+    async def swap_truck_channel(
+        self,
+        company_id: str,
+        discord_id: str | None,
+        employee_name: str,
+        old_channel_id: int | None,
+        new_channel_id: int | None,
+        truck_name: str,
+        dispatch_date: str,
+    ) -> None:
+        """Adjust Discord channel permissions for a post-finalize truck swap.
+
+        - Removes member overwrite from old truck channel (if provided and found).
+        - Grants view/send/history on new truck channel (if provided and found).
+        - Posts a @mention announcement in the new truck channel.
+        """
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            logger.info("swap_truck_channel: Discord not configured for company %s — skipping.", company_id)
+            return
+
+        guild = self.bot.get_guild(cfg.guild_id)
+        if not guild:
+            logger.warning("swap_truck_channel: guild %s not found.", cfg.guild_id)
+            return
+
+        guild_member = None
+        if discord_id and discord_id.isdigit():
+            try:
+                guild_member = await guild.fetch_member(int(discord_id))
+            except (discord.NotFound, discord.HTTPException):
+                logger.warning("swap_truck_channel: could not fetch member discord_id=%s.", discord_id)
+
+        # Remove from old channel
+        if old_channel_id:
+            old_channel = guild.get_channel(old_channel_id)
+            if old_channel and guild_member:
+                try:
+                    await old_channel.set_permissions(guild_member, overwrite=None)
+                    logger.info("Removed %s from channel %s.", employee_name, old_channel.name)
+                except discord.Forbidden:
+                    logger.warning("swap_truck_channel: missing Manage Channel on old channel %s.", old_channel_id)
+                except Exception as exc:
+                    logger.warning("swap_truck_channel: error removing from old channel: %s", exc)
+
+        # Grant access to new channel and post announcement
+        if new_channel_id:
+            new_channel = guild.get_channel(new_channel_id)
+            if new_channel:
+                if guild_member:
+                    try:
+                        await new_channel.set_permissions(
+                            guild_member,
+                            view_channel=True,
+                            send_messages=True,
+                            read_message_history=True,
+                        )
+                    except discord.Forbidden:
+                        logger.warning("swap_truck_channel: missing Manage Channel on new channel %s.", new_channel_id)
+                    except Exception as exc:
+                        logger.warning("swap_truck_channel: error granting new channel perm: %s", exc)
+
+                mention = guild_member.mention if guild_member else f"**{employee_name}**"
+                try:
+                    await new_channel.send(
+                        f"📋 {mention} has been moved to **{truck_name}** for `{dispatch_date}`. "
+                        f"Welcome to the crew!"
+                    )
+                except Exception as exc:
+                    logger.warning("swap_truck_channel: could not post announcement: %s", exc)
+
+
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(DispatchCog(bot))
