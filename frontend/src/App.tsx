@@ -400,7 +400,7 @@ function App() {
             <Route
               path="/sort"
               element={
-                <ProtectedRoute allowedRoles={['dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['trainer', 'dispatch', 'admin']}>
                   <SortPage />
                 </ProtectedRoute>
               }
@@ -408,7 +408,7 @@ function App() {
             <Route
               path="/walker-sort"
               element={
-                <ProtectedRoute allowedRoles={['dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
                   <WalkerSortMonitor />
                 </ProtectedRoute>
               }
