@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +9,8 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.shift_session import ShiftSession
+from app.models.truck_assignment import TruckAssignment
+from app.models.assignment_member import AssignmentMember
 
 router = APIRouter(prefix="/shift-sessions", tags=["shift-sessions"])
 
@@ -45,6 +47,23 @@ def start_shift(
     db: Session = Depends(get_db),
 ):
     """Start a new shift session for the calling driver. Fails if one is already active."""
+    today = date.today()
+    assigned = (
+        db.query(TruckAssignment)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == today,
+            AssignmentMember.employee_id == caller.id,
+        )
+        .first()
+    )
+    if not assigned:
+        raise HTTPException(
+            status_code=400,
+            detail="You are not assigned to a truck for today. Contact your dispatcher.",
+        )
+
     existing = db.query(ShiftSession).filter(
         ShiftSession.driver_id == caller.id,
         ShiftSession.company_id == caller.company_id,
@@ -65,6 +84,31 @@ def start_shift(
     db.commit()
     db.refresh(session)
     return session
+
+
+# ---------------------------------------------------------------------------
+# Eligibility check — is the driver assigned to a truck today?
+# ---------------------------------------------------------------------------
+
+@router.get("/me/eligible", response_model=bool)
+def check_eligibility(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_driver),
+    db: Session = Depends(get_db),
+):
+    """Return true if the driver is assigned to a truck today."""
+    today = date.today()
+    assigned = (
+        db.query(TruckAssignment)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == today,
+            AssignmentMember.employee_id == caller.id,
+        )
+        .first()
+    )
+    return assigned is not None
 
 
 # ---------------------------------------------------------------------------
