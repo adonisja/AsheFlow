@@ -6159,10 +6159,49 @@ the latter, build the right lookup.
 After every implementation session, before writing the ADR:
 
 1. Multi-tenancy: every query filters by `caller.company_id`
-2. Role guards: every endpoint has a `Depends(RoleChecker([...]))`
+2. Role guards: every endpoint has a `Depends(RoleChecker([...])`
 3. Schema↔Model: every `nullable=False` column set in every constructor
 4. Schema↔Frontend: Pydantic response schema fields match TypeScript types
 5. Algorithm invariants: no silent drops, no infinite loops, counting the right unit
 6. Error exposure: no `str(e)` in HTTPException details
 7. PII/privacy: no addresses or personal data in logs or outputs
+
+---
+
+## Role access must match the operational reality, not just the data model (ADR-121, 2026-06-04)
+
+A page can be technically accessible to a role at the API level but completely unreachable from the UI. When adding a new feature, ask: which roles *operationally* use this, and do they have a nav link + route permission?
+
+The route sort page (`/sort`) was dispatch/admin only even though trainers physically run the sort at the anchor point. The sort monitor (`/walker-sort`) was dispatch/admin only even though drivers need to see route assignments during their shift. The backend permitted both roles; only the frontend was wrong.
+
+**Pattern:** When you add a feature, enumerate every role that uses it in practice. For each role, verify:
+1. `allowedRoles` in `App.tsx` includes them
+2. A nav link exists for them in `Navbar.tsx` (both desktop links and `MobileLinks`)
+3. The backend `RoleChecker` covers them
+
+Missing any one of these blocks access even if the other two are correct.
+
+---
+
+## State machine boundaries: validate entry conditions, not just transitions (ADR-121, 2026-06-04)
+
+A state machine that validates transitions (e.g. "you can't go from gate 2 to gate 1") is incomplete if it doesn't validate *entry conditions* — the preconditions that must be true before you enter a state at all.
+
+`POST /shift-sessions/` allowed any driver to start a shift. It checked for duplicate sessions (transition guard) but not for truck assignment (entry guard). A driver with no assignment could start and complete a full shift, generating inspection, fuel log, and departure records against no truck.
+
+**Pattern:** For every state-creating endpoint, ask: "What must be true in the real world before this state makes sense?" That's an entry condition, not a transition condition, and it belongs in the same endpoint as `CREATE`, not just in `ADVANCE`.
+
+Also: add a cheap eligibility-check endpoint (`GET .../eligible`) that the frontend can call before rendering the action button. A disabled button with no context confuses users; a "No assignment today" warning card is actionable.
+
+---
+
+## Frontend form panels need a completion signal, not just internal validation (ADR-121, 2026-06-04)
+
+A pattern that appears safe but isn't: a multi-panel form where each panel validates itself internally, but the parent component has no way to know whether the panels are done. The advance button at the parent level can fire regardless.
+
+`InspectionPanel`, `CheckInPanel`, `DeparturePanel`, `ReturnPanel`, and `FuelMileagePanel` all had internal `submitted`/`checkedIn`/`departed` state and disabled their own submit buttons until valid. But `DriverFieldOpsView` had no access to that state — it just rendered the panels and showed an always-enabled advance button.
+
+**Fix:** Add `onComplete` callbacks to each panel. Fire them in two places: in the `useEffect` load (if the record already exists in the DB for today) and after a successful submit POST/PATCH. The parent holds boolean flags per panel and passes a `canAdvance` condition into the advance button.
+
+Firing on load is critical — if the driver reloads the page mid-shift, the completion state must be restored from the backend, not reset to false.
 8. CI secrets: new env vars set in all CI steps
