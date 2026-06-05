@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     geoclient_app_id: str = ""
     geoclient_app_key: str = ""
 
+    # Fernet key for encrypting trainee credentials (flex email, clock-in code).
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Must be set in production; dev uses a fixed insecure key so the service starts without config.
+    credential_encryption_key: str = "REDACTED_FERNET_KEY="
+
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
 
