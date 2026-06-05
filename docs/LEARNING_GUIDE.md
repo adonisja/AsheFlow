@@ -6234,12 +6234,12 @@ Any post-publish mutation must replicate or reverse the appropriate subset of th
 - `DispatchConfirmation`: hard delete (no `cancelled` status — DB CHECK constraint).
 - Notification: do NOT delete — update message to "Your assignment has been removed" and mark `is_read = True`. The unread banner hides it; the employee still has context if they look.
 - Redis: fire `_fire_redis_cancel()` after commit.
-- Discord: no action (they're off the dispatch).
+- Discord (`completed` phase only): call `_fire_swap_discord(old_channel_id=..., new_channel_id=None)` to silently revoke the channel overwrite. Finalize granted it; it must be explicitly removed here because the next finalize run clears the previous day's overwrites, not today's. No announcement is posted.
 
 **Added (phase-aware):**
 - `planned` phase → skip everything; publish will seed them when it runs.
 - `active` phase (confirmation window open) → seed `pending` confirmation, `dispatch_assignment` notification with Confirm/Decline, Redis `pending`, Discord DM.
-- `completed` phase (finalized) → seed `confirmed` confirmation directly, `dispatch_assignment_info` notification (informational, no buttons), Redis `confirmed`. No DM.
+- `completed` phase (finalized) → seed `confirmed` confirmation directly, `dispatch_assignment_info` notification (informational, no buttons), Redis `confirmed`. Call `_fire_swap_discord(old_channel_id=None, new_channel_id=..., announce=False)` to silently grant the channel overwrite. No DM.
 
 **Swapped — phase-aware (ADR-123):**
 - `active` phase: confirmation reset to `pending` (truck changed → employee must re-confirm the new placement). Notification updated to `dispatch_assignment` type with reassignment message + deadline. Redis reset to `pending`. Discord DM sent.
@@ -6251,5 +6251,15 @@ Any post-publish mutation must replicate or reverse the appropriate subset of th
 **Capture the source truck before mutating the member.** When swapping, the source truck's `discord_channel_id` is needed to remove the old channel overwrite. Once `target_member.assignment_id` is changed, the original truck is unreachable through the member — must be fetched first.
 
 **Three systems in sync — the invariant.** Every mutation to assignment state must be audited against all three: in-app notification, Redis confirmation state, and Discord (DM and/or channel perms). If any one is missing, the employee sees conflicting information. The phase-aware helpers (`_fire_redis_set`, `_fire_redis_cancel`, `_fire_discord_dm`, `_fire_swap_discord`) enforce this by making each system update a deliberate, named action.
+
+**`_fire_swap_discord` is multipurpose via three flag combinations:**
+
+| Call site | `old_channel_id` | `new_channel_id` | `announce` | Effect |
+|---|---|---|---|---|
+| Post-finalize swap | set | set | `True` (default) | Remove old overwrite, grant new, post @mention |
+| Post-finalize add | `None` | set | `False` | Grant new overwrite only — no announcement |
+| Post-finalize remove | set | `None` | (ignored) | Remove old overwrite only |
+
+**`redis.py` documents `"cancelled"` as a valid value.** `_fire_redis_cancel` writes `"cancelled"` to Redis for removed employees. This is intentional: the DB row is hard-deleted (no CHECK constraint violation), and the Redis value prevents the employee from reappearing as `"pending"` on the confirmations board if the TTL hasn't expired.
 
 Guard all seeding with `not existing_conf` / `not existing_notif` to stay idempotent.
