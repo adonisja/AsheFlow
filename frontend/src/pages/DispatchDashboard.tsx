@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
 import type { UnavailableStaff, DispatchResult } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 
@@ -34,6 +34,15 @@ export default function DispatchDashboard() {
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dispatchPhasePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailureCount = useRef(0);
+
+  // transfers: employee_id → most-recent transfer for selected date
+  const [transfers, setTransfers] = useState<Record<string, { to_truck_name: string; from_truck_name: string }>>({});
+  // transfer modal state
+  const [transferModal, setTransferModal] = useState<{ employeeId: string; employeeName: string } | null>(null);
+  const [transferDestTruckId, setTransferDestTruckId] = useState<string>('');
+  const [transferNote, setTransferNote] = useState<string>('');
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [transferWarnings, setTransferWarnings] = useState<string[]>([]);
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
   const [dialog, setDialog] = useState<DialogConfig | null>(null);
@@ -116,6 +125,7 @@ export default function DispatchDashboard() {
     fetchAvailablePool();
     fetchUnavailableStaff();
     fetchConfirmations();
+    fetchTransfers(selectedDate);
     startDispatchPhasePolling(selectedDate);
   }, [selectedDate]);
 
@@ -125,6 +135,44 @@ export default function DispatchDashboard() {
       setConfirmations(res.data.confirmations || {});
     } catch {
       // No confirmations yet — not an error worth surfacing
+    }
+  };
+
+  const fetchTransfers = async (date: string) => {
+    try {
+      const res = await axiosClient.get(`/truck-transfers?date=${date}`);
+      const map: Record<string, { to_truck_name: string; from_truck_name: string }> = {};
+      for (const t of res.data) {
+        map[t.employee_id] = { to_truck_name: t.to_truck_name, from_truck_name: t.from_truck_name };
+      }
+      setTransfers(map);
+    } catch {
+      setTransfers({});
+    }
+  };
+
+  const handleTransfer = async () => {
+    if (!transferModal || !transferDestTruckId) return;
+    setIsTransferring(true);
+    setTransferWarnings([]);
+    try {
+      const res = await axiosClient.post('/truck-transfers', {
+        employee_ids: [transferModal.employeeId],
+        to_truck_id: transferDestTruckId,
+        date: selectedDate,
+        note: transferNote.trim() || null,
+      });
+      if (res.data.warnings?.length) setTransferWarnings(res.data.warnings);
+      await fetchTransfers(selectedDate);
+      if (!res.data.warnings?.length) {
+        setTransferModal(null);
+        setTransferDestTruckId('');
+        setTransferNote('');
+      }
+    } catch (err: any) {
+      setTransferWarnings([err.response?.data?.detail || 'Transfer failed.']);
+    } finally {
+      setIsTransferring(false);
     }
   };
 
@@ -800,7 +848,14 @@ export default function DispatchDashboard() {
                                  <GripVertical className="w-4 h-4 text-muted-foreground opacity-30 group-hover:opacity-100" />
                                  <div>
                                    <p className="text-sm font-medium text-foreground leading-tight">{member.name || member.employee_id}</p>
-                                   <p className="text-[10px] text-subtle uppercase tracking-wider">{employees[member.employee_id]?.role || member.role}</p>
+                                   <div className="flex items-center gap-1.5">
+                                     <p className="text-[10px] text-subtle uppercase tracking-wider">{employees[member.employee_id]?.role || member.role}</p>
+                                     {transfers[member.employee_id] && (
+                                       <span className="text-[9px] font-bold bg-warning/15 text-warning px-1 py-0.5 rounded uppercase tracking-wide" title={`Transferred to ${transfers[member.employee_id].to_truck_name}`}>
+                                         ↗ {transfers[member.employee_id].to_truck_name}
+                                       </span>
+                                     )}
+                                   </div>
                                  </div>
                                </div>
                                <div className="flex items-center gap-1">
@@ -826,6 +881,20 @@ export default function DispatchDashboard() {
                                    if (conf === 'pending') return <Clock className="w-4 h-4 text-warning" aria-label="Pending confirmation" />;
                                    return null;
                                  })()}
+                                 {(workflowStep === 'published' || workflowStep === 'finalized') && (
+                                   <button
+                                     onClick={() => {
+                                       setTransferModal({ employeeId: member.employee_id, employeeName: member.name || member.employee_id });
+                                       setTransferDestTruckId('');
+                                       setTransferNote('');
+                                       setTransferWarnings([]);
+                                     }}
+                                     className="text-muted-foreground hover:text-warning p-1 opacity-40 hover:opacity-100 transition-opacity"
+                                     title="Transfer to another truck"
+                                   >
+                                     <ArrowRightLeft className="w-4 h-4" />
+                                   </button>
+                                 )}
                                  <button
                                    onClick={() => handleRemoveFromTruck(member.employee_id)}
                                    className="text-muted-foreground hover:text-danger p-1 opacity-40 hover:opacity-100 transition-opacity"
@@ -867,6 +936,76 @@ export default function DispatchDashboard() {
           onConfirm={dialog.onConfirm}
           onCancel={closeDialog}
         />
+      )}
+
+      {/* Transfer modal */}
+      {transferModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-foreground flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-warning" />
+                Transfer {transferModal.employeeName}
+              </h2>
+              <button onClick={() => setTransferModal(null)} className="text-muted-foreground hover:text-foreground">
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-subtle">
+              The employee will be transferred to the selected truck. A Discord channel swap and in-app notification will fire immediately.
+              Their original assignment record is preserved.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Destination Truck</label>
+                <select
+                  value={transferDestTruckId}
+                  onChange={e => setTransferDestTruckId(e.target.value)}
+                  className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+                >
+                  <option value="">Select a truck…</option>
+                  {Object.entries(trucks)
+                    .filter(([tid]) => tid !== Object.entries(dispatchData?.assigned_crews ?? {}).find(([, crew]) => crew.some((m: any) => m.employee_id === transferModal.employeeId))?.[0])
+                    .map(([tid, t]: [string, any]) => (
+                      <option key={tid} value={tid}>{t.name}</option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Note (optional)</label>
+                <input
+                  type="text"
+                  value={transferNote}
+                  onChange={e => setTransferNote(e.target.value)}
+                  placeholder="e.g. Extra help needed on heavy route"
+                  className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+                />
+              </div>
+            </div>
+
+            {transferWarnings.length > 0 && (
+              <div className="space-y-1">
+                {transferWarnings.map((w, i) => (
+                  <p key={i} className="text-xs text-warning bg-warning/10 rounded-lg px-3 py-1.5">{w}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setTransferModal(null)} className="btn-ghost flex-1 text-sm py-2">Cancel</button>
+              <button
+                onClick={handleTransfer}
+                disabled={isTransferring || !transferDestTruckId}
+                className="btn-primary flex-1 text-sm py-2 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isTransferring && <div className="w-3.5 h-3.5 border border-white border-t-transparent rounded-full animate-spin" />}
+                {isTransferring ? 'Transferring…' : 'Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

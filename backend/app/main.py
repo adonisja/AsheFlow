@@ -8,7 +8,7 @@ from app import models
 from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, location_profiles, location_profile_library, graduation_quiz, gear_requests, trainee_credentials
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, location_profiles, location_profile_library, graduation_quiz, gear_requests, trainee_credentials, truck_transfers
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -94,6 +94,7 @@ api_v1_router.include_router(location_profile_library.router, dependencies=_conf
 api_v1_router.include_router(graduation_quiz.router,          dependencies=_configured)
 api_v1_router.include_router(gear_requests.router,            dependencies=_configured)
 api_v1_router.include_router(trainee_credentials.router,      dependencies=_configured)
+api_v1_router.include_router(truck_transfers.router,          dependencies=_configured)
 api_v1_router.include_router(companies.router,                dependencies=_configured)
 # Exempt — must be reachable before and during setup
 api_v1_router.include_router(registration.router)
