@@ -74,6 +74,7 @@ jobs:
           AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
           AWS_COGNITO_APP_CLIENT_ID: test-client-id
           INTERNAL_SECRET: ci-test-secret-not-real
+          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
 
   # ── 3. DEPLOY TO STAGING ───────────────────────────────────────────────────
   # Triggers on staging branch pushes only, after audit + test pass.
