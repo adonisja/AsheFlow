@@ -14,12 +14,19 @@ import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/
 
 type CrewMember = { id: string; name: string; role: string };
 
+type Transfer = {
+  to_truck_name: string;
+  from_truck_name: string;
+  transferred_at: string;
+};
+
 type Assignment = {
   truck_name: string;
   role: string;
   // dispatch phase: 'planned' | 'active' | 'completed'
   dispatchPhase: 'planned' | 'active' | 'completed';
   crew: CrewMember[];
+  transfer: Transfer | null;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -58,9 +65,10 @@ export default function TodayAssignmentScreen() {
     const eid = await fetchId();
     if (!eid) return;
     try {
-      const [schedRes, dispatchRes] = await Promise.allSettled([
+      const [schedRes, dispatchRes, transferRes] = await Promise.allSettled([
         apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`),
         apiClient.get(`/dispatch/${today}`),
+        apiClient.get(`/truck-transfers/mine?date=${today}`),
       ]);
 
       const entry = schedRes.status === 'fulfilled' ? (schedRes.value.data ?? [])[0] : null;
@@ -78,7 +86,6 @@ export default function TodayAssignmentScreen() {
         const assignedCrews: Record<string, { employee_id: string }[]> = dispatch?.assigned_crews ?? {};
         const truckAssignments: { truck_id: string; status: string }[] = dispatch?.truck_assignments ?? [];
 
-        // Find which truck this employee is on
         const myTruckId = Object.entries(assignedCrews).find(([, crew]) =>
           crew.some((m) => m.employee_id === eid),
         )?.[0];
@@ -90,11 +97,16 @@ export default function TodayAssignmentScreen() {
         }
       }
 
+      // Most recent transfer for today (last element — ordered by transferred_at asc)
+      const transferList: Transfer[] = transferRes.status === 'fulfilled' ? transferRes.value.data ?? [] : [];
+      const transfer = transferList.length > 0 ? transferList[transferList.length - 1] : null;
+
       setAssignment({
         truck_name: entry.truck_name,
         role: me?.role ?? 'unknown',
         dispatchPhase,
         crew: entry.crew ?? [],
+        transfer,
       });
     } catch {
       setAssignment(null);
@@ -165,6 +177,20 @@ export default function TodayAssignmentScreen() {
         </View>
       )}
 
+      {/* Transfer banner — shown when employee was moved mid-day */}
+      {assignment?.transfer && (
+        <View style={s.transferCard}>
+          <Text style={s.transferLabel}>TRANSFERRED</Text>
+          <Text style={s.transferText}>
+            Moved from <Text style={s.transferBold}>{assignment.transfer.from_truck_name}</Text> to{' '}
+            <Text style={s.transferBold}>{assignment.transfer.to_truck_name}</Text>
+          </Text>
+          <Text style={s.transferTime}>
+            {new Date(assignment.transfer.transferred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+        </View>
+      )}
+
       {/* Crew — grouped by role */}
       {roleOrder.map(role => (
         <View key={role} style={s.section}>
@@ -224,6 +250,12 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   avatar:        { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   avatarText:    { fontSize: fontSize.xs, fontWeight: fontWeight.bold },
   memberName:    { fontSize: fontSize.sm, color: c.foreground, flex: 1 },
+
+  transferCard:  { backgroundColor: '#E8820C11', borderRadius: radius.lg, borderWidth: 1, borderColor: '#E8820C44', padding: spacing.md, marginBottom: spacing.md },
+  transferLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: '#E8820C', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },
+  transferText:  { fontSize: fontSize.sm, color: c.foreground },
+  transferBold:  { fontWeight: fontWeight.bold },
+  transferTime:  { fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 },
 
   emptyCard:     { alignItems: 'center', marginTop: spacing.xxl, gap: spacing.sm },
   emptyIcon:     { fontSize: 48 },

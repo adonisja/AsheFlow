@@ -13,6 +13,7 @@ from app.models.assignment_member import AssignmentMember
 from app.models.truck import Truck
 from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.employee import Employee
+from app.models.truck_transfer import TruckTransfer
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -80,6 +81,27 @@ def get_employee_schedule(
             "assignment_id": ta.id
         }
 
+    # 3a. Fetch any transfers for this employee in the date range
+    transfers_raw = (
+        db.query(TruckTransfer, Truck)
+        .join(TruckAssignment, TruckTransfer.to_assignment_id == TruckAssignment.id)
+        .join(Truck, TruckAssignment.truck_id == Truck.id)
+        .filter(
+            TruckTransfer.employee_id == employee_id,
+            TruckTransfer.transfer_date >= start_date,
+            TruckTransfer.transfer_date <= end_date,
+        )
+        .order_by(TruckTransfer.transferred_at)
+        .all()
+    )
+    # transfer_map: date → list of {to_truck_name, transferred_at}
+    transfer_map: dict = {}
+    for tt, to_truck in transfers_raw:
+        transfer_map.setdefault(tt.transfer_date, []).append({
+            "to_truck_name": to_truck.name,
+            "transferred_at": tt.transferred_at.isoformat(),
+        })
+
     # 3. Fetch the full crew for any assignments found
     assignment_ids = [info["assignment_id"] for info in assignment_map.values()]
     crews = {}
@@ -136,7 +158,8 @@ def get_employee_schedule(
             "date": d,
             "status": status,
             "truck_name": truck_name,
-            "crew": crew
+            "crew": crew,
+            "transfers": transfer_map.get(d),
         })
 
     return results
