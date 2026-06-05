@@ -3,8 +3,9 @@ import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2,
-  LayoutDashboard, RefreshCw, Package, MapPin, LogIn,
+  LayoutDashboard, RefreshCw, Package, MapPin, LogIn, ShoppingBag,
 } from 'lucide-react';
+import GearManagerInbox from '../gear/GearManagerInbox';
 
 export default function ManagementView() {
   const { user } = useAuth();
@@ -436,6 +437,15 @@ export default function ManagementView() {
             <a href="/vehicle-compliance" className="block text-center text-xs text-primary hover:underline pt-4">View full compliance report →</a>
           </>
         )}
+      </div>
+
+      {/* Gear Requests */}
+      <div className="card border-border/60">
+        <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
+          <ShoppingBag className="w-5 h-5 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">Gear Requests</h2>
+        </div>
+        <GearManagerInbox />
       </div>
     </div>
   );

@@ -30,6 +30,8 @@ interface ConfirmationMap {
 interface DispatchData {
   date: string;
   assigned_crews: Record<string, CrewMember[]>;
+  truck_assignments?: { truck_id: string; status: 'planned' | 'active' | 'completed' }[];
+  workflow_status?: 'dispatched' | 'published' | 'finalized';
   warnings: { type?: string; message?: string }[];
 }
 
@@ -92,7 +94,14 @@ export default function DispatchHome() {
     ? Object.values(confirmations).filter(s => s === 'pending').length
     : totalAssigned - confirmed - declined;
 
-  const isPublished = Object.keys(confirmations).length > 0;
+  const workflowStatus = dispatch?.workflow_status ?? 'dispatched';
+  const isPublished  = workflowStatus === 'published' || workflowStatus === 'finalized';
+  const isFinalized  = workflowStatus === 'finalized';
+
+  // Per-truck phase lookup — only meaningful when trucks have mixed statuses
+  const truckPhaseMap: Record<string, 'planned' | 'active' | 'completed'> = Object.fromEntries(
+    (dispatch?.truck_assignments ?? []).map(ta => [ta.truck_id, ta.status])
+  );
 
   if (loading) {
     return (
@@ -137,14 +146,15 @@ export default function DispatchHome() {
           icon={CheckCircle2}
           tone={confirmed === totalAssigned && totalAssigned > 0 ? 'success' : 'teal'}
           delay={0.07}
-          hint={!isPublished ? 'Not published' : undefined}
+          hint={!isPublished ? 'Not published' : isFinalized ? 'Crews locked' : undefined}
         />
         <StatCard
           label="Pending"
-          value={pending}
+          value={isFinalized ? 0 : pending}
           icon={Clock}
-          tone={pending > 0 ? 'warning' : 'success'}
+          tone={!isFinalized && pending > 0 ? 'warning' : 'success'}
           delay={0.14}
+          hint={isFinalized ? 'Window closed' : undefined}
         />
         <StatCard
           label="Open Incidents"
@@ -172,8 +182,8 @@ export default function DispatchHome() {
           <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
             <Truck className="w-5 h-5 text-primary" />
             <h2 className="text-base font-semibold text-foreground">Today's Dispatch</h2>
-            <span className={`ml-auto badge ${isPublished ? 'badge-success' : dispatch ? 'badge-warning' : 'bg-accent text-muted-foreground'}`}>
-              {isPublished ? 'Published' : dispatch ? 'Draft' : 'Not run'}
+            <span className={`ml-auto badge ${isFinalized ? 'badge-primary' : isPublished ? 'badge-success' : dispatch ? 'badge-warning' : 'bg-accent text-muted-foreground'}`}>
+              {isFinalized ? 'Finalized' : isPublished ? 'Published' : dispatch ? 'Draft' : 'Not run'}
             </span>
           </div>
 
@@ -188,11 +198,24 @@ export default function DispatchHome() {
               {Object.entries(dispatch.assigned_crews).map(([truckId, crew]) => {
                 const driver = crew.find(m => m.role === 'driver');
                 const others = crew.filter(m => m.role !== 'driver');
+                const phase  = truckPhaseMap[truckId];
+                const phaseBadge = phase === 'completed'
+                  ? { label: 'Confirmed', cls: 'text-success bg-success/10' }
+                  : phase === 'active'
+                  ? { label: 'Confirming', cls: 'text-warning bg-warning/10' }
+                  : null;
                 return (
                   <div key={truckId} className="p-3 rounded-xl border border-border bg-surface-muted/50">
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-1.5">
-                      {truckNameMap[truckId] ?? 'Truck'} · {crew.length} members
-                    </p>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                        {truckNameMap[truckId] ?? 'Truck'} · {crew.length} members
+                      </p>
+                      {phaseBadge && (
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${phaseBadge.cls}`}>
+                          {phaseBadge.label}
+                        </span>
+                      )}
+                    </div>
                     {driver && (
                       <p className="text-sm font-medium text-foreground">{driver.name}
                         <span className="ml-1.5 text-xs text-muted-foreground font-normal">driver</span>
@@ -233,6 +256,33 @@ export default function DispatchHome() {
               <Clock className="w-10 h-10 mb-3 text-muted-foreground mx-auto" />
               <p className="text-sm font-medium">Not published yet.</p>
               <p className="text-xs text-muted-foreground mt-1">Confirmations appear after publishing to Discord.</p>
+            </div>
+          ) : isFinalized ? (
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-success/8 border border-success/25 flex items-center gap-3">
+                <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Final crews posted</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{confirmed} confirmed · {declined} declined</p>
+                </div>
+              </div>
+              {declined > 0 && (
+                <div className="pt-2 border-t border-border">
+                  <p className="text-xs font-semibold text-danger mb-2">Declined</p>
+                  <div className="space-y-1">
+                    {allAssigned
+                      .filter(m => confirmations[m.employee_id] === 'declined')
+                      .map(m => (
+                        <div key={m.employee_id} className="flex items-center gap-2">
+                          <XCircle className="w-3.5 h-3.5 text-danger shrink-0" />
+                          <p className="text-sm text-foreground">{m.name}
+                            <span className="ml-1 text-xs text-muted-foreground capitalize">{m.role}</span>
+                          </p>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
