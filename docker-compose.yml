@@ -47,6 +47,7 @@ services:
       - BOT_INTERNAL_URL=http://bot:8001
       - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
       - DISCORD_DRIVERS_CHANNEL_ID=${DISCORD_DRIVERS_CHANNEL_ID:-}
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY must be set in .env}
       - TZ=America/New_York
     depends_on:
       postgres:
@@ -81,6 +82,7 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY must be set in .env}
       - TZ=America/New_York
     env_file:
       - ./backend/.env
