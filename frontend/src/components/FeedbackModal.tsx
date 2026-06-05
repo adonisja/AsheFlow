@@ -37,7 +37,7 @@ const FeedbackModal = () => {
     <>
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 gradient-primary text-primary-foreground p-3.5 rounded-full shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40 hover:scale-105 transition-all z-50 flex items-center justify-center"
+        className="fixed bottom-6 right-6 bg-primary text-primary-foreground p-3.5 rounded-full shadow-lg shadow-primary/30 hover:shadow-xl hover:shadow-primary/40 hover:scale-105 transition-all z-50 flex items-center justify-center"
         aria-label="Provide Feedback"
       >
         <MessageSquare size={22} />
