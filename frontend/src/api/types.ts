@@ -32,6 +32,8 @@ export interface CrewMember {
   employee_id: string;
   name: string;
   role: string;
+  assignment_id?: string;
+  discord_id?: string | null;
   id?: string; // fallback used in some contexts
 }
 
