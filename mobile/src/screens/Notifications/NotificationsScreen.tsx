@@ -53,6 +53,7 @@ const TYPE_META: Record<string, { label: string; icon: string }> = {
   pto_approved:                   { label: 'PTO Approved',       icon: '✅' },
   pto_rejected:                   { label: 'PTO Denied',         icon: '❌' },
   feedback_submitted:             { label: 'Feedback',           icon: '💬' },
+  credentials_sent:               { label: 'Credentials',        icon: '🔑' },
 };
 
 function typeMeta(type: string): { label: string; icon: string } {
@@ -64,6 +65,7 @@ function typeMeta(type: string): { label: string; icon: string } {
 
 function typeColor(type: string, c: ThemeColors): string {
   if (type === 'dispatch_assignment' || type === 'dispatch_assignment_info') return c.primary;
+  if (type === 'credentials_sent')                             return c.info;
   if (type === 'trainer_decline_reassignment')                 return c.warning;
   if (type === 'trainee_unassigned')                           return c.danger;
   if (type === 'trainee_graduated' || type === 'graduation')  return c.success;
