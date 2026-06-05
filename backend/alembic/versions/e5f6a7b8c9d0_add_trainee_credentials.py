@@ -1,6 +1,6 @@
 """add trainee credentials table
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: e5f6a7b8c9d0
 Revises: z3a4b5c6d7e8
 Create Date: 2026-06-05
 
@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "a1b2c3d4e5f6"
+revision = "e5f6a7b8c9d0"
 down_revision = "z3a4b5c6d7e8"
 branch_labels = None
 depends_on = None
