@@ -195,6 +195,7 @@ class AsheFlowBot(commands.Bot):
         new_channel_id: int | None,
         truck_name: str,
         dispatch_date: str,
+        announce: bool = True,
     ) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
@@ -208,6 +209,7 @@ class AsheFlowBot(commands.Bot):
             new_channel_id=new_channel_id,
             truck_name=truck_name,
             dispatch_date=dispatch_date,
+            announce=announce,
         )
 
     async def trigger_dm(self, discord_id: str, message: str) -> None:
@@ -349,12 +351,14 @@ async def handle_swap(request: web.Request) -> web.Response:
         "old_channel_id": 123 | null,
         "new_channel_id": 123 | null,
         "truck_name":     "...",
-        "dispatch_date":  "YYYY-MM-DD"
+        "dispatch_date":  "YYYY-MM-DD",
+        "announce":       true | false   (default true)
     }
 
-    Removes the member from their old truck channel, grants them access to the
-    new one, and posts a tagged announcement in the new channel.
-    Only called for post-finalize swaps (completed phase).
+    Adjusts Discord channel permissions for a post-finalize mutation:
+    - swap: removes old overwrite, grants new, posts @mention (announce=true)
+    - add:  grants new channel only, no announcement (announce=false)
+    - remove: removes old overwrite only, no new channel
     """
     if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
@@ -367,9 +371,10 @@ async def handle_swap(request: web.Request) -> web.Response:
     if not company_id or not dispatch_date:
         return web.Response(status=400, text="Missing company_id or dispatch_date")
 
-    discord_id    = data.get("discord_id")
+    discord_id     = data.get("discord_id")
     old_channel_id = int(data["old_channel_id"]) if data.get("old_channel_id") else None
     new_channel_id = int(data["new_channel_id"]) if data.get("new_channel_id") else None
+    announce       = data.get("announce", True)
 
     asyncio.create_task(bot.trigger_swap(
         company_id=company_id,
@@ -379,6 +384,7 @@ async def handle_swap(request: web.Request) -> web.Response:
         new_channel_id=new_channel_id,
         truck_name=truck_name,
         dispatch_date=dispatch_date,
+        announce=announce,
     ))
     return web.json_response({"status": "queued", "employee_name": employee_name})
 
