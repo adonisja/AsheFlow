@@ -10,14 +10,16 @@ import TraineeTodayScreen    from './TraineeTodayScreen';
 import TraineeHistoryScreen  from './TraineeHistoryScreen';
 import MyRouteScreen         from './MyRouteScreen';
 import GraduationQuizScreen  from './GraduationQuizScreen';
+import MyCredentialsScreen   from './MyCredentialsScreen';
 
-type Tab = 'today' | 'history' | 'myroute' | 'quiz';
+type Tab = 'today' | 'history' | 'myroute' | 'quiz' | 'credentials';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: 'today',   label: 'Today',    icon: '📚' },
-  { key: 'history', label: 'History',  icon: '📂' },
-  { key: 'myroute', label: 'My Route', icon: '🗺️' },
-  { key: 'quiz',    label: 'Quiz',     icon: '🎓' },
+  { key: 'today',       label: 'Today',       icon: '📚' },
+  { key: 'history',     label: 'History',     icon: '📂' },
+  { key: 'myroute',     label: 'My Route',    icon: '🗺️' },
+  { key: 'quiz',        label: 'Quiz',        icon: '🎓' },
+  { key: 'credentials', label: 'Credentials', icon: '🔑' },
 ];
 
 export default function TraineeDashboard() {
@@ -58,10 +60,11 @@ export default function TraineeDashboard() {
       </View>
 
       <View style={{ flex: 1 }}>
-        {activeTab === 'today'   && <TraineeTodayScreen />}
-        {activeTab === 'history' && <TraineeHistoryScreen />}
-        {activeTab === 'myroute' && <MyRouteScreen />}
-        {activeTab === 'quiz'    && <GraduationQuizScreen />}
+        {activeTab === 'today'       && <TraineeTodayScreen />}
+        {activeTab === 'history'     && <TraineeHistoryScreen />}
+        {activeTab === 'myroute'     && <MyRouteScreen />}
+        {activeTab === 'quiz'        && <GraduationQuizScreen />}
+        {activeTab === 'credentials' && <MyCredentialsScreen />}
       </View>
     </SafeAreaView>
   );
