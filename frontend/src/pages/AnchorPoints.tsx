@@ -287,11 +287,11 @@ function DriverView() {
 
   if (!truckId) {
     return (
-      <div className="max-w-lg">
+      <div className="w-full">
         <ErrorBanner message={error} />
         {!error && (
-          <div className="card text-center py-12">
-            <Truck className="w-8 h-8 text-muted-foreground mx-auto mb-3 opacity-40" />
+          <div className="card text-center py-16 flex flex-col items-center">
+            <Truck className="w-10 h-10 text-muted-foreground mb-4 opacity-30" />
             <p className="text-sm font-medium text-foreground">No truck assignment found for today.</p>
             <p className="text-xs text-muted-foreground mt-1">Anchor points can only be submitted once you have been dispatched.</p>
           </div>
