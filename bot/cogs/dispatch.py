@@ -526,12 +526,13 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         new_channel_id: int | None,
         truck_name: str,
         dispatch_date: str,
+        announce: bool = True,
     ) -> None:
-        """Adjust Discord channel permissions for a post-finalize truck swap.
+        """Adjust Discord channel permissions for a post-finalize truck swap or add.
 
         - Removes member overwrite from old truck channel (if provided and found).
         - Grants view/send/history on new truck channel (if provided and found).
-        - Posts a @mention announcement in the new truck channel.
+        - Posts a @mention announcement in the new truck channel only when announce=True.
         """
         cfg = await get_guild_config(company_id)
         if cfg is None or not cfg.is_configured:
@@ -579,14 +580,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     except Exception as exc:
                         logger.warning("swap_truck_channel: error granting new channel perm: %s", exc)
 
-                mention = guild_member.mention if guild_member else f"**{employee_name}**"
-                try:
-                    await new_channel.send(
-                        f"📋 {mention} has been moved to **{truck_name}** for `{dispatch_date}`. "
-                        f"Welcome to the crew!"
-                    )
-                except Exception as exc:
-                    logger.warning("swap_truck_channel: could not post announcement: %s", exc)
+                if announce:
+                    mention = guild_member.mention if guild_member else f"**{employee_name}**"
+                    try:
+                        await new_channel.send(
+                            f"📋 {mention} has been moved to **{truck_name}** for `{dispatch_date}`. "
+                            f"Welcome to the crew!"
+                        )
+                    except Exception as exc:
+                        logger.warning("swap_truck_channel: could not post announcement: %s", exc)
 
 
 async def setup(bot: commands.Bot) -> None:

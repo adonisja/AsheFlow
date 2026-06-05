@@ -3,7 +3,7 @@
 Confirmations are stored as Redis hashes keyed by date:
   Key:   dispatch:confirmations:{YYYY-MM-DD}
   Field: {employee_id}
-  Value: "pending" | "confirmed" | "declined"
+  Value: "pending" | "confirmed" | "declined" | "cancelled"
 
 TTL is set to 48 hours so old records are cleaned up automatically.
 """
