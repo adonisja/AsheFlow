@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_caller_employee, RoleChecker, require_configured
+from app.api.deps import get_caller_employee, RoleChecker
 from app.core.encryption import decrypt, encrypt
 from app.database import get_db
 from app.models.employee import Employee
@@ -24,7 +24,6 @@ from app.models.trainee_credentials import TraineeCredentials
 router = APIRouter(
     prefix="/trainee-credentials",
     tags=["trainee-credentials"],
-    dependencies=[Depends(require_configured)],
 )
 
 _mgmt_admin = RoleChecker(["management", "admin"])
