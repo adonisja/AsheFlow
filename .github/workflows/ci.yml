@@ -114,7 +114,8 @@ jobs:
             --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); pag=c.get_paginator(chr(103)+chr(101)+chr(116)+chr(95)+chr(112)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)+chr(95)+chr(98)+chr(121)+chr(95)+chr(112)+chr(97)+chr(116)+chr(104)); ps=[]; [ps.extend(page[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]) for page in pag.paginate(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47),WithDecryption=True)]; skip={chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] not in skip]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
+              "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); pag=c.get_paginator(chr(103)+chr(101)+chr(116)+chr(95)+chr(112)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)+chr(95)+chr(98)+chr(121)+chr(95)+chr(112)+chr(97)+chr(116)+chr(104)); ps=[]; [ps.extend(page[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]) for page in pag.paginate(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47),WithDecryption=True)]; print('SSM param names: ' + ', '.join(p['Name'].rsplit('/', 1)[-1] for p in ps)); skip={chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] not in skip]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
+              "grep -q CREDENTIAL_ENCRYPTION_KEY /home/ubuntu/AsheFlow/.env && echo 'CREDENTIAL_ENCRYPTION_KEY present in .env' || (echo 'ERROR: CREDENTIAL_ENCRYPTION_KEY missing — verify SSM path is exactly /asheflow/staging/CREDENTIAL_ENCRYPTION_KEY' && exit 1)",
               "echo APP_ENV=production >> /home/ubuntu/AsheFlow/.env",
               "echo REDIS_URL=redis://redis:6379/0 >> /home/ubuntu/AsheFlow/.env",
               "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
@@ -135,6 +136,11 @@ jobs:
             --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
             --query "Status" --output text)
           echo "Write .env status: $STATUS"
+          aws ssm get-command-invocation \
+            --region us-east-2 \
+            --command-id "$COMMAND_ID" \
+            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+            --query "StandardOutputContent" --output text
           [ "$STATUS" = "Success" ] || exit 1
 
       - name: Write staging bot .env via SSM Parameter Store
