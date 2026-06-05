@@ -32,6 +32,7 @@ export default function DispatchDashboard() {
   const [confirmationsStale, setConfirmationsStale] = useState(false);
   const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dispatchPhasePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailureCount = useRef(0);
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
@@ -47,6 +48,31 @@ export default function DispatchDashboard() {
     pollFailureCount.current = 0;
     setIsPollingConfirmations(false);
   };
+
+  const stopDispatchPhasePolling = () => {
+    if (dispatchPhasePollRef.current !== null) {
+      clearInterval(dispatchPhasePollRef.current);
+      dispatchPhasePollRef.current = null;
+    }
+  };
+
+  // Poll the dispatch endpoint every 30s to pick up phase changes made on another
+  // tab or device (e.g. a co-dispatcher clicking Publish or Finalize).
+  // Stops automatically once finalized — the phase can't regress.
+  const startDispatchPhasePolling = useCallback((date: string) => {
+    stopDispatchPhasePolling();
+    dispatchPhasePollRef.current = setInterval(async () => {
+      try {
+        const res = await axiosClient.get(`/dispatch/${date}`);
+        const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
+        const hasStatus = !!res.data.workflow_status;
+        setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
+        if (res.data.workflow_status === 'finalized') {
+          stopDispatchPhasePolling();
+        }
+      } catch { /* silent — stale UI is acceptable, user can Refresh */ }
+    }, 30000);
+  }, []);
 
   // Start polling every 15s — stops automatically when all responses are in
   const startConfirmationPolling = useCallback((date: string) => {
@@ -76,16 +102,21 @@ export default function DispatchDashboard() {
   useEffect(() => {
     fetchTrucksAndEmployees();
     axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {});
-    return () => stopConfirmationPolling();
+    return () => {
+      stopConfirmationPolling();
+      stopDispatchPhasePolling();
+    };
   }, []);
 
   useEffect(() => {
     stopConfirmationPolling();
+    stopDispatchPhasePolling();
     setConfirmationsStale(false);
     fetchDispatchData();
     fetchAvailablePool();
     fetchUnavailableStaff();
     fetchConfirmations();
+    startDispatchPhasePolling(selectedDate);
   }, [selectedDate]);
 
   const fetchConfirmations = async () => {
