@@ -70,8 +70,8 @@ class Settings(BaseSettings):
 
     # Fernet key for encrypting trainee credentials (flex email, clock-in code).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Must be set in production; dev uses a fixed insecure key so the service starts without config.
-    credential_encryption_key: str = "REDACTED_FERNET_KEY="
+    # Required — no default. Add CREDENTIAL_ENCRYPTION_KEY to .env locally; set via env var in staging/prod.
+    credential_encryption_key: str
 
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
