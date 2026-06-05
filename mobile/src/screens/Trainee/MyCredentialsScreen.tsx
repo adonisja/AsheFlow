@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, StyleSheet,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
