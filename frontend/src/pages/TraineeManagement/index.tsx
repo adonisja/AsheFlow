@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import {
   Users, Loader2, AlertTriangle, RefreshCw, ChevronRight,
-  X, Calendar, Star, ClipboardList, UserCheck,
+  X, Calendar, Star, ClipboardList, UserCheck, KeyRound, Eye, EyeOff,
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
@@ -197,6 +197,161 @@ function EscalatedTab({
 }
 
 // ---------------------------------------------------------------------------
+// Send Credentials Panel
+// ---------------------------------------------------------------------------
+
+function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
+  const [existing, setExisting]       = useState<{ flex_email: string; clock_in_code: string; updated_at: string } | null>(null);
+  const [loadingExisting, setLoadingExisting] = useState(true);
+  const [open, setOpen]               = useState(false);
+  const [flexEmail, setFlexEmail]     = useState('');
+  const [clockInCode, setClockInCode] = useState('');
+  const [showEmail, setShowEmail]     = useState(false);
+  const [showCode, setShowCode]       = useState(false);
+  const [saving, setSaving]           = useState(false);
+  const [error, setError]             = useState('');
+
+  useEffect(() => {
+    setLoadingExisting(true);
+    axiosClient.get(`/trainee-credentials/${traineeId}`)
+      .then(res => setExisting(res.data))
+      .catch(() => setExisting(null))
+      .finally(() => setLoadingExisting(false));
+  }, [traineeId]);
+
+  const handleOpen = () => {
+    setFlexEmail(existing?.flex_email ?? '');
+    setClockInCode(existing?.clock_in_code ?? '');
+    setError('');
+    setOpen(true);
+  };
+
+  const handleSend = async () => {
+    if (!flexEmail.trim() || !clockInCode.trim()) {
+      setError('Both fields are required.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await axiosClient.post(`/trainee-credentials/${traineeId}`, {
+        flex_email: flexEmail.trim(),
+        clock_in_code: clockInCode.trim(),
+      });
+      setExisting(res.data);
+      setOpen(false);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to send credentials.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center gap-2 mb-1">
+        <KeyRound className="w-4 h-4 text-primary" />
+        <h3 className="font-semibold text-sm text-foreground">Work Credentials</h3>
+      </div>
+
+      {loadingExisting ? (
+        <div className="flex items-center gap-2 text-subtle text-xs py-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading...
+        </div>
+      ) : existing ? (
+        <div className="space-y-2 text-xs">
+          <div className="bg-accent/50 rounded-lg p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground font-medium uppercase tracking-wider">Flex Email</span>
+              <button onClick={() => setShowEmail(v => !v)} className="text-primary">
+                {showEmail ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+            <p className="font-mono text-foreground text-sm">
+              {showEmail ? existing.flex_email : '••••••••••••••••'}
+            </p>
+          </div>
+          <div className="bg-accent/50 rounded-lg p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground font-medium uppercase tracking-wider">Clock-In Code</span>
+              <button onClick={() => setShowCode(v => !v)} className="text-primary">
+                {showCode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+            <p className="font-mono text-foreground text-sm">
+              {showCode ? existing.clock_in_code : '••••••••'}
+            </p>
+          </div>
+          <p className="text-subtle">
+            Last sent {new Date(existing.updated_at).toLocaleDateString()}
+          </p>
+        </div>
+      ) : (
+        <p className="text-subtle text-xs">No credentials on file.</p>
+      )}
+
+      <button onClick={handleOpen} className="btn-primary w-full text-sm py-2">
+        {existing ? 'Update Credentials' : 'Send Credentials'}
+      </button>
+
+      {/* Modal */}
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-foreground flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-primary" />
+                {existing ? 'Update Credentials' : 'Send Credentials'}
+              </h2>
+              <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-subtle">
+              The trainee will receive a notification with these credentials and their ORE training link.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Flex Account Email</label>
+                <input
+                  type="email"
+                  value={flexEmail}
+                  onChange={e => setFlexEmail(e.target.value)}
+                  placeholder="trainee@flex.amazon.com"
+                  className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Clock-In Code</label>
+                <input
+                  type="text"
+                  value={clockInCode}
+                  onChange={e => setClockInCode(e.target.value)}
+                  placeholder="e.g. 1234"
+                  className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+                />
+              </div>
+            </div>
+
+            {error && <p className="text-xs text-danger">{error}</p>}
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setOpen(false)} className="btn-ghost flex-1 text-sm py-2">Cancel</button>
+              <button onClick={handleSend} disabled={saving} className="btn-primary flex-1 text-sm py-2 flex items-center justify-center gap-2">
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {saving ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Trainee History Drilldown
 // ---------------------------------------------------------------------------
 
@@ -368,6 +523,7 @@ function HistoryView({
           {/* Right: manager actions */}
           <div className="space-y-6">
             <ManagerComments record={todayRecord} traineeId={traineeId} />
+            <SendCredentialsPanel traineeId={traineeId} />
           </div>
         </div>
       )}
