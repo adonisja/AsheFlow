@@ -17,7 +17,8 @@ type CrewMember = { id: string; name: string; role: string };
 type Assignment = {
   truck_name: string;
   role: string;
-  status: string;
+  // dispatch phase: 'planned' | 'active' | 'completed'
+  dispatchPhase: 'planned' | 'active' | 'completed';
   crew: CrewMember[];
 };
 
@@ -33,6 +34,12 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const ROLE_ORDER = ['driver', 'trainer', 'trainee', 'walker'];
+
+const PHASE_BADGE = {
+  planned:   { label: 'Scheduled',  color: '#E8820C', bg: '#E8820C22' },
+  active:    { label: 'Confirming', color: '#0EA5D8', bg: '#0EA5D822' },
+  completed: { label: 'Confirmed',  color: '#0FA870', bg: '#0FA87022' },
+};
 
 export default function TodayAssignmentScreen() {
   const c = useColors();
@@ -51,17 +58,42 @@ export default function TodayAssignmentScreen() {
     const eid = await fetchId();
     if (!eid) return;
     try {
-      const res = await apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`);
-      const entry = (res.data ?? [])[0];
+      const [schedRes, dispatchRes] = await Promise.allSettled([
+        apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`),
+        apiClient.get(`/dispatch/${today}`),
+      ]);
+
+      const entry = schedRes.status === 'fulfilled' ? (schedRes.value.data ?? [])[0] : null;
       if (!entry || entry.status !== 'Assigned' || !entry.truck_name) {
         setAssignment(null);
         return;
       }
+
       const me = (entry.crew ?? []).find((m: any) => m.id === eid);
+
+      // Determine dispatch phase by finding the employee's truck in the dispatch response.
+      let dispatchPhase: Assignment['dispatchPhase'] = 'planned';
+      if (dispatchRes.status === 'fulfilled') {
+        const dispatch = dispatchRes.value.data;
+        const assignedCrews: Record<string, { employee_id: string }[]> = dispatch?.assigned_crews ?? {};
+        const truckAssignments: { truck_id: string; status: string }[] = dispatch?.truck_assignments ?? [];
+
+        // Find which truck this employee is on
+        const myTruckId = Object.entries(assignedCrews).find(([, crew]) =>
+          crew.some((m) => m.employee_id === eid),
+        )?.[0];
+
+        if (myTruckId) {
+          const ta = truckAssignments.find((t) => t.truck_id === myTruckId);
+          if (ta?.status === 'completed') dispatchPhase = 'completed';
+          else if (ta?.status === 'active') dispatchPhase = 'active';
+        }
+      }
+
       setAssignment({
         truck_name: entry.truck_name,
         role: me?.role ?? 'unknown',
-        status: 'planned',
+        dispatchPhase,
         crew: entry.crew ?? [],
       });
     } catch {
@@ -115,9 +147,9 @@ export default function TodayAssignmentScreen() {
               <Text style={s.truckName}>{assignment.truck_name}</Text>
               <Text style={s.truckSub}>Today's truck</Text>
             </View>
-            <View style={[s.statusBadge, { backgroundColor: c.warning + '22' }]}>
-              <Text style={[s.statusText, { color: c.warning }]}>
-                {assignment.status}
+            <View style={[s.statusBadge, { backgroundColor: PHASE_BADGE[assignment.dispatchPhase].bg }]}>
+              <Text style={[s.statusText, { color: PHASE_BADGE[assignment.dispatchPhase].color }]}>
+                {PHASE_BADGE[assignment.dispatchPhase].label}
               </Text>
             </View>
           </View>

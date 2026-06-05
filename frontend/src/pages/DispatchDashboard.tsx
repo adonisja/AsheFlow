@@ -32,6 +32,7 @@ export default function DispatchDashboard() {
   const [confirmationsStale, setConfirmationsStale] = useState(false);
   const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
   const confirmationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dispatchPhasePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailureCount = useRef(0);
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
@@ -47,6 +48,31 @@ export default function DispatchDashboard() {
     pollFailureCount.current = 0;
     setIsPollingConfirmations(false);
   };
+
+  const stopDispatchPhasePolling = () => {
+    if (dispatchPhasePollRef.current !== null) {
+      clearInterval(dispatchPhasePollRef.current);
+      dispatchPhasePollRef.current = null;
+    }
+  };
+
+  // Poll the dispatch endpoint every 30s to pick up phase changes made on another
+  // tab or device (e.g. a co-dispatcher clicking Publish or Finalize).
+  // Stops automatically once finalized — the phase can't regress.
+  const startDispatchPhasePolling = useCallback((date: string) => {
+    stopDispatchPhasePolling();
+    dispatchPhasePollRef.current = setInterval(async () => {
+      try {
+        const res = await axiosClient.get(`/dispatch/${date}`);
+        const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
+        const hasStatus = !!res.data.workflow_status;
+        setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
+        if (res.data.workflow_status === 'finalized') {
+          stopDispatchPhasePolling();
+        }
+      } catch { /* silent — stale UI is acceptable, user can Refresh */ }
+    }, 30000);
+  }, []);
 
   // Start polling every 15s — stops automatically when all responses are in
   const startConfirmationPolling = useCallback((date: string) => {
@@ -76,16 +102,21 @@ export default function DispatchDashboard() {
   useEffect(() => {
     fetchTrucksAndEmployees();
     axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {});
-    return () => stopConfirmationPolling();
+    return () => {
+      stopConfirmationPolling();
+      stopDispatchPhasePolling();
+    };
   }, []);
 
   useEffect(() => {
     stopConfirmationPolling();
+    stopDispatchPhasePolling();
     setConfirmationsStale(false);
     fetchDispatchData();
     fetchAvailablePool();
     fetchUnavailableStaff();
     fetchConfirmations();
+    startDispatchPhasePolling(selectedDate);
   }, [selectedDate]);
 
   const fetchConfirmations = async () => {
@@ -244,7 +275,12 @@ export default function DispatchDashboard() {
       setError(null);
       const response = await axiosClient.get(`/dispatch/${selectedDate}`);
       
-      if (Object.keys(response.data.assigned_crews).length === 0) {
+      // Only null out dispatchData if there are genuinely no assignments AND no
+      // workflow_status — an empty crew dict with a status means dispatch ran
+      // and the button must stay disabled.
+      const hasCrews = Object.keys(response.data.assigned_crews).length > 0;
+      const hasStatus = !!response.data.workflow_status;
+      if (!hasCrews && !hasStatus) {
         setDispatchData(null);
       } else {
         setDispatchData(response.data);
@@ -695,6 +731,26 @@ export default function DispatchDashboard() {
               </p>
             </div>
           ) : (
+            <>
+            {/* Rejections banner — only shown after publish when someone declined */}
+            {workflowStep === 'published' && (() => {
+              const declined = Object.entries(confirmations).filter(([, s]) => s === 'declined');
+              if (declined.length === 0) return null;
+              const declinedNames = declined.map(([empId]) => employees[empId]?.name || empId);
+              return (
+                <div className="mb-4 p-3 rounded-xl bg-danger/8 border border-danger/20 flex items-start gap-2">
+                  <XCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-danger">
+                      {declined.length} rejection{declined.length > 1 ? 's' : ''} — reassignment needed
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {declinedNames.join(', ')}
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                {Object.entries(dispatchData.assigned_crews).map(([truckId, crew]) => (
                  <div 
@@ -796,6 +852,7 @@ export default function DispatchDashboard() {
                  <p className="text-sm text-subtle col-span-full text-center py-8">No trucks have valid configurations today.</p>
                )}
             </div>
+            </>
           )}
         </div>
       </div>

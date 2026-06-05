@@ -98,7 +98,7 @@ class Settings(BaseSettings):
             return ["*"]
         return [h.strip() for h in self.cors_allow_headers.split(",") if h.strip()]
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore")
 
 
 

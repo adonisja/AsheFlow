@@ -22,12 +22,15 @@ import TrainerMarks from './pages/TrainerMarks';
 import Phase4Observation from './pages/Phase4Observation';
 import TrainingCurriculum from './pages/TrainingCurriculum';
 import GraduationQuiz from './pages/GraduationQuiz';
+import GearRequest from './pages/GearRequest';
 import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
 import LocationProfiles from './pages/LocationProfiles';
+import SortPage from './pages/Sort';
+import WalkerSortMonitor from './pages/WalkerSort';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
@@ -86,7 +89,7 @@ function RoleRedirect() {
   const { groups, isConfigured, isLoading } = useAuth();
   if (isLoading) return null;
   if (groups.includes('super_admin')) return <Navigate to="/superadmin/companies" replace />;
-  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/dispatch-home' : '/setup'} replace />;
+  if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
@@ -391,6 +394,30 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
                   <LocationProfiles />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sort"
+              element={
+                <ProtectedRoute allowedRoles={['trainer', 'dispatch', 'admin']}>
+                  <SortPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/walker-sort"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
+                  <WalkerSortMonitor />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/gear"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                  <GearRequest />
                 </ProtectedRoute>
               }
             />
