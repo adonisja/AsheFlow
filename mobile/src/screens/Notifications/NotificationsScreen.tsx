@@ -24,6 +24,7 @@ type ConfirmationStatus = 'pending' | 'confirmed' | 'declined' | null;
 // Human-readable label + icon per notification type
 const TYPE_META: Record<string, { label: string; icon: string }> = {
   dispatch_assignment:            { label: 'Assignment',         icon: '📋' },
+  dispatch_assignment_info:       { label: 'Assignment Update',  icon: '📋' },
   trainer_decline_reassignment:   { label: 'Reassignment',       icon: '🔀' },
   trainee_unassigned:             { label: 'Unassigned',         icon: '⚠️' },
   graduation:                     { label: 'Graduation',         icon: '🎓' },
@@ -62,7 +63,7 @@ function typeMeta(type: string): { label: string; icon: string } {
 }
 
 function typeColor(type: string, c: ThemeColors): string {
-  if (type === 'dispatch_assignment')                          return c.primary;
+  if (type === 'dispatch_assignment' || type === 'dispatch_assignment_info') return c.primary;
   if (type === 'trainer_decline_reassignment')                 return c.warning;
   if (type === 'trainee_unassigned')                           return c.danger;
   if (type === 'trainee_graduated' || type === 'graduation')  return c.success;
@@ -141,31 +142,43 @@ function extractTruckName(message: string): string | null {
 }
 
 function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: DispatchModalProps) {
-  const [status,  setStatus]  = useState<ConfirmationStatus>(null);
-  const [loading, setLoading] = useState(true);
-  const [acting,  setActing]  = useState<'confirming' | 'declining' | null>(null);
+  const [status,         setStatus]         = useState<ConfirmationStatus>(null);
+  const [dispatchPhase,  setDispatchPhase]  = useState<'planned' | 'active' | 'completed' | null>(null);
+  const [loading,        setLoading]        = useState(true);
+  const [acting,         setActing]         = useState<'confirming' | 'declining' | null>(null);
   const submitting = useRef(false);
 
   useEffect(() => {
     if (!notif?.dispatch_date) return;
     setLoading(true);
     setStatus(null);
+    setDispatchPhase(null);
 
     const cached = getCached(notif.dispatch_date);
     if (cached !== undefined) {
       setStatus(cached);
-      setLoading(false);
-      return;
+      // Phase is not cached — always fetch it fresh so stale 'active' doesn't show buttons post-finalize
     }
 
-    apiClient.get(`/dispatch/${notif.dispatch_date}/my-confirmation`)
-      .then(r => {
-        const s = r.data.status ?? null;
+    Promise.allSettled([
+      apiClient.get(`/dispatch/${notif.dispatch_date}/my-confirmation`),
+      apiClient.get(`/dispatch/${notif.dispatch_date}`),
+    ]).then(([confResult, dispatchResult]) => {
+      if (confResult.status === 'fulfilled') {
+        const s = confResult.value.data.status ?? null;
         setCached(notif.dispatch_date!, s);
         setStatus(s);
-      })
-      .catch(() => setStatus(null))
-      .finally(() => setLoading(false));
+      } else if (cached !== undefined) {
+        setStatus(cached);
+      }
+
+      if (dispatchResult.status === 'fulfilled') {
+        const wf: string = dispatchResult.value.data?.workflow_status ?? '';
+        if (wf === 'finalized')  setDispatchPhase('completed');
+        else if (wf === 'published') setDispatchPhase('active');
+        else setDispatchPhase('planned');
+      }
+    }).finally(() => setLoading(false));
   }, [notif?.id, notif?.dispatch_date]);
 
   const respond = useCallback(async (choice: 'confirmed' | 'declined') => {
@@ -208,9 +221,13 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
   const cleanMessage = notif?.message ? stripMarkdown(notif.message) : '';
   const truckName = cleanMessage ? extractTruckName(cleanMessage) : null;
 
-  // A past-date notification is read-only — never prompt for action
+  // The confirmation window is open only during the 'active' dispatch phase.
+  // Past-date and finalized dispatches are read-only regardless of status.
   const localToday = new Date().toISOString().slice(0, 10);
   const isPastDate = !!notif?.dispatch_date && notif.dispatch_date < localToday;
+  const isFinalized = dispatchPhase === 'completed';
+  // dispatch_assignment_info is always informational — no action required
+  const isInfoOnly = notif?.type === 'dispatch_assignment_info';
 
   // Derive accent color and status metadata from current status
   const statusAccent = status === 'confirmed' ? c.success
@@ -221,18 +238,21 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
     : status === 'declined' ? '❌'
     : '⏳';
 
+  const windowClosed = isPastDate || isFinalized;
+
   const statusLabel = status === 'confirmed' ? 'Confirmed'
     : status === 'declined' ? 'Declined'
-    : isPastDate ? 'No Response Recorded'
+    : windowClosed ? 'No Response Recorded'
     : 'Awaiting Response';
 
   const statusSub = status === 'confirmed' ? 'Your attendance was recorded'
     : status === 'declined' ? 'You declined this assignment'
+    : isFinalized ? 'Final crews have been posted — this window is closed'
     : isPastDate ? 'This assignment has passed'
     : 'Please confirm or decline your assignment';
 
-  // Only show action buttons for today's unresponded assignment
-  const needsAction = !isPastDate && (status === 'pending' || status === null);
+  // Show action buttons only when the window is open and no response has been submitted
+  const needsAction = !isInfoOnly && !windowClosed && (status === 'pending' || status === null);
 
   return (
     <Modal visible={!!notif} transparent animationType="slide" onRequestClose={onClose}>
@@ -252,9 +272,11 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
               <Text style={[ms.sheetTitle, { color: c.foreground }]}>Dispatch Assignment</Text>
-              {isPastDate && (
+              {(isPastDate || isFinalized) && (
                 <View style={[ms.pastPill, { backgroundColor: c.mutedForeground + '20' }]}>
-                  <Text style={[ms.pastPillText, { color: c.mutedForeground }]}>Past</Text>
+                  <Text style={[ms.pastPillText, { color: c.mutedForeground }]}>
+                    {isFinalized ? 'Finalized' : 'Past'}
+                  </Text>
                 </View>
               )}
             </View>
@@ -461,7 +483,7 @@ export default function NotificationsScreen() {
   }, []);
 
   const handleTap = useCallback((item: Notification) => {
-    if (item.type === 'dispatch_assignment' && item.dispatch_date) {
+    if ((item.type === 'dispatch_assignment' || item.type === 'dispatch_assignment_info') && item.dispatch_date) {
       setActiveNotif(item);
     } else if (!item.is_read) {
       markAsRead(item.id);
@@ -476,9 +498,10 @@ export default function NotificationsScreen() {
   const s = styles(c);
 
   const renderItem = ({ item }: { item: Notification }) => {
-    const meta       = typeMeta(item.type);
-    const accent     = typeColor(item.type, c);
+    const meta        = typeMeta(item.type);
+    const accent      = typeColor(item.type, c);
     const isDispatch  = item.type === 'dispatch_assignment';
+    const isInfoOnly  = item.type === 'dispatch_assignment_info';
     const unread      = !item.is_read;
     const isPast      = !!item.dispatch_date && item.dispatch_date < new Date().toISOString().slice(0, 10);
 
@@ -522,21 +545,23 @@ export default function NotificationsScreen() {
             </Text>
 
             {/* Dispatch CTA */}
-            {isDispatch && item.dispatch_date && (
+            {(isDispatch || isInfoOnly) && item.dispatch_date && (
               <View style={s.ctaRow}>
-                <Text style={[s.cta, { color: isPast ? c.mutedForeground : c.primary }]}>
-                  {isPast ? 'View past assignment →' : 'View & respond to assignment →'}
+                <Text style={[s.cta, { color: isPast || isInfoOnly ? c.mutedForeground : c.primary }]}>
+                  {isInfoOnly ? 'View assignment info →'
+                    : isPast ? 'View past assignment →'
+                    : 'View & respond to assignment →'}
                 </Text>
               </View>
             )}
           </View>
 
           {/* Unread dot — right edge */}
-          {unread && !isDispatch && (
+          {unread && !isDispatch && !isInfoOnly && (
             <View style={[s.dot, { backgroundColor: accent }]} />
           )}
-          {isDispatch && unread && (
-            <View style={[s.dot, { backgroundColor: c.warning }]} />
+          {(isDispatch || isInfoOnly) && unread && (
+            <View style={[s.dot, { backgroundColor: isInfoOnly ? c.primary : c.warning }]} />
           )}
         </View>
       </TouchableOpacity>
