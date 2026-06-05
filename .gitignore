@@ -94,9 +94,10 @@ Thumbs.db
 .DS_Store
 
 
-# Proprietary design documentation
+# Proprietary design documentation — lives in AsheFlow-private only
 docs/decisions/
 docs/journals/
+docs/LEARNING_GUIDE.md
 
 # Claude working protocol — contains internal infrastructure details
 # Will move to private repo (AsheFlow-private)
