@@ -278,3 +278,37 @@ class Phase4OptInRequest(BaseModel):
     route_number: int
     truck_assignment_id: UUID
     route_date: date
+
+
+# ---------------------------------------------------------------------------
+# Walker assignment — pairing walkers to committed routes
+# ---------------------------------------------------------------------------
+
+class AssignWalkersRequest(BaseModel):
+    """Map sorted walker routes to real employees.
+
+    walker_ids must be ordered to match walker_index values from the sort
+    result (index 0 → first walker ID, etc.).
+    """
+    walker_ids: list[UUID]
+
+
+# ---------------------------------------------------------------------------
+# Walker trip schemas
+# ---------------------------------------------------------------------------
+
+class WalkerTripResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    walker_route_id: UUID
+    trip_number: int
+    status: str
+    departed_at: Optional[datetime] = None
+    returned_at: Optional[datetime] = None
+    suggested_walker_route_id: Optional[UUID] = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WalkerTripStatusPatch(BaseModel):
+    status: Literal["in_progress", "completed"]
