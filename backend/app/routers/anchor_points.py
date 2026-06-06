@@ -426,7 +426,7 @@ async def depart_anchor_point(
     if truck and truck.discord_channel_id:
         await _post_embed_to_discord(truck.discord_channel_id, caller.company_id, {
             "title": f"🚚 Departed — {truck_name}",
-            "color": 0x6366F1,  # indigo
+            "color": 0xF97316,  # orange — departure/en-route
             "fields": [
                 {"name": "Driver",   "value": caller.name, "inline": True},
                 {"name": "Left",     "value": ap.location,  "inline": True},
@@ -443,13 +443,13 @@ async def depart_anchor_point(
 # ---------------------------------------------------------------------------
 
 @router.patch("/{anchor_id}/confirm", response_model=AnchorPointResponse)
-def confirm_anchor_point(
+async def confirm_anchor_point(
     anchor_id: UUID,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_dispatch),
 ):
-    """Dispatch acknowledges/confirms an anchor point. Idempotent."""
+    """Dispatch acknowledges an anchor point. Posts an in-channel embed to the truck channel."""
     ap = db.query(AnchorPoint).filter(
         AnchorPoint.id == anchor_id,
         AnchorPoint.company_id == caller.company_id,
@@ -461,6 +461,19 @@ def confirm_anchor_point(
     ap.confirmed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(ap)
+
+    truck = db.query(Truck).filter(Truck.id == ap.truck_id, Truck.company_id == caller.company_id).first()
+    if truck and truck.discord_channel_id:
+        await _post_embed_to_discord(truck.discord_channel_id, caller.company_id, {
+            "title": f"✅ Anchor Point Acknowledged — {truck.name}",
+            "color": 0x6366F1,
+            "fields": [
+                {"name": "Location", "value": ap.location, "inline": True},
+                {"name": "Acknowledged by", "value": caller.name, "inline": True},
+            ],
+            "footer": "Dispatch has acknowledged this anchor point",
+        })
+
     return ap
 
 
