@@ -1,10 +1,14 @@
 import boto3
 import logging
+import os
 import secrets
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import List
 from uuid import UUID
 from botocore.exceptions import ClientError
+
+import requests as http_requests
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -21,6 +25,24 @@ from app.services.email import send_invite_email
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/employees", tags=["employees"])
+
+
+def _fire_discord_dm(discord_id: str, message: str) -> None:
+    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+    secret  = os.environ.get("INTERNAL_SECRET", "")
+
+    def _run():
+        try:
+            http_requests.post(
+                f"{bot_url}/internal/dm",
+                json={"discord_id": discord_id, "message": message},
+                headers={"X-Internal-Secret": secret},
+                timeout=5,
+            )
+        except Exception as exc:
+            logger.warning("promote DM failed for discord_id=%s: %s", discord_id, exc)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 # Cognito group name per role — must match your User Pool group names exactly
 ROLE_TO_COGNITO_GROUP: dict[str, str] = {
@@ -684,6 +706,13 @@ def promote_employee(
     )
     db.commit()
     db.refresh(db_employee)
+
+    if db_employee.discord_id:
+        _fire_discord_dm(
+            str(db_employee.discord_id),
+            "Congratulations! You've been promoted to Trainer. Welcome to the training team.",
+        )
+
     return db_employee
 
 

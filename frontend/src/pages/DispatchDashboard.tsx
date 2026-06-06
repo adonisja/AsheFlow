@@ -43,6 +43,11 @@ export default function DispatchDashboard() {
   const [transferNote, setTransferNote] = useState<string>('');
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferWarnings, setTransferWarnings] = useState<string[]>([]);
+  // hub state
+  const [showHubModal, setShowHubModal] = useState(false);
+  const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
+  const [isCreatingHub, setIsCreatingHub] = useState(false);
+  const [publishingHubTruckId, setPublishingHubTruckId] = useState<string | null>(null);
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
   const [dialog, setDialog] = useState<DialogConfig | null>(null);
@@ -456,6 +461,45 @@ export default function DispatchDashboard() {
     });
   };
 
+  const handleAddHub = async () => {
+    if (!hubModalTruckId) return;
+    setIsCreatingHub(true);
+    setError(null);
+    try {
+      await axiosClient.post('/dispatch/hubs', { truck_id: hubModalTruckId, date: selectedDate });
+      setShowHubModal(false);
+      setHubModalTruckId('');
+      await fetchDispatchData();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to create hub.');
+    } finally {
+      setIsCreatingHub(false);
+    }
+  };
+
+  const handlePublishHub = (truckId: string) => {
+    const truckName = trucks[truckId]?.name || 'Hub';
+    openDialog({
+      title: 'Publish Hub',
+      message: `Send dispatch_assignment notifications to all staff on ${truckName} and post their crew card to Discord?`,
+      confirmLabel: 'Publish Hub',
+      variant: 'default',
+      onConfirm: async () => {
+        closeDialog();
+        setPublishingHubTruckId(truckId);
+        setError(null);
+        try {
+          await axiosClient.post(`/dispatch/hubs/${truckId}/publish`, { date: selectedDate });
+          await fetchDispatchData();
+        } catch (err: any) {
+          setError(err.response?.data?.detail || 'Failed to publish hub.');
+        } finally {
+          setPublishingHubTruckId(null);
+        }
+      },
+    });
+  };
+
   const sortCrewMembers = (a: any, b: any) => {
     // Get true core role from employees map if available
     const roleA = (employees[a.employee_id || a.id]?.role || a.role || 'walker').toLowerCase();
@@ -500,6 +544,19 @@ export default function DispatchDashboard() {
     : dispatchData.workflow_status === 'published'
     ? 'published'
     : 'dispatched';
+
+  // Hub trucks = assignments in 'planned' status while the overall workflow is published/finalized.
+  // These were created via "+ Add Hub" and haven't had Publish Hub called yet.
+  const hubTruckIds: Set<string> = new Set(
+    (dispatchData?.truck_assignments || [])
+      .filter((a: any) => a.status === 'planned')
+      .map((a: any) => a.truck_id)
+  );
+
+  // Trucks that already have an assignment for selectedDate (to exclude from hub modal picker)
+  const assignedTruckIds: Set<string> = new Set(
+    Object.keys(dispatchData?.assigned_crews || {})
+  );
 
   return (
     <div className="space-y-6 animate-slide-up">
@@ -767,6 +824,17 @@ export default function DispatchDashboard() {
               <Truck className="w-5 h-5 text-primary" />
               Assignments for {selectedDate}
             </h2>
+            {workflowStep !== 'none' && (
+              <button
+                onClick={() => { setShowHubModal(true); setHubModalTruckId(''); }}
+                disabled={isLoading}
+                className="flex items-center gap-1.5 text-sm font-medium bg-muted text-foreground hover:bg-muted/80 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-border"
+                title="Create an empty hub truck assignment"
+              >
+                <Plus className="w-4 h-4" />
+                Add Hub
+              </button>
+            )}
           </div>
 
           {!dispatchData ? (
@@ -800,24 +868,46 @@ export default function DispatchDashboard() {
               );
             })()}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-               {Object.entries(dispatchData.assigned_crews).map(([truckId, crew]) => (
-                 <div 
-                   key={truckId} 
-                   className={`card-elevated border border-border flex flex-col transition-colors min-h-[160px]`}
+               {Object.entries(dispatchData.assigned_crews).map(([truckId, crew]) => {
+                 const isHub = hubTruckIds.has(truckId);
+                 return (
+                 <div
+                   key={truckId}
+                   className={`card-elevated border flex flex-col transition-colors min-h-[160px] ${isHub ? 'border-primary/40' : 'border-border'}`}
                    onDragOver={(e) => e.preventDefault()}
                    onDrop={(e) => handleDropToTruck(e, truckId)}
                  >
                    <div className="flex items-center justify-between mb-3 pb-2 border-b border-border">
                      <div className="flex items-center gap-2">
-                       <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center">
-                         <Truck className="w-4 h-4 text-primary" />
+                       <div className={`w-8 h-8 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
+                         <Truck className={`w-4 h-4 ${isHub ? 'text-primary' : 'text-primary'}`} />
                        </div>
-                       <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide">
-                            {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
-                       </h3>
+                       <div>
+                         <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide">
+                           {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
+                         </h3>
+                         {isHub && (
+                           <span className="text-[9px] font-bold uppercase tracking-widest text-primary">Hub</span>
+                         )}
+                       </div>
                      </div>
-                     <div className={`px-2 py-1 text-xs font-semibold rounded-full ${crew.length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
-                       {crew.length} / {maxCrewSize}
+                     <div className="flex items-center gap-2">
+                       {isHub && (
+                         <button
+                           onClick={() => handlePublishHub(truckId)}
+                           disabled={publishingHubTruckId === truckId || (crew as any[]).length === 0}
+                           className="flex items-center gap-1 text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           title={crew.length === 0 ? 'Add staff before publishing' : 'Publish hub — notify all assigned staff'}
+                         >
+                           {publishingHubTruckId === truckId
+                             ? <div className="w-3 h-3 border border-success border-t-transparent rounded-full animate-spin" />
+                             : <Send className="w-3 h-3" />}
+                           Publish Hub
+                         </button>
+                       )}
+                       <div className={`px-2 py-1 text-xs font-semibold rounded-full ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
+                         {(crew as any[]).length} / {maxCrewSize}
+                       </div>
                      </div>
                    </div>
 
@@ -915,8 +1005,9 @@ export default function DispatchDashboard() {
                      )}
                    </div>
                  </div>
-               ))}
-               
+               );
+               })}
+
                {Object.keys(dispatchData.assigned_crews).length === 0 && (
                  <p className="text-sm text-subtle col-span-full text-center py-8">No trucks have valid configurations today.</p>
                )}
@@ -1002,6 +1093,56 @@ export default function DispatchDashboard() {
               >
                 {isTransferring && <div className="w-3.5 h-3.5 border border-white border-t-transparent rounded-full animate-spin" />}
                 {isTransferring ? 'Transferring…' : 'Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Hub modal */}
+      {showHubModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-foreground flex items-center gap-2">
+                <Plus className="w-4 h-4 text-primary" />
+                Add Hub
+              </h2>
+              <button onClick={() => setShowHubModal(false)} className="text-muted-foreground hover:text-foreground">
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-subtle">
+              Create an empty truck assignment for hub operations. After creation, drag staff from the unassigned panel onto the hub truck, then click <strong>Publish Hub</strong> to notify them.
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Select Truck</label>
+              <select
+                value={hubModalTruckId}
+                onChange={e => setHubModalTruckId(e.target.value)}
+                className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+              >
+                <option value="">Choose a truck…</option>
+                {Object.entries(trucks)
+                  .filter(([id]) => !assignedTruckIds.has(id))
+                  .map(([id, t]: [string, any]) => (
+                    <option key={id} value={id}>{t.name}</option>
+                  ))
+                }
+              </select>
+              {Object.keys(trucks).length > 0 && Object.keys(trucks).every(id => assignedTruckIds.has(id)) && (
+                <p className="text-xs text-warning mt-1">All trucks already have assignments for this date.</p>
+              )}
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setShowHubModal(false)} className="btn-ghost flex-1 text-sm py-2">Cancel</button>
+              <button
+                onClick={handleAddHub}
+                disabled={isCreatingHub || !hubModalTruckId}
+                className="btn-primary flex-1 text-sm py-2 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isCreatingHub && <div className="w-3.5 h-3.5 border border-white border-t-transparent rounded-full animate-spin" />}
+                {isCreatingHub ? 'Creating…' : 'Create Hub'}
               </button>
             </div>
           </div>

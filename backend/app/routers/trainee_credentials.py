@@ -7,9 +7,13 @@ Endpoints:
   GET  /trainee-credentials/mine           trainee — fetch own credentials
 """
 
+import logging
+import os
+import threading
 import uuid
 from uuid import UUID
 
+import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -27,6 +31,26 @@ router = APIRouter(
 )
 
 _mgmt_admin = RoleChecker(["management", "admin"])
+
+logger = logging.getLogger(__name__)
+
+
+def _fire_discord_dm(discord_id: str, message: str) -> None:
+    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+    secret  = os.environ.get("INTERNAL_SECRET", "")
+
+    def _run():
+        try:
+            http_requests.post(
+                f"{bot_url}/internal/dm",
+                json={"discord_id": discord_id, "message": message},
+                headers={"X-Internal-Secret": secret},
+                timeout=5,
+            )
+        except Exception as exc:
+            logger.warning("credentials DM failed for discord_id=%s: %s", discord_id, exc)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 # ORE training link — delivered once in the notification, never persisted.
 _ORE_LINK = (
@@ -130,6 +154,12 @@ def send_credentials(
     db.add(notification)
     db.commit()
     db.refresh(row)
+
+    if trainee.discord_id:
+        _fire_discord_dm(
+            str(trainee.discord_id),
+            "Your manager has sent your sign-in credentials. Check your AsheFlow inbox to view them.",
+        )
 
     return _to_response(row)
 

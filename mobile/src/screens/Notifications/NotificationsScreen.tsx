@@ -39,7 +39,6 @@ const TYPE_META: Record<string, { label: string; icon: string }> = {
   incident_resolved:              { label: 'Incident Resolved',  icon: '✅' },
   anchor_point_submitted:         { label: 'Anchor Point',       icon: '📍' },
   anchor_point_arrived:           { label: 'AP Arrival',         icon: '📍' },
-  anchor_point_confirmed:         { label: 'AP Confirmed',       icon: '📍' },
   rts_submitted:                  { label: 'RTS Submitted',      icon: '🏁' },
   rts_approved:                   { label: 'RTS Approved',       icon: '✅' },
   rts_rejected:                   { label: 'RTS Rejected',       icon: '❌' },
@@ -55,6 +54,8 @@ const TYPE_META: Record<string, { label: string; icon: string }> = {
   feedback_submitted:             { label: 'Feedback',           icon: '💬' },
   credentials_sent:               { label: 'Credentials',        icon: '🔑' },
   truck_transfer:                 { label: 'Truck Transfer',     icon: '🔀' },
+  role_change:                    { label: 'Role Change',        icon: '⭐' },
+  quiz_result_confirmed:          { label: 'Quiz Result',        icon: '📋' },
 };
 
 function typeMeta(type: string): { label: string; icon: string } {
