@@ -200,7 +200,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   logoLetters:  { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: c.primary, letterSpacing: 0.5 },
-  brandName:    { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, color: '#fff', letterSpacing: -0.5 },
+  brandName:    { fontSize: fontSize['2xl'], fontWeight: fontWeight.extrabold, color: '#fff', letterSpacing: -0.5 },
   brandTagline: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.72)', marginTop: 4, fontWeight: fontWeight.medium },
 
   // Card
