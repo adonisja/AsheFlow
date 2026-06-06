@@ -402,21 +402,32 @@ def get_rts_report(
 def get_pending_rts_reports(
     target_date: Optional[date] = Query(None),
     db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_management),
 ):
-    """Return all pending RTS reports. Dispatch review queue."""
+    """Return all pending RTS reports for a date. Dispatch review queue."""
     if target_date is None:
         target_date = company_today(db, caller.company_id)
 
     rows = (
         db.query(RTSReport)
-        .filter(RTSReport.date == target_date, RTSReport.status == "pending")
+        .filter(
+            RTSReport.date == target_date,
+            RTSReport.status == "pending",
+            RTSReport.company_id == caller.company_id,
+        )
         .order_by(RTSReport.submitted_at.asc())
         .all()
     )
 
     driver_ids = {r.driver_id for r in rows}
-    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids)).all()}
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee).filter(
+            Employee.id.in_(driver_ids),
+            Employee.company_id == caller.company_id,
+        ).all()
+    }
 
     return [
         {

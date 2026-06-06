@@ -481,6 +481,50 @@ async def confirm_anchor_point(
 # Read endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/late-flags")
+def get_late_flags(
+    target_date: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch),
+):
+    """Return all late-flag records for a date (default today). Dispatch/management/admin."""
+    if target_date is None:
+        target_date = company_today(db, caller.company_id)
+
+    flags = (
+        db.query(AnchorPointLateFlag)
+        .filter(
+            AnchorPointLateFlag.company_id == caller.company_id,
+            AnchorPointLateFlag.date == target_date,
+        )
+        .order_by(AnchorPointLateFlag.flagged_at.asc())
+        .all()
+    )
+
+    driver_ids = {f.driver_id for f in flags}
+    truck_ids  = {f.truck_id  for f in flags}
+
+    emp_map   = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids), Employee.company_id == caller.company_id).all()}
+    truck_map = {t.id: t for t in db.query(Truck).filter(Truck.id.in_(truck_ids),  Truck.company_id == caller.company_id).all()}
+
+    return [
+        {
+            "id":           str(f.id),
+            "anchor_point_id": str(f.anchor_point_id),
+            "driver_id":    str(f.driver_id),
+            "driver_name":  emp_map[f.driver_id].name if f.driver_id in emp_map else None,
+            "truck_id":     str(f.truck_id),
+            "truck_name":   truck_map[f.truck_id].name if f.truck_id in truck_map else None,
+            "date":         str(f.date),
+            "eta":          f.eta,
+            "minutes_late": f.minutes_late,
+            "flagged_at":   f.flagged_at.isoformat() if f.flagged_at else None,
+        }
+        for f in flags
+    ]
+
+
 @router.get("/driver/today", response_model=List[AnchorPointResponse])
 def get_my_anchor_points_today(
     db: Session = Depends(get_db),
