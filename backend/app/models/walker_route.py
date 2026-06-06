@@ -123,6 +123,29 @@ class LocationDifficultyFlag(Base):
     notes           = Column(Text(), nullable=True)
 
 
+class WalkerTrip(Base):
+    """One physical delivery trip made by a walker from the anchor point.
+
+    A WalkerRoute has one or more trips. Status lifecycle:
+      pending → in_progress (departed) → completed (returned)
+    """
+    __tablename__ = "walker_trips"
+
+    id                       = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id               = Column(UUID(as_uuid=True), nullable=False, index=True)
+    walker_route_id          = Column(UUID(as_uuid=True), ForeignKey("walker_routes.id", ondelete="CASCADE"), nullable=False, index=True)
+    trip_number              = Column(Integer(), nullable=False)
+    status                   = Column(String(20), nullable=False, default="pending")  # pending|in_progress|completed
+    departed_at              = Column(DateTime(timezone=True), nullable=True)
+    returned_at              = Column(DateTime(timezone=True), nullable=True)
+    suggested_walker_route_id = Column(UUID(as_uuid=True), ForeignKey("walker_routes.id", ondelete="SET NULL"), nullable=True)
+    created_at               = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("walker_route_id", "trip_number", name="uq_walker_trips_route_trip"),
+    )
+
+
 class MisroutedPackageFlag(Base):
     """Records a package whose block_key didn't match its tote's dominant block_key at sort time.
 
