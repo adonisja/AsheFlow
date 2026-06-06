@@ -25,6 +25,7 @@ import GraduationQuiz from './pages/GraduationQuiz';
 import GearRequest from './pages/GearRequest';
 import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
+import DriverSurveys from './pages/DriverSurveys';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
@@ -378,6 +379,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
                   <OperationsAnalytics />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/driver-surveys"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <DriverSurveys />
                 </ProtectedRoute>
               }
             />
