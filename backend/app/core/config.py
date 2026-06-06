@@ -40,6 +40,21 @@ class Settings(BaseSettings):
                 "CORS_ORIGINS contains 'localhost' in a non-development environment. "
                 "Set CORS_ORIGINS to your actual production/staging domain(s) before deploying."
             )
+
+        # GDPR Art. 32 / CCPA §1798.150 — encryption in transit is mandatory in production.
+        # AWS RDS requires sslmode=require (or prefer/verify-full) in the connection string.
+        # If the database_url does not include SSL params and we are not in development,
+        # the connection would be unencrypted. Fail fast here rather than silently skip.
+        if self.app_env not in {"development", "test"}:
+            db_lower = self.database_url.lower()
+            has_ssl = "sslmode=require" in db_lower or "sslmode=verify" in db_lower
+            is_local = "localhost" in db_lower or "127.0.0.1" in db_lower
+            if not has_ssl and not is_local:
+                raise RuntimeError(
+                    "DATABASE_URL must include sslmode=require (or verify-full) in staging/production. "
+                    "Unencrypted database connections are not permitted. "
+                    "Example: postgresql://user:pass@host:5432/db?sslmode=require"
+                )
     
     
 
@@ -61,6 +76,12 @@ class Settings(BaseSettings):
     # Days after invite before an unverified (pending_verification) employee
     # record is automatically deleted by the Celery cleanup job.
     invite_expiry_days: int = 7
+
+    # Retention period (days) for operational shift records:
+    # CrewCompliance, DriverCheckIn, RTSReport, StationHandoff.
+    # FLSA §211 requires employment records be kept for at least 3 years (1095 days).
+    # Default is 1095 (3 years); set to 0 to disable automatic purge.
+    operational_record_retention_days: int = 1095
 
     # NYC GeoClient API — used for address enrichment at manifest ingestion time.
     # Register at https://api.nyc.gov/  (free, requires NYC account).

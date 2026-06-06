@@ -110,6 +110,16 @@ def delete_time_off_request(
     if caller.role not in mgmt_roles and caller.id != db_request.employee_id:
         raise HTTPException(status_code=403, detail="You can only cancel your own time-off requests.")
 
+    write_audit(
+        db,
+        action_type="pto.deleted",
+        target_table="time_off_requests",
+        target_id=str(db_request.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"employee_id": str(db_request.employee_id), "date": str(db_request.date), "status": db_request.status},
+        after=None,
+    )
     db.delete(db_request)
     db.commit()
 

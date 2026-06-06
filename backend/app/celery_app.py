@@ -55,4 +55,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
         "schedule": crontab(hour=18, minute=30),
     },
+    # 03:30 AM Eastern on the 1st of every month — purge operational records
+    # older than operational_record_retention_days (default 1095 / 3 years, FLSA §211).
+    "purge-expired-operational-records-monthly": {
+        "task": "app.tasks.cleanup.purge_expired_operational_records",
+        "schedule": crontab(hour=3, minute=30, day_of_month=1),
+    },
 }

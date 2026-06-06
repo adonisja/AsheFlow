@@ -304,5 +304,17 @@ def delete_profile(
     )
     if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found.")
+
+    from app.services.audit import write_audit
+    write_audit(
+        db,
+        action_type="location_profile.deleted",
+        target_table="location_profiles",
+        target_id=str(profile.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"block_key": profile.block_key, "workload_class": profile.workload_class},
+        after=None,
+    )
     db.delete(profile)
     db.commit()

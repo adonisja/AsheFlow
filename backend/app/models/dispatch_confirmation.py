@@ -39,3 +39,7 @@ class DispatchConfirmation(Base):
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
     source       = Column(String(20),         nullable=False, default="discord_bot")
     created_at   = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # LA-2: WARN labor-law timestamps — track when the offer was made and when it expires.
+    # Required to demonstrate WARN Act / FLSA advance-notice compliance for dispatch offers.
+    offer_sent_at    = Column(DateTime(timezone=True), nullable=True)
+    offer_expires_at = Column(DateTime(timezone=True), nullable=True)
