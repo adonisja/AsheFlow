@@ -5,11 +5,12 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
+from app.api.ratelimit import limiter
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
@@ -105,7 +106,9 @@ def _get_valid_token(token_str: str, db: Session) -> InviteToken:
 # ── endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/invite", status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
 def send_invite(
+    request: Request,
     body: InviteRequest,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
@@ -161,7 +164,9 @@ def send_invite(
 
 
 @router.post("/resend-credentials", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
 def resend_credentials(
+    request: Request,
     body: InviteRequest,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
@@ -226,7 +231,9 @@ def resend_credentials(
 
 
 @router.get("/validate", response_model=ValidateResponse)
+@limiter.limit("20/minute")
 def validate_token(
+    request: Request,
     token: str,
     db: Session = Depends(get_db),
 ):
@@ -259,7 +266,9 @@ def validate_token(
 
 
 @router.post("/complete", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
 def complete_registration(
+    request: Request,
     body: CompleteRequest,
     db: Session = Depends(get_db),
 ):

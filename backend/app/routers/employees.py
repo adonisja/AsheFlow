@@ -595,18 +595,33 @@ def reactivate_employee(
     db.commit()
     db.refresh(db_employee)
 
-    # Re-enable the Cognito user so they can sign in again
-    # Prefer username — Cognito accounts are created under the derived username.
-    # Fall back to email only for legacy accounts predating the username column.
+    # Re-enable the Cognito user and restore their role group so permissions
+    # take effect on next token refresh.
     cognito_username = db_employee.username or db_employee.email
     if cognito_username:
+        cognito = _cognito_client()
         try:
-            _cognito_client().admin_enable_user(
+            cognito.admin_enable_user(
                 UserPoolId=settings.aws_cognito_user_pool_id,
                 Username=cognito_username,
             )
         except ClientError as e:
             logger.warning("Cognito admin_enable_user failed for %s: %s", cognito_username, e)
+
+        group = ROLE_TO_COGNITO_GROUP.get(db_employee.role)
+        if group:
+            try:
+                # Idempotent — adding a user to a group they already belong to is a no-op in Cognito
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=cognito_username,
+                    GroupName=group,
+                )
+            except ClientError as e:
+                logger.warning(
+                    "Cognito group restore failed for %s (group=%s): %s",
+                    cognito_username, group, e,
+                )
 
     return db_employee
 

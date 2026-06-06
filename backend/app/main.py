@@ -1,13 +1,16 @@
 import logging
 import json
-from fastapi import FastAPI, APIRouter, Depends
+from fastapi import FastAPI, APIRouter, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.database import engine
 from app import models
 from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
+from app.api.ratelimit import limiter
 from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, location_profiles, location_profile_library, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys
 
 try:
@@ -41,6 +44,12 @@ _configure_logging()
 # We no longer need Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AsheFlow Dispatch API")
+
+# SlowAPI — distributed rate limiting backed by Redis.
+# Limits are defined per-endpoint in the routers; this wires the state and
+# the 429 error handler into the FastAPI app.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Trust X-Forwarded-Proto from Caddy so redirect Location headers use https://.
 # Caddy is the only trusted proxy — it runs in the same Docker network.
