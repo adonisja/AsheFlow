@@ -452,6 +452,46 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # HUB FINALIZE — post crew embed to a single hub truck channel
     # ------------------------------------------------------------------
 
+    async def sync_trainer_role(self, discord_id: str, company_id: str, action: str) -> None:
+        """Grant or revoke the Captain (trainer) Discord role for a member.
+
+        action: "grant_trainer" → add role_captain
+                "revoke_trainer" → remove role_captain
+        """
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            return
+
+        guild = self.bot.get_guild(cfg.guild_id)
+        if guild is None:
+            logger.warning("sync_trainer_role: guild %s not found", cfg.guild_id)
+            return
+
+        if not cfg.role_captain:
+            logger.warning("sync_trainer_role: role_captain not configured for company %s", company_id)
+            return
+
+        role = guild.get_role(cfg.role_captain)
+        if role is None:
+            logger.warning("sync_trainer_role: role_captain %s not found in guild", cfg.role_captain)
+            return
+
+        try:
+            member = await guild.fetch_member(int(discord_id))
+        except (discord.NotFound, discord.HTTPException):
+            logger.warning("sync_trainer_role: member %s not found in guild", discord_id)
+            return
+
+        try:
+            if action == "grant_trainer":
+                await member.add_roles(role, reason="Promoted to trainer")
+            else:
+                await member.remove_roles(role, reason="Demoted from trainer")
+        except discord.Forbidden:
+            logger.error("sync_trainer_role: missing Manage Roles permission for guild %s", cfg.guild_id)
+        except discord.HTTPException as exc:
+            logger.error("sync_trainer_role: HTTP error for discord_id=%s: %s", discord_id, exc)
+
     async def hub_finalize_truck(self, payload: dict) -> None:
         """Post a hub crew embed to the hub truck's Discord channel and send DMs.
 

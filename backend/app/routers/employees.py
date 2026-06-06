@@ -44,6 +44,28 @@ def _fire_discord_dm(discord_id: str, message: str) -> None:
 
     threading.Thread(target=_run, daemon=True).start()
 
+
+def _fire_role_sync(discord_id: str, company_id: str, action: str) -> None:
+    """Fire-and-forget: tell the bot to grant or revoke the trainer Discord role.
+
+    action: "grant_trainer" | "revoke_trainer"
+    """
+    bot_url = os.environ.get("BOT_INTERNAL_URL", "http://bot:8001")
+    secret  = os.environ.get("INTERNAL_SECRET", "")
+
+    def _run():
+        try:
+            http_requests.post(
+                f"{bot_url}/internal/role-sync",
+                json={"discord_id": discord_id, "company_id": company_id, "action": action},
+                headers={"X-Internal-Secret": secret},
+                timeout=5,
+            )
+        except Exception as exc:
+            logger.warning("role-sync failed discord_id=%s action=%s: %s", discord_id, action, exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+
 # Cognito group name per role — must match your User Pool group names exactly
 ROLE_TO_COGNITO_GROUP: dict[str, str] = {
     "driver":     "driver",
@@ -710,8 +732,9 @@ def promote_employee(
     if db_employee.discord_id:
         _fire_discord_dm(
             str(db_employee.discord_id),
-            "Congratulations! You've been promoted to Trainer. Welcome to the training team.",
+            "Congratulations! You've been promoted to Trainer. Welcome to the training team. Access has been granted to #trainers-chat.",
         )
+        _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "grant_trainer")
 
     return db_employee
 
@@ -780,6 +803,10 @@ def demote_employee(
     )
     db.commit()
     db.refresh(db_employee)
+
+    if db_employee.discord_id:
+        _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "revoke_trainer")
+
     return db_employee
 
 
