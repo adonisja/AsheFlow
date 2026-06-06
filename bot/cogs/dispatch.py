@@ -424,39 +424,13 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     continue
                 try:
                     discord_user = await self.bot.fetch_user(int(discord_id))
-                    crew_lines = "\n".join(
-                        f"  {ROLE_LABELS.get(m['role'], m['role'])}: **{m['name']}**"
-                        for m in confirmed_crew
-                        if m["employee_id"] != member["employee_id"]
-                    )
-
                     role = member.get("role", "walker")
-                    pairing_note = ""
-                    if role == "trainer":
-                        if confirmed_trainees:
-                            phase_info = await _fetch_trainee_phases(confirmed_trainees)
-                            lines = "\n".join(
-                                f"  📋 **{name}** — Phase {phase}"
-                                for name, phase in phase_info
-                            )
-                            pairing_note = f"\n\n📋 **Your trainee today:**\n{lines}"
-                        else:
-                            pairing_note = "\n\n*(No trainee on your truck — one may be reassigned by dispatch.)*"
-                    elif role == "trainee":
-                        if confirmed_trainers:
-                            trainer_names = ", ".join(f"**{m['name']}**" for m in confirmed_trainers)
-                            pairing_note = f"\n\n🎓 **Your trainer today:** {trainer_names}"
-                        else:
-                            pairing_note = "\n\n⚠️ **No confirmed trainer on your truck** — contact dispatch for reassignment."
-
                     final_embed = discord.Embed(
-                        title=f"✅ Final Assignment — {dispatch_date}",
+                        title=f"✅ Final Assignment Confirmed — {dispatch_date}",
                         description=(
                             f"**Truck:** {truck_name}\n"
                             f"**Your role:** {ROLE_LABELS.get(role, role)}\n\n"
-                            f"**Confirmed crew:**\n{crew_lines or 'No other crew members.'}"
-                            f"{pairing_note}\n\n"
-                            f"You now have access to **#{truck_channel.name}** for today."
+                            f"You now have access to **#{truck_channel.name}**."
                         ),
                         color=discord.Color.green(),
                     )
@@ -473,6 +447,113 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             )
 
         logger.info("Finalization complete for %s. Channel errors: %s", dispatch_date, channel_errors)
+
+    # ------------------------------------------------------------------
+    # HUB FINALIZE — post crew embed to a single hub truck channel
+    # ------------------------------------------------------------------
+
+    async def sync_trainer_role(self, discord_id: str, company_id: str, action: str) -> None:
+        """Grant or revoke the Captain (trainer) Discord role for a member.
+
+        action: "grant_trainer" → add role_captain
+                "revoke_trainer" → remove role_captain
+        """
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            return
+
+        guild = self.bot.get_guild(cfg.guild_id)
+        if guild is None:
+            logger.warning("sync_trainer_role: guild %s not found", cfg.guild_id)
+            return
+
+        if not cfg.role_captain:
+            logger.warning("sync_trainer_role: role_captain not configured for company %s", company_id)
+            return
+
+        role = guild.get_role(cfg.role_captain)
+        if role is None:
+            logger.warning("sync_trainer_role: role_captain %s not found in guild", cfg.role_captain)
+            return
+
+        try:
+            member = await guild.fetch_member(int(discord_id))
+        except (discord.NotFound, discord.HTTPException):
+            logger.warning("sync_trainer_role: member %s not found in guild", discord_id)
+            return
+
+        try:
+            if action == "grant_trainer":
+                await member.add_roles(role, reason="Promoted to trainer")
+            else:
+                await member.remove_roles(role, reason="Demoted from trainer")
+        except discord.Forbidden:
+            logger.error("sync_trainer_role: missing Manage Roles permission for guild %s", cfg.guild_id)
+        except discord.HTTPException as exc:
+            logger.error("sync_trainer_role: HTTP error for discord_id=%s: %s", discord_id, exc)
+
+    async def hub_finalize_truck(self, payload: dict) -> None:
+        """Post a hub crew embed to the hub truck's Discord channel and send DMs.
+
+        Called when dispatch publishes a hub truck (POST /dispatch/hubs/{id}/publish).
+        Unlike finalize_assignments, this targets only one truck and does not
+        post to #drivers-chat.
+        """
+        company_id    = payload.get("company_id")
+        dispatch_date = payload.get("date")
+        truck_name    = payload.get("truck_name", "Hub")
+        channel_id_str = payload.get("discord_channel_id")
+        crew: list[dict] = payload.get("crew", [])
+
+        cfg = await get_guild_config(company_id)
+        if cfg is None or not cfg.is_configured:
+            logger.info("hub_finalize_truck: Discord not configured for company %s — skipping.", company_id)
+            return
+
+        guild = self.bot.get_guild(cfg.guild_id)
+        if not guild:
+            logger.error("hub_finalize_truck: guild %s not found.", cfg.guild_id)
+            return
+
+        if not channel_id_str:
+            logger.warning("hub_finalize_truck: no discord_channel_id for truck %s — skipping embed.", truck_name)
+        else:
+            truck_channel = guild.get_channel(int(channel_id_str))
+            if truck_channel:
+                try:
+                    await self._set_truck_channel_permissions(guild, truck_channel, crew, cfg)
+                except Exception as e:
+                    logger.warning("hub_finalize_truck: permission error on %s: %s", truck_name, e)
+
+                crew_embed = _build_truck_channel_embed(truck_name, crew, dispatch_date)
+                try:
+                    await truck_channel.send(embed=crew_embed)
+                except Exception as e:
+                    logger.warning("hub_finalize_truck: could not post embed to %s: %s", truck_name, e)
+            else:
+                logger.warning("hub_finalize_truck: channel %s not found for truck %s.", channel_id_str, truck_name)
+
+        for member in crew:
+            discord_id = member.get("discord_id")
+            if not discord_id or not discord_id.isdigit():
+                continue
+            try:
+                discord_user = await self.bot.fetch_user(int(discord_id))
+                role = member.get("role", "walker")
+                final_embed = discord.Embed(
+                    title=f"✅ Final Assignment Confirmed — {dispatch_date}",
+                    description=(
+                        f"**Truck:** {truck_name}\n"
+                        f"**Your role:** {ROLE_LABELS.get(role, role)}\n\n"
+                        + (f"You now have access to **#{guild.get_channel(int(channel_id_str)).name}**." if channel_id_str and guild.get_channel(int(channel_id_str)) else "You have been assigned to the hub for today.")
+                    ),
+                    color=discord.Color.green(),
+                )
+                await discord_user.send(embed=final_embed)
+            except Exception:
+                pass
+
+        logger.info("hub_finalize_truck complete: truck=%s date=%s crew=%d", truck_name, dispatch_date, len(crew))
 
     async def _set_truck_channel_permissions(
         self,
@@ -527,12 +608,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         truck_name: str,
         dispatch_date: str,
         announce: bool = True,
+        transfer_context: dict | None = None,
     ) -> None:
-        """Adjust Discord channel permissions for a post-finalize truck swap or add.
+        """Adjust Discord channel permissions for a post-finalize truck swap, transfer, or add.
 
         - Removes member overwrite from old truck channel (if provided and found).
         - Grants view/send/history on new truck channel (if provided and found).
         - Posts a @mention announcement in the new truck channel only when announce=True.
+          transfer_context present  → transfer path: "You've been transferred here for today."
+          transfer_context absent   → assignment path: "You've been assigned to this truck today."
         """
         cfg = await get_guild_config(company_id)
         if cfg is None or not cfg.is_configured:
@@ -582,11 +666,12 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
                 if announce:
                     mention = guild_member.mention if guild_member else f"**{employee_name}**"
+                    if transfer_context:
+                        announcement = f"🔀 {mention} You've been transferred here for today."
+                    else:
+                        announcement = f"📋 {mention} You've been assigned to this truck today."
                     try:
-                        await new_channel.send(
-                            f"📋 {mention} has been moved to **{truck_name}** for `{dispatch_date}`. "
-                            f"Welcome to the crew!"
-                        )
+                        await new_channel.send(announcement)
                     except Exception as exc:
                         logger.warning("swap_truck_channel: could not post announcement: %s", exc)
 

@@ -31,6 +31,7 @@ import {
   Route,
   Activity,
   ShoppingBag,
+  ClipboardList,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -352,6 +353,7 @@ const Navbar = () => {
           <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
           <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
           <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
           <NavLink to="/location-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
           <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
           <NavLink to="/field-ops" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Field Ops</NavLink>
@@ -411,6 +413,7 @@ const Navbar = () => {
               <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
               <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
               <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
             </>
           )}
           {(isDispatch || isMgmt) && (
@@ -423,6 +426,7 @@ const Navbar = () => {
               <NavLink to="/vehicle-compliance" className={linkClass}><ShieldAlert className="w-3.5 h-3.5" /> Compliance</NavLink>
               <NavLink to="/walker-performance" className={linkClass}><Star className="w-3.5 h-3.5" /> Walkers</NavLink>
               <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
             </>
           )}
         </>
@@ -511,6 +515,7 @@ function MobileLinks({
         <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
         <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         <NavLink to="/location-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
         <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
         <NavLink to="/field-ops" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Field Ops</NavLink>
@@ -543,6 +548,7 @@ function MobileLinks({
           <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>
           <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
           <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         </>}
         {(isDispatch || isMgmt) && <NavLink to="/location-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>}
         {isMgmt && <>
@@ -551,6 +557,7 @@ function MobileLinks({
           <NavLink to="/vehicle-compliance" onClick={onNav} className={cls}><ShieldAlert className="w-4 h-4" /> Compliance</NavLink>
           <NavLink to="/walker-performance" onClick={onNav} className={cls}><Star className="w-4 h-4" /> Walkers</NavLink>
           <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         </>}
       </>}
     </>

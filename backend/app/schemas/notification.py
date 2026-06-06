@@ -12,5 +12,6 @@ class NotificationResponse(BaseModel):
     is_read: bool
     created_at: datetime
     dispatch_date: Optional[date] = None
+    expires_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -186,6 +186,13 @@ class AsheFlowBot(commands.Bot):
             return
         await dispatch_cog.finalize_assignments(dispatch_date, company_id)
 
+    async def trigger_hub_finalize(self, payload: dict) -> None:
+        dispatch_cog = self.cogs.get("Dispatch")
+        if dispatch_cog is None:
+            logger.error("Dispatch cog not loaded — cannot finalize hub.")
+            return
+        await dispatch_cog.hub_finalize_truck(payload)
+
     async def trigger_swap(
         self,
         company_id: str,
@@ -196,6 +203,7 @@ class AsheFlowBot(commands.Bot):
         truck_name: str,
         dispatch_date: str,
         announce: bool = True,
+        transfer_context: dict | None = None,
     ) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
@@ -210,7 +218,15 @@ class AsheFlowBot(commands.Bot):
             truck_name=truck_name,
             dispatch_date=dispatch_date,
             announce=announce,
+            transfer_context=transfer_context,
         )
+
+    async def trigger_role_sync(self, discord_id: str, company_id: str, action: str) -> None:
+        dispatch_cog = self.cogs.get("Dispatch")
+        if dispatch_cog is None:
+            logger.error("Dispatch cog not loaded — cannot process role-sync.")
+            return
+        await dispatch_cog.sync_trainer_role(discord_id, company_id, action)
 
     async def trigger_dm(self, discord_id: str, message: str) -> None:
         invite_cog = self.cogs.get("Invite")
@@ -371,10 +387,11 @@ async def handle_swap(request: web.Request) -> web.Response:
     if not company_id or not dispatch_date:
         return web.Response(status=400, text="Missing company_id or dispatch_date")
 
-    discord_id     = data.get("discord_id")
-    old_channel_id = int(data["old_channel_id"]) if data.get("old_channel_id") else None
-    new_channel_id = int(data["new_channel_id"]) if data.get("new_channel_id") else None
-    announce       = data.get("announce", True)
+    discord_id        = data.get("discord_id")
+    old_channel_id    = int(data["old_channel_id"]) if data.get("old_channel_id") else None
+    new_channel_id    = int(data["new_channel_id"]) if data.get("new_channel_id") else None
+    announce          = data.get("announce", True)
+    transfer_context  = data.get("transfer_context")  # present only for truck_transfer calls
 
     asyncio.create_task(bot.trigger_swap(
         company_id=company_id,
@@ -385,6 +402,7 @@ async def handle_swap(request: web.Request) -> web.Response:
         truck_name=truck_name,
         dispatch_date=dispatch_date,
         announce=announce,
+        transfer_context=transfer_context,
     ))
     return web.json_response({"status": "queued", "employee_name": employee_name})
 
@@ -449,10 +467,62 @@ async def handle_post_embed(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_role_sync(request: web.Request) -> web.Response:
+    """POST /internal/role-sync
+
+    body: { "discord_id": "...", "company_id": "...", "action": "grant_trainer" | "revoke_trainer" }
+
+    Grants or revokes the Captain (trainer) Discord role for the given member.
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data       = await request.json()
+    discord_id = data.get("discord_id")
+    company_id = data.get("company_id")
+    action     = data.get("action")
+
+    if not discord_id or not company_id or action not in ("grant_trainer", "revoke_trainer"):
+        return web.Response(status=400, text="Missing or invalid fields")
+
+    asyncio.create_task(bot.trigger_role_sync(discord_id, company_id, action))
+    return web.json_response({"status": "queued"})
+
+
+async def handle_hub_finalize(request: web.Request) -> web.Response:
+    """POST /internal/hub-finalize
+
+    body: {
+        "date":               "YYYY-MM-DD",
+        "company_id":         "...",
+        "truck_id":           "...",
+        "truck_name":         "...",
+        "discord_channel_id": "123" | null,
+        "crew": [{ "employee_id": "...", "name": "...", "role": "...",
+                   "discord_id": "...", "paired_trainer_id": "..." | null }]
+    }
+
+    Posts the hub crew embed to the truck's Discord channel and sends DMs.
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data = await request.json()
+    dispatch_date = data.get("date")
+    company_id    = data.get("company_id")
+    if not dispatch_date or not company_id:
+        return web.Response(status=400, text="Missing date or company_id")
+
+    asyncio.create_task(bot.trigger_hub_finalize(data))
+    return web.json_response({"status": "queued", "date": dispatch_date})
+
+
 async def start_webhook_server() -> None:
     app = web.Application()
     app.router.add_post("/internal/publish",          handle_publish)
     app.router.add_post("/internal/finalize",         handle_finalize)
+    app.router.add_post("/internal/hub-finalize",     handle_hub_finalize)
+    app.router.add_post("/internal/role-sync",        handle_role_sync)
     app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)
     app.router.add_post("/internal/lockdown-channel", handle_lockdown_channel)

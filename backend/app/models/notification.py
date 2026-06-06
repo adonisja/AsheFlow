@@ -18,3 +18,5 @@ class Notification(Base):
     # Populated only for type='dispatch_assignment' — tells the frontend
     # which date to POST /dispatch/{date}/confirmations against.
     dispatch_date = Column(Date, nullable=True)
+    # dispatch_assignment: expires at confirmation deadline; dispatch_assignment_info: expires at midnight of dispatch_date; others: NULL
+    expires_at    = Column(DateTime(timezone=True), nullable=True)

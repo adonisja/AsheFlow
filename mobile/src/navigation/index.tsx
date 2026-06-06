@@ -29,6 +29,7 @@ import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
 import ScheduleChangesScreen    from '@screens/ScheduleChanges/ScheduleChangesScreen';
 import WalkerDashboard          from '@screens/Walker/WalkerDashboard';
 import LocationProfilesScreen   from '@screens/LocationProfiles/LocationProfilesScreen';
+import DriverSurveyScreen       from '@screens/DriverSurvey/DriverSurveyScreen';
 import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
 import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
 
@@ -45,6 +46,7 @@ export const TRAINEE_ROLES            = ['trainee'] as const;
 export const WALKER_ROLES             = ['walker'] as const;
 export const LOCATION_PROFILE_ROLES   = ['driver', 'walker', 'trainer', 'trainee'] as const;
 export const ROUTE_SORT_ROLES         = ['driver'] as const;
+export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -89,6 +91,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
   { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
+  { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', roles: DRIVER_SURVEY_ROLES,     component: DriverSurveyScreen },
   { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
   { key: 'SchChanges',      label: 'Sch. Changes',     icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
   { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
