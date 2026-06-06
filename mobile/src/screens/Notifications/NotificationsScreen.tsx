@@ -70,6 +70,7 @@ const TYPE_META: Record<string, { label: string; icon: string }> = {
   assignment_change_request:      { label: 'Reassign Request',   icon: '📋' },
   assignment_change_approved:     { label: 'Reassign Approved',  icon: '✅' },
   assignment_change_rejected:     { label: 'Reassign Denied',    icon: '❌' },
+  driver_survey:                  { label: 'Driver Survey',      icon: '📊' },
 };
 
 function typeMeta(type: string): { label: string; icon: string } {
