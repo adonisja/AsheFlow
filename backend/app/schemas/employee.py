@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, EmailStr
+from pydantic import BaseModel, field_validator, EmailStr, Field
 from typing import Optional, Literal, List
 from uuid import UUID
 from datetime import datetime
@@ -19,11 +19,11 @@ def _validate_discord_id(v: Optional[str]) -> Optional[str]:
 
 
 class EmployeeCreate(BaseModel):
-    name: str
+    name: str = Field(..., max_length=100)
     email: EmailStr
     discord_id: Optional[str] = None
     role: RoleStr
-    phone_number: Optional[str] = None
+    phone_number: Optional[str] = Field(None, max_length=20)
 
     @field_validator("discord_id", mode="before")
     @classmethod
@@ -32,12 +32,12 @@ class EmployeeCreate(BaseModel):
 
 
 class EmployeeUpdate(BaseModel):
-    name:         Optional[str]     = None
-    email:        Optional[EmailStr]     = None
-    discord_id:   Optional[str]     = None
-    role:         Optional[RoleStr] = None
-    is_active:    Optional[bool]    = None
-    phone_number: Optional[str]     = None
+    name:         Optional[str]      = Field(None, max_length=100)
+    email:        Optional[EmailStr] = None
+    discord_id:   Optional[str]      = None
+    role:         Optional[RoleStr]  = None
+    is_active:    Optional[bool]     = None
+    phone_number: Optional[str]      = Field(None, max_length=20)
 
     @field_validator("discord_id", mode="before")
     @classmethod
@@ -64,12 +64,12 @@ class EmployeeResponse(BaseModel):
 
 class BulkImportRow(BaseModel):
     """One row from a bulk import payload — same fields as EmployeeCreate."""
-    name: str
+    name: str = Field(..., max_length=100)
     email: EmailStr
     discord_id: Optional[str] = None
     role: RoleStr
-    phone_number: Optional[str] = None
-    hr_system_id_adp: Optional[str] = None  # ADP associateOID; omitted for non-ADP imports
+    phone_number: Optional[str] = Field(None, max_length=20)
+    hr_system_id_adp: Optional[str] = Field(None, max_length=50)  # ADP associateOID; omitted for non-ADP imports
 
     @field_validator("discord_id", mode="before")
     @classmethod
@@ -89,11 +89,10 @@ class BulkImportResult(BaseModel):
 class EmployeePublicResponse(BaseModel):
     """Redacted response — returned to field staff (driver/walker/trainer/trainee).
 
-    Omits phone_number, email, and cognito_sub.
+    Omits phone_number, email, cognito_sub, and discord_id.
     """
     id: UUID
     name: str
-    discord_id: Optional[str] = None
     role: str
     is_active: bool
 

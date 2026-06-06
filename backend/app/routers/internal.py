@@ -25,11 +25,18 @@ from app.services.company_config import get_discord_config
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-_INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "change-me-in-production")
+_INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET") or ""
+
+if not _INTERNAL_SECRET:
+    import logging as _logging
+    _logging.getLogger(__name__).critical(
+        "INTERNAL_SECRET is not set — internal endpoints will reject all requests. "
+        "Set INTERNAL_SECRET in the environment before starting the server."
+    )
 
 
 def _verify_secret(x_internal_secret: str = Header(default="")) -> None:
-    if x_internal_secret != _INTERNAL_SECRET:
+    if not _INTERNAL_SECRET or x_internal_secret != _INTERNAL_SECRET:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
