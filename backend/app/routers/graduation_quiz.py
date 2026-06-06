@@ -267,18 +267,32 @@ def submit_quiz(
     ).all()
 
     preliminary = "likely passed" if score_result["passed_preliminary"] else "needs review"
+    mgmt_message = (
+        f"{caller.name} submitted their graduation quiz "
+        f"(attempt {quiz.attempt_number}). "
+        f"Preliminary score: {score_result['auto_score']:.1f}% — {preliminary}. "
+        f"Please review and confirm the final result."
+    )
     for recipient in recipients:
         db.add(Notification(
             company_id=caller.company_id,
             employee_id=recipient.id,
             type="quiz_submitted",
-            message=(
-                f"{caller.name} submitted their graduation quiz "
-                f"(attempt {quiz.attempt_number}). "
-                f"Preliminary score: {score_result['auto_score']:.1f}% — {preliminary}. "
-                f"Please review and confirm the final result."
-            ),
+            message=mgmt_message,
         ))
+
+    # Notify the paired trainer (confirmation only — no score details)
+    if quiz.training_record_id:
+        record = db.query(TrainingRecord).filter(TrainingRecord.id == quiz.training_record_id).first()
+        if record and record.trainer_id:
+            trainer_already_notified = any(r.id == record.trainer_id for r in recipients)
+            if not trainer_already_notified:
+                db.add(Notification(
+                    company_id=caller.company_id,
+                    employee_id=record.trainer_id,
+                    type="quiz_submitted",
+                    message=f"{caller.name} has submitted their graduation quiz (attempt {quiz.attempt_number}).",
+                ))
 
     db.commit()
     return {

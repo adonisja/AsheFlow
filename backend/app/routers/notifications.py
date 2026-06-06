@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import or_
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -31,11 +32,13 @@ def get_notifications(
     """
     if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+    now = datetime.now(timezone.utc)
     return (
         db.query(Notification)
         .filter(
             Notification.employee_id == employee_id,
             Notification.company_id == caller.company_id,
+            or_(Notification.expires_at == None, Notification.expires_at > now),
         )
         .order_by(Notification.created_at.desc())
         .offset(skip)
@@ -97,13 +100,18 @@ def prune_notifications(
     Only removes notifications that have already been marked as read — unread
     notifications are never pruned regardless of age.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
     deleted = (
         db.query(Notification)
         .filter(
             Notification.company_id == caller.company_id,
-            Notification.is_read == True,
-            Notification.created_at < cutoff,
+            or_(
+                # old read notifications
+                (Notification.is_read == True) & (Notification.created_at < cutoff),
+                # expired notifications regardless of read state
+                (Notification.expires_at != None) & (Notification.expires_at <= now),
+            ),
         )
         .delete(synchronize_session=False)
     )

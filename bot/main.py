@@ -221,6 +221,13 @@ class AsheFlowBot(commands.Bot):
             transfer_context=transfer_context,
         )
 
+    async def trigger_role_sync(self, discord_id: str, company_id: str, action: str) -> None:
+        dispatch_cog = self.cogs.get("Dispatch")
+        if dispatch_cog is None:
+            logger.error("Dispatch cog not loaded — cannot process role-sync.")
+            return
+        await dispatch_cog.sync_trainer_role(discord_id, company_id, action)
+
     async def trigger_dm(self, discord_id: str, message: str) -> None:
         invite_cog = self.cogs.get("Invite")
         if invite_cog is None:
@@ -460,6 +467,28 @@ async def handle_post_embed(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_role_sync(request: web.Request) -> web.Response:
+    """POST /internal/role-sync
+
+    body: { "discord_id": "...", "company_id": "...", "action": "grant_trainer" | "revoke_trainer" }
+
+    Grants or revokes the Captain (trainer) Discord role for the given member.
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data       = await request.json()
+    discord_id = data.get("discord_id")
+    company_id = data.get("company_id")
+    action     = data.get("action")
+
+    if not discord_id or not company_id or action not in ("grant_trainer", "revoke_trainer"):
+        return web.Response(status=400, text="Missing or invalid fields")
+
+    asyncio.create_task(bot.trigger_role_sync(discord_id, company_id, action))
+    return web.json_response({"status": "queued"})
+
+
 async def handle_hub_finalize(request: web.Request) -> web.Response:
     """POST /internal/hub-finalize
 
@@ -493,6 +522,7 @@ async def start_webhook_server() -> None:
     app.router.add_post("/internal/publish",          handle_publish)
     app.router.add_post("/internal/finalize",         handle_finalize)
     app.router.add_post("/internal/hub-finalize",     handle_hub_finalize)
+    app.router.add_post("/internal/role-sync",        handle_role_sync)
     app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)
     app.router.add_post("/internal/lockdown-channel", handle_lockdown_channel)

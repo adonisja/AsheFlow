@@ -150,6 +150,18 @@ def submit_incident(
 
     _notify_management(incident, reporter, db)
 
+    # Self-notification: reporter gets a record of their own submission
+    category_label = incident.category.replace("_", " ").title()
+    db.add(Notification(
+        company_id=reporter.company_id,
+        employee_id=reporter.id,
+        type="incident_submitted",
+        message=(
+            f"Your {category_label} incident report for "
+            f"{incident.date.strftime('%a, %b %d')} has been submitted and is under review."
+        ),
+    ))
+
     db.commit()
     db.refresh(incident)
     return incident
