@@ -51,7 +51,6 @@ class EmployeeResponse(BaseModel):
     name: str
     email: Optional[EmailStr] = None
     discord_id: Optional[str] = None
-    cognito_sub: Optional[str] = None
     username: Optional[str] = None
     role: str
     is_active: bool

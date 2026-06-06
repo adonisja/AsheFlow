@@ -93,7 +93,24 @@ def delete_all_off_days(
     if not employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    db.query(EmployeeOffDay).filter(EmployeeOffDay.employee_id == employee_id).delete()
+    deleted_rows = (
+        db.query(EmployeeOffDay)
+        .filter(EmployeeOffDay.employee_id == employee_id)
+        .all()
+    )
+    for row in deleted_rows:
+        db.delete(row)
+
+    write_audit(
+        db,
+        action_type="off_day.bulk_deleted",
+        target_table="employee_off_days",
+        target_id=str(employee_id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"employee_id": str(employee_id), "count": len(deleted_rows)},
+        after=None,
+    )
     db.commit()
 
 @router.delete("/{off_day_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -113,6 +130,16 @@ def delete_employee_off_day(
     if not off_day:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Off day not found")
 
+    write_audit(
+        db,
+        action_type="off_day.deleted",
+        target_table="employee_off_days",
+        target_id=str(off_day.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"employee_id": str(off_day.employee_id), "day_of_week": off_day.day_of_week, "status": off_day.status},
+        after=None,
+    )
     db.delete(off_day)
     db.commit()
 

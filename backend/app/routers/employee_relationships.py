@@ -202,5 +202,19 @@ def delete_employee_relationships(
             detail="You can only delete your own relationships.",
         )
 
+    write_audit(
+        db,
+        action_type="employee_relationship.deleted",
+        target_table="employee_relationships",
+        target_id=str(relationship.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={
+            "employee_id": str(relationship.employee_id),
+            "related_employee_id": str(relationship.related_employee_id),
+            "relationship_type": relationship.relationship_type,
+        },
+        after=None,
+    )
     db.delete(relationship)
     db.commit()
