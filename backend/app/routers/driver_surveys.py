@@ -18,7 +18,7 @@ from typing import List
 from uuid import UUID
 
 import requests as http_requests
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee, Pagination
@@ -247,17 +247,25 @@ def activate_survey(
 
 @router.get("/", response_model=List[DriverSurveyListItem])
 def list_surveys(
+    response: Response,
     pg: Pagination = Depends(),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
 ):
-    """List all driver surveys for this company, newest first."""
-    surveys = pg.apply(
+    """List all driver surveys for this company, newest first.
+
+    Sets X-Total-Count header with the unfiltered total for client-side pagination.
+    """
+    base_q = (
         db.query(DriverSurvey)
         .filter(DriverSurvey.company_id == caller.company_id)
         .order_by(DriverSurvey.date.desc())
-    ).all()
+    )
+    total = base_q.count()
+    surveys = pg.apply(base_q).all()
+
+    response.headers["X-Total-Count"] = str(total)
 
     result = []
     for survey in surveys:
@@ -370,6 +378,12 @@ def submit_response(
     ).first()
     if not survey:
         raise HTTPException(status_code=404, detail="Survey not found.")
+
+    if datetime.now(timezone.utc) >= _midnight_utc(survey.date):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This survey closed at midnight on {survey.date}. Responses are no longer accepted.",
+        )
 
     existing = db.query(DriverSurveyResponse).filter(
         DriverSurveyResponse.survey_id     == survey_id,

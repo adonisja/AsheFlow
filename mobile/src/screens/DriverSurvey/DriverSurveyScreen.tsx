@@ -100,8 +100,10 @@ const toggleStyles = (c: ThemeColors) => StyleSheet.create({
 
 export default function DriverSurveyScreen() {
   const c = useColors();
-  const { user, employeeId } = useAuth();
+  const { user } = useAuth();
   const s = styles(c);
+
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
 
   // Active survey for today
   const [survey,        setSurvey]        = useState<SurveyListItem | null>(null);
@@ -161,7 +163,10 @@ export default function DriverSurveyScreen() {
     }
   }, [todayStr, employeeId]);
 
-  useEffect(() => { loadSurveyData(); }, [loadSurveyData]);
+  useEffect(() => {
+    apiClient.get('/employees/me').then(r => setEmployeeId(r.data?.id ?? null)).catch(() => {});
+    loadSurveyData();
+  }, [loadSurveyData]);
 
   const handleSubmit = async () => {
     if (
@@ -286,10 +291,23 @@ export default function DriverSurveyScreen() {
     );
   }
 
+  // Midnight deadline banner
+  const midnightMs = new Date(survey.date).setHours(24, 0, 0, 0);
+  const hoursLeft  = Math.max(0, (midnightMs - Date.now()) / 3_600_000);
+  const isUrgent   = hoursLeft < 2;
+
   // Survey form
   return (
     <SafeAreaView style={s.safe}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+        <View style={[s.deadlineBanner, isUrgent && s.deadlineBannerUrgent]}>
+          <Text style={[s.deadlineText, isUrgent && s.deadlineTextUrgent]}>
+            {isUrgent
+              ? `⚠️ Survey closes at midnight — less than ${Math.ceil(hoursLeft * 60)} min remaining`
+              : `📋 Survey closes at midnight tonight`}
+          </Text>
+        </View>
+
         <View style={s.header}>
           <Text style={s.title}>Driver Survey</Text>
           <Text style={s.subtitle}>{survey.date}</Text>
@@ -396,12 +414,18 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   // Read-only submitted view
   submittedBadge:   { marginTop: spacing.xs, alignSelf: 'flex-start', backgroundColor: c.success + '20', paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.sm },
   submittedText:    { fontSize: fontSize.xs, color: c.success, fontWeight: fontWeight.semibold },
-  submittedMeta:    { fontSize: fontSize.xs, color: c.subtle, textAlign: 'center', marginTop: spacing.sm },
+  submittedMeta:    { fontSize: fontSize.xs, color: c.subtleForeground, textAlign: 'center', marginTop: spacing.sm },
   readOnlyRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: c.border },
   readOnlyQ:        { fontSize: fontSize.sm, color: c.foreground, flex: 1, paddingRight: spacing.sm },
   readOnlyA:        { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   notesReadView:    { marginTop: spacing.md, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: c.border },
   notesReadText:    { fontSize: fontSize.sm, color: c.foreground, fontStyle: 'italic', marginTop: spacing.xs },
+
+  // Midnight deadline banner
+  deadlineBanner:       { backgroundColor: c.info + '18', borderWidth: 1, borderColor: c.info + '40', borderRadius: radius.md, paddingVertical: spacing.xs + 2, paddingHorizontal: spacing.sm, marginBottom: spacing.md },
+  deadlineBannerUrgent: { backgroundColor: c.warning + '20', borderColor: c.warning + '60' },
+  deadlineText:         { fontSize: fontSize.xs, color: c.info, textAlign: 'center', fontWeight: fontWeight.medium },
+  deadlineTextUrgent:   { color: c.warning },
 
   // Empty state
   emptyIcon:        { fontSize: 40, textAlign: 'center', marginBottom: spacing.md },

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ClipboardList, Users, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { ClipboardList, Users, CheckCircle, XCircle, RefreshCw, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { today } from '../utils/date';
@@ -50,6 +50,79 @@ function YesNo({ value }: { value: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// Response detail modal
+// ---------------------------------------------------------------------------
+
+function ResponseModal({ response, onClose }: {
+  response: SurveyResponseItem;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const rows: { label: string; value: boolean }[] = [
+    { label: 'Routes organized at shift start', value: response.routes_organized },
+    { label: 'Anchor point in good location',   value: response.anchor_point_location },
+    { label: 'Rabbit & supplies ready',          value: response.supplies_ready },
+    { label: 'Driver support at anchor point',   value: response.driver_support },
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="card w-full max-w-md relative">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-subtle hover:text-foreground transition-colors"
+          aria-label="Close"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        <h3 className="text-base font-semibold text-foreground mb-1">{response.respondent_name}</h3>
+        <p className="text-xs text-muted-foreground mb-4 capitalize">
+          {response.respondent_role}
+          {response.respondent_email ? ` · ${response.respondent_email}` : ''}
+        </p>
+
+        <div className="space-y-0.5 text-sm mb-4">
+          <p><span className="text-muted-foreground">Truck: </span><span className="font-medium text-foreground">{response.truck_name ?? '—'}</span></p>
+          <p><span className="text-muted-foreground">Driver: </span><span className="font-medium text-foreground">{response.driver_name ?? '—'}</span></p>
+          <p><span className="text-muted-foreground">Submitted: </span><span className="text-foreground">
+            {new Date(response.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span></p>
+        </div>
+
+        <div className="space-y-3 mb-4">
+          {rows.map(({ label, value }) => (
+            <div key={label} className="flex items-start justify-between gap-3">
+              <span className="text-sm text-foreground flex-1">{label}</span>
+              <span className={`text-sm font-semibold shrink-0 ${value ? 'text-success' : 'text-danger'}`}>
+                {value ? 'Yes' : 'No'}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {response.notes ? (
+          <div className="bg-accent rounded-lg p-3">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
+            <p className="text-sm text-foreground italic">{response.notes}</p>
+          </div>
+        ) : (
+          <p className="text-xs text-subtle italic">No additional notes.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -97,34 +170,43 @@ interface SurveyDetail {
 // Main page
 // ---------------------------------------------------------------------------
 
+const PAGE_SIZE = 20;
+
 export default function DriverSurveys() {
   const { groups } = useAuth();
   const isManagement = groups?.some(g => ['management', 'admin'].includes(g));
 
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [surveys, setSurveys]           = useState<SurveyListItem[]>([]);
+  const [total, setTotal]               = useState(0);
+  const [page, setPage]                 = useState(0);
   const [detail, setDetail]             = useState<SurveyDetail | null>(null);
   const [activating, setActivating]     = useState(false);
   const [loading, setLoading]           = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError]               = useState<string | null>(null);
+  const [modalResponse, setModalResponse] = useState<SurveyResponseItem | null>(null);
 
-  const loadSurveys = useCallback(async () => {
+  const loadSurveys = useCallback(async (targetPage = page) => {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await axiosClient.get<SurveyListItem[]>('/driver-surveys/?limit=60');
+      const skip = targetPage * PAGE_SIZE;
+      const { data, headers } = await axiosClient.get<SurveyListItem[]>(
+        `/driver-surveys/?limit=${PAGE_SIZE}&skip=${skip}`
+      );
       setSurveys(data);
+      const ct = parseInt(headers['x-total-count'] ?? '0', 10);
+      setTotal(isNaN(ct) ? data.length + skip : ct);
     } catch {
       setError('Failed to load surveys.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   const loadDetail = useCallback(async (date: string) => {
     setDetailLoading(true);
-    setDetail(null);
     try {
       const { data } = await axiosClient.get<SurveyDetail>(`/driver-surveys/${date}`);
       setDetail(data);
@@ -135,7 +217,9 @@ export default function DriverSurveys() {
     }
   }, []);
 
-  useEffect(() => { loadSurveys(); }, [loadSurveys]);
+  useEffect(() => {
+    loadSurveys(0);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-load detail for the most recent survey on mount
   useEffect(() => {
@@ -152,7 +236,7 @@ export default function DriverSurveys() {
     setError(null);
     try {
       await axiosClient.post('/driver-surveys/', { date: selectedDate });
-      await loadSurveys();
+      await loadSurveys(0);
       await loadDetail(selectedDate);
     } catch (err: any) {
       setError(err.response?.data?.detail ?? 'Failed to activate survey.');
@@ -166,8 +250,17 @@ export default function DriverSurveys() {
     loadDetail(date);
   };
 
+  const handlePageChange = (newPage: number) => {
+    setPage(newPage);
+    loadSurveys(newPage);
+  };
+
   const surveyForSelectedDate = surveys.find(s => s.date === selectedDate);
   const alreadyActivated = !!surveyForSelectedDate;
+
+  const todayStr = today();
+  const isTodaySurvey = detail?.date === todayStr;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
 
   if (!isManagement) {
     return (
@@ -186,8 +279,12 @@ export default function DriverSurveys() {
           <h1 className="text-xl font-bold text-foreground">Driver Surveys</h1>
           <p className="text-sm text-muted-foreground">End-of-shift feedback from trainers and walkers</p>
         </div>
-        <button onClick={loadSurveys} className="ml-auto btn-ghost p-2 rounded" title="Refresh">
-          <RefreshCw className={`w-4 h-4 text-subtle ${loading ? 'animate-spin' : ''}`} />
+        <button
+          onClick={() => { loadSurveys(page); if (selectedDate) loadDetail(selectedDate); }}
+          className="ml-auto btn-ghost p-2 rounded"
+          title="Refresh"
+        >
+          <RefreshCw className={`w-4 h-4 text-subtle ${loading || detailLoading ? 'animate-spin' : ''}`} />
         </button>
       </div>
 
@@ -224,7 +321,8 @@ export default function DriverSurveys() {
       {/* Survey list */}
       {surveys.length > 0 && (
         <div className="card">
-          <SectionHeader icon={Users} title="Past Surveys" iconColor="text-info" />
+          <SectionHeader icon={Users} title="Survey History" iconColor="text-info"
+            subtitle={total > PAGE_SIZE ? `${total} total` : undefined} />
           <div className="space-y-1">
             {surveys.map(s => {
               const rate = s.expected_count > 0
@@ -250,6 +348,31 @@ export default function DriverSurveys() {
               );
             })}
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-3 mt-3 border-t border-border">
+              <span className="text-xs text-muted-foreground">
+                Page {page + 1} of {totalPages}
+              </span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => handlePageChange(page - 1)}
+                  disabled={page === 0 || loading}
+                  className="btn-ghost p-1.5 rounded disabled:opacity-40"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => handlePageChange(page + 1)}
+                  disabled={page >= totalPages - 1 || loading}
+                  className="btn-ghost p-1.5 rounded disabled:opacity-40"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -262,6 +385,13 @@ export default function DriverSurveys() {
 
       {detail && !detailLoading && (
         <>
+          {/* Live poll indicator for today's survey */}
+          {isTodaySurvey && (
+            <div className="rounded-lg bg-info/10 border border-info/30 px-4 py-2 text-xs text-info">
+              Use the ↻ button to refresh responses · Survey closes at midnight tonight
+            </div>
+          )}
+
           {/* Summary stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <StatCard
@@ -313,7 +443,7 @@ export default function DriverSurveys() {
           {detail.responses.length > 0 && (
             <div className="card">
               <SectionHeader icon={Users} title="Individual Responses"
-                subtitle={`${detail.responses.length} submitted`} iconColor="text-info" />
+                subtitle={`${detail.responses.length} submitted · click a row to expand`} iconColor="text-info" />
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -331,7 +461,11 @@ export default function DriverSurveys() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {detail.responses.map(r => (
-                      <tr key={r.id} className="hover:bg-accent/30 transition-colors">
+                      <tr
+                        key={r.id}
+                        className="hover:bg-accent/40 transition-colors cursor-pointer"
+                        onClick={() => setModalResponse(r)}
+                      >
                         <td className="py-2 pr-3 font-medium text-foreground whitespace-nowrap">
                           {r.respondent_name}
                         </td>
@@ -342,7 +476,7 @@ export default function DriverSurveys() {
                         <td className="py-2 pr-3 text-center"><YesNo value={r.anchor_point_location} /></td>
                         <td className="py-2 pr-3 text-center"><YesNo value={r.supplies_ready} /></td>
                         <td className="py-2 pr-3 text-center"><YesNo value={r.driver_support} /></td>
-                        <td className="py-2 text-muted-foreground text-xs max-w-xs">
+                        <td className="py-2 text-muted-foreground text-xs max-w-[180px] truncate">
                           {r.notes ? (
                             <span className="italic">{r.notes}</span>
                           ) : (
@@ -369,6 +503,11 @@ export default function DriverSurveys() {
         <div className="card text-center py-12 text-sm text-muted-foreground">
           No surveys activated yet. Select a date above and activate the first one.
         </div>
+      )}
+
+      {/* Response detail modal */}
+      {modalResponse && (
+        <ResponseModal response={modalResponse} onClose={() => setModalResponse(null)} />
       )}
     </div>
   );
