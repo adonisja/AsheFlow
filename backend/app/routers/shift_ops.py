@@ -105,37 +105,31 @@ def submit_crew_compliance(
     return created
 
 
-@router.get("/crew-compliance/{driver_id}", response_model=List[CrewComplianceResponse])
-def get_crew_compliance(
-    driver_id: UUID,
-    target_date: date = None,
-    db: Session = Depends(get_db),
-    caller: Employee = Depends(get_caller_employee),
-):
-    """Return compliance records submitted by a driver, optionally for a single date."""
-    assert_owns_or_privileged(caller, driver_id, "crew compliance")
-    q = db.query(CrewCompliance).filter(CrewCompliance.driver_id == driver_id)
-    if target_date:
-        q = q.filter(CrewCompliance.date == target_date)
-    return q.order_by(CrewCompliance.date.desc()).all()
-
-
 @router.get("/crew-compliance/summary/{target_date}")
 def get_crew_compliance_summary(
     target_date: date,
     db: Session = Depends(get_db),
     _: dict = Depends(allow_management),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return all compliance records for a date with employee names. Management use."""
     rows = (
         db.query(CrewCompliance)
-        .filter(CrewCompliance.date == target_date)
+        .filter(
+            CrewCompliance.date == target_date,
+            CrewCompliance.company_id == caller.company_id,
+        )
         .order_by(CrewCompliance.submitted_at.asc())
         .all()
     )
 
     emp_ids = {r.driver_id for r in rows} | {r.employee_id for r in rows}
-    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(emp_ids)).all()}
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee)
+        .filter(Employee.id.in_(emp_ids), Employee.company_id == caller.company_id)
+        .all()
+    }
 
     return [
         {
@@ -148,6 +142,21 @@ def get_crew_compliance_summary(
         }
         for r in rows
     ]
+
+
+@router.get("/crew-compliance/{driver_id}", response_model=List[CrewComplianceResponse])
+def get_crew_compliance(
+    driver_id: UUID,
+    target_date: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return compliance records submitted by a driver, optionally for a single date."""
+    assert_owns_or_privileged(caller, driver_id, "crew compliance")
+    q = db.query(CrewCompliance).filter(CrewCompliance.driver_id == driver_id)
+    if target_date:
+        q = q.filter(CrewCompliance.date == target_date)
+    return q.order_by(CrewCompliance.date.desc()).all()
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +222,7 @@ def get_check_ins_summary(
     target_date: Optional[date] = Query(None),
     db: Session = Depends(get_db),
     _: dict = Depends(allow_management),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return latest check-in per driver for a date. Shows which drivers need support."""
     if target_date is None:
@@ -220,13 +230,21 @@ def get_check_ins_summary(
 
     rows = (
         db.query(DriverCheckIn)
-        .filter(DriverCheckIn.date == target_date)
+        .filter(
+            DriverCheckIn.date == target_date,
+            DriverCheckIn.company_id == caller.company_id,
+        )
         .order_by(DriverCheckIn.driver_id, DriverCheckIn.check_in_number.desc())
         .all()
     )
 
     driver_ids = {r.driver_id for r in rows}
-    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids)).all()}
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee)
+        .filter(Employee.id.in_(driver_ids), Employee.company_id == caller.company_id)
+        .all()
+    }
 
     # Latest check-in per driver
     seen: set = set()
@@ -336,6 +354,7 @@ def review_rts_report(
     row = db.query(RTSReport).filter(
         RTSReport.driver_id == driver_id,
         RTSReport.date == target_date,
+        RTSReport.company_id == caller.company_id,
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="No RTS report found for this driver.")
@@ -392,6 +411,7 @@ def get_rts_report(
     row = db.query(RTSReport).filter(
         RTSReport.driver_id == driver_id,
         RTSReport.date == target_date,
+        RTSReport.company_id == caller.company_id,
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="No RTS report found.")
@@ -513,6 +533,7 @@ def get_station_handoff(
     row = db.query(StationHandoff).filter(
         StationHandoff.driver_id == driver_id,
         StationHandoff.date == target_date,
+        StationHandoff.company_id == caller.company_id,
     ).first()
     if not row:
         raise HTTPException(status_code=404, detail="No station handoff found.")
@@ -524,6 +545,7 @@ def get_station_handoffs_summary(
     target_date: Optional[date] = Query(None),
     db: Session = Depends(get_db),
     _: dict = Depends(allow_management),
+    caller: Employee = Depends(get_caller_employee),
 ):
     """Return all station handoffs for a date. Management overview of returned totes and RTS."""
     if target_date is None:
@@ -531,13 +553,21 @@ def get_station_handoffs_summary(
 
     rows = (
         db.query(StationHandoff)
-        .filter(StationHandoff.date == target_date)
+        .filter(
+            StationHandoff.date == target_date,
+            StationHandoff.company_id == caller.company_id,
+        )
         .order_by(StationHandoff.submitted_at.asc())
         .all()
     )
 
     driver_ids = {r.driver_id for r in rows}
-    emp_map = {e.id: e for e in db.query(Employee).filter(Employee.id.in_(driver_ids)).all()}
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee)
+        .filter(Employee.id.in_(driver_ids), Employee.company_id == caller.company_id)
+        .all()
+    }
 
     return {
         "date": target_date.isoformat(),
