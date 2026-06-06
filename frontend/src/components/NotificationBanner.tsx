@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
 interface Notification {
@@ -37,6 +37,20 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
       bg: 'bg-danger/10',
       border: 'border-danger/30',
       icon: <XCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />,
+    };
+  }
+  if (type === 'anchor_point_running_late') {
+    return {
+      bg: 'bg-warning/10',
+      border: 'border-warning/30',
+      icon: <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />,
+    };
+  }
+  if (type.startsWith('anchor_point')) {
+    return {
+      bg: 'bg-info/10',
+      border: 'border-info/30',
+      icon: <MapPin className="w-4 h-4 text-info shrink-0 mt-0.5" />,
     };
   }
   if (type.includes('critical') || type.includes('warning')) {

@@ -29,6 +29,7 @@ import DriverSurveys from './pages/DriverSurveys';
 import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
+import AuditLog from './pages/AuditLog';
 import LocationProfiles from './pages/LocationProfiles';
 import SortPage from './pages/Sort';
 import WalkerSortMonitor from './pages/WalkerSort';
@@ -371,6 +372,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin']}>
                   <CompanySettings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/audit"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <AuditLog />
                 </ProtectedRoute>
               }
             />
