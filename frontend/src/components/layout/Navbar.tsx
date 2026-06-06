@@ -32,6 +32,7 @@ import {
   Activity,
   ShoppingBag,
   ClipboardList,
+  ScrollText,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -51,6 +52,8 @@ interface NavNotification {
 function notifIcon(type: string) {
   if (type.endsWith('_approved')) return <CheckCircle2 className="w-3.5 h-3.5 text-success shrink-0 mt-0.5" />;
   if (type.endsWith('_rejected')) return <XCircle className="w-3.5 h-3.5 text-danger shrink-0 mt-0.5" />;
+  if (type === 'anchor_point_running_late') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
+  if (type.startsWith('anchor_point')) return <MapPin className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
   if (type.includes('critical') || type.includes('warning')) return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   return <Info className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
 }
@@ -353,6 +356,7 @@ const Navbar = () => {
           <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
           <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
           <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
+          <NavLink to="/audit" className={linkClass}><ScrollText className="w-3.5 h-3.5" /> Audit Log</NavLink>
           <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
           <NavLink to="/location-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
           <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
@@ -426,7 +430,8 @@ const Navbar = () => {
               <NavLink to="/vehicle-compliance" className={linkClass}><ShieldAlert className="w-3.5 h-3.5" /> Compliance</NavLink>
               <NavLink to="/walker-performance" className={linkClass}><Star className="w-3.5 h-3.5" /> Walkers</NavLink>
               <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
-          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
+              <NavLink to="/audit" className={linkClass}><ScrollText className="w-3.5 h-3.5" /> Audit Log</NavLink>
+              <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
             </>
           )}
         </>
@@ -515,6 +520,7 @@ function MobileLinks({
         <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
         <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
+        <NavLink to="/audit" onClick={onNav} className={cls}><ScrollText className="w-4 h-4" /> Audit Log</NavLink>
         <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         <NavLink to="/location-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
         <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
@@ -557,7 +563,8 @@ function MobileLinks({
           <NavLink to="/vehicle-compliance" onClick={onNav} className={cls}><ShieldAlert className="w-4 h-4" /> Compliance</NavLink>
           <NavLink to="/walker-performance" onClick={onNav} className={cls}><Star className="w-4 h-4" /> Walkers</NavLink>
           <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
-        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
+          <NavLink to="/audit" onClick={onNav} className={cls}><ScrollText className="w-4 h-4" /> Audit Log</NavLink>
+          <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         </>}
       </>}
     </>

@@ -390,3 +390,48 @@ def complete_registration(
             logger.error("Credentials email failed for %s: %s", employee.email, e)
 
     return {"detail": "Registration complete. Check your email for sign-in credentials.", "username": username}
+
+
+@router.get("/pending-invites")
+def get_pending_invites(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["admin"])),
+    db: Session = Depends(get_db),
+):
+    """Return outstanding (unused, not-yet-expired) invite tokens for this company.
+
+    Allows admins to see which employees haven't completed registration yet and
+    whether their link is still active or has expired.
+    """
+    now = datetime.now(timezone.utc)
+
+    tokens = (
+        db.query(InviteToken)
+        .filter(
+            InviteToken.company_id == caller.company_id,
+            InviteToken.used == False,
+        )
+        .order_by(InviteToken.created_at.desc())
+        .all()
+    )
+
+    employee_ids = [t.employee_id for t in tokens]
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee).filter(
+            Employee.id.in_(employee_ids),
+            Employee.company_id == caller.company_id,
+        ).all()
+    }
+
+    return [
+        {
+            "employee_id":   str(t.employee_id),
+            "employee_name": emp_map[t.employee_id].name if t.employee_id in emp_map else None,
+            "employee_role": emp_map[t.employee_id].role if t.employee_id in emp_map else None,
+            "invited_at":    t.created_at.isoformat(),
+            "expires_at":    t.expires_at.isoformat(),
+            "expired":       now > t.expires_at,
+        }
+        for t in tokens
+    ]
