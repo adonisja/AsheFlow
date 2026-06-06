@@ -54,6 +54,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=settings.get_cors_methods(),
     allow_headers=settings.get_cors_headers(),
+    expose_headers=["X-Total-Count"],
 )
 
 # Define our versioned API router
