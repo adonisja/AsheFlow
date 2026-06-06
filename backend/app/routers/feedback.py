@@ -35,10 +35,12 @@ def create_feedback(
     exists — admin accounts have no employee row and will submit anonymously).
     Fans out a notification to all active admin employees.
     """
+    company_id = caller.company_id if caller else None
     db_feedback = Feedback(
         type=feedback.type,
         message=feedback.message,
         employee_id=caller.id if caller else None,
+        company_id=company_id,
     )
     db.add(db_feedback)
 
@@ -49,7 +51,6 @@ def create_feedback(
         f"{type_label} submitted by {sender_name}: "
         f"{feedback.message[:120]}{'…' if len(feedback.message) > 120 else ''}"
     )
-    company_id = caller.company_id if caller else None
     admins = db.query(Employee).filter(
         Employee.role == "admin",
         Employee.is_active == True,

@@ -96,12 +96,9 @@ def _derive_username(name: str, db: Session) -> str:
 
 def _get_valid_token(token_str: str, db: Session) -> InviteToken:
     record = db.query(InviteToken).filter(InviteToken.token == token_str).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Invite link is invalid.")
-    if record.used:
-        raise HTTPException(status_code=410, detail="This invite link has already been used.")
-    if datetime.now(timezone.utc) > record.expires_at:
-        raise HTTPException(status_code=410, detail="This invite link has expired.")
+    # Uniform 404 for all invalid/expired/used states — prevents token oracle enumeration
+    if not record or record.used or datetime.now(timezone.utc) > record.expires_at:
+        raise HTTPException(status_code=404, detail="Invite link is invalid or has expired.")
     return record
 
 

@@ -307,20 +307,34 @@ def require_configured(
         )
 
 
-def assert_owns_or_privileged(caller, target_id: str, resource: str = "resource") -> None:
-    """Raise 403 unless caller owns the resource or has a privileged role.
-
-    Usage::
-
-        assert_owns_or_privileged(caller, employee_id)
+def assert_owns_or_privileged(
+    caller,
+    target_id: str,
+    resource: str = "resource",
+    target_company_id=None,
+) -> None:
+    """Raise 403 unless caller owns the resource or has a privileged role within the same tenant.
 
     Args:
-        caller:      Employee ORM object returned by ``get_caller_employee``.
-        target_id:   String UUID of the resource owner.
-        resource:    Human-readable noun for the error message.
+        caller:             Employee ORM object returned by ``get_caller_employee``.
+        target_id:          String UUID of the resource owner.
+        resource:           Human-readable noun for the error message.
+        target_company_id:  company_id of the target record, when available.
+                            Omit only for self-owned resources (where target_id == caller.id).
     """
-    if str(caller.id) != str(target_id) and caller.role not in _PRIVILEGED_ROLES:
+    owns = str(caller.id) == str(target_id)
+    privileged = caller.role in _PRIVILEGED_ROLES
+
+    if not owns and not privileged:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"You do not have permission to access this {resource}.",
         )
+
+    # Privileged callers must still be in the same tenant as the target record.
+    if privileged and target_company_id is not None:
+        if str(caller.company_id) != str(target_company_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You do not have permission to access this {resource}.",
+            )

@@ -39,7 +39,7 @@ def create_employee_off_day(
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    db_off_day = EmployeeOffDay(**employee_off_day.model_dump())
+    db_off_day = EmployeeOffDay(**employee_off_day.model_dump(), company_id=caller.company_id)
     db.add(db_off_day)
     db.commit()
     db.refresh(db_off_day)
