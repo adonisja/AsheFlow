@@ -35,3 +35,9 @@ from app.models.location_profile_library import LocationProfileLibrary
 from app.models.gear_request import GearOrder, GearOrderItem
 from app.models.trainee_credentials import TraineeCredentials
 from app.models.truck_transfer import TruckTransfer
+from app.models.adp_integration import ADPIntegration
+from app.models.adp_pay_period import ADPPayPeriod
+from app.models.adp_timecard import ADPTimeCard, ADPTimeCardSegment
+from app.models.flex_timesheets import FlexTimesheet
+from app.models.timecard_adjustments import TimeCardAdjustment
+from app.models.driver_survey import DriverSurvey, DriverSurveyResponse
