@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders"],
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync"],
 )
 
 celery_app.conf.update(
@@ -54,6 +54,11 @@ celery_app.conf.beat_schedule = {
     "fuel-log-reminder-second": {
         "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
         "schedule": crontab(hour=18, minute=30),
+    },
+    # 02:00 AM Eastern — sync ADP employee roster for all enabled integrations
+    "sync-adp-employees-nightly": {
+        "task": "app.tasks.adp_sync.sync_adp_employees",
+        "schedule": crontab(hour=2, minute=0),
     },
     # 03:30 AM Eastern on the 1st of every month — purge operational records
     # older than operational_record_retention_days (default 1095 / 3 years, FLSA §211).
