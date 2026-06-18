@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync"],
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync"],
 )
 
 celery_app.conf.update(
@@ -66,4 +66,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.purge_expired_operational_records",
         "schedule": crontab(hour=3, minute=30, day_of_month=1),
     },
+    # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
+    "fetch-adp-timecards-daily": {
+        "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",
+        "schedule": crontab(hour=6, minute=0),
+    }
 }
