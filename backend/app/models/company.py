@@ -106,8 +106,9 @@ class CompanyConfig(Base):
     discord_role_walker         = Column(BigInteger, nullable=True)
 
     # ── ADP payroll correction escalation thresholds ─────────────────
-    adp_urgent_correction_day = Column(Integer, nullable=False, default=6)
-    adp_mandatory_correction_hour = Column(Integer, nullable=False, default=12)
+    adp_urgent_correction_day = Column(Integer, nullable=False, default=5)
+    adp_mandatory_correction_day = Column(Integer, nullable=False, default=6)
+    adp_mandatory_correction_hour = Column(Integer, nullable=False, default=0)
 
     # True once the admin has completed the initial setup form.
     # Every protected endpoint checks this via require_configured.
