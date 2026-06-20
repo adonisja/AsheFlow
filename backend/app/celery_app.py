@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync"],
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_mismatch_detect"],
 )
 
 celery_app.conf.update(
@@ -70,5 +70,10 @@ celery_app.conf.beat_schedule = {
     "fetch-adp-timecards-daily": {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",
         "schedule": crontab(hour=6, minute=0),
+    },
+    # 12:00 PM Eastern - Run ADP mismatch detections for each company
+    "run-adp-vs-flex-mismatch-detection-daily": {
+        "task": "app.tasks.adp_mismatch_detect.detect_timecard_mismatches",
+        "schedule": crontab(hour=12, minute=0)
     }
 }
