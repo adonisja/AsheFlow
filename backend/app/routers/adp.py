@@ -145,6 +145,7 @@ async def upload_flex_timesheets(
             raise HTTPException(status_code=400, detail=f"Invalid date/time for employee {row.employee_id}: {e}")
         
         existing = db.query(FlexTimesheet).filter(
+            FlexTimesheet.company_id == caller.company_id,
             FlexTimesheet.employee_id == emp_id,
             FlexTimesheet.work_date == work_date,
         ).first()
