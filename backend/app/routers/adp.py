@@ -6,19 +6,24 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
+from datetime import date, datetime, timezone
+from app.services.audit import write_audit
 
 from app.api.deps import RoleChecker, get_caller_employee
 from app.core.config import settings
 from app.database import get_db
 from app.models.adp_integration import ADPIntegration
 from app.models.employee import Employee
-
+from app.models.timecard_adjustments import TimeCardAdjustment
+from app.models.adp_pay_period import ADPPayPeriod
+from app.services.adp import patch_adp_timecard
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/adp", tags=["adp"])
 
 allow_admin = RoleChecker(["admin"])
+allow_manager_or_admin = RoleChecker(["admin", "manager"])
 
 class ADPConfigureRequest(BaseModel):
     adp_client_id: str
@@ -162,3 +167,148 @@ async def upload_flex_timesheets(
     
     db.commit()
     return {"created": created, "updated": updated}
+
+
+@router.post("/adjustments/{adjustment_id}/employee-signoff", status_code=status.HTTP_201_CREATED)
+async def employee_signoff(
+    adjustment_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    adjustment = db.query(TimeCardAdjustment).filter(
+        TimeCardAdjustment.company_id == caller.company_id,
+        TimeCardAdjustment.id == adjustment_id
+    ).first()
+
+    if not adjustment:
+        logger.warning(f"Could not find adjustment ID: {adjustment_id}")
+        raise HTTPException(status_code=404, detail=f"Adjustment ID {adjustment_id} not found!")
+
+    if caller.id != adjustment.employee_id and caller.role != "admin":
+        raise HTTPException(status_code=403, detail="You are not authorized to access this page")
+    
+    if adjustment.status != "pending_employee":
+        raise HTTPException(status_code=409, detail="Adjustment is not awaiting employee sign-off")
+    
+    adjustment.status = "pending_manager"
+    adjustment.employee_signed_off_at = datetime.now(timezone.utc)
+    db.commit()
+    write_audit(
+        db, actor_id=str(caller.id),
+        company_id=caller.company_id,
+        action_type="timecard_adjustment.employee_signed_off",
+        target_table="timecard_adjustments",
+        target_id=str(adjustment.id),
+        before={"status": "pending_employee"}, after={"status": "pending_manager"}
+    )
+    
+    return {"detail": "Employee successfully signed off on adjustment"}
+
+@router.post("/adjustments/{adjustment_id}/manager_approve", status_code=status.HTTP_201_CREATED)
+async def manager_sign_off(
+    adjustment_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: bool = Depends(allow_manager_or_admin)
+):
+    adjustment = db.query(TimeCardAdjustment).filter(
+        TimeCardAdjustment.company_id == caller.company_id,
+        TimeCardAdjustment.id == adjustment_id
+    ).first()
+
+    if not adjustment:
+        raise HTTPException(status_code=404, detail="Adjustment not found")
+
+    if adjustment.status != "pending_manager":
+        raise HTTPException(status_code=409, detail="Adjustment status is not awaiting manager approval")
+    
+    adjustment.status = "approved"
+    adjustment.manager_id = caller.id
+    adjustment.manager_approved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    integration = db.query(ADPIntegration).filter(
+        ADPIntegration.company_id == caller.company_id
+    ).first()
+
+    employee = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.id == adjustment.employee_id,
+    ).first()
+
+    pay_period = db.query(ADPPayPeriod).filter(
+        ADPPayPeriod.company_id == caller.company_id,
+        ADPPayPeriod.id == adjustment.pay_period_id
+    ).first()
+
+    try:
+        adp_response = await patch_adp_timecard(
+            integration,
+            employee.hr_system_id_adp,
+            pay_period.adp_pay_period_id,
+            adjustment.proposed_break_start_at,
+            adjustment.proposed_break_end_at
+        )
+
+        adjustment.status = "applied"
+        adjustment.adp_applied_at = datetime.now(timezone.utc)
+        adjustment.adp_response_payload = adp_response
+    
+    except RuntimeError:
+        adjustment.status = "write_failed"
+        adjustment.write_attempt_count += 1
+
+    db.commit()
+    write_audit(
+        db, actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="timecard_adjustment.manager_approval",
+        target_table="timecard_adjustments",
+        target_id=str(adjustment.id),
+        before={"status": "pending_manager"},
+        after={"status": adjustment.status}
+    )
+
+    return {"detail": "Adjustment Approved", "status": adjustment.status}
+
+@router.post("/adjustments/{adjustment_id}/reject", status_code=status.HTTP_202_ACCEPTED)
+def reject_adjustment(
+    adjustment_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee)
+) -> dict:
+    
+    adjustment = db.query(TimeCardAdjustment).filter(
+        TimeCardAdjustment.company_id == caller.company_id,
+        TimeCardAdjustment.id == adjustment_id
+    ).first()
+
+    if not adjustment:
+        raise HTTPException(status_code=404, detail="Adjustment not found")
+    
+    if adjustment.status == "pending_employee":
+        if caller.id != adjustment.employee_id and caller.role != "admin":
+            raise HTTPException(status_code=403, detail="Only the employee on record or an admin can reject at this stage")
+    
+    elif adjustment.status == "pending_manager":
+        if caller.role not in ["admin", "manager"]:
+            raise HTTPException(status_code=403, detail="Only a manager or admin can reject at this stage")
+
+    else:
+        raise HTTPException(status_code=409, detail="Adjustment cannot be rejected at the current stage. Please speak to your manager or admin for assistance")
+    
+    previous_status = adjustment.status
+    adjustment.status = "rejected"
+    db.commit()
+
+    write_audit(
+        db, actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="timecard_adjustments.reject",
+        target_table="timecard_adjustments",
+        target_id=str(adjustment.id),
+        before={"status": previous_status},
+        after={"status": adjustment.status}
+    )
+
+    return {"detail": "Adjustment Rejected", "status": adjustment.status}
