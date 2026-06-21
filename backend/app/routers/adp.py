@@ -184,7 +184,7 @@ async def employee_signoff(
         logger.warning(f"Could not find adjustment ID: {adjustment_id}")
         raise HTTPException(status_code=404, detail=f"Adjustment ID {adjustment_id} not found!")
 
-    if caller.id != adjustment.employee_id and caller.role != "admin":
+    if caller.id != adjustment.employee_id:
         raise HTTPException(status_code=403, detail="You are not authorized to access this page")
     
     if adjustment.status != "pending_employee":
