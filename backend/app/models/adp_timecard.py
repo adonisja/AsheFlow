@@ -30,6 +30,6 @@ class ADPTimeCardSegment(Base):
     company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     timecard_id = Column(UUID(as_uuid=True), ForeignKey("adp_timecards.id", ondelete="CASCADE"), nullable=False, index=True)
     segment_index = Column(Integer, nullable=False)
-    clock_in_at = Column(DateTime(timezone=True), nullable=False)
-    clock_out_at = Column(DateTime(timezone=True), nullable=False)
+    clock_in_at = Column(DateTime(timezone=True), nullable=True)
+    clock_out_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

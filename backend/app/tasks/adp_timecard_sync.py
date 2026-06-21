@@ -72,6 +72,7 @@ def sync_adp_timecards() -> dict:
 
                         if existing_timecard:
                             deleted_rows = db.query(ADPTimeCardSegment).filter(
+                                ADPTimeCardSegment.company_id == integration.company_id,
                                 ADPTimeCardSegment.timecard_id == timecard_row.id
                             ).all()
 
