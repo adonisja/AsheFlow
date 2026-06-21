@@ -201,7 +201,10 @@ jobs:
               echo "[$i/$MAX] $STATUS"
               if [ "$STATUS" = "Success" ]; then return 0; fi
               if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-                aws ssm get-command-invocation --region us-east-2 \
+                echo "=== STDOUT ===" && aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardOutputContent" --output text
+                echo "=== STDERR ===" && aws ssm get-command-invocation --region us-east-2 \
                   --command-id "$CMD_ID" --instance-id "$INSTANCE" \
                   --query "StandardErrorContent" --output text
                 return 1
@@ -351,7 +354,10 @@ jobs:
               echo "[$i/$MAX] $STATUS"
               if [ "$STATUS" = "Success" ]; then return 0; fi
               if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-                aws ssm get-command-invocation --region us-east-2 \
+                echo "=== STDOUT ===" && aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardOutputContent" --output text
+                echo "=== STDERR ===" && aws ssm get-command-invocation --region us-east-2 \
                   --command-id "$CMD_ID" --instance-id "$INSTANCE" \
                   --query "StandardErrorContent" --output text
                 return 1
