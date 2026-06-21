@@ -31,6 +31,9 @@ def escalate_adjustment_urgency() -> dict:
                 ).all()
 
                 for adjustment in adjustments:
+                    if adjustment.urgency not in URGENCY_RANK:
+                        logger.warning(f"Unknown urgency value '{adjustment.urgency}' on adjustment {adjustment.id} — skipping")
+                        continue
                     new_urgency = calculate_urgency(now, company_config)
                     if URGENCY_RANK[new_urgency] > URGENCY_RANK[adjustment.urgency]:
                         adjustment.urgency = new_urgency
