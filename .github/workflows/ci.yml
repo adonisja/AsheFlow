@@ -129,19 +129,23 @@ jobs:
             ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 10
-          STATUS=$(aws ssm get-command-invocation \
-            --region us-east-2 \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-            --query "Status" --output text)
-          echo "Write .env status: $STATUS"
-          OUTPUT=$(aws ssm get-command-invocation \
-            --region us-east-2 \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-            --query "StandardOutputContent" --output text)
-          echo "$OUTPUT"
+          for i in $(seq 1 18); do
+            sleep 10
+            STATUS=$(aws ssm get-command-invocation \
+              --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            echo "[$i/18] Write .env status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then break; fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              aws ssm get-command-invocation --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+                --query "StandardErrorContent" --output text
+              exit 1
+            fi
+          done
           [ "$STATUS" = "Success" ] || exit 1
 
       - name: Write staging bot .env via SSM Parameter Store
