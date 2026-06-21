@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, DateTime, Boolean, CheckConstraint, UniqueConstraint, ForeignKey, func
+from sqlalchemy import Column, String, Integer, Date, DateTime, Boolean, CheckConstraint, UniqueConstraint, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from app.models.base import Base
 import uuid
@@ -7,7 +7,7 @@ import uuid
 class TimeCardAdjustment(Base):
     __tablename__ = "timecard_adjustments"
     __table_args__ = (
-        CheckConstraint("status IN ('pending_employee', 'pending_manager', 'approved', 'applied', 'rejected')", name="ck_timecard_adjustment_status"),
+        CheckConstraint("status IN ('pending_employee', 'pending_manager', 'approved', 'applied', 'write_failed', 'rejected' )", name="ck_timecard_adjustment_status"),
         CheckConstraint("urgency IN ('routine', 'urgent', 'mandatory')", name="ck_timecard_adjustment_urgency"),
     )
 
@@ -22,8 +22,9 @@ class TimeCardAdjustment(Base):
     proposed_break_start_at = Column(DateTime(timezone=True), nullable=False)
     proposed_break_end_at = Column(DateTime(timezone=True), nullable=False)
     status = Column(String(20), nullable=False, default="pending_employee")
+    write_attempt_count = Column(Integer, nullable=False, default=0)
     urgency = Column(String(20), nullable=False, default="routine")
-    is_post_close = Column(Boolean, nullable=False)
+    is_post_close = Column(Boolean, nullable=False, default=False)
     employee_signed_off_at = Column(DateTime(timezone=True), nullable=True)
     manager_approved_at = Column(DateTime(timezone=True), nullable=True)
     manager_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)

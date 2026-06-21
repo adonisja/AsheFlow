@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import datetime, date, timezone
 
 import boto3
 import httpx
@@ -94,3 +94,36 @@ async def fetch_adp_timecard(integration: ADPIntegration, associate_oid: str, wo
     
     time_cards = response.json().get("timeCards", [])
     return time_cards[0] if time_cards else {}
+
+async def patch_adp_timecard(integration: ADPIntegration, associate_oid: str, adp_pay_period_id: str, break_start_at: date, break_end_at: date) -> dict:
+    client_secret, cert_pem = _get_adp_credentials(integration)
+    token = await _fetch_adp_token(client_secret, cert_pem, integration.adp_environment)
+
+    base_url = "https://api.adp.com" if integration.adp_environment == "production" else "https://sandbox.api.adp.com"
+    url = f"{base_url}/time/v2/workers/{associate_oid}/time-cards"
+
+    payload = {
+        "timeLaborEntries": [
+            {
+                "payPeriodReference": {"id": adp_pay_period_id},
+                "breakStart": break_start_at.isoformat(),
+                "breakEnd": break_end_at.isoformat()
+            }
+        ]
+    }
+
+    async with httpx.AsyncClient(cert=cert_pem) as client:
+        response = await client.patch(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload
+        )
+
+    if response.status_code == 404:
+        return {}
+    
+    if response.status_code != 200:
+        logger.warning(f"Failed to write timecard edits to adp")
+        raise RuntimeError(f"Failed to write timecard edits to adp for Associate_OID: {associate_oid}")
+    else:
+        return response.json()
