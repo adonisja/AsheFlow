@@ -103,7 +103,17 @@ jobs:
         run: |
           aws ec2 start-instances --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
           aws ec2 wait instance-running --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
-          echo "Staging EC2 is running."
+          echo "EC2 is running. Waiting for SSM Agent..."
+          for i in $(seq 1 24); do
+            PING=$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>/dev/null || echo "NotReady")
+            echo "[$i/24] SSM ping: $PING"
+            if [ "$PING" = "Online" ]; then echo "SSM Agent is ready."; break; fi
+            sleep 5
+          done
+          [ "$PING" = "Online" ] || (echo "SSM Agent never came online." && exit 1)
 
       # EC2 uses boto3 to pull /asheflow/staging/* from SSM Parameter Store.
       # No secret values pass through the CI runner or CLI arguments.
