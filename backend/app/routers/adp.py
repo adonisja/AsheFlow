@@ -17,6 +17,7 @@ from app.models.employee import Employee
 from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.services.adp import patch_adp_timecard
+from app.models.notification import Notification
 
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,24 @@ async def employee_signoff(
         target_id=str(adjustment.id),
         before={"status": "pending_employee"}, after={"status": "pending_manager"}
     )
-    
+
+    managers_and_admins = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.role.in_(["admin", "manager"]),
+        Employee.is_active == True
+    ).all()
+    for person in managers_and_admins:
+        db.add(Notification(
+            company_id = caller.company_id,
+            employee_id = person.id,
+            type = "timecard_pending_manager",
+            message = (
+                f"{caller.name.title()} has signed off on a timecard adjustment for "
+                f"{adjustment.work_date}. Manager approval required."
+            )
+        ))
+    db.commit()
+
     return {"detail": "Employee successfully signed off on adjustment"}
 
 @router.post("/adjustments/{adjustment_id}/manager_approve", status_code=status.HTTP_201_CREATED)
@@ -269,6 +287,24 @@ async def manager_sign_off(
         after={"status": adjustment.status}
     )
 
+    if adjustment.status == "applied":
+        notif_message = (
+            f"Your timecard adjustment for {adjustment.work_date} has been approved "
+            f"and successfully submitted to ADP."
+        )
+    else:
+        notif_message = (
+            f"Your timecard adjustment for {adjustment.work_date} was approved but "
+            f"could not be submitted to ADP. Your manager has been notified."
+        )
+    db.add(Notification(
+        company_id = caller.company_id,
+        employee_id = adjustment.employee_id,
+        type = "timecard_applied",
+        message = notif_message
+    ))
+    db.commit()
+
     return {"detail": "Adjustment Approved", "status": adjustment.status}
 
 @router.post("/adjustments/{adjustment_id}/reject", status_code=status.HTTP_202_ACCEPTED)
@@ -310,5 +346,35 @@ def reject_adjustment(
         before={"status": previous_status},
         after={"status": adjustment.status}
     )
+
+    if previous_status == "pending_employee":
+        # Employee disputed — notify managers/admins
+        managers_and_admins = db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(["admin", "manager"]),
+            Employee.is_active == True
+        ).all()
+        for person in managers_and_admins:
+            db.add(Notification(
+                company_id = caller.company_id,
+                employee_id = person.id,
+                type = "timecard_rejected",
+                message = (
+                    f"{caller.name.title()} has disputed their timecard adjustment for "
+                    f"{adjustment.work_date}. Please review."
+                )
+            ))
+    else:
+        # Manager rejected — notify the employee
+        db.add(Notification(
+            company_id = caller.company_id,
+            employee_id = adjustment.employee_id,
+            type = "timecard_rejected",
+            message = (
+                f"Your timecard adjustment for {adjustment.work_date} has been rejected "
+                f"by your manager. Please contact your manager for details."
+            )
+        ))
+    db.commit()
 
     return {"detail": "Adjustment Rejected", "status": adjustment.status}
