@@ -12,21 +12,9 @@ from app.models.adp_pay_period import ADPPayPeriod
 from app.models.company import CompanyConfig
 from app.models.employee import Employee
 from app.models.notification import Notification
+from app.services.adp_urgency import calculate_urgency
 
 logger = logging.getLogger(__name__)
-
-
-def _calculate_urgency(detected_at, company_config) -> str:
-    urgent_day = company_config.adp_urgent_correction_day if company_config else 5
-    mandatory_day = company_config.adp_mandatory_correction_day if company_config else 6
-    mandatory_hour = company_config.adp_mandatory_correction_hour if company_config else 0
-
-    if detected_at.weekday() >= mandatory_day and detected_at.hour >= mandatory_hour:
-        return "mandatory"
-    elif detected_at.weekday() >= urgent_day:
-        return "urgent"
-    else:
-        return "routine"
     
 
 @celery_app.task(name="app.tasks.adp_mismatch_detect.detect_timecard_mismatches")
@@ -50,7 +38,7 @@ def detect_timecard_mismatches() -> dict:
                 ).first()
 
                 now = datetime.now(timezone.utc)
-                urgency = _calculate_urgency(now, company_config)
+                urgency = calculate_urgency(now, company_config)
 
                 for timecard in timecards:
                     flex = db.query(FlexTimesheet).filter(
