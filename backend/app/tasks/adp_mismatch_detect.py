@@ -11,6 +11,7 @@ from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.models.company import CompanyConfig
 from app.models.employee import Employee
+from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ def detect_timecard_mismatches() -> dict:
                     if not pay_period: continue
 
                     if not segments:
+                        description = f"{employee.name.title()} has no ADP timecard segments found for working day {timecard.work_date}"
                         db.add(TimeCardAdjustment(
                             company_id = integration.company_id,
                             employee_id = timecard.employee_id,
@@ -97,10 +99,17 @@ def detect_timecard_mismatches() -> dict:
                             work_date = timecard.work_date,
                             proposed_break_start_at = flex.break_start_at,
                             proposed_break_end_at = flex.break_end_at,
-                            mismatch_description = f"{employee.name.title()} has no ADP timecard segments found for working day {timecard.work_date}",
+                            mismatch_description = description,
                             status = "pending_employee",
                             urgency = urgency,
                             detected_at = now
+                        ))
+                        db.commit()
+                        db.add(Notification(
+                            company_id = integration.company_id,
+                            employee_id = timecard.employee_id,
+                            type = "timecard_mismatch",
+                            message = f"Action required: {description}. Please review and sign off in AsheFlow."
                         ))
                         db.commit()
                         continue
@@ -108,6 +117,7 @@ def detect_timecard_mismatches() -> dict:
                     missing_entry = False
                     for segment in segments:
                         if segment.clock_in_at is None:
+                            description = f"{employee.name.title()} has a missing Lunch Break Punch In for {timecard.work_date} on segment {segment.segment_index}"
                             db.add(TimeCardAdjustment(
                                 company_id = integration.company_id,
                                 employee_id = timecard.employee_id,
@@ -117,16 +127,24 @@ def detect_timecard_mismatches() -> dict:
                                 work_date = timecard.work_date,
                                 proposed_break_start_at = flex.break_start_at,
                                 proposed_break_end_at = flex.break_end_at,
-                                mismatch_description = f"{employee.name.title()} has a missing Lunch Break Punch In for {timecard.work_date} on segment {segment.segment_index}",
+                                mismatch_description = description,
                                 status = "pending_employee",
                                 urgency = urgency,
                                 detected_at = now
+                            ))
+                            db.commit()
+                            db.add(Notification(
+                                company_id = integration.company_id,
+                                employee_id = timecard.employee_id,
+                                type = "timecard_mismatch",
+                                message = f"Action required: {description}. Please review and sign off in AsheFlow."
                             ))
                             db.commit()
                             missing_entry = True
                             
 
                         if segment.clock_out_at is None:
+                            description = f"{employee.name.title()} has a missing Lunch Break Punch Out for {timecard.work_date} on segment {segment.segment_index}"
                             db.add(TimeCardAdjustment(
                                     company_id = integration.company_id,
                                     employee_id = timecard.employee_id,
@@ -136,10 +154,17 @@ def detect_timecard_mismatches() -> dict:
                                     work_date = timecard.work_date,
                                     proposed_break_start_at = flex.break_start_at,
                                     proposed_break_end_at = flex.break_end_at,
-                                    mismatch_description = f"{employee.name.title()} has a missing Lunch Break Punch Out for {timecard.work_date} on segment {segment.segment_index}",
+                                    mismatch_description = description,
                                     status = "pending_employee",
                                     urgency = urgency,
                                     detected_at = now
+                            ))
+                            db.commit()
+                            db.add(Notification(
+                                company_id = integration.company_id,
+                                employee_id = timecard.employee_id,
+                                type = "timecard_mismatch",
+                                message = f"Action required: {description}. Please review and sign off in AsheFlow."
                             ))
                             db.commit()
                             missing_entry = True
@@ -158,6 +183,7 @@ def detect_timecard_mismatches() -> dict:
                             break
 
                     if adp_break_start is None:
+                        description = f"{employee.name.title()} is missing a Lunch Break Period on {timecard.work_date}"
                         db.add(TimeCardAdjustment(
                             company_id = integration.company_id,
                             employee_id = timecard.employee_id,
@@ -167,15 +193,23 @@ def detect_timecard_mismatches() -> dict:
                             work_date = timecard.work_date,
                             proposed_break_start_at = flex.break_start_at,
                             proposed_break_end_at = flex.break_end_at,
-                            mismatch_description = f"{employee.name.title()} is missing a Lunch Break Period on {timecard.work_date}",
+                            mismatch_description = description,
                             status = "pending_employee",
                             urgency = urgency,
                             detected_at = now
                         ))
                         db.commit()
+                        db.add(Notification(
+                            company_id = integration.company_id,
+                            employee_id = timecard.employee_id,
+                            type = "timecard_mismatch",
+                            message = f"Action required: {description}. Please review and sign off"
+                        ))
+                        db.commit()
                         continue
 
                     if abs(adp_break_start - flex.break_start_at) > timedelta(minutes=5) or abs(adp_break_end - flex.break_end_at) > timedelta(minutes=5):
+                        description = f"{employee.name.title()} has a Break Mismatch on {timecard.work_date}: Flex [{flex.break_start_at} - {flex.break_end_at}] vs ADP [{adp_break_start} - {adp_break_end}]"
                         db.add(TimeCardAdjustment(
                             company_id = integration.company_id,
                             employee_id = timecard.employee_id,
@@ -185,10 +219,17 @@ def detect_timecard_mismatches() -> dict:
                             work_date = timecard.work_date,
                             proposed_break_start_at = flex.break_start_at,
                             proposed_break_end_at = flex.break_end_at,
-                            mismatch_description = f"{employee.name.title()} has a Break Mismatch on {timecard.work_date}: Flex [{flex.break_start_at} - {flex.break_end_at}] vs ADP [{adp_break_start} - {adp_break_end}]",
+                            mismatch_description = description,
                             status = "pending_employee",
                             urgency = urgency,
                             detected_at = now
+                        ))
+                        db.commit()
+                        db.add(Notification(
+                            company_id = integration.company_id,
+                            employee_id = timecard.employee_id,
+                            type = "timecard_mismatch",
+                            message = f"Action required: {description}. Please review and sign off"
                         ))
                         db.commit()
                         continue
@@ -197,6 +238,8 @@ def detect_timecard_mismatches() -> dict:
             except Exception as e:
                 logger.warning(f"Integration failed for company {integration.company_id}: {e}")
                 continue
+
+       
 
         return {"status": "ok"}
     finally:
