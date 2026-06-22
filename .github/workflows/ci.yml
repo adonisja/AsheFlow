@@ -108,7 +108,7 @@ jobs:
             PING=$(aws ssm describe-instance-information \
               --instance-information-filter-list "key=InstanceIds,valueSet=${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
               --query "InstanceInformationList[0].PingStatus" \
-              --output text 2>/dev/null || echo "NotReady")
+              --output text 2>&1 || echo "NotReady")
             echo "[$i/36] SSM ping: $PING"
             if [ "$PING" = "Online" ]; then echo "SSM Agent is ready."; break; fi
             sleep 10
