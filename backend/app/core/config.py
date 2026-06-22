@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         if self.app_env not in {"development", "test"}:
             db_lower = self.database_url.lower()
             has_ssl = "sslmode=require" in db_lower or "sslmode=verify" in db_lower
-            is_local = "localhost" in db_lower or "127.0.0.1" in db_lower
+            is_local = "localhost" in db_lower or "127.0.0.1" in db_lower or "@postgres:" in db_lower
             if not has_ssl and not is_local:
                 raise RuntimeError(
                     "DATABASE_URL must include sslmode=require (or verify-full) in staging/production. "
