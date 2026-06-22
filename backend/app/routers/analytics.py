@@ -15,7 +15,7 @@ from statistics import median
 from typing import List
 from uuid import UUID
 
-from app.services.local_date import company_today
+from app.services.local_date import company_today, company_tz
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -147,7 +147,8 @@ def get_ban_override_freq(
     _: dict = Depends(allow_mgmt),
     db: Session = Depends(get_db),
 ):
-    today = company_today(db, caller.company_id)
+    tz = company_tz(db, caller.company_id)
+    today = datetime.now(tz).date()
     range_start = today - timedelta(weeks=weeks)
 
     rows = (
@@ -160,10 +161,14 @@ def get_ban_override_freq(
         .all()
     )
 
-    # Bucket by ISO week start (Monday)
+    # Bucket by ISO week start (Monday), using company-local date
     week_counts: dict[date, int] = {}
     for notif in rows:
-        event_date = notif.created_at.date() if notif.created_at else today
+        if notif.created_at:
+            dt = notif.created_at if notif.created_at.tzinfo else notif.created_at.replace(tzinfo=timezone.utc)
+            event_date = dt.astimezone(tz).date()
+        else:
+            event_date = today
         # Roll back to Monday of that week
         week_start = event_date - timedelta(days=event_date.weekday())
         week_counts[week_start] = week_counts.get(week_start, 0) + 1
