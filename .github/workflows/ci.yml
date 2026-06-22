@@ -106,7 +106,7 @@ jobs:
           echo "EC2 is running. Waiting for SSM Agent..."
           for i in $(seq 1 36); do
             PING=$(aws ssm describe-instance-information \
-              --filters "Key=InstanceIds,Values=${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
+              --instance-information-filter-list "key=InstanceIds,valueSet=${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
               --query "InstanceInformationList[0].PingStatus" \
               --output text 2>/dev/null || echo "NotReady")
             echo "[$i/36] SSM ping: $PING"
