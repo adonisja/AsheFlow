@@ -104,14 +104,14 @@ jobs:
           aws ec2 start-instances --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
           aws ec2 wait instance-running --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
           echo "EC2 is running. Waiting for SSM Agent..."
-          for i in $(seq 1 24); do
+          for i in $(seq 1 36); do
             PING=$(aws ssm describe-instance-information \
               --filters "Key=InstanceIds,Values=${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
               --query "InstanceInformationList[0].PingStatus" \
               --output text 2>/dev/null || echo "NotReady")
-            echo "[$i/24] SSM ping: $PING"
+            echo "[$i/36] SSM ping: $PING"
             if [ "$PING" = "Online" ]; then echo "SSM Agent is ready."; break; fi
-            sleep 5
+            sleep 10
           done
           [ "$PING" = "Online" ] || (echo "SSM Agent never came online." && exit 1)
 
