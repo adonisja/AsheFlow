@@ -6,6 +6,7 @@ import httpx
 
 from app.core.config import settings
 from app.models.adp_integration import ADPIntegration
+from app.services.adp_exceptions import ADPClientError, ADPServerError
 
 logger = logging.getLogger(__name__)
 
@@ -111,19 +112,24 @@ async def patch_adp_timecard(integration: ADPIntegration, associate_oid: str, ad
             }
         ]
     }
+    try:
+        async with httpx.AsyncClient(cert=cert_pem) as client:
+            response = await client.patch(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload
+            )
+    except (httpx.TimeoutException, httpx.RequestError):
+        raise ADPServerError(0,{})
 
-    async with httpx.AsyncClient(cert=cert_pem) as client:
-        response = await client.patch(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            json=payload
-        )
-
+    if response.status_code == 200:
+        return response.json()
+    
     if response.status_code == 404:
         return {}
+
+    if 400 <= response.status_code < 500:
+        raise ADPClientError(response.status_code, response.json())
     
-    if response.status_code != 200:
-        logger.warning(f"Failed to write timecard edits to adp")
-        raise RuntimeError(f"Failed to write timecard edits to adp for Associate_OID: {associate_oid}")
-    else:
-        return response.json()
+    if 500 <= response.status_code < 600:
+        raise ADPServerError(response.status_code, response.json())
