@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.adp_mismatch_detect.detect_timecard_mismatches")
 def detect_timecard_mismatches() -> dict:
+    """Detect break time mismatches between ADP timecards and Amazon Flex records.
+
+    Runs daily at 12:00 PM Eastern for all companies with an enabled ADP integration.
+    Compares the previous day's ADP timecard segments against Flex break records
+    and creates a TimeCardAdjustment for any of the following conditions:
+
+    - No ADP timecard segments found for a verified working day.
+    - A segment is missing a clock-in or clock-out punch.
+    - The break window in ADP differs from the Flex record by more than 5 minutes.
+
+    Skips employees who already have an open (non-applied, non-rejected) adjustment
+    to avoid duplicate records. A per-company try/except ensures one company's
+    failure does not block others.
+    """
     db = SessionLocal()
     try:
         integrations = db.query(ADPIntegration).filter(
@@ -224,7 +238,7 @@ def detect_timecard_mismatches() -> dict:
 
    
             except Exception as e:
-                logger.warning(f"Integration failed for company {integration.company_id}: {e}")
+                logger.warning("ADP mismatch detection failed for company %s: %s", integration.company_id, e)
                 continue
 
        

@@ -154,7 +154,7 @@ def send_invite(
         logger.error("Failed to send invite email to %s: %s", employee.email, e)
         raise HTTPException(
             status_code=502,
-            detail="Invite token created but email delivery failed. Check SES configuration.",
+            detail="Invite token created but the invitation email could not be delivered. Please try re-sending the invite.",
         )
 
     employee.invited_at = datetime.now(timezone.utc)

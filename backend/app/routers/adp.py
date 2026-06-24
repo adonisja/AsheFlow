@@ -18,7 +18,7 @@ from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.services.adp import patch_adp_timecard
 from app.models.notification import Notification
-from app.services.adp_exceptions import ADPClientError, ADPServerError
+from app.services.adp_exceptions import ADPAuthError, ADPClientError, ADPServerError
 
 
 logger = logging.getLogger(__name__)
@@ -184,11 +184,11 @@ async def employee_signoff(
     ).first()
 
     if not adjustment:
-        logger.warning(f"Could not find adjustment ID: {adjustment_id}")
-        raise HTTPException(status_code=404, detail=f"Adjustment ID {adjustment_id} not found!")
+        logger.warning("Adjustment %s not found for company %s (requested by employee %s)", adjustment_id, caller.company_id, caller.id)
+        raise HTTPException(status_code=404, detail="Timecard adjustment not found.")
 
     if caller.id != adjustment.employee_id:
-        raise HTTPException(status_code=403, detail="You are not authorized to access this page")
+        raise HTTPException(status_code=403, detail="You can only sign off on your own timecard adjustments.")
     
     if adjustment.status != "pending_employee":
         raise HTTPException(status_code=409, detail="Adjustment is not awaiting employee sign-off")
@@ -274,15 +274,32 @@ async def manager_sign_off(
         adjustment.adp_applied_at = datetime.now(timezone.utc)
         adjustment.adp_response_payload = adp_response
     
-    except ADPClientError as e:
-        notif_message = (
-            f"ADP timecard update to failed due to malformed "
-            f"payload, please review before retrying: {e.body}\n"
-            f"Employee: {employee.name}\n"
-            f'Break: {adjustment.proposed_break_start_at.strftime("%I:%M %p")} - {adjustment.proposed_break_end_at.strftime("%I:%M %p")}'
+    except ADPAuthError as e:
+        logger.warning(
+            "ADP auth failed during manager approval of adjustment %s (company %s) with status %s: %s",
+            adjustment.id, caller.company_id, e.status_code, e.message
         )
         adjustment.status = "write_failed"
         adjustment.write_attempt_count += 1
+
+    except ADPClientError as e:
+        break_window = (
+            f"{adjustment.proposed_break_start_at.strftime('%I:%M %p')} - "
+            f"{adjustment.proposed_break_end_at.strftime('%I:%M %p')}"
+        )
+        logger.warning(
+            "ADP rejected timecard write for adjustment %s (employee %s, company %s) "
+            "with status %s — marking non-retryable. ADP response: %s",
+            adjustment.id, employee.name, caller.company_id, e.status_code, e.body
+        )
+        notif_message = (
+            f"ADP rejected the timecard correction for {employee.name.title()} "
+            f"(break: {break_window}) — the submission was invalid and will not be "
+            f"retried automatically. Please review the adjustment and re-submit manually."
+        )
+        adjustment.status = "write_failed"
+        adjustment.write_attempt_count += 1
+        adjustment.is_retryable = False
         managers_and_admins = db.query(Employee).filter(
             Employee.company_id == caller.company_id,
             Employee.role.in_(["admin", "manager"]),
@@ -290,14 +307,17 @@ async def manager_sign_off(
         ).all()
         for person in managers_and_admins:
             db.add(Notification(
-                company_id = caller.company_id,
-                employee_id = person.id,
-                type = "timecard_update_failed",
-                message = notif_message
+                company_id=caller.company_id,
+                employee_id=person.id,
+                type="timecard_update_failed",
+                message=notif_message,
             ))
-        adjustment.is_retryable = False
-     
+
     except ADPServerError as e:
+        logger.warning(
+            "ADP timecard write failed for adjustment %s (company %s) with status %s — will retry.",
+            adjustment.id, caller.company_id, e.status_code
+        )
         adjustment.status = "write_failed"
         adjustment.write_attempt_count += 1
 
