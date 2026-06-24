@@ -26,6 +26,19 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.adp_sync.sync_adp_employees")
 def sync_adp_employees() -> dict:
+    """Sync AsheFlow's employee roster against ADP RUN for all enabled integrations.
+
+    Runs nightly at 02:00 AM Eastern. Can also be triggered on-demand via
+    POST /api/v1/adp/sync-employees.
+
+    For each worker returned by ADP:
+    - Terminated: deactivates the employee in AsheFlow, disables their Cognito
+      account, removes future truck assignments, and notifies managers.
+    - New (not in AsheFlow): creates a pending_verification employee record.
+    - Existing: updates the name and marks hr_system_id_adp_verified = True.
+
+    A per-company try/except ensures one company's failure does not block others.
+    """
     db = SessionLocal()
     try:
         integrations = db.query(ADPIntegration).filter(
@@ -53,11 +66,17 @@ def sync_adp_employees() -> dict:
 
                         db.commit()
 
-                        cognito = boto3.client("cognito-idp", region_name=settings.aws_region)
-                        cognito.admin_disable_user(
-                            UserPoolId=settings.aws_cognito_user_pool_id,
-                            Username=employee.cognito_sub
-                        )
+                        try:
+                            cognito = boto3.client("cognito-idp", region_name=settings.aws_region)
+                            cognito.admin_disable_user(
+                                UserPoolId=settings.aws_cognito_user_pool_id,
+                                Username=employee.cognito_sub
+                            )
+                        except Exception as cognito_err:
+                            logger.warning(
+                                "Failed to disable Cognito account for employee %s (company %s): %s",
+                                employee.id, integration.company_id, cognito_err
+                            )
 
                         accounts = db.query(AssignmentMember).join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id
                         ).filter(
@@ -117,7 +136,7 @@ def sync_adp_employees() -> dict:
                         db.commit()
 
             except Exception as e:
-                logger.warning(f"Integration failed for company {integration.company_id}: {e}")
+                logger.warning("ADP employee sync failed for company %s: %s", integration.company_id, e)
                 continue
 
         return {"status": "ok"}

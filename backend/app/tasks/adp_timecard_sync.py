@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.adp_timecard_sync.sync_adp_timecards")
 def sync_adp_timecards() -> dict:
+    """Fetch and store the previous day's ADP timecards for all verified employees.
+
+    Runs daily at 06:00 AM Eastern. For each company with an enabled ADP integration,
+    fetches timecards for every employee whose ADP association has been verified.
+
+    Each timecard is upserted: created on first fetch, updated on re-fetch (e.g.,
+    if the task is re-run after a failure). Timecard segments (clock-in/out pairs)
+    are replaced wholesale on each sync to ensure consistency with ADP's current state.
+
+    A per-company try/except ensures one company's failure does not block others.
+    """
 
     work_date: date = date.today() - timedelta(days=1)
     db = SessionLocal()
@@ -93,7 +104,7 @@ def sync_adp_timecards() -> dict:
                         db.commit()
 
             except Exception as e:
-                logger.warning(f"Integration failed for company {integration.company_id}: {e}")
+                logger.warning("ADP timecard sync failed for company %s: %s", integration.company_id, e)
                 continue
         
         return {"status": "ok"}

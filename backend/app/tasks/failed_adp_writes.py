@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.failed_adp_writes.retry_failed_adp_writes")
 def retry_failed_adp_writes():
+    """Re-attempt failed ADP timecard writes before the pay period close deadline.
+
+    Runs on a Beat schedule every 2 hours Saturday–Sunday and a final pass
+    Monday 18:00 Eastern. Queries all write_failed adjustments where is_retryable
+    is True, groups them by company to minimise database round-trips, then calls
+    patch_adp_timecard for each one.
+
+    Outcomes per adjustment:
+    - Success: status → "applied", adp_applied_at and adp_response_payload stamped.
+    - ADPClientError (4xx): is_retryable → False, managers notified. Will not be
+      retried again — requires human review of the payload.
+    - ADPServerError (5xx / network): write_attempt_count incremented, warning
+      logged. Adjustment remains retryable for the next scheduled run.
+    """
 
     db = SessionLocal()
     try:
@@ -60,13 +74,22 @@ def retry_failed_adp_writes():
                     
 
                 except ADPClientError as e:
+                    break_window = (
+                        f"{adjustment.proposed_break_start_at.strftime('%I:%M %p')} - "
+                        f"{adjustment.proposed_break_end_at.strftime('%I:%M %p')}"
+                    )
+                    logger.warning(
+                        "ADP rejected timecard write for adjustment %s (employee %s, company %s) "
+                        "with status %s — payload invalid, marking non-retryable. ADP response: %s",
+                        adjustment.id, employee.name, adjustment.company_id, e.status_code, e.body
+                    )
                     notif_message = (
-                        f"ADP timecard update to failed due to malformed "
-                        f"payload, please review before retrying: {e.body}\n"
-                        f"Employee: {employee.name}\n"
-                        f'Break: {adjustment.proposed_break_start_at.strftime("%I:%M %p")} - {adjustment.proposed_break_end_at.strftime("%I:%M %p")}'
-                        )
+                        f"ADP rejected the timecard correction for {employee.name.title()} "
+                        f"(break: {break_window}) — the submission was invalid and will not be "
+                        f"retried automatically. Please review the adjustment and re-submit manually."
+                    )
                     adjustment.write_attempt_count += 1
+                    adjustment.is_retryable = False
                     managers_and_admins = db.query(Employee).filter(
                         Employee.company_id == adjustment.company_id,
                         Employee.role.in_(["admin", "manager"]),
@@ -74,17 +97,19 @@ def retry_failed_adp_writes():
                     ).all()
                     for person in managers_and_admins:
                         db.add(Notification(
-                            company_id = integration.company_id,
-                            employee_id = person.id,
-                            type = "timecard_update_failed",
-                            message = notif_message
+                            company_id=integration.company_id,
+                            employee_id=person.id,
+                            type="timecard_update_failed",
+                            message=notif_message,
                         ))
-                    adjustment.is_retryable = False
-                    
 
                 except ADPServerError as e:
+                    logger.warning(
+                        "ADP timecard write failed for adjustment %s (employee %s, company %s) "
+                        "with status %s — will retry on next scheduled run.",
+                        adjustment.id, employee.name, adjustment.company_id, e.status_code
+                    )
                     adjustment.write_attempt_count += 1
-                    logger.warning(f"Failed to write Timecard Adjustment ({adjustment.id}) to ADP for {employee.name}: {e}")
 
                 db.commit()
 
