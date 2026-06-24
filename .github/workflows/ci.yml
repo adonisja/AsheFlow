@@ -103,7 +103,17 @@ jobs:
         run: |
           aws ec2 start-instances --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
           aws ec2 wait instance-running --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }}
-          echo "Staging EC2 is running."
+          echo "EC2 is running. Waiting for SSM Agent..."
+          for i in $(seq 1 36); do
+            PING=$(aws ssm describe-instance-information \
+              --instance-information-filter-list "key=InstanceIds,valueSet=${{ secrets.STAGING_EC2_INSTANCE_ID }}" \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>&1 || echo "NotReady")
+            echo "[$i/36] SSM ping: $PING"
+            if [ "$PING" = "Online" ]; then echo "SSM Agent is ready."; break; fi
+            sleep 10
+          done
+          [ "$PING" = "Online" ] || (echo "SSM Agent never came online." && exit 1)
 
       # EC2 uses boto3 to pull /asheflow/staging/* from SSM Parameter Store.
       # No secret values pass through the CI runner or CLI arguments.
@@ -129,19 +139,27 @@ jobs:
             ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 10
-          STATUS=$(aws ssm get-command-invocation \
-            --region us-east-2 \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-            --query "Status" --output text)
-          echo "Write .env status: $STATUS"
-          OUTPUT=$(aws ssm get-command-invocation \
-            --region us-east-2 \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-            --query "StandardOutputContent" --output text)
-          echo "$OUTPUT"
+          for i in $(seq 1 18); do
+            sleep 10
+            STATUS=$(aws ssm get-command-invocation \
+              --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            echo "[$i/18] Write .env status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then break; fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "=== STDOUT ===" && aws ssm get-command-invocation --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+                --query "StandardOutputContent" --output text
+              echo "=== STDERR ===" && aws ssm get-command-invocation --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+                --query "StandardErrorContent" --output text
+              exit 1
+            fi
+          done
           [ "$STATUS" = "Success" ] || exit 1
 
       - name: Write staging bot .env via SSM Parameter Store
@@ -158,13 +176,27 @@ jobs:
             ]' \
             --query "Command.CommandId" \
             --output text)
-          sleep 10
-          STATUS=$(aws ssm get-command-invocation \
-            --region us-east-2 \
-            --command-id "$COMMAND_ID" \
-            --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
-            --query "Status" --output text)
-          echo "Write bot .env status: $STATUS"
+          for i in $(seq 1 18); do
+            sleep 10
+            STATUS=$(aws ssm get-command-invocation \
+              --region us-east-2 \
+              --command-id "$COMMAND_ID" \
+              --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            echo "[$i/18] Write bot .env status: $STATUS"
+            if [ "$STATUS" = "Success" ]; then break; fi
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "=== STDOUT ===" && aws ssm get-command-invocation --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+                --query "StandardOutputContent" --output text
+              echo "=== STDERR ===" && aws ssm get-command-invocation --region us-east-2 \
+                --command-id "$COMMAND_ID" \
+                --instance-id ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
+                --query "StandardErrorContent" --output text
+              exit 1
+            fi
+          done
           [ "$STATUS" = "Success" ] || exit 1
 
       # Deploy backend via SSM — no SSH key needed
@@ -179,7 +211,10 @@ jobs:
               echo "[$i/$MAX] $STATUS"
               if [ "$STATUS" = "Success" ]; then return 0; fi
               if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-                aws ssm get-command-invocation --region us-east-2 \
+                echo "=== STDOUT ===" && aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardOutputContent" --output text
+                echo "=== STDERR ===" && aws ssm get-command-invocation --region us-east-2 \
                   --command-id "$CMD_ID" --instance-id "$INSTANCE" \
                   --query "StandardErrorContent" --output text
                 return 1
@@ -209,7 +244,7 @@ jobs:
               "cp -r /tmp/asheflow-private/asheflow_private /home/ubuntu/AsheFlow/backend/asheflow_private",
               "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
               "touch /home/ubuntu/AsheFlow/bot/.env",
-              "cd /home/ubuntu/AsheFlow && docker compose build backend",
+              "cd /home/ubuntu/AsheFlow && docker compose build --progress=plain backend",
               "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy bot"
             ]' \
             --query "Command.CommandId" --output text)
@@ -329,7 +364,10 @@ jobs:
               echo "[$i/$MAX] $STATUS"
               if [ "$STATUS" = "Success" ]; then return 0; fi
               if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-                aws ssm get-command-invocation --region us-east-2 \
+                echo "=== STDOUT ===" && aws ssm get-command-invocation --region us-east-2 \
+                  --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+                  --query "StandardOutputContent" --output text
+                echo "=== STDERR ===" && aws ssm get-command-invocation --region us-east-2 \
                   --command-id "$CMD_ID" --instance-id "$INSTANCE" \
                   --query "StandardErrorContent" --output text
                 return 1

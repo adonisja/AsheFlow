@@ -13,6 +13,9 @@ from app.celery_app import celery_app
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.employee import Employee
+from app.models.crew_compliance import CrewCompliance
+from app.models.driver_check_in import DriverCheckIn
+from app.models.rts_clearance import RTSReport, StationHandoff
 
 logger = logging.getLogger(__name__)
 
@@ -51,30 +54,38 @@ def expire_pending_invites() -> dict:
         cognito = boto3.client("cognito-idp", region_name=settings.aws_region)
 
         for employee in expired:
-            # Delete from Cognito first — if this fails we still want to log it,
-            # but we proceed with DB deletion so the record doesn't linger.
-            if employee.email:
-                try:
-                    cognito.admin_delete_user(
-                        UserPoolId=settings.aws_cognito_user_pool_id,
-                        Username=employee.email,
-                    )
-                    deleted_cognito += 1
-                except ClientError as e:
-                    code = e.response["Error"]["Code"]
-                    if code == "UserNotFoundException":
-                        # Already gone from Cognito — treat as success
-                        deleted_cognito += 1
-                    else:
-                        logger.error(
-                            "Failed to delete Cognito user %s: %s", employee.email, e
-                        )
-                        cognito_failures.append(employee.email)
-
+            # Delete from DB first so the employee loses access atomically.
+            # Cognito cleanup is best-effort afterwards; orphaned Cognito users
+            # are harmless (disabled by AdminDisableUser if needed) but we
+            # attempt deletion to keep the pool clean.
             db.delete(employee)
             deleted_db += 1
 
         db.commit()
+
+        # Attempt Cognito cleanup after the DB transaction is committed.
+        # Prefer username (the Cognito account identifier post-registration);
+        # fall back to email for pre-registration accounts that only have
+        # a Cognito user created via AdminCreateUser with email as the username.
+        for employee in expired:
+            cognito_username = employee.username or employee.email
+            if not cognito_username:
+                continue
+            try:
+                cognito.admin_delete_user(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=cognito_username,
+                )
+                deleted_cognito += 1
+            except ClientError as e:
+                code = e.response["Error"]["Code"]
+                if code == "UserNotFoundException":
+                    deleted_cognito += 1
+                else:
+                    logger.error(
+                        "Failed to delete Cognito user %s: %s", cognito_username, e
+                    )
+                    cognito_failures.append(cognito_username)
         logger.info(
             "expire_pending_invites: deleted %d DB records, %d Cognito users. Failures: %s",
             deleted_db, deleted_cognito, cognito_failures,
@@ -92,3 +103,50 @@ def expire_pending_invites() -> dict:
         "deleted_cognito": deleted_cognito,
         "cognito_failures": cognito_failures,
     }
+
+
+@celery_app.task(name="app.tasks.cleanup.purge_expired_operational_records")
+def purge_expired_operational_records() -> dict:
+    """Delete operational shift records older than operational_record_retention_days.
+
+    Covers: CrewCompliance, DriverCheckIn, RTSReport, StationHandoff.
+    FLSA §211 requires employment records be kept for at least 3 years — the
+    default retention period is 1095 days. Set operational_record_retention_days=0
+    in config to disable this task.
+
+    Returns a summary dict with per-table delete counts.
+    """
+    retention_days = settings.operational_record_retention_days
+    if retention_days <= 0:
+        logger.info("purge_expired_operational_records: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    db = SessionLocal()
+    counts: dict[str, int] = {}
+
+    try:
+        for model, label in (
+            (CrewCompliance,  "crew_compliance"),
+            (DriverCheckIn,   "driver_check_ins"),
+            (RTSReport,       "rts_reports"),
+            (StationHandoff,  "station_handoffs"),
+        ):
+            n = (
+                db.query(model)
+                .filter(model.submitted_at < cutoff)
+                .delete(synchronize_session=False)
+            )
+            counts[label] = n
+
+        db.commit()
+        logger.info("purge_expired_operational_records: %s", counts)
+
+    except Exception as e:
+        db.rollback()
+        logger.error("purge_expired_operational_records failed: %s", e)
+        raise
+    finally:
+        db.close()
+
+    return counts

@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders"],
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes"]
 )
 
 celery_app.conf.update(
@@ -54,5 +54,39 @@ celery_app.conf.beat_schedule = {
     "fuel-log-reminder-second": {
         "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
         "schedule": crontab(hour=18, minute=30),
+    },
+    # 02:00 AM Eastern — sync ADP employee roster for all enabled integrations
+    "sync-adp-employees-nightly": {
+        "task": "app.tasks.adp_sync.sync_adp_employees",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # 03:30 AM Eastern on the 1st of every month — purge operational records
+    # older than operational_record_retention_days (default 1095 / 3 years, FLSA §211).
+    "purge-expired-operational-records-monthly": {
+        "task": "app.tasks.cleanup.purge_expired_operational_records",
+        "schedule": crontab(hour=3, minute=30, day_of_month=1),
+    },
+    # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
+    "fetch-adp-timecards-daily": {
+        "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",
+        "schedule": crontab(hour=6, minute=0),
+    },
+    # 12:00 PM Eastern - Run ADP mismatch detections for each company
+    "run-adp-vs-flex-mismatch-detection-daily": {
+        "task": "app.tasks.adp_mismatch_detect.detect_timecard_mismatches",
+        "schedule": crontab(hour=12, minute=0)
+    },
+    # 12:00 AM Eastern Saturday and Sunday - Escalate ADP status if necessary
+    "escalate-adp-mismatch-statuses": {
+        "task": "app.tasks.adp_urgency_escalation.escalate_adjustment_urgency",
+        "schedule": crontab(hour=0, minute=5, day_of_week="6,0")
+    },
+    "retry-failed-adp-writes-weekend": {
+        "task": "app.tasks.failed_adp_writes.retry_failed_adp_writes",
+        "schedule": crontab(minute=0, hour="0,2,4,6,8,10,12,14,16,18,20,22", day_of_week="6,0"),
+    },
+    "retry-failed-adp-writes-final": {
+        "task": "app.tasks.failed_adp_writes.retry_failed_adp_writes",
+        "schedule": crontab(hour=18, minute=0, day_of_week=1),
     },
 }

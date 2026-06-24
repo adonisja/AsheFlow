@@ -8,6 +8,8 @@ from typing import List
 from uuid import UUID
 from botocore.exceptions import ClientError
 
+from pydantic import BaseModel, EmailStr, Field
+
 import requests as http_requests
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -106,6 +108,7 @@ def _cognito_revoke_access(cognito_username: str | None) -> None:
 def create_employee(
     employee: EmployeeCreate,
     caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
     db: Session = Depends(get_db),
 ):
     """Create an employee record and send them a registration invite email.
@@ -353,11 +356,11 @@ def get_my_employee(
     return EmployeeResponse.model_validate(caller)
 
 
-@router.get("/by-discord/{discord_id}", response_model=EmployeeResponse)
+@router.get("/by-discord/{discord_id}", response_model=EmployeePublicResponse)
 def get_employee_by_discord(
     discord_id: str,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(list(PRIVILEGED_ROLES | FIELD_ROLES))),
+    current_user: dict = Depends(RoleChecker(list(PRIVILEGED_ROLES | FIELD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Fetch an employee by Discord ID. Used by the bot on member-join to assign roles."""
@@ -367,7 +370,10 @@ def get_employee_by_discord(
     ).first()
     if not employee:
         raise HTTPException(status_code=404, detail="No employee found with that Discord ID.")
-    return EmployeeResponse.model_validate(employee)
+    caller_groups = set(current_user.get("cognito_groups", []))
+    if caller_groups & PRIVILEGED_ROLES:
+        return EmployeeResponse.model_validate(employee)
+    return EmployeePublicResponse.model_validate(employee)
 
 
 @router.get("/{employee_id}", response_model=EmployeeResponse)
@@ -589,18 +595,33 @@ def reactivate_employee(
     db.commit()
     db.refresh(db_employee)
 
-    # Re-enable the Cognito user so they can sign in again
-    # Prefer username — Cognito accounts are created under the derived username.
-    # Fall back to email only for legacy accounts predating the username column.
+    # Re-enable the Cognito user and restore their role group so permissions
+    # take effect on next token refresh.
     cognito_username = db_employee.username or db_employee.email
     if cognito_username:
+        cognito = _cognito_client()
         try:
-            _cognito_client().admin_enable_user(
+            cognito.admin_enable_user(
                 UserPoolId=settings.aws_cognito_user_pool_id,
                 Username=cognito_username,
             )
         except ClientError as e:
             logger.warning("Cognito admin_enable_user failed for %s: %s", cognito_username, e)
+
+        group = ROLE_TO_COGNITO_GROUP.get(db_employee.role)
+        if group:
+            try:
+                # Idempotent — adding a user to a group they already belong to is a no-op in Cognito
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=cognito_username,
+                    GroupName=group,
+                )
+            except ClientError as e:
+                logger.warning(
+                    "Cognito group restore failed for %s (group=%s): %s",
+                    cognito_username, group, e,
+                )
 
     return db_employee
 
@@ -810,42 +831,30 @@ def demote_employee(
     return db_employee
 
 
+class _EmailChangeRequest(BaseModel):
+    access_token: str
+    new_email: EmailStr
+
+
 @router.post("/me/email/request-change", status_code=status.HTTP_200_OK)
 def request_email_change(
-    payload: dict,
+    payload: _EmailChangeRequest,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+    _: dict = Depends(RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])),
 ):
     """Step 1: Request an email address change.
 
     Calls Cognito UpdateUserAttributes with the user's own access token.
     Cognito sends a verification code to the new email address.
-
-    Body: { "access_token": "<cognito_access_token>", "new_email": "<email>" }
     """
-    access_token = payload.get("access_token")
-    new_email    = payload.get("new_email", "").strip().lower()
+    new_email = payload.new_email.strip().lower()
 
-    if not access_token or not new_email:
-        raise HTTPException(status_code=422, detail="access_token and new_email are required.")
-
-    # Basic format check
-    if "@" not in new_email or "." not in new_email.split("@")[-1]:
-        raise HTTPException(status_code=422, detail="Invalid email address.")
-
-    # Check the new email isn't already taken in our DB
-    existing = db_check = None
-    try:
-        from app.database import SessionLocal
-        db_check = SessionLocal()
-        existing = db_check.query(Employee).filter(
-            Employee.email == new_email,
-            Employee.company_id == caller.company_id,
-            Employee.id    != caller.id,
-        ).first()
-    finally:
-        if db_check:
-            db_check.close()
+    existing = db.query(Employee).filter(
+        Employee.email == new_email,
+        Employee.company_id == caller.company_id,
+        Employee.id != caller.id,
+    ).first()
 
     if existing:
         raise HTTPException(status_code=409, detail="That email is already in use by another account.")
@@ -853,7 +862,7 @@ def request_email_change(
     cognito = _cognito_client()
     try:
         cognito.update_user_attributes(
-            AccessToken=access_token,
+            AccessToken=payload.access_token,
             UserAttributes=[{"Name": "email", "Value": new_email}],
         )
     except ClientError as e:
@@ -866,29 +875,29 @@ def request_email_change(
     return {"detail": "Verification code sent to the new email address."}
 
 
+class _EmailConfirmRequest(BaseModel):
+    access_token: str
+    code: str = Field(..., min_length=4, max_length=10)
+    new_email: EmailStr
+
+
 @router.post("/me/email/confirm-change", status_code=status.HTTP_200_OK)
 def confirm_email_change(
-    payload: dict,
+    payload: _EmailConfirmRequest,
     caller: Employee = Depends(get_caller_employee),
     db: Session = Depends(get_db),
 ):
     """Step 2: Confirm the email change with the verification code.
 
     Calls Cognito VerifyUserAttribute, then updates the employee DB record.
-
-    Body: { "access_token": "<cognito_access_token>", "code": "<6-digit code>", "new_email": "<email>" }
     """
-    access_token = payload.get("access_token")
-    code         = payload.get("code", "").strip()
-    new_email    = payload.get("new_email", "").strip().lower()
-
-    if not access_token or not code or not new_email:
-        raise HTTPException(status_code=422, detail="access_token, code, and new_email are required.")
+    new_email = payload.new_email.strip().lower()
+    code      = payload.code.strip()
 
     cognito = _cognito_client()
     try:
         cognito.verify_user_attribute(
-            AccessToken=access_token,
+            AccessToken=payload.access_token,
             AttributeName="email",
             Code=code,
         )

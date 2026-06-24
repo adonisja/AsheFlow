@@ -48,6 +48,7 @@ def get_employee_schedule(
     # 1. Fetch recurring off days for the employee
     off_days = db.query(EmployeeOffDay).filter(
         EmployeeOffDay.employee_id == employee_id,
+        EmployeeOffDay.company_id == caller.company_id,
         EmployeeOffDay.status.in_(["approved", "pending"])
     ).all()
     recurring_off_day_map = {od.day_of_week: od.status for od in off_days}
@@ -55,6 +56,7 @@ def get_employee_schedule(
     # 1.5 Fetch specific date time-off requests
     time_off_reqs = db.query(TimeOffRequest).filter(
         TimeOffRequest.employee_id == employee_id,
+        TimeOffRequest.company_id == caller.company_id,
         TimeOffRequest.date >= start_date,
         TimeOffRequest.date <= end_date,
         TimeOffRequest.status.in_(["approved", "pending"])
@@ -109,7 +111,10 @@ def get_employee_schedule(
         all_crew_members = (
             db.query(AssignmentMember, Employee)
             .join(Employee, AssignmentMember.employee_id == Employee.id)
-            .filter(AssignmentMember.assignment_id.in_(assignment_ids))
+            .filter(
+                AssignmentMember.assignment_id.in_(assignment_ids),
+                Employee.company_id == caller.company_id,
+            )
             .all()
         )
         for crew_am, crew_emp in all_crew_members:

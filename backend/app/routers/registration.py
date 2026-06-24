@@ -5,11 +5,12 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
+from app.api.ratelimit import limiter
 from app.core.config import settings
 from app.database import get_db
 from app.models.employee import Employee
@@ -96,19 +97,18 @@ def _derive_username(name: str, db: Session) -> str:
 
 def _get_valid_token(token_str: str, db: Session) -> InviteToken:
     record = db.query(InviteToken).filter(InviteToken.token == token_str).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Invite link is invalid.")
-    if record.used:
-        raise HTTPException(status_code=410, detail="This invite link has already been used.")
-    if datetime.now(timezone.utc) > record.expires_at:
-        raise HTTPException(status_code=410, detail="This invite link has expired.")
+    # Uniform 404 for all invalid/expired/used states — prevents token oracle enumeration
+    if not record or record.used or datetime.now(timezone.utc) > record.expires_at:
+        raise HTTPException(status_code=404, detail="Invite link is invalid or has expired.")
     return record
 
 
 # ── endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/invite", status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
 def send_invite(
+    request: Request,
     body: InviteRequest,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
@@ -154,7 +154,7 @@ def send_invite(
         logger.error("Failed to send invite email to %s: %s", employee.email, e)
         raise HTTPException(
             status_code=502,
-            detail="Invite token created but email delivery failed. Check SES configuration.",
+            detail="Invite token created but the invitation email could not be delivered. Please try re-sending the invite.",
         )
 
     employee.invited_at = datetime.now(timezone.utc)
@@ -164,7 +164,9 @@ def send_invite(
 
 
 @router.post("/resend-credentials", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
 def resend_credentials(
+    request: Request,
     body: InviteRequest,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(RoleChecker(["management", "admin"])),
@@ -229,7 +231,9 @@ def resend_credentials(
 
 
 @router.get("/validate", response_model=ValidateResponse)
+@limiter.limit("20/minute")
 def validate_token(
+    request: Request,
     token: str,
     db: Session = Depends(get_db),
 ):
@@ -262,7 +266,9 @@ def validate_token(
 
 
 @router.post("/complete", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
 def complete_registration(
+    request: Request,
     body: CompleteRequest,
     db: Session = Depends(get_db),
 ):
@@ -390,3 +396,48 @@ def complete_registration(
             logger.error("Credentials email failed for %s: %s", employee.email, e)
 
     return {"detail": "Registration complete. Check your email for sign-in credentials.", "username": username}
+
+
+@router.get("/pending-invites")
+def get_pending_invites(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["admin"])),
+    db: Session = Depends(get_db),
+):
+    """Return outstanding (unused, not-yet-expired) invite tokens for this company.
+
+    Allows admins to see which employees haven't completed registration yet and
+    whether their link is still active or has expired.
+    """
+    now = datetime.now(timezone.utc)
+
+    tokens = (
+        db.query(InviteToken)
+        .filter(
+            InviteToken.company_id == caller.company_id,
+            InviteToken.used == False,
+        )
+        .order_by(InviteToken.created_at.desc())
+        .all()
+    )
+
+    employee_ids = [t.employee_id for t in tokens]
+    emp_map = {
+        e.id: e
+        for e in db.query(Employee).filter(
+            Employee.id.in_(employee_ids),
+            Employee.company_id == caller.company_id,
+        ).all()
+    }
+
+    return [
+        {
+            "employee_id":   str(t.employee_id),
+            "employee_name": emp_map[t.employee_id].name if t.employee_id in emp_map else None,
+            "employee_role": emp_map[t.employee_id].role if t.employee_id in emp_map else None,
+            "invited_at":    t.created_at.isoformat(),
+            "expires_at":    t.expires_at.isoformat(),
+            "expired":       now > t.expires_at,
+        }
+        for t in tokens
+    ]

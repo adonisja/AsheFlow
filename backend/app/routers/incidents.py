@@ -60,7 +60,12 @@ def _resolve_driver_id(assignment_id: UUID, db: Session) -> Optional[UUID]:
 
 
 def _notify_management(incident: Incident, reporter: Employee, db: Session):
-    """Send notifications to all active dispatch/management/admin for this incident."""
+    """Send notifications to all active dispatch/management/admin for this incident.
+
+    Critical injury incidents additionally generate a 'incident_critical_injury'
+    escalation notification so the notification system can apply a higher-priority
+    delivery path (push, SMS) for injury reports that require immediate response.
+    """
     severity = incident.severity
     notif_type = f"incident_{severity}"  # incident_info | incident_warning | incident_critical
 
@@ -84,6 +89,23 @@ def _notify_management(incident: Incident, reporter: Employee, db: Session):
             type=notif_type,
             message=message,
         ))
+
+    # LA-5: escalation path for critical injury — generates a second, distinct
+    # notification type so consumers (push gateway, on-call pager) can route
+    # these separately without polling for category+severity combinations.
+    if incident.severity == "critical" and incident.category == "injury":
+        escalation_message = (
+            f"CRITICAL INJURY — {reporter.name} on {incident.date.strftime('%a, %b %d')}. "
+            f"Immediate response required. "
+            f"{incident.description[:120]}{'…' if len(incident.description) > 120 else ''}"
+        )
+        for emp in recipients:
+            db.add(Notification(
+                company_id=incident.company_id,
+                employee_id=emp.id,
+                type="incident_critical_injury",
+                message=escalation_message,
+            ))
 
 
 # ---------------------------------------------------------------------------

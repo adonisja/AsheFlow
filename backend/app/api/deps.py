@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -6,6 +8,8 @@ from app.core.security import verify_cognito_token
 from app.database import get_db
 from app.services.constants import OVERSIGHT_ROLES
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # This tells FastAPI an endpoint requires a "Bearer" token in the Authorization header.
 # It also adds the "Authorize" padlock button to our /docs Swagger UI automatically!
@@ -73,6 +77,16 @@ def _resolve_employee_from_cognito(current_user: dict, db: Session):
         employee = db.query(Employee).filter(Employee.cognito_sub == sub).first()
 
     if not employee and username:
+        # Legacy path — fires only when cognito_sub is not yet stamped.
+        # Not company-scoped (company_id unknown until employee is resolved);
+        # username collisions across tenants are possible but extremely unlikely
+        # for human-readable usernames. Stamp cognito_sub after resolution so
+        # subsequent calls take the globally-unique fast path.
+        logger.warning(
+            "SC-3 fallback: resolving employee by username=%r (cognito_sub fast-path missed). "
+            "sub=%r — cognito_sub will be stamped after resolution.",
+            username, sub,
+        )
         # New pool: username is danny.rivera — match Employee.username
         employee = db.query(Employee).filter(Employee.username == username).first()
         # Old pool fallback: username was the discord_id
@@ -80,6 +94,11 @@ def _resolve_employee_from_cognito(current_user: dict, db: Session):
             employee = db.query(Employee).filter(Employee.discord_id == username).first()
 
     if not employee and email:
+        logger.warning(
+            "SC-3 fallback: resolving employee by email=%r (username fallback also missed). "
+            "sub=%r — cognito_sub will be stamped after resolution.",
+            email, sub,
+        )
         employee = db.query(Employee).filter(Employee.email == email).first()
 
     if not employee and sub:
@@ -307,20 +326,34 @@ def require_configured(
         )
 
 
-def assert_owns_or_privileged(caller, target_id: str, resource: str = "resource") -> None:
-    """Raise 403 unless caller owns the resource or has a privileged role.
-
-    Usage::
-
-        assert_owns_or_privileged(caller, employee_id)
+def assert_owns_or_privileged(
+    caller,
+    target_id: str,
+    resource: str = "resource",
+    target_company_id=None,
+) -> None:
+    """Raise 403 unless caller owns the resource or has a privileged role within the same tenant.
 
     Args:
-        caller:      Employee ORM object returned by ``get_caller_employee``.
-        target_id:   String UUID of the resource owner.
-        resource:    Human-readable noun for the error message.
+        caller:             Employee ORM object returned by ``get_caller_employee``.
+        target_id:          String UUID of the resource owner.
+        resource:           Human-readable noun for the error message.
+        target_company_id:  company_id of the target record, when available.
+                            Omit only for self-owned resources (where target_id == caller.id).
     """
-    if str(caller.id) != str(target_id) and caller.role not in _PRIVILEGED_ROLES:
+    owns = str(caller.id) == str(target_id)
+    privileged = caller.role in _PRIVILEGED_ROLES
+
+    if not owns and not privileged:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"You do not have permission to access this {resource}.",
         )
+
+    # Privileged callers must still be in the same tenant as the target record.
+    if privileged and target_company_id is not None:
+        if str(caller.company_id) != str(target_company_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You do not have permission to access this {resource}.",
+            )
