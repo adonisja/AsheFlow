@@ -13,6 +13,17 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.adp_urgency_escalation.escalate_adjustment_urgency")
 def escalate_adjustment_urgency() -> dict:
+    """Escalate the urgency level of open timecard adjustments as pay period close approaches.
+
+    Runs at 00:05 AM Eastern on Saturday and Sunday — the window when Amazon DSP
+    pay periods close and unresolved adjustments become payroll errors.
+
+    For each open adjustment (pending_employee or pending_manager), recalculates
+    urgency based on how much time remains before the pay period deadline. Urgency
+    never downgrades — only updates if the new level is strictly higher than the
+    current one. A per-company try/except ensures one company's failure does not
+    block others.
+    """
     db = SessionLocal()
     try:
         integrations = db.query(ADPIntegration).filter(
@@ -32,7 +43,7 @@ def escalate_adjustment_urgency() -> dict:
 
                 for adjustment in adjustments:
                     if adjustment.urgency not in URGENCY_RANK:
-                        logger.warning(f"Unknown urgency value '{adjustment.urgency}' on adjustment {adjustment.id} — skipping")
+                        logger.warning("Unknown urgency value '%s' on adjustment %s (company %s) — skipping", adjustment.urgency, adjustment.id, integration.company_id)
                         continue
                     new_urgency = calculate_urgency(now, company_config)
                     if URGENCY_RANK[new_urgency] > URGENCY_RANK[adjustment.urgency]:
@@ -40,7 +51,7 @@ def escalate_adjustment_urgency() -> dict:
                         db.commit()
                         
             except Exception as e:
-                logger.warning(f"Integration failed for company: {integration.company_id}: {e}")
+                logger.warning("ADP urgency escalation failed for company %s: %s", integration.company_id, e)
                 continue
 
         return {"status": "ok"}
