@@ -18,6 +18,7 @@ from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.adp_pay_period import ADPPayPeriod
 from app.services.adp import patch_adp_timecard
 from app.models.notification import Notification
+from app.services.adp_exceptions import ADPClientError, ADPServerError
 
 
 logger = logging.getLogger(__name__)
@@ -273,7 +274,30 @@ async def manager_sign_off(
         adjustment.adp_applied_at = datetime.now(timezone.utc)
         adjustment.adp_response_payload = adp_response
     
-    except RuntimeError:
+    except ADPClientError as e:
+        notif_message = (
+            f"ADP timecard update to failed due to malformed "
+            f"payload, please review before retrying: {e.body}\n"
+            f"Employee: {employee.name}\n"
+            f'Break: {adjustment.proposed_break_start_at.strftime("%I:%M %p")} - {adjustment.proposed_break_end_at.strftime("%I:%M %p")}'
+        )
+        adjustment.status = "write_failed"
+        adjustment.write_attempt_count += 1
+        managers_and_admins = db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(["admin", "manager"]),
+            Employee.is_active == True
+        ).all()
+        for person in managers_and_admins:
+            db.add(Notification(
+                company_id = caller.company_id,
+                employee_id = person.id,
+                type = "timecard_update_failed",
+                message = notif_message
+            ))
+        adjustment.is_retryable = False
+     
+    except ADPServerError as e:
         adjustment.status = "write_failed"
         adjustment.write_attempt_count += 1
 

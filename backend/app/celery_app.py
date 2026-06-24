@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes"]
 )
 
 celery_app.conf.update(
@@ -80,5 +80,13 @@ celery_app.conf.beat_schedule = {
     "escalate-adp-mismatch-statuses": {
         "task": "app.tasks.adp_urgency_escalation.escalate_adjustment_urgency",
         "schedule": crontab(hour=0, minute=5, day_of_week="6,0")
-    }
+    },
+    "retry-failed-adp-writes-weekend": {
+        "task": "app.tasks.failed_adp_writes.retry_failed_adp_writes",
+        "schedule": crontab(minute=0, hour="0,2,4,6,8,10,12,14,16,18,20,22", day_of_week="6,0"),
+    },
+    "retry-failed-adp-writes-final": {
+        "task": "app.tasks.failed_adp_writes.retry_failed_adp_writes",
+        "schedule": crontab(hour=18, minute=0, day_of_week=1),
+    },
 }

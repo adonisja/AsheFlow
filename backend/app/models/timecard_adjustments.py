@@ -23,6 +23,7 @@ class TimeCardAdjustment(Base):
     proposed_break_end_at = Column(DateTime(timezone=True), nullable=False)
     status = Column(String(20), nullable=False, default="pending_employee")
     write_attempt_count = Column(Integer, nullable=False, default=0)
+    is_retryable = Column(Boolean, nullable=False, default=True)
     urgency = Column(String(20), nullable=False, default="routine")
     is_post_close = Column(Boolean, nullable=False, default=False)
     employee_signed_off_at = Column(DateTime(timezone=True), nullable=True)
