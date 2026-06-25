@@ -1,21 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-
-interface Notification {
-  id: string;
-  employee_id: string;
-  type: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-  dispatch_date: string | null;
-}
-
-interface Props {
-  employeeId: string;
-  onNotification?: (type: string) => void;
-}
+import { useNotificationContext } from '../contexts/NotificationContext';
+import type { Notification } from '../contexts/NotificationContext';
 
 function styleForType(type: string): { bg: string; border: string; icon: React.ReactNode } {
   if (type === 'dispatch_assignment' || type === 'dispatch_assignment_info') {
@@ -53,6 +40,13 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
       icon: <MapPin className="w-4 h-4 text-info shrink-0 mt-0.5" />,
     };
   }
+  if (type === 'timecard_adjustment') {
+    return {
+      bg: 'bg-warning/10',
+      border: 'border-warning/30',
+      icon: <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />,
+    };
+  }
   if (type.includes('critical') || type.includes('warning')) {
     return {
       bg: 'bg-warning/10',
@@ -67,93 +61,65 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
   };
 }
 
-// Tracks which dispatch_assignment notifications have been responded to in this session.
-// Maps notification id → 'confirmed' | 'declined'
 type ResponseMap = Record<string, 'confirmed' | 'declined'>;
-
-// Maps dispatch_date → confirmation status fetched from the backend.
-// 'pending' or null means the window is still open; 'confirmed'/'declined' means already responded.
 type ConfirmationStatusMap = Record<string, 'pending' | 'confirmed' | 'declined' | null>;
 
-const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => {
-  const [notifications, setNotifications]         = useState<Notification[]>([]);
-  const [responses, setResponses]                 = useState<ResponseMap>({});
-  const [responding, setResponding]               = useState<string | null>(null);
+const NotificationBanner: React.FC = () => {
+  const { notifications, employeeId, markRead, markAllRead, refresh } = useNotificationContext();
+  const [responses, setResponses] = useState<ResponseMap>({});
+  const [responding, setResponding] = useState<string | null>(null);
   const [confirmationStatus, setConfirmationStatus] = useState<ConfirmationStatusMap>({});
-  const seenIds = useRef<Set<string>>(new Set());
+  const fetchedDates = useRef<Set<string>>(new Set());
 
+  // Fetch confirmation window status for any new dispatch_assignment notifications
   useEffect(() => {
-    if (!employeeId) return;
-    axiosClient
-      .get<Notification[]>(`/notifications/${employeeId}`)
-      .then(async (res) => {
-        const unread = res.data.filter((n) => !n.is_read);
-        setNotifications(unread);
-        if (onNotification) {
-          for (const n of unread) {
-            if (!seenIds.current.has(n.id)) {
-              seenIds.current.add(n.id);
-              onNotification(n.type);
-            }
-          }
-        }
+    const dates = [
+      ...new Set(
+        notifications
+          .filter(n => n.type === 'dispatch_assignment' && n.dispatch_date)
+          .map(n => n.dispatch_date as string)
+          .filter(d => !fetchedDates.current.has(d)),
+      ),
+    ];
+    if (dates.length === 0) return;
 
-        // For every unique dispatch_date on a dispatch_assignment notification, fetch
-        // the employee's current confirmation status. This tells us whether the
-        // confirmation window is still open so we can show or suppress the buttons.
-        const dates = [
-          ...new Set(
-            unread
-              .filter((n) => n.type === 'dispatch_assignment' && n.dispatch_date)
-              .map((n) => n.dispatch_date as string),
-          ),
-        ];
-        if (dates.length === 0) return;
-        const results = await Promise.allSettled(
-          dates.map((d) =>
-            axiosClient
-              .get<{ date: string; status: 'pending' | 'confirmed' | 'declined' | null }>(
-                `/dispatch/${d}/my-confirmation`,
-              )
-              .then((r) => ({ date: d, status: r.data.status })),
-          ),
-        );
-        const statusMap: ConfirmationStatusMap = {};
-        for (const r of results) {
-          if (r.status === 'fulfilled') statusMap[r.value.date] = r.value.status;
-        }
-        setConfirmationStatus(statusMap);
-      })
-      .catch(() => {});
-  }, [employeeId, onNotification]);
+    dates.forEach(d => fetchedDates.current.add(d));
 
-  const dismiss = async (id: string) => {
-    await axiosClient.patch(`/notifications/${id}/read`).catch(() => {});
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-  };
+    Promise.allSettled(
+      dates.map(d =>
+        axiosClient
+          .get<{ date: string; status: 'pending' | 'confirmed' | 'declined' | null }>(
+            `/dispatch/${d}/my-confirmation`,
+          )
+          .then(r => ({ date: d, status: r.data.status })),
+      ),
+    ).then(results => {
+      const statusMap: ConfirmationStatusMap = {};
+      for (const r of results) {
+        if (r.status === 'fulfilled') statusMap[r.value.date] = r.value.status;
+      }
+      setConfirmationStatus(prev => ({ ...prev, ...statusMap }));
+    });
+  }, [notifications]);
+
+  const dismiss = (id: string) => markRead(id);
 
   const dismissAll = async () => {
-    // dispatch_assignment cards with an open window require an explicit response.
-    // All others (including dispatch_assignment_info and already-responded cards) can be bulk-dismissed.
     const requiresResponse = (n: Notification) =>
       n.type === 'dispatch_assignment' &&
       !responses[n.id] &&
       n.dispatch_date &&
       confirmationStatus[n.dispatch_date] === 'pending';
 
-    const toRemove = notifications.filter((n) => !requiresResponse(n));
-    const ids = new Set(toRemove.map((n) => n.id));
-
-    if (toRemove.some((n) => n.type !== 'dispatch_assignment')) {
-      await axiosClient.patch(`/notifications/employee/${employeeId}/read-all`).catch(() => {});
+    const toRemove = notifications.filter(n => !requiresResponse(n));
+    if (toRemove.some(n => n.type !== 'dispatch_assignment')) {
+      await markAllRead();
+    } else {
+      await Promise.all(toRemove.map(n => markRead(n.id)));
     }
-    setNotifications((prev) => prev.filter((n) => !ids.has(n.id)));
   };
 
-  const respondToDispatch = async (
-    notif: Notification,
-    status: 'confirmed' | 'declined',
-  ) => {
+  const respondToDispatch = async (notif: Notification, status: 'confirmed' | 'declined') => {
     if (!notif.dispatch_date || responding) return;
     setResponding(notif.id);
     try {
@@ -161,8 +127,11 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
         employee_id: employeeId,
         status,
       });
-      setResponses((prev) => ({ ...prev, [notif.id]: status }));
-      setTimeout(() => dismiss(notif.id), 1800);
+      setResponses(prev => ({ ...prev, [notif.id]: status }));
+      setTimeout(() => {
+        dismiss(notif.id);
+        refresh();
+      }, 1800);
     } catch (e) {
       console.error('Failed to record confirmation:', e);
     } finally {
@@ -189,14 +158,12 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
         )}
       </div>
 
-      {notifications.map((n) => {
+      {notifications.map(n => {
         const style = styleForType(n.type);
 
         if (n.type === 'dispatch_assignment') {
           const response = responses[n.id];
           const isSubmitting = responding === n.id;
-          // Window is open only when the backend status is 'pending' (or not yet loaded).
-          // 'confirmed' / 'declined' means the employee already responded — suppress buttons.
           const backendStatus = n.dispatch_date ? confirmationStatus[n.dispatch_date] : undefined;
           const windowOpen = backendStatus === undefined || backendStatus === 'pending';
 
@@ -221,7 +188,6 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
                   {response === 'confirmed' ? 'Confirmed' : 'Declined'} — response recorded.
                 </div>
               ) : !windowOpen ? (
-                // Confirmation window closed — show recorded status, no action needed
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   {backendStatus === 'confirmed' && (
                     <>
@@ -269,7 +235,6 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
           );
         }
 
-        // dispatch_assignment_info — informational dispatch card, dismissible, no action buttons
         if (n.type === 'dispatch_assignment_info') {
           return (
             <div
@@ -288,7 +253,6 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
           );
         }
 
-        // Default render for all other notification types
         return (
           <div
             key={n.id}

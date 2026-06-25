@@ -33,7 +33,9 @@ import AuditLog from './pages/AuditLog';
 import LocationProfiles from './pages/LocationProfiles';
 import SortPage from './pages/Sort';
 import WalkerSortMonitor from './pages/WalkerSort';
+import NotificationsHistory from './pages/NotificationsHistory';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { NotificationProvider } from './contexts/NotificationContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
 import CompanyDetail from './pages/superadmin/CompanyDetail';
@@ -185,6 +187,7 @@ function Dashboard() {
 function App() {
   return (
     <AuthProvider>
+      <NotificationProvider>
       <Router>
         <Routes>
           <Route path="/login"    element={<Login />} />
@@ -260,6 +263,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Account />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/notifications"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch']}>
+                  <NotificationsHistory />
                 </ProtectedRoute>
               }
             />
@@ -457,6 +468,7 @@ function App() {
 
         </Routes>
       </Router>
+      </NotificationProvider>
     </AuthProvider>
   );
 }

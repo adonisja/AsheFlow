@@ -1,12 +1,16 @@
+import asyncio
+import json
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import or_
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.database import get_db
-from app.api.deps import RoleChecker, get_caller_employee, Pagination
+from app.database import get_db, SessionLocal
+from app.api.deps import RoleChecker, get_caller_employee, Pagination, _resolve_employee_from_cognito
+from app.core.security import verify_cognito_token
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.schemas.notification import NotificationResponse
@@ -117,3 +121,119 @@ def prune_notifications(
     )
     db.commit()
     return {"deleted": deleted, "cutoff": cutoff.date().isoformat(), "days": days}
+
+
+_SSE_POLL_SECONDS = 10
+_SSE_KEEPALIVE_SECONDS = 25
+
+
+@router.get("/{employee_id}/stream")
+async def stream_notifications(
+    employee_id: UUID,
+    token: str = Query(..., description="Cognito ID token for authentication"),
+):
+    """Server-Sent Events stream of unread notifications for an employee.
+
+    Sends the full unread list immediately on connect, then pushes a delta
+    whenever new notifications appear (polled every 10 s server-side).
+    Keepalive comments are sent every 25 s to prevent proxy timeouts.
+
+    Auth is via ?token= query param because EventSource cannot send headers.
+    Access: the employee themselves or management/dispatch/admin.
+    """
+    # Verify the token and resolve the caller — mirrors get_caller_employee but
+    # reads the token from the query string instead of the Authorization header.
+    try:
+        claims = verify_cognito_token(token)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
+
+    current_user = {
+        "id": claims.get("sub", ""),
+        "email": claims.get("email", ""),
+        "username": claims.get("cognito:username") or claims.get("username", ""),
+        "cognito_groups": claims.get("cognito:groups", []),
+    }
+
+    db = SessionLocal()
+    try:
+        caller, sub = _resolve_employee_from_cognito(current_user, db)
+    finally:
+        db.close()
+
+    if not caller:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee not found.")
+    if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+
+    company_id = caller.company_id
+
+    def _fetch_unread(seen_ids: set) -> tuple[list[dict], set]:
+        """Query unread notifications, return only ones not yet sent."""
+        db = SessionLocal()
+        try:
+            now = datetime.now(timezone.utc)
+            rows = (
+                db.query(Notification)
+                .filter(
+                    Notification.employee_id == employee_id,
+                    Notification.company_id == company_id,
+                    Notification.is_read == False,
+                    or_(Notification.expires_at == None, Notification.expires_at > now),
+                )
+                .order_by(Notification.created_at.desc())
+                .limit(50)
+                .all()
+            )
+            new_rows = [r for r in rows if str(r.id) not in seen_ids]
+            new_seen = seen_ids | {str(r.id) for r in rows}
+            payload = [
+                {
+                    "id": str(r.id),
+                    "employee_id": str(r.employee_id),
+                    "type": r.type,
+                    "message": r.message,
+                    "is_read": r.is_read,
+                    "created_at": r.created_at.isoformat(),
+                    "dispatch_date": r.dispatch_date.isoformat() if r.dispatch_date else None,
+                    "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                }
+                for r in new_rows
+            ]
+            return payload, new_seen
+        finally:
+            db.close()
+
+    async def _generate():
+        seen_ids: set = set()
+        seconds_since_keepalive = 0
+
+        # Send initial batch immediately on connect
+        payload, seen_ids = await asyncio.get_event_loop().run_in_executor(
+            None, _fetch_unread, seen_ids
+        )
+        if payload:
+            yield f"data: {json.dumps(payload)}\n\n"
+
+        while True:
+            await asyncio.sleep(_SSE_POLL_SECONDS)
+            seconds_since_keepalive += _SSE_POLL_SECONDS
+
+            payload, seen_ids = await asyncio.get_event_loop().run_in_executor(
+                None, _fetch_unread, seen_ids
+            )
+            if payload:
+                yield f"data: {json.dumps(payload)}\n\n"
+                seconds_since_keepalive = 0
+            elif seconds_since_keepalive >= _SSE_KEEPALIVE_SECONDS:
+                yield ": keepalive\n\n"
+                seconds_since_keepalive = 0
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

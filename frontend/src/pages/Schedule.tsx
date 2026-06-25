@@ -11,7 +11,6 @@ import {
   RefreshCw, ArrowUpDown, Filter,
 } from 'lucide-react';
 import { MiniCalendar } from '../components/MiniCalendar';
-import NotificationBanner from '../components/NotificationBanner';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
@@ -651,7 +650,6 @@ const Schedule = () => {
         <div className="card border-danger/30 bg-danger/5 text-danger text-sm px-4 py-3 rounded-xl">{loadError}</div>
       )}
 
-      {myId && <NotificationBanner employeeId={myId} />}
 
       {myId ? (
         <div className="flex flex-col gap-8 items-center max-w-2xl mx-auto w-full">

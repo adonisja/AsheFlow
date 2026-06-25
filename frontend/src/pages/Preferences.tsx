@@ -6,7 +6,6 @@ import {
   getRelationships, createRelationship, deleteRelationship,
   type EmployeeRelationship
 } from '../api/preferences';
-import NotificationBanner from '../components/NotificationBanner';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
@@ -456,7 +455,6 @@ const Preferences = () => {
 
       <ErrorBanner message={loadError} />
 
-      {myId && <NotificationBanner employeeId={myId} />}
 
       {myId && (
         <div className="space-y-6">

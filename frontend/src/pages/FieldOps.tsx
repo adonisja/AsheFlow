@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import NotificationBanner from '../components/NotificationBanner';
+import { useNotificationContext } from '../contexts/NotificationContext';
 import { getLocalYMD as todayStr } from '../utils/date';
 import { fileToDataUrl } from '../utils/file';
 
@@ -1064,15 +1064,17 @@ function TruckAPCard({ employeeId, refreshTrigger = 0 }: { employeeId: string; r
 // ---------------------------------------------------------------------------
 function FieldStaffView({ employeeId }: { employeeId: string }) {
   const [apRefreshTrigger, setApRefreshTrigger] = useState(0);
+  const { setOnNotification } = useNotificationContext();
 
-  // Called by NotificationBanner when an anchor_point_* notification arrives
-  const handleNotification = useCallback((type: string) => {
-    if (type.startsWith('anchor_point')) setApRefreshTrigger(n => n + 1);
-  }, []);
+  useEffect(() => {
+    setOnNotification((type: string) => {
+      if (type.startsWith('anchor_point')) setApRefreshTrigger(n => n + 1);
+    });
+    return () => setOnNotification(null);
+  }, [setOnNotification]);
 
   return (
     <div className="space-y-4">
-      <NotificationBanner employeeId={employeeId} onNotification={handleNotification} />
       <TruckAPCard employeeId={employeeId} refreshTrigger={apRefreshTrigger} />
     </div>
   );
@@ -2127,18 +2129,8 @@ export default function FieldOps() {
   return (
     <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
-      {isDriver    && (
-        <>
-          <NotificationBanner employeeId={employeeId} />
-          <DriverFieldOpsView employeeId={employeeId} />
-        </>
-      )}
-      {isWalker    && (
-        <>
-          <NotificationBanner employeeId={employeeId} />
-          <WalkerSelfPerformancePanel employeeId={employeeId} />
-        </>
-      )}
+      {isDriver    && <DriverFieldOpsView employeeId={employeeId} />}
+      {isWalker    && <WalkerSelfPerformancePanel employeeId={employeeId} />}
       {isFieldStaff && <FieldStaffView employeeId={employeeId} />}
     </div>
   );

@@ -3,7 +3,6 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { ClipboardCheck, Loader2 } from 'lucide-react';
 import TaskChecklist from '../components/TrainerDashboard/TaskChecklist';
-import NotificationBanner from '../components/NotificationBanner';
 import { getLocalYMD } from '../utils/date';
 
 export default function TraineeDashboard() {
@@ -81,7 +80,6 @@ export default function TraineeDashboard() {
           </p>
         </div>
       </div>
-      {traineeId && <NotificationBanner employeeId={traineeId} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">

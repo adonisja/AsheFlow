@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Navbar from './Navbar';
 import FeedbackModal from '../FeedbackModal';
 import CommandPalette from '../CommandPalette';
+import NotificationBanner from '../NotificationBanner';
 
 const Layout = () => {
   const location = useLocation();
@@ -28,6 +29,9 @@ const Layout = () => {
       <Navbar />
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="mb-4">
+          <NotificationBanner />
+        </div>
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}

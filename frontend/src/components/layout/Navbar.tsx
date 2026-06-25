@@ -1,38 +1,14 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNotificationContext } from '../../contexts/NotificationContext';
 import { NavLink, useNavigate, Link } from 'react-router-dom';
 import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../../contexts/AuthContext';
 import axiosClient from '../../api/axiosClient';
-import {
-  LogOut,
-  Menu,
-  X,
-  Home,
-  Calendar,
-  Settings,
-  Truck,
-  ClipboardCheck,
-  Users,
-  MapPin,
-  AlertTriangle,
-  Shield,
-  RefreshCw,
-  ShieldAlert,
-  MessageSquare,
-  Star,
-  Bell,
-  CheckCircle2,
-  XCircle,
-  Info,
-  Search,
-  BarChart2,
-  UserCircle2,
-  Building2,
-  Route,
-  Activity,
-  ShoppingBag,
-  ClipboardList,
-  ScrollText,
+import { LogOut, Menu, X, Home, Calendar, Settings, Truck,
+ ClipboardCheck, Users, MapPin, AlertTriangle, Shield, RefreshCw,
+  ShieldAlert, MessageSquare, Star, Bell, CheckCircle2,
+  XCircle, Info, Search, BarChart2, UserCircle2, Building2, 
+  Route, Activity, ShoppingBag, ClipboardList, ScrollText,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';
@@ -41,65 +17,14 @@ import Avatar from '../ui/Avatar';
 // Notification bell
 // ---------------------------------------------------------------------------
 
-interface NavNotification {
-  id: string;
-  type: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-}
-
 function notifIcon(type: string) {
   if (type.endsWith('_approved')) return <CheckCircle2 className="w-3.5 h-3.5 text-success shrink-0 mt-0.5" />;
   if (type.endsWith('_rejected')) return <XCircle className="w-3.5 h-3.5 text-danger shrink-0 mt-0.5" />;
   if (type === 'anchor_point_running_late') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   if (type.startsWith('anchor_point')) return <MapPin className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
+  if (type === 'timecard_adjustment') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   if (type.includes('critical') || type.includes('warning')) return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   return <Info className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
-}
-
-const EMPLOYEE_GROUPS = ['driver', 'walker', 'trainer', 'trainee'];
-
-function useNotifications(isAuthenticated: boolean, groups: string[]) {
-  const [employeeId, setEmployeeId] = useState<string | null>(null);
-  const [notifications, setNotifications] = useState<NavNotification[]>([]);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const isFieldStaffOrDispatch = groups.some(g => [...EMPLOYEE_GROUPS, 'dispatch'].includes(g));
-
-  const fetchNotifs = useCallback(async (empId: string) => {
-    try {
-      const res = await axiosClient.get<NavNotification[]>(`/notifications/${empId}`, { params: { limit: 20 } });
-      setNotifications(res.data.filter(n => !n.is_read));
-    } catch { /* silently ignore polling errors */ }
-  }, []);
-
-  useEffect(() => {
-    if (!isAuthenticated || !isFieldStaffOrDispatch) return;
-    axiosClient.get('/employees/me')
-      .then(res => {
-        const id = res.data.id as string;
-        setEmployeeId(id);
-        fetchNotifs(id);
-        intervalRef.current = setInterval(() => fetchNotifs(id), 30_000);
-      })
-      .catch(() => { /* employee record not found — skip notifications */ });
-
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [isAuthenticated, isFieldStaffOrDispatch, fetchNotifs]);
-
-  const markRead = async (notifId: string) => {
-    await axiosClient.patch(`/notifications/${notifId}/read`).catch(() => {});
-    setNotifications(prev => prev.filter(n => n.id !== notifId));
-  };
-
-  const markAllRead = async () => {
-    if (!employeeId) return;
-    await axiosClient.patch(`/notifications/employee/${employeeId}/read-all`).catch(() => {});
-    setNotifications([]);
-  };
-
-  return { notifications, markRead, markAllRead };
 }
 
 function NotificationDropdown({
@@ -108,7 +33,7 @@ function NotificationDropdown({
   onMarkAllRead,
   onClose,
 }: {
-  notifications: NavNotification[];
+  notifications: { id: string; type: string; message: string }[];
   onMarkRead: (id: string) => void;
   onMarkAllRead: () => void;
   onClose: () => void;
@@ -155,6 +80,15 @@ function NotificationDropdown({
           ))}
         </ul>
       )}
+      <div className="border-t border-border/50 px-4 py-2">
+        <Link
+          to="/notifications"
+          onClick={onClose}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          View all notifications →
+        </Link>
+      </div>
     </div>
   );
 }
@@ -164,12 +98,12 @@ function NotificationDropdown({
 // ---------------------------------------------------------------------------
 
 function TitleBar() {
-  const { user, groups, isAuthenticated } = useAuth();
+  const { user, groups } = useAuth();
   const navigate = useNavigate();
   const [bellOpen,    setBellOpen]    = useState(false);
   const [avatarOpen,  setAvatarOpen]  = useState(false);
   const avatarRef = useRef<HTMLDivElement>(null);
-  const { notifications, markRead, markAllRead } = useNotifications(isAuthenticated, groups);
+  const { notifications, markRead, markAllRead } = useNotificationContext();
 
   const handleSignOut = async () => {
     try {
