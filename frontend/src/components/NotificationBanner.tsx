@@ -40,7 +40,7 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
       icon: <MapPin className="w-4 h-4 text-info shrink-0 mt-0.5" />,
     };
   }
-  if (type === 'timecard_adjustment') {
+  if (type === 'timecard_adjustment' && import.meta.env.VITE_ADP_ENABLED === 'true') {
     return {
       bg: 'bg-warning/10',
       border: 'border-warning/30',

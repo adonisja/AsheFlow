@@ -22,7 +22,7 @@ function notifIcon(type: string) {
   if (type.endsWith('_rejected')) return <XCircle className="w-3.5 h-3.5 text-danger shrink-0 mt-0.5" />;
   if (type === 'anchor_point_running_late') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   if (type.startsWith('anchor_point')) return <MapPin className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
-  if (type === 'timecard_adjustment') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
+  if (type === 'timecard_adjustment' && import.meta.env.VITE_ADP_ENABLED === 'true') return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   if (type.includes('critical') || type.includes('warning')) return <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />;
   return <Info className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />;
 }

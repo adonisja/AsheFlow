@@ -22,10 +22,29 @@ from app.services.adp_exceptions import ADPAuthError, ADPClientError, ADPServerE
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/adp", tags=["adp"])
 
 allow_admin = RoleChecker(["admin"])
 allow_manager_or_admin = RoleChecker(["admin", "manager"])
+
+
+def require_adp_enabled():
+    """Block all ADP endpoints until ADP_ENABLED=true is set in the environment.
+
+    Returns 503 so the route is discoverable internally but clearly
+    unavailable to callers until the integration is signed off.
+    """
+    if not settings.adp_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ADP integration is not yet enabled for this environment.",
+        )
+
+
+router = APIRouter(
+    prefix="/adp",
+    tags=["adp"],
+    dependencies=[Depends(require_adp_enabled)],
+)
 
 class ADPConfigureRequest(BaseModel):
     adp_client_id: str

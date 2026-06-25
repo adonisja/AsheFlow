@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     # Required — no default. Add CREDENTIAL_ENCRYPTION_KEY to .env locally; set via env var in staging/prod.
     credential_encryption_key: str
 
+    # Feature flag — ADP payroll integration.
+    # Keep False until the integration is fully tested and signed off.
+    # Flip to True via ADP_ENABLED=true in the environment to enable all /adp endpoints.
+    adp_enabled: bool = False
+
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
 
