@@ -66,3 +66,9 @@ class Employee(Base):
     # Timecard sync only runs for employees where this flag is true.
     hr_system_id_adp          = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     hr_system_id_adp_verified = Column(Boolean, nullable=False, default=False)
+
+    # ── Modified duty / injury status ─────────────────────────────────────────
+    # null = no restriction; "injured" = temporary light duty; "disabled" = permanent light duty.
+    # Both non-null values hard-block assignment to heavy routes (ADR-139).
+    injury_status       = Column(String(20), nullable=True)
+    injury_status_since = Column(DateTime(timezone=True), nullable=True)

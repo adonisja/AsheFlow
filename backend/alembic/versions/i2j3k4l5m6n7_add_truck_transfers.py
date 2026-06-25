@@ -1,6 +1,6 @@
 """add truck transfers table
 
-Revision ID: b2c3d4e5f6a7
+Revision ID: i2j3k4l5m6n7
 Revises: e5f6a7b8c9d0
 Create Date: 2026-06-05
 
@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "b2c3d4e5f6a7"
+revision = "i2j3k4l5m6n7"
 down_revision = "e5f6a7b8c9d0"
 branch_labels = None
 depends_on = None

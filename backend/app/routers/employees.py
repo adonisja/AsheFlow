@@ -21,7 +21,7 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
-from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult
+from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch
 from app.services.audit import write_audit
 from app.services.email import send_invite_email
 
@@ -829,6 +829,48 @@ def demote_employee(
         _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "revoke_trainer")
 
     return db_employee
+
+
+# ── Injury / modified-duty status ─────────────────────────────────────────────
+
+@router.patch("/{employee_id}/injury-status", response_model=EmployeeResponse)
+def set_injury_status(
+    employee_id: UUID,
+    body: InjuryStatusPatch,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Set or clear an employee's injury / modified-duty status.
+
+    injury_status=null clears the flag and restores full routing eligibility.
+    injury_status="injured"|"disabled" hard-blocks the employee from heavy route
+    assignments until the flag is explicitly cleared (ADR-139).
+    """
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
+
+    old_status = employee.injury_status
+    employee.injury_status = body.injury_status
+    employee.injury_status_since = datetime.now(timezone.utc) if body.injury_status else None
+
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type="employee.injury_status_updated",
+        target_table="employees",
+        target_id=str(employee_id),
+        before={"injury_status": old_status},
+        after={"injury_status": body.injury_status},
+    )
+    db.commit()
+    db.refresh(employee)
+    return employee
 
 
 class _EmailChangeRequest(BaseModel):

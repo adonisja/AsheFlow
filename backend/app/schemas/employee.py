@@ -57,8 +57,15 @@ class EmployeeResponse(BaseModel):
     phone_number: Optional[str] = None
     account_status: str = "active"
     invited_at: Optional[datetime] = None
+    injury_status: Optional[str] = None
+    injury_status_since: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class InjuryStatusPatch(BaseModel):
+    """Body for PATCH /employees/{id}/injury-status."""
+    injury_status: Optional[Literal["injured", "disabled"]] = None
 
 
 class BulkImportRow(BaseModel):

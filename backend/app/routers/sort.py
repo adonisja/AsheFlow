@@ -13,7 +13,7 @@ import logging
 import os
 import tempfile
 import uuid as _uuid_mod
-from datetime import date
+from datetime import date, datetime, timezone
 from uuid import UUID
 from typing import Optional
 
@@ -29,17 +29,20 @@ from app.models.audit_log import AuditLog
 from app.models.company import CompanyConfig
 from app.models.employee import Employee
 from app.models.truck import Truck
+from app.models.truck_assignment import TruckAssignment
 from app.models.truck_zone import TruckZone
 from app.models.walker_route import RouteClusterCentroid
-from app.services.manifest_ingestor import FileManifestIngestor
+from app.services.manifest_ingestor import FileManifestIngestor, IngestResult
 from app.services.run_sort import run_sort, SortError
+from app.services.seed_manifest import generate_manifest
 from app.tasks.enrich_manifest import enrich_manifest_packages
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sort", tags=["sort"])
 
-allow_sort = RoleChecker(["dispatch", "management", "admin"])
+allow_sort  = RoleChecker(["dispatch", "management", "admin"])
+allow_admin = RoleChecker(["admin"])
 
 _REDIS_TTL_SECONDS = 86_400   # matches enrich_manifest task
 _ENRICHING_KEY_TTL = 300      # 5-min sentinel while Celery task is in flight
@@ -48,16 +51,10 @@ _MAX_UPLOAD_BYTES  = 10 * 1024 * 1024   # 10 MB — daily manifest should be wel
 
 # ── request / response schemas ────────────────────────────────────────────────
 
-class TotePackageIn(BaseModel):
-    tba: str
-    lat: float
-    lng: float
-
-
 class ToteIn(BaseModel):
     tote_id: str
     truck_id: UUID
-    packages: list[TotePackageIn]
+    tbas: list[str]     # TBA barcodes physically in this tote
 
 
 class SortRunRequest(BaseModel):
@@ -74,6 +71,7 @@ class ToteResultOut(BaseModel):
     outside_packages: int
     outside_pct: float
     outside_tbas: list[str]
+    outlier_tbas: list[str]        # TBAs with no DBSCAN cluster — no suggested truck possible
     suggested_truck_id: Optional[UUID] = None
     unresolvable: bool
 
@@ -118,7 +116,9 @@ class SortStatusResponse(BaseModel):
 class ManifestUploadResponse(BaseModel):
     sort_date: date
     package_count: int
-    status: str     # "enriching"
+    pending_count: int          # rows with missing/unreadable TBA — need dispatch resolution
+    warnings: list[str]         # count-reconciliation warnings (mismatches vs manifest header)
+    status: str                 # "enriching"
 
 
 class ManifestStatusResponse(BaseModel):
@@ -227,11 +227,11 @@ def upload_manifest(
         tmp.write(contents)
         tmp.flush()
         tmp.close()
-        packages = FileManifestIngestor(tmp.name).ingest()
+        result: IngestResult = FileManifestIngestor(tmp.name).ingest()
     finally:
         os.unlink(tmp.name)
 
-    if not packages:
+    if not result.packages and not result.pending:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No packages could be parsed from the file. Check column headers.",
@@ -245,7 +245,7 @@ def upload_manifest(
     if cfg and cfg.geoclient_borough:
         borough = cfg.geoclient_borough
     else:
-        borough = _infer_borough(packages) or "manhattan"
+        borough = _infer_borough(result.packages) or "manhattan"
 
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
@@ -254,7 +254,8 @@ def upload_manifest(
     r = _redis()
     r.setex(_enriching_key(cid_str, date_str), _ENRICHING_KEY_TTL, "1")
 
-    # Dispatch Celery task — packages serialised as dicts
+    # Only valid packages (with TBAs) go to the enrichment task.
+    # Pending packages have no TBA — dispatch must resolve them via a separate input.
     raw_dicts = [
         {
             "tba":          p.tba,
@@ -265,7 +266,7 @@ def upload_manifest(
             "tag_number":   p.tag_number,
             "package_type": p.package_type,
         }
-        for p in packages
+        for p in result.packages
     ]
     enrich_manifest_packages.delay(
         company_id=cid_str,
@@ -276,12 +277,20 @@ def upload_manifest(
 
     logger.info(
         "manifest upload accepted",
-        extra={"company_id": cid_str, "sort_date": date_str, "packages": len(packages)},
+        extra={
+            "company_id":    cid_str,
+            "sort_date":     date_str,
+            "packages":      len(result.packages),
+            "pending":       len(result.pending),
+            "warnings":      len(result.warnings),
+        },
     )
 
     return ManifestUploadResponse(
         sort_date=sort_date,
-        package_count=len(packages),
+        package_count=len(result.packages),
+        pending_count=len(result.pending),
+        warnings=result.warnings,
         status="enriching",
     )
 
@@ -392,6 +401,49 @@ def run_sort_endpoint(
         http_status = _SORT_ERROR_STATUS.get(exc.code, status.HTTP_400_BAD_REQUEST)
         raise HTTPException(status_code=http_status, detail=exc.detail)
 
+    # Stamp sort actor + timestamp on every TruckAssignment for this company + date.
+    # Only runs when zones were actually persisted (tier1 passed or force=True).
+    if result.zones_persisted:
+        db.query(TruckAssignment).filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == body.sort_date,
+        ).update(
+            {
+                "sort_initiated_by": caller.id,
+                "sort_committed_at": datetime.now(timezone.utc),
+            },
+            synchronize_session="fetch",
+        )
+
+    # Write RouteClusterCentroid rows — one per assigned cluster, for the Deck.gl density layer.
+    # Delete stale rows for this date first (idempotent re-sort).
+    if result.zones_persisted:
+        db.query(RouteClusterCentroid).filter(
+            RouteClusterCentroid.company_id == caller.company_id,
+            RouteClusterCentroid.route_date == body.sort_date,
+        ).delete(synchronize_session="fetch")
+
+        # Resolve truck_assignment_id for each truck in the proposal
+        ta_by_truck: dict = {
+            ta.truck_id: ta.id
+            for ta in db.query(TruckAssignment).filter(
+                TruckAssignment.company_id == caller.company_id,
+                TruckAssignment.date == body.sort_date,
+            ).all()
+        }
+
+        for assignment in result.proposal.assignments:
+            c = assignment.cluster
+            db.add(RouteClusterCentroid(
+                company_id          = caller.company_id,
+                truck_assignment_id = ta_by_truck.get(assignment.truck_id),
+                route_date          = body.sort_date,
+                centroid_lat        = c.centroid["lat"],
+                centroid_lng        = c.centroid["lng"],
+                package_count       = len(c.packages),
+                truck_zone_label    = assignment.truck_name,
+            ))
+
     # Audit log when dispatch overrides a tier-1 failure
     if result.was_forced:
         db.add(AuditLog(
@@ -430,6 +482,7 @@ def run_sort_endpoint(
             outside_packages   = t.outside_packages,
             outside_pct        = t.outside_pct,
             outside_tbas       = t.outside_tbas,
+            outlier_tbas       = t.outlier_tbas,
             suggested_truck_id = t.suggested_truck_id,
             unresolvable       = t.unresolvable,
         )
@@ -503,4 +556,98 @@ def get_sort_status(
         sort_date  = sort_date,
         zones      = zones,
         zone_count = len(zones),
+    )
+
+
+# ── Seed manifest (admin-only dev tool) ───────────────────────────────────────
+
+class SeedManifestPackagePreview(BaseModel):
+    tracking_id:  str
+    address:      str
+    bag_id:       str
+    package_type: str
+    latitude:     float
+    longitude:    float
+
+
+class SeedManifestResponse(BaseModel):
+    sort_date:     date
+    package_count: int
+    tote_count:    int
+    ov_count:      int
+    truck_count:   int
+    truck_names:   list[str]
+    preview_rows:  list[SeedManifestPackagePreview]   # first 20 rows for in-browser review
+    csv_b64:       str                                 # base64-encoded CSV for the upload step
+
+
+@router.post(
+    "/seed-manifest",
+    response_model=SeedManifestResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Generate a synthetic test manifest (admin only)",
+)
+def seed_manifest(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Generate a 1 500-package synthetic manifest for end-to-end pipeline testing.
+
+    Only callable by admin role.  Requires that truck dispatch has already run for
+    the requested date (at least one TruckAssignment must exist) so the caller
+    knows which trucks they are testing against.
+
+    Returns:
+    - Summary counts (packages, totes, OVs, trucks)
+    - First 20 rows as a preview table
+    - Base-64-encoded CSV bytes — pass directly to POST /sort/upload to start enrichment
+    """
+    import base64
+
+    assignment_rows = (
+        db.query(TruckAssignment)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == sort_date,
+        )
+        .all()
+    )
+    if not assignment_rows:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"No truck assignments found for {sort_date}. "
+                "Run dispatch for this date first, then generate the test manifest."
+            ),
+        )
+
+    truck_ids = [a.truck_id for a in assignment_rows]
+    trucks = db.query(Truck).filter(Truck.id.in_(truck_ids)).all()
+    truck_names = sorted(t.name for t in trucks)
+
+    result = generate_manifest()
+
+    preview = [
+        SeedManifestPackagePreview(
+            tracking_id  = r["Tracking ID"],
+            address      = r["Address"],
+            bag_id       = r["Bag ID"],
+            package_type = r["Package Type"] or "—",
+            latitude     = r["Latitude"],
+            longitude    = r["Longitude"],
+        )
+        for r in result.rows[:20]
+    ]
+
+    return SeedManifestResponse(
+        sort_date     = sort_date,
+        package_count = result.package_count,
+        tote_count    = result.tote_count,
+        ov_count      = result.ov_count,
+        truck_count   = len(assignment_rows),
+        truck_names   = truck_names,
+        preview_rows  = preview,
+        csv_b64       = base64.b64encode(result.csv_bytes).decode("ascii"),
     )

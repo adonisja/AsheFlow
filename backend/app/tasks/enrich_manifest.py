@@ -15,6 +15,7 @@ Endpoint: GET /geoclient/v2/address.json?houseNumber=411&street=W+36+St&borough=
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -48,8 +49,17 @@ def _parse_house_and_street(address: str) -> tuple[str, str] | None:
     return house, street
 
 
-def _geoclient_normalise(address: str, borough: str = "manhattan") -> str | None:
-    """Call GeoClient address endpoint; return normalised street string or None."""
+@dataclass
+class GeoClientResult:
+    normalised_address: str
+    lat: float | None
+    lng: float | None
+    first_cross_street: str | None
+    second_cross_street: str | None
+
+
+def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientResult | None:
+    """Call GeoClient address endpoint; return enriched location data or None."""
     if not settings.geoclient_app_id or not settings.geoclient_app_key:
         return None
 
@@ -73,9 +83,27 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> str | None
         resp.raise_for_status()
         data = resp.json()
         addr = data.get("address", {})
+
         first_street = addr.get("firstStreetNameNormalized") or addr.get("firstStreetName")
-        if first_street:
-            return f"{house} {first_street}"
+        if not first_street:
+            return None
+
+        lat_raw = addr.get("latitude")
+        lng_raw = addr.get("longitude")
+
+        try:
+            lat = float(lat_raw) if lat_raw is not None else None
+            lng = float(lng_raw) if lng_raw is not None else None
+        except (TypeError, ValueError):
+            lat, lng = None, None
+
+        return GeoClientResult(
+            normalised_address=f"{house} {first_street}",
+            lat=lat,
+            lng=lng,
+            first_cross_street=addr.get("firstCrossStreetNameNormalized") or addr.get("firstCrossStreetName") or None,
+            second_cross_street=addr.get("secondCrossStreetNameNormalized") or addr.get("secondCrossStreetName") or None,
+        )
     except Exception:
         pass
     return None
@@ -155,30 +183,38 @@ def enrich_manifest_packages(
 def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key):
     enriched: list[dict] = []
     failed: list[dict] = []
+    ov_zones: set[str] = set()
 
     for pkg in packages:
         address = pkg.get("address") or ""
         tba = pkg.get("tba", "unknown")
 
-        normalised = None
-        block_key = None
-        failure_reason = None
+        geo: GeoClientResult | None = None
+        block_key: str | None = None
+        failure_reason: str | None = None
+
+        # tag_number is Amazon's warehouse staging locator (e.g. "A-12") — informational
+        # at load time only. Collect unique values for the OV zones cache; exclude from
+        # the enriched package dict.
+        tag = pkg.get("tag_number")
+        if tag:
+            ov_zones.add(tag.strip())
 
         if address:
-            # Attempt GeoClient normalisation (3 retries with backoff)
+            # Attempt GeoClient lookup with 3 retries (network hiccups)
             for attempt in range(3):
                 try:
-                    normalised = _geoclient_normalise(address, borough=borough)
+                    geo = _geoclient_normalise(address, borough=borough)
                     break
                 except Exception:
                     if attempt == 2:
                         failure_reason = "geoclient_error"
 
-            if normalised is None and not failure_reason:
+            if geo is None and not failure_reason:
                 failure_reason = "geoclient_no_match"
 
-            # derive_block_key on normalised address, fall back to raw address
-            source = normalised or address
+            # derive_block_key on normalised address; fall back to raw if GeoClient failed
+            source = geo.normalised_address if geo else address
             result = derive_block_key(source, tba=tba)
             if isinstance(result, ParsedBlock):
                 block_key = result.block_key
@@ -188,7 +224,26 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
         else:
             failure_reason = "missing_address"
 
-        enriched_pkg = {**pkg, "block_key": block_key, "normalised_address": normalised}
+        # GeoClient lat/lng is primary. Fall back to Amazon-supplied coordinates only
+        # when GeoClient returns no lat/lng (API down, address outside coverage, etc.).
+        amazon_lat = pkg.get("lat")
+        amazon_lng = pkg.get("lng")
+        final_lat = (geo.lat if geo and geo.lat is not None else amazon_lat)
+        final_lng = (geo.lng if geo and geo.lng is not None else amazon_lng)
+
+        # Build the canonical enriched package dict.
+        # address and tag_number are intentionally excluded (ephemeral / load-phase only).
+        enriched_pkg = {
+            "tba":                 tba,
+            "bag_id":              pkg.get("bag_id"),
+            "package_type":        pkg.get("package_type"),
+            "lat":                 final_lat,
+            "lng":                 final_lng,
+            "block_key":           block_key,
+            "normalised_address":  geo.normalised_address if geo else None,
+            "first_cross_street":  geo.first_cross_street if geo else None,
+            "second_cross_street": geo.second_cross_street if geo else None,
+        }
         enriched.append(enriched_pkg)
 
         if failure_reason:
@@ -198,9 +253,16 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                 "reason": failure_reason,
             })
 
-    # Cache enriched packages in Redis (r was passed in from caller)
+    # Cache enriched packages in Redis
     key = _manifest_key(company_id, sort_date)
     r.setex(key, _REDIS_TTL_SECONDS, json.dumps(enriched))
+
+    # Cache OV sort zones separately — same TTL. Surfaces to dispatch/trainer so they
+    # can locate OVs in the warehouse without re-reading the raw manifest.
+    if ov_zones:
+        ov_key = f"manifest_ov_zones:{company_id}:{sort_date}"
+        r.setex(ov_key, _REDIS_TTL_SECONDS, json.dumps(sorted(ov_zones)))
+
     # Clear any prior failure key now that enrichment succeeded
     r.delete(_failed_key)
 

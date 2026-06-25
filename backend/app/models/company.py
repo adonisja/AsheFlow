@@ -81,8 +81,11 @@ class CompanyConfig(Base):
     tier1_stray_pct            = Column(Float,   nullable=True)   # default 0.10
     tier1_uncertain_pct        = Column(Float,   nullable=True)   # default 0.40
 
-    # ── Location profile verification ─────────────────────────────────────────
-    location_profile_lock_threshold = Column(Integer, nullable=True)   # default 3 agreements to lock
+    # ── Route effort scoring tuning ───────────────────────────────────────────
+    # Weights applied to time_weight and physical_weight per workload_class.
+    # Default 0.5 each (equal contribution). Tuned per-company from field data.
+    effort_time_factor     = Column(Float, nullable=True)   # default 0.5
+    effort_physical_factor = Column(Float, nullable=True)   # default 0.5
 
     # ── Manifest ingestion mode ───────────────────────────────────────────────
     ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"

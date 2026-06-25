@@ -19,7 +19,7 @@ EFFORT_CAPACITY_PAIRED: dict[str, int] = {
     "heavy":    12,   # 6 slots × 2
 }
 
-# workload_class → effort_class (from LocationProfile)
+# workload_class → effort_class (from BuildingProfile / BuildingProfileLibrary)
 WORKLOAD_TO_EFFORT: dict[str, str] = {
     "bulk_drop":  "easy",
     "standard":   "standard",
@@ -42,27 +42,24 @@ TOTE_HALF_SLOTS = 2
 # Sort request — addresses are ephemeral, never stored
 # ---------------------------------------------------------------------------
 
-class OVInput(BaseModel):
-    sort_zone: str = Field(..., description="Warehouse staging locator, e.g. 'A-12'")
-    size_tier: Literal["XL", "L", "M", "S"]
-    paired_bag_id: str = Field(..., description="Bag ID this OV accompanies, e.g. 'Green 5270'")
-
-
 class PackageInput(BaseModel):
     tba_number: str
-    tag_number: Optional[str] = None
     bag_id: str
-    address: str        # ephemeral — used only during sort, never persisted
+    block_key: Optional[str] = None            # pre-computed from enriched Redis manifest
+    normalised_address: Optional[str] = None   # from GeoClient — used for BuildingProfile lookup
+    package_type: Optional[str] = None         # "OV_S"|"OV_M"|"OV_L"|"OV_XL"|"standard"|None
     lat: Optional[float] = None
     lng: Optional[float] = None
+    first_cross_street: Optional[str] = None   # from GeoClient — used for BFS adjacency
+    second_cross_street: Optional[str] = None  # from GeoClient — used for BFS adjacency
 
 
 class SortRequest(BaseModel):
     truck_assignment_id: UUID
     route_date: date
     packages: list[PackageInput]
-    ovs: list[OVInput] = []
     # walker_count removed — routes are computed first, people assigned second
+    # ovs removed — OV pairings are derived server-side from bag_id + package_type
 
 
 # ---------------------------------------------------------------------------
@@ -70,11 +67,10 @@ class SortRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 class MisroutedPackageOut(BaseModel):
-    tba_number: str
-    tag_number: Optional[str]
-    current_bag_id: str
-    destination_block_key: Optional[str]        # block_key it belongs to
-    suggested_route_number: Optional[int]       # None = needs captain review
+    tba_number: Optional[str] = None
+    current_bag_id: Optional[str] = None
+    destination_block_key: Optional[str] = None        # block_key it belongs to
+    suggested_route_number: Optional[int] = None       # None = needs captain review
 
 
 class RouteOut(BaseModel):
@@ -83,12 +79,13 @@ class RouteOut(BaseModel):
     block_keys: list[str]
     tote_ids: list[str]
     tba_numbers: list[str]
-    tag_numbers: list[str]
     slot_cost: int                  # half-slots
     capacity_limit: int             # half-slots
-    effort_class: str               # easy|standard|heavy
-    workload_source: str            # profile|flag|default
+    effort_class: str               # easy|standard|heavy|very_heavy
+    effort_score: float = 0.0       # weighted normalized score snapshot
+    workload_source: str            # address_profile|block_profile|flag|default
     package_count: int
+    coverage_pct: float = 0.0       # fraction of packages with locked BuildingProfile
     misrouted_packages: list[MisroutedPackageOut] = []
 
 
@@ -111,15 +108,18 @@ class WaveAssignmentEntry(BaseModel):
 class WaveDistributionRequest(BaseModel):
     """Assign routes to confirmed staff at the anchor point.
 
-    The client sends the final assignment map after the trainer reviews the
-    auto-distribution and makes any manual adjustments.
+    When auto_assign=True the server returns a WaveDistributionProposal without
+    committing anything. The trainer reviews, adjusts, then resubmits with
+    auto_assign=False and the finalized assignments list.
+    When auto_assign=False (default) assignments must be fully populated.
     """
     truck_assignment_id: UUID
     route_date: date
-    assignments: list[WaveAssignmentEntry]
+    assignments: list[WaveAssignmentEntry] = []
     trainer_id: UUID
     trainee_id: Optional[UUID] = None
     trainee_phase: Optional[int] = Field(None, ge=1, le=5)
+    auto_assign: bool = False
 
 
 class RouteReassignRequest(BaseModel):
@@ -170,16 +170,18 @@ class RouteResponse(BaseModel):
     truck_assignment_id: UUID
     route_date: date
     route_number: int
+    wave_number: int = 1
     block_keys: list[str]
     tote_ids: list[str]
     tba_numbers: list[str]
-    tag_numbers: list[str]
     slot_cost: int
     capacity_limit: int
     capacity_limit_paired: Optional[int] = None
     package_count: int
     effort_class: str
+    effort_score: Optional[float] = None
     workload_source: str
+    coverage_pct: Optional[float] = None
     assigned_to: Optional[UUID] = None
     assigned_to_name: Optional[str] = None
     paired_trainee_id: Optional[UUID] = None
@@ -193,22 +195,77 @@ class RouteResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class WalkerRouteResponse(BaseModel):
-    id: UUID
-    truck_assignment_id: UUID
-    route_date: date
-    employee_id: UUID
-    total_routes: int
-    total_packages: int
-    total_bags: int
-    total_slot_cost: int
-    created_at: datetime
-    routes: list[RouteResponse] = []
-    model_config = ConfigDict(from_attributes=True)
-
-
 class RouteStatusPatch(BaseModel):
     status: Literal["assigned", "in_progress", "completed"]
+
+
+# ---------------------------------------------------------------------------
+# Wave pool — second-wave return mechanic
+# ---------------------------------------------------------------------------
+
+class ReturnedWalkerRoute(BaseModel):
+    route_number: int
+    wave_number: int
+    package_count: int
+    effort_class: str
+
+
+class ReturnedWalker(BaseModel):
+    employee_id: UUID
+    employee_name: str
+    injury_status: Optional[str] = None
+    completed_routes: list[ReturnedWalkerRoute]
+
+
+class UnassignedRouteEntry(BaseModel):
+    route_id: UUID
+    route_number: int
+    effort_class: str
+    package_count: int
+    slot_cost: int
+    wave_number: int
+
+
+class WaveStatusCounts(BaseModel):
+    assigned: int = 0
+    in_progress: int = 0
+    completed: int = 0
+    unassigned: int = 0
+
+
+class WaveSummary(BaseModel):
+    """Per-wave status breakdown, keyed by wave number (1-based string key).
+
+    Returned as {"1": {...}, "2": {...}, ...} — clients iterate over keys
+    rather than hardcoded field names so any number of waves is supported.
+    """
+    waves: dict[str, WaveStatusCounts]
+    total_routes: int
+
+
+class WavePoolResponse(BaseModel):
+    returned_walkers: list[ReturnedWalker]
+    unassigned_routes: list[UnassignedRouteEntry]
+    wave_summary: WaveSummary
+
+
+# ---------------------------------------------------------------------------
+# Wave distribution — auto_assign proposal mode
+# ---------------------------------------------------------------------------
+
+class ProposedAssignmentEntry(BaseModel):
+    route_number: int
+    route_id: UUID
+    employee_id: UUID
+    employee_name: str
+    effort_class: str
+    auto_proposed: bool = False
+
+
+class WaveDistributionProposal(BaseModel):
+    """Returned when auto_assign=True — trainer reviews before confirming."""
+    proposed_assignments: list[ProposedAssignmentEntry]
+    conflicts: list[str]   # human-readable strings when injury constraints can't be fully satisfied
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +275,12 @@ class RouteStatusPatch(BaseModel):
 class CommitSortRequest(BaseModel):
     """Commit a route sort for a truck assignment.
 
-    Server loads packages from the enriched Redis manifest via
-    TruckZone.package_tbas. OV pairings require physical observation by the
-    trainer and are supplied by the client.
+    Server loads packages from the enriched Redis manifest via TruckZone.package_tbas.
+    OV pairings are derived server-side from bag_id grouping + package_type — the
+    trainer does not need to supply them.
     """
     truck_assignment_id: UUID
     route_date: date
-    ovs: list[OVInput] = []
 
 
 class CommitSortResponse(BaseModel):
@@ -259,7 +315,6 @@ class MisroutedPackageFlagResponse(BaseModel):
     id: UUID
     route_id: UUID
     tba_number: str
-    tag_number: Optional[str] = None
     current_bag_id: str
     destination_block_key: Optional[str] = None
     suggested_route_id: Optional[UUID] = None
@@ -280,35 +335,3 @@ class Phase4OptInRequest(BaseModel):
     route_date: date
 
 
-# ---------------------------------------------------------------------------
-# Walker assignment — pairing walkers to committed routes
-# ---------------------------------------------------------------------------
-
-class AssignWalkersRequest(BaseModel):
-    """Map sorted walker routes to real employees.
-
-    walker_ids must be ordered to match walker_index values from the sort
-    result (index 0 → first walker ID, etc.).
-    """
-    walker_ids: list[UUID]
-
-
-# ---------------------------------------------------------------------------
-# Walker trip schemas
-# ---------------------------------------------------------------------------
-
-class WalkerTripResponse(BaseModel):
-    id: UUID
-    company_id: UUID
-    walker_route_id: UUID
-    trip_number: int
-    status: str
-    departed_at: Optional[datetime] = None
-    returned_at: Optional[datetime] = None
-    suggested_walker_route_id: Optional[UUID] = None
-    created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-
-class WalkerTripStatusPatch(BaseModel):
-    status: Literal["in_progress", "completed"]

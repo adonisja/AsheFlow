@@ -139,6 +139,11 @@ backend/app/routers/dispatch.py
 backend/app/routers/training.py
 backend/app/routers/field_ops.py
 backend/app/routers/walker_routes.py
+backend/app/routers/rts.py
+backend/app/routers/building_profiles.py
+backend/app/routers/building_profile_library.py
+backend/app/services/derive_block_key.py
+backend/app/services/seed_manifest.py
 
 # Auth tokens and credentials (never commit these)
 .claude/token.json

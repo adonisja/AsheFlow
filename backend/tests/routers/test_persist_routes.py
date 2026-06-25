@@ -53,7 +53,7 @@ def _make_route_out(
         block_keys         = block_keys,
         tote_ids           = [f"Bag{route_number}"],
         tba_numbers        = [f"TBA{route_number:03}{i}" for i in range(package_count)],
-        tag_numbers        = [],
+
         slot_cost          = 4,
         capacity_limit     = EFFORT_CAPACITY["standard"],
         effort_class       = "standard",
@@ -98,7 +98,7 @@ def _make_mock_db():
 
 class TestPersistRoutesPackageCount:
     def test_package_count_set_on_single_route(self):
-        route_out = _make_route_out(1, ["W_36_St_350s_even"], package_count=5)
+        route_out = _make_route_out(1, ["W_36_St_300"], package_count=5)
         result = _make_sort_result([route_out])
         db = _make_mock_db()
 
@@ -109,8 +109,8 @@ class TestPersistRoutesPackageCount:
 
     def test_package_count_set_on_each_route_independently(self):
         routes = [
-            _make_route_out(1, ["W_36_St_350s_even"], package_count=3),
-            _make_route_out(2, ["W_57_St_400s_odd"],  package_count=7),
+            _make_route_out(1, ["W_36_St_300"], package_count=3),
+            _make_route_out(2, ["W_57_St_400"],  package_count=7),
         ]
         result = _make_sort_result(routes)
         db = _make_mock_db()
@@ -122,7 +122,7 @@ class TestPersistRoutesPackageCount:
 
     def test_package_count_zero_is_allowed(self):
         # A route with no packages (e.g. OV-only) must still set the field
-        route_out = _make_route_out(1, ["W_36_St_350s_even"], package_count=0)
+        route_out = _make_route_out(1, ["W_36_St_300"], package_count=0)
         result = _make_sort_result([route_out])
         db = _make_mock_db()
 
@@ -131,7 +131,7 @@ class TestPersistRoutesPackageCount:
         assert created[0].package_count == 0
 
     def test_company_id_set_on_route(self):
-        route_out = _make_route_out(1, ["W_36_St_350s_even"])
+        route_out = _make_route_out(1, ["W_36_St_300"])
         result = _make_sort_result([route_out])
         db = _make_mock_db()
 
@@ -140,7 +140,7 @@ class TestPersistRoutesPackageCount:
         assert created[0].company_id == _COMPANY_ID
 
     def test_status_is_unassigned(self):
-        route_out = _make_route_out(1, ["W_36_St_350s_even"])
+        route_out = _make_route_out(1, ["W_36_St_300"])
         result = _make_sort_result([route_out])
         db = _make_mock_db()
 
@@ -164,15 +164,14 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
         return created, flags
 
     def test_misroute_anchored_to_matching_destination_route(self):
-        # Route 1 owns W_36_St_350s_even; Route 2 owns W_57_St_400s_odd.
-        # A misroute destined for W_57_St_400s_odd must anchor to Route 2.
-        r1 = _make_route_out(1, ["W_36_St_350s_even"])
-        r2 = _make_route_out(2, ["W_57_St_400s_odd"])
+        # Route 1 owns W_36_St_300; Route 2 owns W_57_St_400.
+        # A misroute destined for W_57_St_400 must anchor to Route 2.
+        r1 = _make_route_out(1, ["W_36_St_300"])
+        r2 = _make_route_out(2, ["W_57_St_400"])
         misroute = MisroutedPackageOut(
             tba_number             = "TBA999",
-            tag_number             = None,
             current_bag_id         = "BagX",
-            destination_block_key  = "W_57_St_400s_odd",
+            destination_block_key  = "W_57_St_400",
             suggested_route_number = None,
         )
 
@@ -184,13 +183,12 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
 
     def test_misroute_falls_back_to_first_route_when_no_match(self):
         # Destination block key not present in any route — fall back to created[0].
-        r1 = _make_route_out(1, ["W_36_St_350s_even"])
-        r2 = _make_route_out(2, ["W_57_St_400s_odd"])
+        r1 = _make_route_out(1, ["W_36_St_300"])
+        r2 = _make_route_out(2, ["W_57_St_400"])
         misroute = MisroutedPackageOut(
             tba_number             = "TBA888",
-            tag_number             = None,
             current_bag_id         = "BagY",
-            destination_block_key  = "W_99_St_100s_even",   # no route owns this
+            destination_block_key  = "W_99_St_100",   # no route owns this
             suggested_route_number = None,
         )
 
@@ -200,10 +198,9 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
         assert unassigned_flags[0].route_id == created[0].id  # falls back to Route 1
 
     def test_misroute_with_none_destination_falls_back_to_first_route(self):
-        r1 = _make_route_out(1, ["W_36_St_350s_even"])
+        r1 = _make_route_out(1, ["W_36_St_300"])
         misroute = MisroutedPackageOut(
             tba_number             = "TBA777",
-            tag_number             = None,
             current_bag_id         = "BagZ",
             destination_block_key  = None,
             suggested_route_number = None,
@@ -216,21 +213,18 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
 
     def test_multiple_misroutes_each_anchored_independently(self):
         # Three routes; three unassigned misroutes each destined for a different route.
-        r1 = _make_route_out(1, ["W_36_St_350s_even"])
-        r2 = _make_route_out(2, ["W_57_St_400s_odd"])
-        r3 = _make_route_out(3, ["5_Ave_200s_even"])
+        r1 = _make_route_out(1, ["W_36_St_300"])
+        r2 = _make_route_out(2, ["W_57_St_400"])
+        r3 = _make_route_out(3, ["5_Ave_200"])
         misroutes = [
             MisroutedPackageOut(
-                tba_number="M1", tag_number=None, current_bag_id="B1",
-                destination_block_key="W_57_St_400s_odd", suggested_route_number=None,
+                destination_block_key="W_57_St_400", suggested_route_number=None,
             ),
             MisroutedPackageOut(
-                tba_number="M2", tag_number=None, current_bag_id="B2",
-                destination_block_key="5_Ave_200s_even", suggested_route_number=None,
+                destination_block_key="5_Ave_200", suggested_route_number=None,
             ),
             MisroutedPackageOut(
-                tba_number="M3", tag_number=None, current_bag_id="B3",
-                destination_block_key="W_36_St_350s_even", suggested_route_number=None,
+                destination_block_key="W_36_St_300", suggested_route_number=None,
             ),
         ]
 
@@ -242,7 +236,7 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
         assert flag_map["M3"] == created[0].id   # W_36_St → Route 1
 
     def test_no_misroutes_means_no_flag_rows_added_for_unassigned(self):
-        r1 = _make_route_out(1, ["W_36_St_350s_even"])
+        r1 = _make_route_out(1, ["W_36_St_300"])
         result = _make_sort_result([r1], unassigned_misroutes=[])
         db = _make_mock_db()
 
@@ -252,14 +246,14 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
         assert flags == []
 
     def test_destination_block_key_preserved_on_flag(self):
-        r1 = _make_route_out(1, ["W_36_St_350s_even"])
+        r1 = _make_route_out(1, ["W_36_St_300"])
         misroute = MisroutedPackageOut(
-            tba_number="TBA123", tag_number="T1", current_bag_id="BagA",
-            destination_block_key="W_36_St_350s_even", suggested_route_number=None,
+            tba_number="TBA123", current_bag_id="BagA",
+            destination_block_key="W_36_St_300", suggested_route_number=None,
         )
         _, flags = self._run([r1], [misroute])
 
         flag = next(f for f in flags if f.tba_number == "TBA123")
-        assert flag.destination_block_key == "W_36_St_350s_even"
+        assert flag.destination_block_key == "W_36_St_300"
         assert flag.current_bag_id == "BagA"
         assert flag.resolved is False
