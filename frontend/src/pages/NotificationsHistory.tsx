@@ -148,7 +148,7 @@ export default function NotificationsHistory() {
         <div className="card text-center py-12">
           <Bell className="w-8 h-8 text-muted-foreground mx-auto mb-3 opacity-40" />
           <p className="text-muted-foreground text-sm">
-            {filter === 'unread' ? 'You're all caught up.' : 'No notifications yet.'}
+            {filter === 'unread' ? "You're all caught up." : 'No notifications yet.'}
           </p>
         </div>
       ) : (

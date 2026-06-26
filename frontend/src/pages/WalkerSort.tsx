@@ -270,7 +270,7 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
 
         {/* Injury badge */}
         {injuryStatus && (
-          <ShieldAlert className="w-3.5 h-3.5 text-warning shrink-0" title={`${assignee?.name}: ${injuryStatus}`} />
+          <ShieldAlert className="w-3.5 h-3.5 text-warning shrink-0" aria-label={`${assignee?.name}: ${injuryStatus}`} />
         )}
 
         {route.misrouted_packages.length > 0 && (
