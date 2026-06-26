@@ -135,7 +135,9 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "grep -v '^CORS_ORIGINS=' /home/ubuntu/AsheFlow/backend/.env > /tmp/backend_env_tmp 2>/dev/null && mv /tmp/backend_env_tmp /home/ubuntu/AsheFlow/backend/.env || true",
+              "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
@@ -340,7 +342,9 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "grep -v '^CORS_ORIGINS=' /home/ubuntu/AsheFlow/backend/.env > /tmp/backend_env_tmp 2>/dev/null && mv /tmp/backend_env_tmp /home/ubuntu/AsheFlow/backend/.env || true",
+              "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
