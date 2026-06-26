@@ -137,7 +137,8 @@ class CompanyConfigResponse(BaseModel):
     tier1_small_uncertain_max:        Optional[int]
     tier1_stray_pct:                  Optional[float]
     tier1_uncertain_pct:              Optional[float]
-    location_profile_lock_threshold:  Optional[int]
+    effort_time_factor:               Optional[float]
+    effort_physical_factor:           Optional[float]
     ingestion_mode:                   Optional[str]
 
     model_config = {"from_attributes": True}
@@ -180,7 +181,8 @@ class CompanyConfigResponse(BaseModel):
             tier1_small_uncertain_max=obj.tier1_small_uncertain_max,
             tier1_stray_pct=obj.tier1_stray_pct,
             tier1_uncertain_pct=obj.tier1_uncertain_pct,
-            location_profile_lock_threshold=obj.location_profile_lock_threshold,
+            effort_time_factor=obj.effort_time_factor,
+            effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
         )
 
@@ -597,8 +599,9 @@ class CompanyConfigUpdate(BaseModel):
     tier1_stray_pct:                 Optional[float] = Field(None, ge=0.0, le=1.0)
     tier1_uncertain_pct:             Optional[float] = Field(None, ge=0.0, le=1.0)
 
-    # Location profiles
-    location_profile_lock_threshold: Optional[int]  = Field(None, ge=1, le=50)
+    # Effort scoring
+    effort_time_factor:              Optional[float] = Field(None, ge=0.0, le=1.0)
+    effort_physical_factor:          Optional[float] = Field(None, ge=0.0, le=1.0)
 
     # Manifest ingestion
     ingestion_mode:                  Optional[str]   = None

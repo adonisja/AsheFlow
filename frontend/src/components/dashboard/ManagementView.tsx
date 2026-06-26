@@ -224,10 +224,17 @@ export default function ManagementView() {
                 </div>
               )}
               {trainingPipeline.trainer_loads.length === 0 ? (
-                <p className="text-sm text-subtle text-center py-4">No training sessions today.</p>
+                <p className="text-sm text-subtle text-center py-4">No active trainer assignments.</p>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-xs text-subtle uppercase tracking-wider font-medium">Trainer Load Today</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-subtle uppercase tracking-wider font-medium">
+                      {truckStatuses.length > 0 ? 'Trainer Load Today' : 'Standing Assignments'}
+                    </p>
+                    {truckStatuses.length === 0 && (
+                      <span className="text-xs text-subtle italic">no dispatch yet</span>
+                    )}
+                  </div>
                   {trainingPipeline.trainer_loads.map((t: any) => (
                     <div key={t.trainer_id} className="flex items-center justify-between">
                       <span className="text-sm text-foreground truncate">{t.trainer_name}</span>

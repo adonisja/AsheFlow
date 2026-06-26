@@ -208,12 +208,19 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
       'Same concept as the stray percentage, but for uncertain (border-point) packages. Higher values allow more geographic looseness in cluster assignment.',
     example: '"0.40" — up to 40% of packages can be uncertain in a large tote.',
   },
-  location_profile_lock_threshold: {
-    title: 'Location Profile Lock Threshold',
-    summary: 'Number of matching agreements before a location profile is automatically locked.',
+  effort_time_factor: {
+    title: 'Effort Time Factor',
+    summary: 'Weight applied to time-based components when computing route effort scores.',
     detail:
-      'Location profiles are validated by multiple employees visiting the same location and reporting consistent data. Once this many employees agree on the profile data, the profile is "locked" — it can no longer be edited by field employees without admin override. This prevents drift in well-established location data.',
-    example: '"3" — after 3 employees confirm the same profile data, it locks.',
+      'Controls how much the time spent on a route (total hours, stop duration) contributes to the final effort score. A value of 1.0 means time is the sole driver; 0.0 means time is ignored entirely. Combine with Effort Physical Factor — the two do not need to sum to 1.',
+    example: '"0.5" — time and physical effort contribute equally.',
+  },
+  effort_physical_factor: {
+    title: 'Effort Physical Factor',
+    summary: 'Weight applied to physical-exertion components when computing route effort scores.',
+    detail:
+      'Controls how much the physical demands of a route (stairs, elevator waits, package weight class) contribute to the final effort score. A value of 1.0 means physical effort is the sole driver; 0.0 means it is ignored.',
+    example: '"0.5" — time and physical effort contribute equally.',
   },
   ingestion_mode: {
     title: 'Manifest Ingestion Mode',

@@ -47,7 +47,8 @@ interface CompanyConfig {
   tier1_small_uncertain_max: number | null;
   tier1_stray_pct: number | null;
   tier1_uncertain_pct: number | null;
-  location_profile_lock_threshold: number | null;
+  effort_time_factor: number | null;
+  effort_physical_factor: number | null;
   ingestion_mode: string | null;
 }
 
@@ -131,8 +132,9 @@ const TIER1_VERIFY: FieldMeta[] = [
   { key: 'tier1_uncertain_pct', label: 'Uncertain % Threshold', type: 'float', description: 'Max uncertain packages as fraction of tote (large totes).', placeholder: '0.40', min: 0, max: 1, step: 0.01 },
 ];
 
-const LOCATION_PROFILES: FieldMeta[] = [
-  { key: 'location_profile_lock_threshold', label: 'Lock Threshold (agreements)', type: 'int', description: 'Matching employee agreements to lock a location profile.', placeholder: '3', min: 1, max: 50 },
+const EFFORT_SCORING: FieldMeta[] = [
+  { key: 'effort_time_factor', label: 'Effort Time Factor', type: 'float', description: 'Weight for time-based effort in route scoring (0–1).', placeholder: '0.5', min: 0, max: 1, step: 0.05 },
+  { key: 'effort_physical_factor', label: 'Effort Physical Factor', type: 'float', description: 'Weight for physical-based effort in route scoring (0–1).', placeholder: '0.5', min: 0, max: 1, step: 0.05 },
 ];
 
 const INGESTION: FieldMeta[] = [
@@ -179,7 +181,7 @@ const CONFIG_KEYS: string[] = [
   'dispatch_weight_cap', 'flag_threshold', 'driver_checkin_count',
   'tier1_dbscan_eps', 'tier1_dbscan_min_samples', 'tier1_small_tote_cutoff',
   'tier1_small_stray_max', 'tier1_small_uncertain_max', 'tier1_stray_pct', 'tier1_uncertain_pct',
-  'location_profile_lock_threshold', 'ingestion_mode',
+  'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
 ];
 
 const DISCORD_KEYS: string[] = [
@@ -195,13 +197,14 @@ const INT_FIELDS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'underperforming_trainer_threshold', 'max_training_phase', 'driver_checkin_count',
   'tier1_dbscan_min_samples', 'tier1_small_tote_cutoff', 'tier1_small_stray_max',
-  'tier1_small_uncertain_max', 'location_profile_lock_threshold',
+  'tier1_small_uncertain_max',
 ]);
 const FLOAT_FIELDS = new Set([
   'phase4_pass_score', 'dispatch_weight_driver', 'dispatch_weight_trainer',
   'dispatch_weight_walker', 'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus',
   'dispatch_consecutive_penalty', 'dispatch_weight_cap', 'flag_threshold',
   'tier1_dbscan_eps', 'tier1_stray_pct', 'tier1_uncertain_pct',
+  'effort_time_factor', 'effort_physical_factor',
 ]);
 const STRING_FIELDS = new Set(['ingestion_mode']);
 
@@ -371,7 +374,8 @@ const SETUP_DEFAULTS: Record<string, string> = {
   tier1_small_uncertain_max: '3',
   tier1_stray_pct: '0.10',
   tier1_uncertain_pct: '0.40',
-  location_profile_lock_threshold: '3',
+  effort_time_factor: '0.5',
+  effort_physical_factor: '0.5',
   ingestion_mode: 'file',
 };
 
@@ -496,7 +500,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
     { title: 'Driver Check-ins', icon: CheckSquare, fields: DRIVER_CHECKINS },
     { title: 'Tier 1 Manifest Verify', icon: Package, fields: TIER1_VERIFY },
-    { title: 'Location Profiles', icon: MapPin, fields: LOCATION_PROFILES },
+    { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },
     { title: 'Manifest Ingestion', icon: Settings, fields: INGESTION },
   ];
 
