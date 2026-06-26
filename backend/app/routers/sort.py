@@ -179,9 +179,9 @@ def _enriching_key(company_id: str, sort_date: str) -> str:
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 _SORT_ERROR_STATUS = {
-    "no_manifest":    status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "no_trucks":      status.HTTP_422_UNPROCESSABLE_ENTITY,
-    "no_packages":    status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "no_manifest":    status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "no_trucks":      status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "no_packages":    status.HTTP_422_UNPROCESSABLE_CONTENT,
     "tier1_failed":   status.HTTP_409_CONFLICT,
     "config_missing": status.HTTP_503_SERVICE_UNAVAILABLE,
 }
@@ -208,7 +208,7 @@ def upload_manifest(
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("csv", "xlsx", "xls"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Unsupported file type. Upload a CSV or XLSX file.",
         )
 
@@ -233,7 +233,7 @@ def upload_manifest(
 
     if not result.packages and not result.pending:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="No packages could be parsed from the file. Check column headers.",
         )
 
@@ -616,7 +616,7 @@ def seed_manifest(
     )
     if not assignment_rows:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"No truck assignments found for {sort_date}. "
                 "Run dispatch for this date first, then generate the test manifest."

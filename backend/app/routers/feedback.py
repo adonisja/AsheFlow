@@ -112,7 +112,7 @@ def update_feedback_status(
     """Update feedback status (admin only). Valid transitions: new → in_progress → resolved."""
     if payload.status not in _VALID_STATUSES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid status. Must be one of: {', '.join(sorted(_VALID_STATUSES))}",
         )
     record = db.query(Feedback).filter(Feedback.id == feedback_id, Feedback.company_id == caller.company_id).first()
