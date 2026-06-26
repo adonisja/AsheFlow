@@ -135,7 +135,8 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "printf 'AWS_REGION=us-east-2\\nAWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb\\nAWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d\\nCORS_ORIGINS=https://staging.asheflow.com\\nAPP_BASE_URL=https://staging.asheflow.com\\n' > /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
@@ -340,7 +341,8 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "printf 'AWS_REGION=us-east-2\\nAWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb\\nAWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d\\nCORS_ORIGINS=https://asheflow.com,https://www.asheflow.com\\nAPP_BASE_URL=https://asheflow.com\\n' > /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
