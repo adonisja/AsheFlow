@@ -852,7 +852,7 @@ export default function SortPage() {
     setError(null);
     try {
       const [taRes, empRes, zoneRes, centroidRes] = await Promise.allSettled([
-        axiosClient.get<TruckAssignment[]>('/truck-assignments/', { params: { date: today } }),
+        axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<Employee[]>('/employees/', { params: { is_active: true } }),
         axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
         axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),

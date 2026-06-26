@@ -517,7 +517,7 @@ export default function WalkerSortMonitor() {
     setError(null);
     try {
       const [taRes, empRes] = await Promise.all([
-        axiosClient.get<TruckAssignment[]>('/truck-assignments/', { params: { date: today } }),
+        axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<Employee[]>('/employees/', { params: { is_active: true } }),
       ]);
       const tas  = taRes.data;
