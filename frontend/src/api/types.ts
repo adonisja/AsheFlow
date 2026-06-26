@@ -464,19 +464,227 @@ export interface WaveAssignmentEntry {
   employee_id: string;
 }
 
-export interface RebalanceOffer {
+// ---------------------------------------------------------------------------
+// Wave pool (GET /{truck_assignment_id}/wave-pool)
+// ---------------------------------------------------------------------------
+
+export interface ReturnedWalkerRoute {
+  route_number: number;
+  wave_number: number;
+  package_count: number;
+  effort_class: string;
+}
+
+export interface ReturnedWalker {
+  employee_id: string;
+  employee_name: string;
+  injury_status: string | null;
+  completed_routes: ReturnedWalkerRoute[];
+}
+
+export interface UnassignedRouteEntry {
+  route_id: string;
   route_number: number;
   effort_class: string;
-  workload_source: string;
-  current_slot_cost: number;
-  paired_capacity_limit: number;
-  absorbable_tote_ids: string[];
-  absorbable_package_count: number;
+  package_count: number;
+  slot_cost: number;
+  wave_number: number;
+}
+
+export interface WaveStatusCounts {
+  assigned: number;
+  in_progress: number;
+  completed: number;
+  unassigned: number;
+}
+
+export interface WaveSummary {
+  waves: Record<string, WaveStatusCounts>;
+  total_routes: number;
+}
+
+export interface WavePoolResponse {
+  returned_walkers: ReturnedWalker[];
+  unassigned_routes: UnassignedRouteEntry[];
+  wave_summary: WaveSummary;
+}
+
+// ---------------------------------------------------------------------------
+// Wave distribution — auto-propose mode
+// ---------------------------------------------------------------------------
+
+export interface ProposedAssignmentEntry {
+  route_number: number;
+  route_id: string;
+  employee_id: string;
+  employee_name: string;
+  effort_class: string;
+  auto_proposed: boolean;
+}
+
+export interface WaveDistributionProposal {
+  proposed_assignments: ProposedAssignmentEntry[];
+  conflicts: string[];
+}
+
+// ---------------------------------------------------------------------------
+// My Assignment (GET /assignments/mine)
+// ---------------------------------------------------------------------------
+
+export interface MyAssignmentResponse {
+  truck_assignment_id: string;
+  truck_id: string;
+  truck_name: string;
+  date: string;
+  status: string;
+  role: string;
+  paired_trainer_id: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// RTS / Missing Packages / Delivery Stops
+// ---------------------------------------------------------------------------
+
+export type RtsType =
+  | 'no_access'
+  | 'business_closed'
+  | 'package_damaged'
+  | 'inclement_weather'
+  | 'customer_requested_future_delivery'
+  | 'customer_cancelled_order';
+
+export interface RTSPackageCreate {
+  route_id: string;
+  tba_number: string;
+  rts_type: RtsType;
+  rts_explanation: string;
+}
+
+export interface RTSPackageResponse {
+  id: string;
+  company_id: string;
+  route_id: string;
+  truck_assignment_id: string;
+  tba_number: string;
+  normalised_address: string | null;
+  rts_type: string;
+  rts_explanation: string;
+  is_reattemptable: boolean;
+  walker_id: string | null;
+  walker_name: string | null;
+  recorded_at: string;
+  delivery_stop_id: string | null;
+}
+
+export interface MissingPackageCreate {
+  route_id: string;
+  tba_number: string;
+}
+
+export interface MissingPackageResponse {
+  id: string;
+  company_id: string;
+  route_id: string;
+  truck_assignment_id: string;
+  tba_number: string;
+  normalised_address: string | null;
+  walker_id: string | null;
+  walker_name: string | null;
+  reported_at: string;
+  resolution_status: string;
+  misroute_flag_id: string | null;
+  resolution_notes: string | null;
+  resolved_by: string | null;
+  resolved_by_name: string | null;
+  resolved_at: string | null;
+  delivery_stop_id: string | null;
+}
+
+export interface DeliveryStopCreate {
+  route_id: string;
+  tba_numbers: string[];
+  completed_at: string;
+}
+
+export interface DeliveryStopResponse {
+  id: string;
+  company_id: string;
+  route_id: string;
+  truck_assignment_id: string;
+  walker_id: string | null;
+  walker_name: string | null;
+  normalised_address: string;
+  block_key: string;
+  tba_numbers: string[];
+  completed_at: string;
+  stop_sequence: number;
+  packages_total: number;
+  packages_delivered: number;
+  rts_count: number;
+  missing_count: number;
+  effort_class: string;
+  workload_class: string | null;
+}
+
+export interface StopSignal {
+  signal: string;
+  reason: string;
+  urgency: number;
+}
+
+export interface NextStopSuggestion {
+  normalised_address: string;
+  block_key: string;
+  tba_numbers: string[];
+  packages_total: number;
+  signals: StopSignal[];
+  urgency_score: number;
+}
+
+// ---------------------------------------------------------------------------
+// Building Profiles
+// ---------------------------------------------------------------------------
+
+export type BuildingType =
+  | 'receptionist'
+  | 'walkup'
+  | 'elevator'
+  | 'biz_freight'
+  | 'biz_security'
+  | 'biz_loading_dock'
+  | 'mailroom'
+  | 'doorman'
+  | 'biz_front';
+
+export interface BuildingProfileCreate {
+  tba_number: string;
+  building_type: BuildingType;
+  raw_note?: string;
+}
+
+export interface BuildingProfileResponse {
+  id: string;
+  company_id: string;
+  normalised_address: string;
+  block_key: string;
+  building_type: string;
+  workload_class: string;
+  raw_note: string | null;
+  operational_note: string | null;
+  note_verified: boolean;
+  building_type_status: 'pending' | 'verified' | 'locked';
+  building_type_agreement_count: number;
+  nomination_status: string | null;
+  submitted_by_name: string;
+  created_at: string;
 }
 
 export interface ArrivalConfirmResponse {
-  rebalanced_route_numbers: number[];
-  heavy_offers: RebalanceOffer[];
+  sort_not_yet_committed: boolean;
+  paired_route: RouteResponse | null;
+  absorbed_route_numbers: number[];
+  trimmed_route_numbers: number[];
+  paired_capacity_limit: number;
 }
 
 // ---------------------------------------------------------------------------

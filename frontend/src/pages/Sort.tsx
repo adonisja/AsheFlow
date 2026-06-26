@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
@@ -8,12 +8,14 @@ import type { ZonePolygon, Centroid } from '../components/ZoneDensityMap';
 import {
   Package, Users, AlertTriangle, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, Send, UserCheck, Shuffle,
-  MapPin, Route, Layers,
+  MapPin, Route, Layers, Zap, CircleAlert, Loader2,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import type {
   CommitSortResponse, RouteResponse, WaveAssignmentEntry,
-  ArrivalConfirmResponse, RebalanceOffer, MisroutedPackageOut,
+  ArrivalConfirmResponse, MisroutedPackageOut,
+  WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +78,286 @@ function StatusBadge({ status }: { status: string }) {
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${map[status] ?? 'bg-muted text-muted-foreground'}`}>
       {status.replace('_', ' ')}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Wave pool panel — live second-wave state, polled every 30 s
+// ---------------------------------------------------------------------------
+
+function WavePoolPanel({
+  taId,
+  routeDate,
+  walkers,
+  onSecondWavePropose,
+}: {
+  taId: string;
+  routeDate: string;
+  walkers: { id: string; name: string; role: string }[];
+  onSecondWavePropose: (taId: string, proposal: ProposedAssignmentEntry[]) => void;
+}) {
+  const [pool, setPool]         = useState<WavePoolResponse | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [proposing, setProposing] = useState(false);
+  const [propError, setPropError] = useState<string | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchPool = useCallback(async () => {
+    try {
+      const { data } = await axiosClient.get<WavePoolResponse>(
+        `/walker-routes/${taId}/wave-pool`,
+        { params: { route_date: routeDate } },
+      );
+      setPool(data);
+    } catch {
+      // silent — pool is advisory
+    } finally {
+      setLoading(false);
+    }
+  }, [taId, routeDate]);
+
+  useEffect(() => {
+    fetchPool();
+    intervalRef.current = setInterval(fetchPool, 30_000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [fetchPool]);
+
+  async function handleAutoPropose() {
+    setProposing(true);
+    setPropError(null);
+    try {
+      const res = await axiosClient.post<WaveDistributionProposal>(
+        '/walker-routes/wave-distribution',
+        {
+          truck_assignment_id: taId,
+          route_date: routeDate,
+          auto_assign: true,
+          assignments: [],
+          trainer_id: null,
+          trainee_id: null,
+          trainee_phase: null,
+        },
+      );
+      onSecondWavePropose(taId, res.data.proposed_assignments);
+      if (res.data.conflicts.length > 0) {
+        setPropError(`Conflicts: ${res.data.conflicts.join('; ')}`);
+      }
+    } catch (e: any) {
+      setPropError(e?.response?.data?.detail ?? 'Auto-propose failed.');
+    } finally {
+      setProposing(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading wave pool…
+      </div>
+    );
+  }
+
+  if (!pool) return null;
+
+  const { returned_walkers, unassigned_routes, wave_summary } = pool;
+  const waveKeys = Object.keys(wave_summary.waves).sort();
+
+  return (
+    <div className="space-y-4 pt-2">
+      {/* Wave progress summary */}
+      {waveKeys.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Wave progress</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {waveKeys.map(wk => {
+              const counts = wave_summary.waves[wk];
+              const done = counts.completed;
+              const total = counts.assigned + counts.in_progress + counts.completed + counts.unassigned;
+              const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+              return (
+                <div key={wk} className="p-2 rounded-lg bg-accent/50 space-y-1">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Wave {wk}</p>
+                  <div className="h-1 bg-border rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${pct === 100 ? 'bg-success' : 'bg-primary'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    {done}/{total} complete · {counts.in_progress} active
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Returned walkers */}
+      {returned_walkers.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+              <ArrowRightLeft className="w-3.5 h-3.5" /> Returned walkers
+            </p>
+            <span className="text-xs text-success font-medium">{returned_walkers.length} available</span>
+          </div>
+          <div className="space-y-1">
+            {returned_walkers.map(w => (
+              <div key={w.employee_id} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-success/5 border border-success/20">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-medium text-foreground truncate">{w.employee_name}</span>
+                  {w.injury_status && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning font-medium shrink-0">
+                      {w.injury_status}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {w.completed_routes.map(r => `#${r.route_number}`).join(', ')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Unassigned pool */}
+      {unassigned_routes.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-warning" /> Unassigned pool
+            <span className="text-warning font-medium">({unassigned_routes.length})</span>
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {unassigned_routes
+              .slice()
+              .sort((a, b) => a.route_number - b.route_number)
+              .map(r => (
+                <div key={r.route_id} className="flex items-center gap-1 px-2 py-1 rounded-lg border border-border bg-accent/40 text-xs">
+                  <span className="font-semibold text-foreground">#{r.route_number}</span>
+                  <EffortBadge effort={r.effort_class} />
+                  <span className="text-muted-foreground">{r.package_count}p</span>
+                </div>
+              ))}
+          </div>
+
+          {/* Auto-propose button */}
+          {returned_walkers.length > 0 && (
+            <div className="space-y-1.5">
+              <button
+                onClick={handleAutoPropose}
+                disabled={proposing}
+                className="btn-primary flex items-center gap-1.5 text-sm"
+              >
+                {proposing
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Proposing…</>
+                  : <><Shuffle className="w-3.5 h-3.5" /> Auto-propose second wave</>}
+              </button>
+              {propError && (
+                <p className="text-xs text-warning flex items-start gap-1">
+                  <CircleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />{propError}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {unassigned_routes.length === 0 && returned_walkers.length === 0 && (
+        <p className="text-xs text-muted-foreground py-1">No walkers returned yet — pool is empty.</p>
+      )}
+
+      <button
+        onClick={() => { setLoading(true); fetchPool(); }}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <RefreshCw className="w-3 h-3" /> Refresh pool
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Proposal review panel — trainer confirms or edits auto-proposed assignments
+// ---------------------------------------------------------------------------
+
+function ProposalReviewPanel({
+  taId,
+  routeDate,
+  proposal,
+  walkers,
+  onConfirm,
+  onDiscard,
+}: {
+  taId: string;
+  routeDate: string;
+  proposal: ProposedAssignmentEntry[];
+  walkers: { id: string; name: string; role: string }[];
+  onConfirm: (taId: string, assignments: WaveAssignmentEntry[]) => Promise<void>;
+  onDiscard: () => void;
+}) {
+  const [overrides, setOverrides] = useState<Record<number, string>>(() =>
+    Object.fromEntries(proposal.map(p => [p.route_number, p.employee_id]))
+  );
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setConfirming(true);
+    setError(null);
+    try {
+      const assignments: WaveAssignmentEntry[] = Object.entries(overrides)
+        .filter(([, eid]) => eid)
+        .map(([rn, eid]) => ({ route_number: Number(rn), employee_id: eid }));
+      await onConfirm(taId, assignments);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Confirm failed.');
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 p-3 bg-info/5 border border-info/20 rounded-xl">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-info uppercase tracking-widest">Review proposed assignments</p>
+        <button onClick={onDiscard} className="text-xs text-muted-foreground hover:text-foreground">Discard</button>
+      </div>
+      <p className="text-xs text-muted-foreground">Edit any assignment before confirming. Auto-proposed rows are highlighted.</p>
+
+      <div className="space-y-1.5">
+        {proposal.map(p => (
+          <div key={p.route_number} className={`flex items-center gap-2 p-2 rounded-lg border ${p.auto_proposed ? 'bg-info/5 border-info/20' : 'bg-background border-border'}`}>
+            <span className="text-xs font-semibold text-foreground w-8 shrink-0">#{p.route_number}</span>
+            <EffortBadge effort={p.effort_class} />
+            <select
+              value={overrides[p.route_number] ?? ''}
+              onChange={e => setOverrides(prev => ({ ...prev, [p.route_number]: e.target.value }))}
+              className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+            >
+              <option value="">Unassign…</option>
+              {walkers.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+            {p.auto_proposed && (
+              <span className="text-[10px] text-info shrink-0">auto</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <button
+        onClick={handleConfirm}
+        disabled={confirming}
+        className="btn-primary w-full flex items-center justify-center gap-1.5 text-sm"
+      >
+        {confirming
+          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending…</>
+          : <><Send className="w-3.5 h-3.5" /> Confirm wave assignments</>}
+      </button>
+    </div>
   );
 }
 
@@ -176,19 +458,19 @@ function TruckSortPanel({
   state,
   walkers,
   trainers,
+  routeDate,
   onCommit,
   onDistribute,
   onArrivalConfirm,
-  onAcceptHeavy,
   onRefresh,
 }: {
   state: TruckSortState;
   walkers: Employee[];
   trainers: Employee[];
+  routeDate: string;
   onCommit: (taId: string) => Promise<void>;
   onDistribute: (taId: string, assignments: WaveAssignmentEntry[], trainerId: string, traineeId?: string, traineePhase?: number) => Promise<void>;
   onArrivalConfirm: (taId: string, trainerId: string, traineeId: string) => Promise<void>;
-  onAcceptHeavy: (taId: string, routeNumber: number) => Promise<void>;
   onRefresh: (taId: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -199,6 +481,9 @@ function TruckSortPanel({
 
   // Wave assignment map: route_number → employee_id
   const [waveMap, setWaveMap] = useState<Record<number, string>>({});
+
+  // Second-wave auto-propose state
+  const [secondWaveProposal, setSecondWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
   const [selectedTrainerId, setSelectedTrainerId] = useState('');
   const [selectedTraineeId, setSelectedTraineeId] = useState('');
   const [traineePhase, setTraineePhase] = useState<number>(1);
@@ -447,31 +732,29 @@ function TruckSortPanel({
             </div>
           )}
 
-          {/* ── Heavy rebalance offers ── */}
-          {state.rebalanceResult && state.rebalanceResult.heavy_offers.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-widest text-warning flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5" /> Heavy rebalance offers
+          {/* ── Arrival rebalance result ── */}
+          {state.rebalanceResult && !state.rebalanceResult.sort_not_yet_committed && (
+            <div className="space-y-1.5 p-3 bg-success/5 border border-success/20 rounded-xl">
+              <p className="text-xs font-semibold uppercase tracking-widest text-success flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Rebalance complete — capacity {state.rebalanceResult.paired_capacity_limit} half-slots
               </p>
-              {state.rebalanceResult.heavy_offers.map(offer => (
-                <div key={offer.route_number} className="p-3 bg-warning/5 border border-warning/20 rounded-xl space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold text-foreground">Route #{offer.route_number}</p>
-                    <span className="text-xs text-muted-foreground">
-                      {offer.current_slot_cost}/{offer.paired_capacity_limit} half-slots after
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    +{offer.absorbable_package_count} packages from {offer.absorbable_tote_ids.length} totes
-                  </p>
-                  <button
-                    onClick={() => onAcceptHeavy(state.ta.id, offer.route_number)}
-                    className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-warning text-warning-foreground hover:brightness-105 transition-all press"
-                  >
-                    Accept rebalance
-                  </button>
-                </div>
-              ))}
+              {state.rebalanceResult.absorbed_route_numbers.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Absorbed routes: {state.rebalanceResult.absorbed_route_numbers.map(n => `#${n}`).join(', ')}
+                </p>
+              )}
+              {state.rebalanceResult.trimmed_route_numbers.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Trimmed routes: {state.rebalanceResult.trimmed_route_numbers.map(n => `#${n}`).join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+          {state.rebalanceResult?.sort_not_yet_committed && (
+            <div className="p-3 bg-info/5 border border-info/20 rounded-xl">
+              <p className="text-xs text-muted-foreground">
+                Arrival recorded — paired capacity will apply when sort is committed.
+              </p>
             </div>
           )}
 
@@ -485,6 +768,38 @@ function TruckSortPanel({
               {state.unassigned_misroutes.map(m => (
                 <div key={m.tba_number} className="text-xs text-muted-foreground font-mono">{m.tba_number}</div>
               ))}
+            </div>
+          )}
+
+          {/* ── Second-wave pool (visible once routes are distributed) ── */}
+          {(state.phase === 'distributed' || state.phase === 'arrived') && (
+            <div className="space-y-3 border-t border-border pt-4">
+              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                Second-wave pool
+              </p>
+
+              {/* Proposal review — shown after auto-propose */}
+              {secondWaveProposal ? (
+                <ProposalReviewPanel
+                  taId={state.ta.id}
+                  routeDate={routeDate}
+                  proposal={secondWaveProposal}
+                  walkers={walkers}
+                  onConfirm={async (taId, assignments) => {
+                    await onDistribute(taId, assignments, '', undefined, undefined);
+                    setSecondWaveProposal(null);
+                    await onRefresh(taId);
+                  }}
+                  onDiscard={() => setSecondWaveProposal(null)}
+                />
+              ) : (
+                <WavePoolPanel
+                  taId={state.ta.id}
+                  routeDate={routeDate}
+                  walkers={walkers}
+                  onSecondWavePropose={(_taId, proposed) => setSecondWaveProposal(proposed)}
+                />
+              )}
             </div>
           )}
 
@@ -558,7 +873,7 @@ export default function SortPage() {
 
       const states = await Promise.all(tas.map(async ta => {
         try {
-          const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${ta.id}`);
+          const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${ta.id}/routes`);
           return buildInitialState(ta, r.data);
         } catch {
           return buildInitialState(ta, []);
@@ -579,7 +894,7 @@ export default function SortPage() {
   };
 
   const handleCommit = async (taId: string) => {
-    const res = await axiosClient.post<CommitSortResponse>('/walker-routes/commit', {
+    const res = await axiosClient.post<CommitSortResponse>('/walker-routes/commit-sort', {
       truck_assignment_id: taId,
       route_date: today,
       ovs: [],
@@ -605,7 +920,7 @@ export default function SortPage() {
     traineeId?: string,
     traineePhase?: number,
   ) => {
-    await axiosClient.post('/walker-routes/distribute', {
+    await axiosClient.post('/walker-routes/wave-distribution', {
       truck_assignment_id: taId,
       route_date: today,
       assignments,
@@ -613,7 +928,7 @@ export default function SortPage() {
       trainee_id: traineeId ?? null,
       trainee_phase: traineePhase ?? null,
     });
-    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${taId}`);
+    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${taId}/routes`);
     updateState(taId, { phase: 'distributed', routes: r.data });
   };
 
@@ -624,7 +939,7 @@ export default function SortPage() {
       trainer_id: trainerId,
       trainee_id: traineeId,
     });
-    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${taId}`);
+    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${taId}/routes`);
     updateState(taId, {
       phase: 'arrived',
       routes: r.data,
@@ -632,29 +947,11 @@ export default function SortPage() {
     });
   };
 
-  const handleAcceptHeavy = async (taId: string, routeNumber: number) => {
-    const ta = truckStates.find(s => s.ta.id === taId);
-    if (!ta) return;
-    await axiosClient.post('/walker-routes/arrival-confirm/accept-heavy', {
-      route_number: routeNumber,
-      truck_assignment_id: taId,
-      route_date: today,
-    });
-    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${taId}`);
-    setTruckStates(prev => prev.map(s => {
-      if (s.ta.id !== taId) return s;
-      const updatedOffers = s.rebalanceResult
-        ? { ...s.rebalanceResult, heavy_offers: s.rebalanceResult.heavy_offers.filter(o => o.route_number !== routeNumber) }
-        : null;
-      return { ...s, routes: r.data, rebalanceResult: updatedOffers };
-    }));
-  };
-
   const handleRefresh = async (taId: string) => {
     const ta = assignments.find(a => a.id === taId);
     if (!ta) return;
     try {
-      const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${taId}`);
+      const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${taId}/routes`);
       updateState(taId, buildInitialState(ta, r.data));
     } catch { /* ignore */ }
   };
@@ -712,10 +1009,10 @@ export default function SortPage() {
               state={state}
               walkers={walkers}
               trainers={trainers}
+              routeDate={today}
               onCommit={handleCommit}
               onDistribute={handleDistribute}
               onArrivalConfirm={handleArrivalConfirm}
-              onAcceptHeavy={handleAcceptHeavy}
               onRefresh={handleRefresh}
             />
           ))}

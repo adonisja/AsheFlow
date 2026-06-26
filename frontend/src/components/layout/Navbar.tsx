@@ -299,6 +299,8 @@ const Navbar = () => {
           <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
           <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
+          <NavLink to="/my-route" className={linkClass}><Route className="w-3.5 h-3.5" /> My Route</NavLink>
+          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Building Profiles</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
           <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
           <NavLink to="/settings" className={linkClass}><Settings className="w-3.5 h-3.5" /> Settings</NavLink>
@@ -321,8 +323,17 @@ const Navbar = () => {
           {isTrainer && (
             <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
           )}
+          {(isTrainer || groups.includes('driver')) && (
+            <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
+          )}
           {isTrainer && trainerPhase === 4 && (
             <NavLink to="/phase4-observation" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Phase 4</NavLink>
+          )}
+          {groups.includes('walker') && (
+            <NavLink to="/my-route" className={linkClass}><Route className="w-3.5 h-3.5" /> My Route</NavLink>
+          )}
+          {groups.includes('trainee') && (
+            <NavLink to="/my-route" className={linkClass}><Route className="w-3.5 h-3.5" /> My Route</NavLink>
           )}
           {groups.includes('trainee') && (
             <NavLink to="/my-training" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> My Training</NavLink>
@@ -349,9 +360,10 @@ const Navbar = () => {
               <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
               <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
               <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
+              <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
               <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
               <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
-          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
+              <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
             </>
           )}
           {(isDispatch || isMgmt) && (

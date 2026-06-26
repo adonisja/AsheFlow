@@ -6,12 +6,11 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import {
   Package, Route, Users, AlertTriangle, CheckCircle2,
   RefreshCw, ChevronDown, ChevronUp, MapPin, Layers, Clock,
+  UserCheck, Loader2, ShieldAlert,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
-import type {
-  CommitSortResponse, RouteResponse, WaveAssignmentEntry,
-  ArrivalConfirmResponse, RebalanceOffer, MisroutedPackageOut,
-} from '../api/types';
+import { useAuth } from '../contexts/AuthContext';
+import type { RouteResponse, MisroutedPackageOut } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,19 +34,22 @@ interface SortStatus {
   packages_dropped: number;
 }
 
-type WaveStep = 'idle' | 'distributing' | 'done';
+interface Employee {
+  id: string;
+  name: string;
+  role: string;
+  injury_status?: string | null;
+}
 
 // ---------------------------------------------------------------------------
-// Effort class badge
+// Helpers
 // ---------------------------------------------------------------------------
 
 function EffortBadge({ effort }: { effort: string }) {
   const cls =
-    effort === 'heavy'
-      ? 'bg-danger/10 text-danger'
-      : effort === 'easy'
-      ? 'bg-success/10 text-success'
-      : 'bg-primary/10 text-primary';
+    effort === 'heavy'   ? 'bg-danger/10 text-danger'
+    : effort === 'easy'  ? 'bg-success/10 text-success'
+    :                      'bg-primary/10 text-primary';
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
       {effort}
@@ -55,16 +57,12 @@ function EffortBadge({ effort }: { effort: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Route status badge
-// ---------------------------------------------------------------------------
-
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     unassigned: 'bg-muted text-muted-foreground',
-    assigned: 'bg-info/10 text-info',
-    in_progress: 'bg-warning/10 text-warning',
-    completed: 'bg-success/10 text-success',
+    assigned:   'bg-info/10 text-info',
+    in_progress:'bg-warning/10 text-warning',
+    completed:  'bg-success/10 text-success',
   };
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${map[status] ?? 'bg-muted text-muted-foreground'}`}>
@@ -74,13 +72,174 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Route row — expandable
+// Reassign modal
 // ---------------------------------------------------------------------------
 
-function RouteRow({ route }: { route: RouteResponse }) {
+interface ReassignModalProps {
+  route: RouteResponse;
+  walkers: Employee[];
+  onClose: () => void;
+  onReassigned: () => void;
+}
+
+function ReassignModal({ route, walkers, onClose, onReassigned }: ReassignModalProps) {
+  const [selectedId, setSelectedId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const eligible = walkers.filter(w =>
+    w.role !== 'trainer' &&
+    !(w.injury_status !== null && w.injury_status !== undefined && route.effort_class === 'heavy')
+  );
+
+  async function submit() {
+    if (!selectedId) return;
+    setSaving(true);
+    setError(null);
+    const emp = walkers.find(w => w.id === selectedId);
+    try {
+      await axiosClient.patch(`/walker-routes/routes/${route.id}/reassign`, {
+        new_employee_id: selectedId,
+        new_employee_name: emp?.name ?? '',
+      });
+      onReassigned();
+      onClose();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Reassign failed.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <UserCheck className="w-4 h-4 text-primary" />
+          <h3 className="font-semibold text-foreground">Reassign route #{route.route_number}</h3>
+        </div>
+        <div className="text-xs text-muted-foreground space-y-0.5">
+          <p>Current: <span className="text-foreground font-medium">{route.assigned_to_name ?? 'Unassigned'}</span></p>
+          <p>Effort: <EffortBadge effort={route.effort_class} /></p>
+          {route.effort_class === 'heavy' && (
+            <p className="text-warning flex items-center gap-1">
+              <ShieldAlert className="w-3.5 h-3.5" /> Injured/modified-duty walkers excluded
+            </p>
+          )}
+        </div>
+        <select
+          className="input w-full"
+          value={selectedId}
+          onChange={e => setSelectedId(e.target.value)}
+        >
+          <option value="">Select walker…</option>
+          {eligible.map(w => (
+            <option key={w.id} value={w.id}>{w.name}{w.injury_status ? ` (${w.injury_status})` : ''}</option>
+          ))}
+        </select>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+          <button onClick={submit} disabled={!selectedId || saving} className="btn-primary text-sm flex items-center gap-1.5">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Reassign
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Misroute resolve modal
+// ---------------------------------------------------------------------------
+
+interface MisrouteResolveModalProps {
+  routeId: string;
+  flagId: string;
+  tbaNumber: string;
+  routes: RouteResponse[];
+  onClose: () => void;
+  onResolved: () => void;
+}
+
+function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, onClose, onResolved }: MisrouteResolveModalProps) {
+  const [destRouteId, setDestRouteId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    if (!destRouteId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await axiosClient.patch(`/walker-routes/routes/${routeId}/misroutes/${flagId}/resolve`, {
+        destination_route_id: destRouteId,
+      });
+      onResolved();
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Resolve failed.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-warning" />
+          <h3 className="font-semibold text-foreground">Resolve misroute</h3>
+        </div>
+        <p className="text-xs text-muted-foreground font-mono">{tbaNumber}</p>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Package moved to route</label>
+          <select
+            className="input w-full"
+            value={destRouteId}
+            onChange={e => setDestRouteId(e.target.value)}
+          >
+            <option value="">Select destination route…</option>
+            {routes.map(r => (
+              <option key={r.id} value={r.id}>#{r.route_number} — {r.assigned_to_name ?? 'unassigned'} ({r.effort_class})</option>
+            ))}
+          </select>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+          <button onClick={submit} disabled={!destRouteId || saving} className="btn-primary text-sm flex items-center gap-1.5">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Mark resolved
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Route row — expandable, with reassign + misroute resolve controls
+// ---------------------------------------------------------------------------
+
+interface RouteRowProps {
+  route: RouteResponse;
+  allRoutes: RouteResponse[];
+  walkers: Employee[];
+  canReassign: boolean;
+  onReassign: (route: RouteResponse) => void;
+  onResolveMisroute: (routeId: string, flagId: string, tba: string) => void;
+}
+
+function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolveMisroute }: RouteRowProps) {
   const [open, setOpen] = useState(false);
   const slotPct = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
   const barColor = slotPct >= 90 ? 'bg-danger' : slotPct >= 70 ? 'bg-warning' : 'bg-success';
+
+  const assignee = walkers.find(w => w.id === route.assigned_to);
+  const injuryStatus = assignee?.injury_status ?? null;
 
   return (
     <div className="border border-border rounded-xl overflow-hidden">
@@ -92,7 +251,6 @@ function RouteRow({ route }: { route: RouteResponse }) {
         <EffortBadge effort={route.effort_class} />
         <StatusBadge status={route.status} />
         <span className="text-xs text-muted-foreground ml-1">{route.package_count} pkgs</span>
-        <span className="text-xs text-muted-foreground">{route.tote_ids.length} totes</span>
 
         {/* Capacity bar */}
         <div className="flex-1 min-w-0 mx-2">
@@ -108,6 +266,11 @@ function RouteRow({ route }: { route: RouteResponse }) {
           <span className="text-xs text-foreground font-medium shrink-0 max-w-[120px] truncate hidden sm:block">
             {route.assigned_to_name}
           </span>
+        )}
+
+        {/* Injury badge */}
+        {injuryStatus && (
+          <ShieldAlert className="w-3.5 h-3.5 text-warning shrink-0" title={`${assignee?.name}: ${injuryStatus}`} />
         )}
 
         {route.misrouted_packages.length > 0 && (
@@ -130,29 +293,43 @@ function RouteRow({ route }: { route: RouteResponse }) {
             </div>
           </div>
 
-          {/* Totes */}
-          <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-1.5">Totes</p>
-            <div className="flex flex-wrap gap-1">
-              {route.tote_ids.map(t => (
-                <span key={t} className="px-2 py-0.5 bg-accent rounded text-xs text-foreground font-mono">{t}</span>
-              ))}
+          {/* Assignment info + injury warning */}
+          {route.assigned_to_name && (
+            <div className="flex items-start gap-3 text-xs text-muted-foreground flex-wrap">
+              <span>Assigned: <span className="text-foreground font-medium">{route.assigned_to_name}</span></span>
+              {route.paired_trainee_id && (
+                <span>Trainee paired (Phase {route.trainee_phase})</span>
+              )}
+              {injuryStatus && route.effort_class === 'heavy' && (
+                <span className="text-warning flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3" /> {assignee?.name} is {injuryStatus} — consider reassigning
+                </span>
+              )}
             </div>
-          </div>
+          )}
 
-          {/* Misroutes */}
+          {/* Misrouted packages with resolve button */}
           {route.misrouted_packages.length > 0 && (
             <div>
               <p className="text-[10px] uppercase tracking-widest text-warning font-semibold mb-1.5 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" /> Misrouted packages
               </p>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {route.misrouted_packages.map(m => (
-                  <div key={m.tba_number} className="flex items-center gap-2 text-xs">
-                    <span className="font-mono text-foreground">{m.tba_number}</span>
-                    <span className="text-muted-foreground">bag: {m.current_bag_id}</span>
-                    {m.destination_block_key && (
-                      <span className="text-warning">→ {m.destination_block_key}</span>
+                  <div key={m.tba_number} className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs min-w-0">
+                      <span className="font-mono text-foreground">{m.tba_number}</span>
+                      {m.destination_block_key && (
+                        <span className="text-warning">→ {m.destination_block_key}</span>
+                      )}
+                    </div>
+                    {canReassign && (
+                      <button
+                        onClick={() => onResolveMisroute(route.id, m.tba_number, m.tba_number)}
+                        className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
+                      >
+                        Resolve
+                      </button>
                     )}
                   </div>
                 ))}
@@ -160,14 +337,14 @@ function RouteRow({ route }: { route: RouteResponse }) {
             </div>
           )}
 
-          {/* Assignment info */}
-          {route.assigned_to_name && (
-            <div className="flex items-center gap-4 text-xs text-muted-foreground">
-              <span>Assigned: <span className="text-foreground font-medium">{route.assigned_to_name}</span></span>
-              {route.paired_trainee_id && (
-                <span>Trainee paired (Phase {route.trainee_phase})</span>
-              )}
-            </div>
+          {/* Reassign button */}
+          {canReassign && (
+            <button
+              onClick={() => onReassign(route)}
+              className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
+            >
+              <UserCheck className="w-3.5 h-3.5" /> Reassign route
+            </button>
           )}
         </div>
       )}
@@ -181,75 +358,116 @@ function RouteRow({ route }: { route: RouteResponse }) {
 
 function TruckSortCard({
   sortStatus,
+  walkers,
+  canReassign,
   onRefresh,
 }: {
   sortStatus: SortStatus;
+  walkers: Employee[];
+  canReassign: boolean;
   onRefresh: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const assignedCount = sortStatus.routes.filter(r => r.status !== 'unassigned').length;
+  const [reassignTarget, setReassignTarget] = useState<RouteResponse | null>(null);
+  const [misrouteTarget, setMisrouteTarget] = useState<{ routeId: string; flagId: string; tba: string } | null>(null);
+
+  const assignedCount  = sortStatus.routes.filter(r => r.status !== 'unassigned').length;
   const completedCount = sortStatus.routes.filter(r => r.status === 'completed').length;
 
   return (
-    <div className="card-elevated space-y-0">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 p-4 hover:bg-accent/20 transition-colors rounded-xl text-left"
-      >
-        <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-primary/10 shrink-0">
-          <Layers className="w-4.5 h-4.5 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">{sortStatus.truck_name}</p>
-          <p className="text-xs text-muted-foreground">
-            {sortStatus.routes.length} routes · {sortStatus.packages_sorted} pkgs sorted
-            {sortStatus.packages_dropped > 0 && ` · ${sortStatus.packages_dropped} dropped`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {completedCount === sortStatus.routes.length && sortStatus.routes.length > 0 ? (
-            <CheckCircle2 className="w-4 h-4 text-success" />
-          ) : assignedCount > 0 ? (
-            <Clock className="w-4 h-4 text-info" />
-          ) : (
-            <span className="text-xs text-muted-foreground">unassigned</span>
-          )}
-          {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-        </div>
-      </button>
+    <>
+      <div className="card-elevated space-y-0">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="w-full flex items-center gap-3 p-4 hover:bg-accent/20 transition-colors rounded-xl text-left"
+        >
+          <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-primary/10 shrink-0">
+            <Layers className="w-4.5 h-4.5 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground">{sortStatus.truck_name}</p>
+            <p className="text-xs text-muted-foreground">
+              {sortStatus.routes.length} routes · {sortStatus.packages_sorted} pkgs sorted
+              {sortStatus.packages_dropped > 0 && ` · ${sortStatus.packages_dropped} dropped`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {completedCount === sortStatus.routes.length && sortStatus.routes.length > 0 ? (
+              <CheckCircle2 className="w-4 h-4 text-success" />
+            ) : assignedCount > 0 ? (
+              <Clock className="w-4 h-4 text-info" />
+            ) : (
+              <span className="text-xs text-muted-foreground">unassigned</span>
+            )}
+            {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </div>
+        </button>
 
-      {open && (
-        <div className="border-t border-border px-4 pb-4 pt-3 space-y-2">
-          {sortStatus.routes.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">No routes committed yet.</p>
-          ) : (
-            sortStatus.routes
-              .slice()
-              .sort((a, b) => a.route_number - b.route_number)
-              .map(r => <RouteRow key={r.id} route={r} />)
-          )}
+        {open && (
+          <div className="border-t border-border px-4 pb-4 pt-3 space-y-2">
+            {sortStatus.routes.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-4">No routes committed yet.</p>
+            ) : (
+              sortStatus.routes
+                .slice()
+                .sort((a, b) => a.route_number - b.route_number)
+                .map(r => (
+                  <RouteRow
+                    key={r.id}
+                    route={r}
+                    allRoutes={sortStatus.routes}
+                    walkers={walkers}
+                    canReassign={canReassign}
+                    onReassign={setReassignTarget}
+                    onResolveMisroute={(routeId, flagId, tba) =>
+                      setMisrouteTarget({ routeId, flagId, tba })
+                    }
+                  />
+                ))
+            )}
 
-          {sortStatus.unassigned_misroutes.length > 0 && (
-            <div className="mt-3 p-3 bg-warning/5 border border-warning/20 rounded-xl">
-              <p className="text-xs font-semibold text-warning mb-2 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                {sortStatus.unassigned_misroutes.length} unresolved misroutes (no destination found)
-              </p>
-              {sortStatus.unassigned_misroutes.map(m => (
-                <div key={m.tba_number} className="text-xs text-muted-foreground font-mono">{m.tba_number}</div>
-              ))}
-            </div>
-          )}
+            {sortStatus.unassigned_misroutes.length > 0 && (
+              <div className="mt-3 p-3 bg-warning/5 border border-warning/20 rounded-xl">
+                <p className="text-xs font-semibold text-warning mb-2 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {sortStatus.unassigned_misroutes.length} unresolved misroutes (no destination found)
+                </p>
+                {sortStatus.unassigned_misroutes.map(m => (
+                  <div key={m.tba_number} className="text-xs text-muted-foreground font-mono">{m.tba_number}</div>
+                ))}
+              </div>
+            )}
 
-          <button
-            onClick={e => { e.stopPropagation(); onRefresh(); }}
-            className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
-          </button>
-        </div>
+            <button
+              onClick={e => { e.stopPropagation(); onRefresh(); }}
+              className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Refresh
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Modals — rendered outside the card so z-index is independent */}
+      {reassignTarget && (
+        <ReassignModal
+          route={reassignTarget}
+          walkers={walkers}
+          onClose={() => setReassignTarget(null)}
+          onReassigned={onRefresh}
+        />
       )}
-    </div>
+      {misrouteTarget && (
+        <MisrouteResolveModal
+          routeId={misrouteTarget.routeId}
+          flagId={misrouteTarget.flagId}
+          tbaNumber={misrouteTarget.tba}
+          routes={sortStatus.routes}
+          onClose={() => setMisrouteTarget(null)}
+          onResolved={onRefresh}
+        />
+      )}
+    </>
   );
 }
 
@@ -259,14 +477,19 @@ function TruckSortCard({
 
 export default function WalkerSortMonitor() {
   const today = getLocalYMD();
+  const { groups } = useAuth();
+
   const [assignments, setAssignments] = useState<TruckAssignment[]>([]);
   const [sortStatuses, setSortStatuses] = useState<SortStatus[]>([]);
+  const [walkers, setWalkers] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const canReassign = groups.some(r => ['trainer', 'driver', 'dispatch', 'management', 'admin'].includes(r));
+
   const fetchSortStatus = useCallback(async (ta: TruckAssignment): Promise<SortStatus> => {
     try {
-      const res = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${ta.id}`);
+      const res = await axiosClient.get<RouteResponse[]>(`/walker-routes/${ta.id}/routes`);
       return {
         truck_assignment_id: ta.id,
         truck_name: ta.truck_name,
@@ -293,9 +516,14 @@ export default function WalkerSortMonitor() {
     setLoading(true);
     setError(null);
     try {
-      const taRes = await axiosClient.get<TruckAssignment[]>(`/truck-assignments/`, { params: { date: today } });
-      const tas = taRes.data;
+      const [taRes, empRes] = await Promise.all([
+        axiosClient.get<TruckAssignment[]>('/truck-assignments/', { params: { date: today } }),
+        axiosClient.get<Employee[]>('/employees/', { params: { is_active: true } }),
+      ]);
+      const tas  = taRes.data;
+      const emps = empRes.data;
       setAssignments(tas);
+      setWalkers(emps.filter(e => ['walker', 'trainee', 'trainer', 'driver'].includes(e.role)));
       const statuses = await Promise.all(tas.map(fetchSortStatus));
       setSortStatuses(statuses);
     } catch (e: any) {
@@ -313,11 +541,11 @@ export default function WalkerSortMonitor() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   // Aggregate stats
-  const totalRoutes = sortStatuses.reduce((s, st) => s + st.routes.length, 0);
-  const totalPkgs = sortStatuses.reduce((s, st) => s + st.packages_sorted, 0);
-  const assignedRoutes = sortStatuses.reduce((s, st) => s + st.routes.filter(r => r.status !== 'unassigned').length, 0);
+  const totalRoutes     = sortStatuses.reduce((s, st) => s + st.routes.length, 0);
+  const totalPkgs       = sortStatuses.reduce((s, st) => s + st.packages_sorted, 0);
+  const assignedRoutes  = sortStatuses.reduce((s, st) => s + st.routes.filter(r => r.status !== 'unassigned').length, 0);
   const completedRoutes = sortStatuses.reduce((s, st) => s + st.routes.filter(r => r.status === 'completed').length, 0);
-  const misrouteCount = sortStatuses.reduce((s, st) => s + st.routes.reduce((rs, r) => rs + r.misrouted_packages.length, 0) + st.unassigned_misroutes.length, 0);
+  const misrouteCount   = sortStatuses.reduce((s, st) => s + st.routes.reduce((rs, r) => rs + r.misrouted_packages.length, 0) + st.unassigned_misroutes.length, 0);
 
   return (
     <div className="space-y-8 animate-slide-up">
@@ -334,16 +562,10 @@ export default function WalkerSortMonitor() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard label="Total Routes" value={loading ? '—' : totalRoutes} icon={Route} tone="primary" delay={0} />
-        <StatCard label="Packages Sorted" value={loading ? '—' : totalPkgs} icon={Package} tone="info" delay={0.05} />
-        <StatCard label="Assigned" value={loading ? '—' : `${assignedRoutes}/${totalRoutes}`} icon={Users} tone="success" delay={0.1} />
-        <StatCard
-          label="Misroutes"
-          value={loading ? '—' : misrouteCount}
-          icon={AlertTriangle}
-          tone={misrouteCount > 0 ? 'warning' : 'success'}
-          delay={0.15}
-        />
+        <StatCard label="Total Routes"    value={loading ? '—' : totalRoutes}                            icon={Route}         tone="primary"  delay={0} />
+        <StatCard label="Packages Sorted" value={loading ? '—' : totalPkgs}                             icon={Package}       tone="info"     delay={0.05} />
+        <StatCard label="Assigned"        value={loading ? '—' : `${assignedRoutes}/${totalRoutes}`}    icon={Users}         tone="success"  delay={0.1} />
+        <StatCard label="Misroutes"       value={loading ? '—' : misrouteCount}                         icon={AlertTriangle} tone={misrouteCount > 0 ? 'warning' : 'success'} delay={0.15} />
       </div>
 
       {/* Progress bar */}
@@ -362,7 +584,6 @@ export default function WalkerSortMonitor() {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
       )}
@@ -382,6 +603,8 @@ export default function WalkerSortMonitor() {
             <TruckSortCard
               key={st.truck_assignment_id}
               sortStatus={st}
+              walkers={walkers}
+              canReassign={canReassign}
               onRefresh={() => refreshOne(assignments[i])}
             />
           ))}
