@@ -257,7 +257,9 @@ jobs:
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "cd /home/ubuntu/AsheFlow && docker compose logs --no-color --tail=80 backend"
+              "cd /home/ubuntu/AsheFlow && docker compose ps -a",
+              "cd /home/ubuntu/AsheFlow && docker compose logs --no-color --tail=100 backend || true",
+              "docker inspect asheflow_backend --format=\\"Status: {{.State.Status}} | ExitCode: {{.State.ExitCode}} | Error: {{.State.Error}}\\" 2>/dev/null || echo no-container"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 1b SSM (backend logs): $CID"
