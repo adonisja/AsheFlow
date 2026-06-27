@@ -382,23 +382,31 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
     async def _build_crew_dm(self, member: dict, crew: list[dict], dispatch_date: str) -> discord.Embed:
         role = member.get("role", "walker")
+        member_id = member.get("employee_id")
 
         pairing_note = ""
         if role == "trainer":
-            trainees_on_crew = [m for m in crew if m["role"] == "trainee"]
-            if trainees_on_crew:
-                phase_info = await _fetch_trainee_phases(trainees_on_crew)
-                lines = "\n".join(f"  📋 **{name}** — Phase {phase}" for name, phase in phase_info)
-                pairing_note = f"\n\n📋 **Your trainee(s) today:**\n{lines}"
+            # Only trainees whose paired_trainer_id matches this trainer
+            paired_trainees = [
+                m for m in crew
+                if m["role"] == "trainee" and m.get("paired_trainer_id") == member_id
+            ]
+            if paired_trainees:
+                phase_info = await _fetch_trainee_phases(paired_trainees)
+                lines = "\n".join(f"  📋 **{name}** — Day {phase}" for name, phase in phase_info)
+                pairing_note = f"\n\n📋 **Your trainee today:**\n{lines}"
             else:
-                pairing_note = "\n\n*(No trainees on your truck today.)*"
+                pairing_note = "\n\n*(No trainee paired with you today.)*"
         elif role == "trainee":
-            trainers_on_crew = [m for m in crew if m["role"] == "trainer"]
-            if trainers_on_crew:
-                trainer_names = ", ".join(f"**{m['name']}**" for m in trainers_on_crew)
-                pairing_note = f"\n\n🎓 **Your trainer today:** {trainer_names}"
+            paired_trainer_id = member.get("paired_trainer_id")
+            paired_trainer = next(
+                (m for m in crew if m["role"] == "trainer" and m.get("employee_id") == paired_trainer_id),
+                None,
+            )
+            if paired_trainer:
+                pairing_note = f"\n\n🎓 **Your trainer today:** **{paired_trainer['name']}**"
             else:
-                pairing_note = "\n\n⚠️ No trainer assigned to your truck — contact dispatch."
+                pairing_note = "\n\n⚠️ No trainer assigned to you — contact dispatch."
 
         return discord.Embed(
             title=f"📋 Attendance Confirmation — {dispatch_date}",
@@ -494,6 +502,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             confirmed_trainers = [m for m in confirmed_crew if m["role"] == "trainer"]
             confirmed_trainees = [m for m in confirmed_crew if m["role"] == "trainee"]
 
+            trainer_by_id = {m["employee_id"]: m["name"] for m in confirmed_crew if m["role"] == "trainer"}
+
             for member in confirmed_crew:
                 discord_id = member.get("discord_id")
                 if not discord_id or not discord_id.isdigit():
@@ -501,11 +511,27 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 try:
                     discord_user = await self.bot.fetch_user(int(discord_id))
                     role = member.get("role", "walker")
+
+                    extra = ""
+                    if role == "trainee":
+                        paired_trainer_name = trainer_by_id.get(member.get("paired_trainer_id", ""))
+                        if paired_trainer_name:
+                            extra = f"\n**Your trainer:** {paired_trainer_name}"
+                    elif role == "trainer":
+                        paired_trainees = [
+                            m for m in confirmed_crew
+                            if m["role"] == "trainee" and m.get("paired_trainer_id") == member["employee_id"]
+                        ]
+                        if paired_trainees:
+                            names = ", ".join(m["name"] for m in paired_trainees)
+                            extra = f"\n**Your trainee:** {names}"
+
                     final_embed = discord.Embed(
                         title=f"✅ Final Assignment Confirmed — {dispatch_date}",
                         description=(
                             f"**Truck:** {truck_name}\n"
-                            f"**Your role:** {ROLE_LABELS.get(role, role)}\n\n"
+                            f"**Your role:** {ROLE_LABELS.get(role, role)}"
+                            f"{extra}\n\n"
                             f"You now have access to **#{truck_channel.name}**."
                         ),
                         color=discord.Color.green(),
