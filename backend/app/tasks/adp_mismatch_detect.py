@@ -1,9 +1,10 @@
 import logging
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from app.celery_app import celery_app
 
 from app.database import SessionLocal
+from app.services.local_date import task_today
 from app.models.adp_integration import ADPIntegration
 from app.models.adp_timecard import ADPTimeCard, ADPTimeCardSegment
 from app.models.flex_timesheets import FlexTimesheet
@@ -43,7 +44,7 @@ def detect_timecard_mismatches() -> dict:
             try:
                 timecards = db.query(ADPTimeCard).filter(
                     ADPTimeCard.company_id == integration.company_id,
-                    ADPTimeCard.work_date == (date.today() - timedelta(days=1)),
+                    ADPTimeCard.work_date == (task_today() - timedelta(days=1)),
                     ADPTimeCard.is_working_day == True
                 ).all()
 

@@ -9,13 +9,14 @@ import logging
 import asyncio
 import boto3
 
-from datetime import date, datetime
+from datetime import datetime
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
 from app.models.adp_integration import ADPIntegration
 from app.models.employee import Employee
 from app.services.adp import fetch_adp_employees
+from app.services.local_date import task_today
 from app.core.config import settings
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
@@ -81,7 +82,7 @@ def sync_adp_employees() -> dict:
                         accounts = db.query(AssignmentMember).join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id
                         ).filter(
                             AssignmentMember.employee_id == employee.id,
-                            TruckAssignment.date > date.today(),
+                            TruckAssignment.date > task_today(),
                             TruckAssignment.company_id == integration.company_id,
                         ).all()
 

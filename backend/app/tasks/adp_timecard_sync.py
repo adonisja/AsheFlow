@@ -1,9 +1,10 @@
 import logging
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.services.local_date import task_today
 from app.models.adp_integration import ADPIntegration
 from app.models.employee import Employee
 from app.models.adp_timecard import ADPTimeCard, ADPTimeCardSegment
@@ -25,7 +26,7 @@ def sync_adp_timecards() -> dict:
     A per-company try/except ensures one company's failure does not block others.
     """
 
-    work_date: date = date.today() - timedelta(days=1)
+    work_date: date = task_today() - timedelta(days=1)
     db = SessionLocal()
     try:
         

@@ -8,10 +8,9 @@ A second pass at 18:30 (6:30 PM) re-notifies any still-missing drivers —
 this handles late returns.
 """
 
-from datetime import date
-
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.services.local_date import task_today
 from app.models.employee import Employee
 from app.models.field_ops import FuelMileageLog, CheckIn
 from app.models.notification import Notification
@@ -31,7 +30,7 @@ def remind_fuel_log_missing() -> dict:
     Sends each of them an in-app notification reminder.
     Returns a summary dict.
     """
-    today = date.today()
+    today = task_today()
     db = SessionLocal()
     try:
         # Only run on days with a dispatch

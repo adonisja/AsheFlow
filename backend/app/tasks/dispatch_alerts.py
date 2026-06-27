@@ -9,12 +9,11 @@ always triggered manually by dispatch via POST /dispatch/{date}/finalize.
 """
 
 import os
-from datetime import date
-
 import requests
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.services.local_date import task_today
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
@@ -30,7 +29,7 @@ def alert_finalization_deadline() -> dict:
 
     Returns a summary dict.
     """
-    today = date.today()
+    today = task_today()
     db = SessionLocal()
     try:
         # Find all distinct company_ids that have a dispatch today

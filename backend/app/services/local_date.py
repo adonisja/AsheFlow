@@ -1,3 +1,4 @@
+import os
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -26,3 +27,18 @@ def company_today(db: Session, company_id) -> date:
     that gates on 'today' (dispatch, field ops, shift sessions, etc.).
     """
     return datetime.now(company_tz(db, company_id)).date()
+
+
+def task_today() -> date:
+    """Return today's date for use in Celery tasks that have no caller/company_id.
+
+    Reads SERVER_TIMEZONE from the environment (default: America/New_York).
+    Use this instead of date.today() in all scheduled tasks — date.today()
+    returns the server's UTC date which is wrong after ~7 PM Eastern.
+    """
+    tz_str = os.environ.get("SERVER_TIMEZONE", "America/New_York")
+    try:
+        tz = ZoneInfo(tz_str)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz).date()

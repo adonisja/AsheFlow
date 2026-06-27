@@ -1,7 +1,8 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.services.local_date import task_today
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.models.trainer_mark import TrainerMark
@@ -27,7 +28,7 @@ def check_training_submissions() -> dict:
 
     Returns a summary dict for Celery task result inspection.
     """
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = task_today() - timedelta(days=1)
     flagged = 0
     skipped_not_dispatched = 0
     marks_issued = 0
