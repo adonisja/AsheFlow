@@ -564,6 +564,32 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # HUB FINALIZE — post crew embed to a single hub truck channel
     # ------------------------------------------------------------------
 
+    async def revoke_member_from_channel(self, discord_id: str, channel_id: int) -> None:
+        """Remove a member's permission overwrite from a truck channel.
+
+        Called when a trainee declines their assignment or is marked NCNS after
+        finalization has already granted channel access.
+        """
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            logger.warning("revoke_member_from_channel: channel %s not found", channel_id)
+            return
+
+        guild = channel.guild
+        try:
+            member = await guild.fetch_member(int(discord_id))
+        except (discord.NotFound, discord.HTTPException):
+            logger.warning("revoke_member_from_channel: member %s not found in guild", discord_id)
+            return
+
+        try:
+            await channel.set_permissions(member, overwrite=None)
+            logger.info("revoke_member_from_channel: removed %s from channel %s", discord_id, channel_id)
+        except discord.Forbidden:
+            logger.warning("revoke_member_from_channel: missing Manage Channel permission for %s", channel_id)
+        except Exception as e:
+            logger.warning("revoke_member_from_channel: error removing %s from %s: %s", discord_id, channel_id, e)
+
     async def sync_trainer_role(self, discord_id: str, company_id: str, action: str) -> None:
         """Grant or revoke the Captain (trainer) Discord role for a member.
 

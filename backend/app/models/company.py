@@ -69,6 +69,9 @@ class CompanyConfig(Base):
     # ── Walker rating anomaly detection ───────────────────────────────────────
     flag_threshold = Column(Float, nullable=True)   # default 1.0
 
+    # ── Shift roll call ───────────────────────────────────────────────────────
+    late_window_minutes = Column(Integer, nullable=True)    # default 20; minutes past shift_start before "late"
+
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
 

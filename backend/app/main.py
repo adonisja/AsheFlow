@@ -11,7 +11,7 @@ from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -109,6 +109,7 @@ api_v1_router.include_router(building_profiles.router,              dependencies
 api_v1_router.include_router(building_profile_library.router,       dependencies=_configured)
 api_v1_router.include_router(walker_routes.router,                  dependencies=_configured)
 api_v1_router.include_router(rts.router,                            dependencies=_configured)
+api_v1_router.include_router(roll_call.router,                      dependencies=_configured)
 api_v1_router.include_router(companies.router,                      dependencies=_configured)
 # Exempt — must be reachable before and during setup
 api_v1_router.include_router(registration.router)
