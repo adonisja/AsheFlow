@@ -254,39 +254,41 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
         if not trainers and not trainees:
             continue
 
-        has_any_pairing = True
         lines: list[str] = []
 
         if trainers and trainees:
-            # Use paired_trainer_id for exact matching (set at dispatch-run time).
+            # Only show trainers that have an actual paired trainee today.
             claimed_trainee_ids: set[str] = set()
             for trainer in trainers:
                 paired = [
                     t for t in trainees
                     if t.get("paired_trainer_id") == trainer["employee_id"]
                 ]
+                if not paired:
+                    continue  # skip unpaired trainers — keeps the list clean
                 lines.append(f"🎓 **{trainer['name']}**")
                 for trainee in paired:
                     phase = phase_map.get(trainee["employee_id"])
                     phase_label = f"Day {phase}" if phase is not None else "Day ?"
                     lines.append(f"  └ 📋 **{trainee['name']}** — {phase_label}")
                     claimed_trainee_ids.add(trainee["employee_id"])
-                if not paired:
-                    lines.append("  └ *(no trainee paired)*")
+            # Orphaned trainees — no trainer set
             for trainee in trainees:
                 if trainee["employee_id"] not in claimed_trainee_ids:
                     phase = phase_map.get(trainee["employee_id"])
                     phase_label = f"Day {phase}" if phase is not None else "Day ?"
                     lines.append(f"📋 **{trainee['name']}** ({phase_label}) — *(trainer not set)*")
-        elif trainers:
-            for trainer in trainers:
-                lines.append(f"🎓 **{trainer['name']}** — *(no trainee today)*")
         else:
+            # Truck has trainees but no trainers at all
             for trainee in trainees:
                 phase = phase_map.get(trainee["employee_id"])
                 phase_label = f"Day {phase}" if phase is not None else "Day ?"
                 lines.append(f"📋 **{trainee['name']}** ({phase_label}) — *(no trainer assigned)*")
 
+        if not lines:
+            continue  # entire truck has trainers but none paired — skip it
+
+        has_any_pairing = True
         embed.add_field(name=f"🚛 {truck_name}", value="\n".join(lines), inline=False)
 
     if not has_any_pairing:
