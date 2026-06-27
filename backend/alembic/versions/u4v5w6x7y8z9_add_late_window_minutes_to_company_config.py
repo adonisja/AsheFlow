@@ -1,14 +1,14 @@
 """Add late_window_minutes to company_configs
 
 Revision ID: u4v5w6x7y8z9
-Revises: a0b1c2d3e4f5, a1b2c3d4e5f9, e6fa3d53aa53, j3k4l5m6n7o8, k4l5m6n7o8p9, l5m6n7o8p9q0, o8p9q0r1s2t3
+Revises: e6fa3d53aa53, j3k4l5m6n7o8, k4l5m6n7o8p9, l5m6n7o8p9q0, o8p9q0r1s2t3
 Create Date: 2026-06-27
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = 'u4v5w6x7y8z9'
-down_revision = ('a0b1c2d3e4f5', 'a1b2c3d4e5f9', 'e6fa3d53aa53', 'j3k4l5m6n7o8', 'k4l5m6n7o8p9', 'l5m6n7o8p9q0', 'o8p9q0r1s2t3')
+down_revision = ('e6fa3d53aa53', 'j3k4l5m6n7o8', 'k4l5m6n7o8p9', 'l5m6n7o8p9q0', 'o8p9q0r1s2t3')
 branch_labels = None
 depends_on = None
 
