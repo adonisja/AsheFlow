@@ -1,15 +1,15 @@
 """Add shift_roll_calls table
 
-Revision ID: b2c3d4e5f6a7
-Revises: a1b2c3d4e5f6
+Revision ID: v5w6x7y8z9a0
+Revises: u4v5w6x7y8z9
 Create Date: 2026-06-27
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = 'b2c3d4e5f6a7'
-down_revision = 'a1b2c3d4e5f6'
+revision = 'v5w6x7y8z9a0'
+down_revision = 'u4v5w6x7y8z9'
 branch_labels = None
 depends_on = None
 
@@ -32,9 +32,9 @@ def upgrade():
         sa.UniqueConstraint('employee_id', 'date', name='uq_shift_roll_calls_employee_date'),
         sa.CheckConstraint("status IN ('early', 'present', 'late', 'ncns')", name='ck_shift_roll_calls_status'),
     )
-    op.create_index('ix_shift_roll_calls_company_id',  'shift_roll_calls', ['company_id'])
-    op.create_index('ix_shift_roll_calls_employee_id', 'shift_roll_calls', ['employee_id'])
-    op.create_index('ix_shift_roll_calls_date',        'shift_roll_calls', ['date'])
+    op.create_index('ix_shift_roll_calls_company_id',      'shift_roll_calls', ['company_id'])
+    op.create_index('ix_shift_roll_calls_employee_id',     'shift_roll_calls', ['employee_id'])
+    op.create_index('ix_shift_roll_calls_date',            'shift_roll_calls', ['date'])
     op.create_index('ix_shift_roll_calls_submitted_by_id', 'shift_roll_calls', ['submitted_by_id'])
 
 
