@@ -113,7 +113,7 @@ class Settings(BaseSettings):
         "http://localhost:5173,http://127.0.0.1:5173"
     )
 
-    cors_allow_methods: str = "GET,POST,PATCH,DELETE"
+    cors_allow_methods: str = "GET,POST,PUT,PATCH,DELETE"
     cors_allow_headers: str = "Authorization,Content-Type"
 
     def get_cors_origins(self) -> List[str]:

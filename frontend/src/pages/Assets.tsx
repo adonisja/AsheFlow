@@ -50,7 +50,7 @@ type TruckRecord = {
   id: string;
   name: string;
   is_active: boolean;
-  discord_channel_id: number | null;
+  discord_channel_id: string | null;
 };
 
 type Tab = 'people' | 'fleet' | 'system';
@@ -388,7 +388,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
 
 type TruckModalProps = {
   initial?: Partial<TruckRecord>;
-  onSave: (data: { name: string; discord_channel_id: number | null }) => Promise<void>;
+  onSave: (data: { name: string; discord_channel_id: string | null }) => Promise<void>;
   onClose: () => void;
   isCreate: boolean;
 };
@@ -411,7 +411,9 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
     try {
       await onSave({
         name,
-        discord_channel_id: channelId.trim() ? Number(channelId.trim()) : null,
+        // Send as string — Discord snowflake IDs exceed Number.MAX_SAFE_INTEGER.
+        // Backend TruckUpdate accepts Optional[int] and Pydantic coerces string → int.
+        discord_channel_id: channelId.trim() || null,
       });
     } catch (err: any) {
       setError(err?.response?.data?.detail ?? 'Something went wrong.');
@@ -422,61 +424,68 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-card w-full max-w-sm rounded-2xl border border-border shadow-xl animate-slide-up">
-        <div className="flex items-center justify-between p-5 border-b border-border">
-          <h2 className="font-semibold text-foreground">{isCreate ? 'Add Truck' : 'Edit Truck'}</h2>
+      <div className="bg-card w-full max-w-md rounded-2xl border border-border shadow-xl animate-slide-up">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+              <Truck className="w-4 h-4 text-primary" />
+            </div>
+            <h2 className="font-semibold text-foreground">{isCreate ? 'Add Truck' : 'Edit Truck'}</h2>
+          </div>
           <button onClick={onClose} className="btn-ghost p-1.5"><X className="w-4 h-4" /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
           {error && (
             <div className="text-sm text-danger bg-danger/10 border border-danger/20 rounded-xl px-3 py-2">
               {error}
             </div>
           )}
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Truck Name *</label>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Truck Name <span className="text-danger">*</span>
+            </label>
             <input
               required
               value={name}
               onChange={e => setName(e.target.value)}
               className="input w-full"
-              placeholder="Atlas"
+              placeholder="e.g. Atlas"
             />
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Discord Channel ID
             </label>
             <input
               value={channelId}
               onChange={e => setChannelId(e.target.value)}
-              className={`input w-full font-mono ${!channelIdValid ? 'border-danger/60 focus:ring-danger/30' : ''}`}
+              className={`input w-full font-mono text-sm ${!channelIdValid ? 'border-danger/60 focus:ring-danger/30' : ''}`}
               placeholder="e.g. 1234567890123456789"
             />
-            {!channelIdValid && (
-              <p className="text-xs text-danger">Must be a valid Discord snowflake (17–20 digits).</p>
-            )}
-            {channelId && channelIdValid && (
-              <p className="text-xs text-success flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Channel linked
+            {!channelIdValid ? (
+              <p className="text-xs text-danger flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" /> Must be a valid Discord snowflake (17–20 digits).
               </p>
-            )}
-            {!channelId && (
+            ) : channelId ? (
+              <p className="text-xs text-success flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> Channel will be linked
+              </p>
+            ) : (
               <p className="text-xs text-muted-foreground">
-                Right-click the channel in Discord → Copy Channel ID.
-                {!isCreate && ' Leave blank to unlink.'}
+                Right-click a channel in Discord → <strong>Copy Channel ID</strong>.{' '}
+                {!isCreate && 'Leave blank to unlink.'}
               </p>
             )}
           </div>
 
-          <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose} className="btn-ghost">Cancel</button>
+          <div className="flex justify-end gap-3 pt-1">
+            <button type="button" onClick={onClose} className="btn-ghost px-4">Cancel</button>
             <button
               type="submit"
               disabled={saving || !channelIdValid}
-              className="btn-primary flex items-center gap-2"
+              className="btn-primary flex items-center gap-2 px-5"
             >
               {saving && <div className="w-3.5 h-3.5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />}
               {isCreate ? 'Add Truck' : 'Save Changes'}
@@ -973,13 +982,13 @@ function FleetTab() {
 
   useEffect(() => { load(); }, []);
 
-  const handleCreate = async (data: { name: string; discord_channel_id: number | null }) => {
+  const handleCreate = async (data: { name: string; discord_channel_id: string | null }) => {
     const res = await axiosClient.post('/trucks/', data);
     setTrucks(prev => [...prev, res.data]);
     setShowModal(false);
   };
 
-  const handleEdit = async (data: { name: string; discord_channel_id: number | null }) => {
+  const handleEdit = async (data: { name: string; discord_channel_id: string | null }) => {
     if (!editTarget) return;
     const res = await axiosClient.put(`/trucks/${editTarget.id}`, data);
     setTrucks(prev => prev.map(t => t.id === editTarget.id ? res.data : t));
@@ -1033,32 +1042,46 @@ function FleetTab() {
       ) : trucks.length === 0 ? (
         <div className="text-center py-16 text-subtle">No trucks in the fleet yet.</div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+        <div className="card divide-y divide-border overflow-hidden">
           {trucks.map(truck => (
             <div
               key={truck.id}
-              className={`card p-4 space-y-3 flex flex-col items-center text-center transition-opacity ${
+              className={`flex items-center gap-4 px-4 py-3 transition-colors hover:bg-accent/30 ${
                 !truck.is_active ? 'opacity-50' : ''
               }`}
             >
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+              {/* Icon */}
+              <div className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${
                 truck.is_active ? 'bg-primary/10' : 'bg-accent'
               }`}>
-                <Truck className={`w-5 h-5 ${truck.is_active ? 'text-primary' : 'text-muted-foreground'}`} />
+                <Truck className={`w-4 h-4 ${truck.is_active ? 'text-primary' : 'text-muted-foreground'}`} />
               </div>
-              <div>
-                <p className="text-sm font-semibold text-foreground">{truck.name}</p>
-                <p className={`text-xs font-medium mt-0.5 ${truck.is_active ? 'text-success' : 'text-muted-foreground'}`}>
-                  {truck.is_active ? 'Active' : 'Inactive'}
-                </p>
-                <p className={`text-xs mt-1 flex items-center justify-center gap-1 ${truck.discord_channel_id ? 'text-success' : 'text-warning'}`}>
-                  {truck.discord_channel_id
-                    ? <><CheckCircle2 className="w-3 h-3" /> Discord linked</>
-                    : <><AlertTriangle className="w-3 h-3" /> No channel</>
-                  }
-                </p>
+
+              {/* Name + status */}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground truncate">{truck.name}</p>
+                <div className="flex items-center gap-3 mt-0.5">
+                  <span className={`text-xs font-medium ${truck.is_active ? 'text-success' : 'text-muted-foreground'}`}>
+                    {truck.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                  <span className={`text-xs flex items-center gap-1 ${truck.discord_channel_id ? 'text-success' : 'text-warning'}`}>
+                    {truck.discord_channel_id
+                      ? <><CheckCircle2 className="w-3 h-3" /> Discord linked</>
+                      : <><AlertTriangle className="w-3 h-3" /> No channel</>
+                    }
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-2 pt-1">
+
+              {/* Channel ID chip */}
+              {truck.discord_channel_id && (
+                <span className="hidden sm:block text-xs font-mono text-muted-foreground bg-accent px-2 py-0.5 rounded-lg truncate max-w-[160px]">
+                  {truck.discord_channel_id}
+                </span>
+              )}
+
+              {/* Actions */}
+              <div className="shrink-0 flex items-center gap-1">
                 <button
                   onClick={() => setEditTarget(truck)}
                   className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
@@ -1069,14 +1092,14 @@ function FleetTab() {
                 {truck.is_active ? (
                   <button
                     onClick={() => handleDeactivate(truck)}
-                    className="text-xs font-medium text-danger hover:bg-danger/10 px-2 py-1 rounded-lg transition-colors"
+                    className="text-xs font-medium text-danger hover:bg-danger/10 px-2.5 py-1 rounded-lg transition-colors"
                   >
                     Deactivate
                   </button>
                 ) : (
                   <button
                     onClick={() => handleReactivate(truck)}
-                    className="text-xs font-medium text-success hover:bg-success/10 px-2 py-1 rounded-lg transition-colors"
+                    className="text-xs font-medium text-success hover:bg-success/10 px-2.5 py-1 rounded-lg transition-colors"
                   >
                     Reactivate
                   </button>

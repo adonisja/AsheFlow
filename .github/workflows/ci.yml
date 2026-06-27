@@ -140,7 +140,8 @@ jobs:
               "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/backend/.env",
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
-              "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env"
+              "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
+              "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
@@ -366,7 +367,8 @@ jobs:
               "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/backend/.env",
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
-              "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/backend/.env"
+              "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
+              "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
