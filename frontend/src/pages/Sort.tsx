@@ -9,7 +9,7 @@ import {
   Package, Users, AlertTriangle, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, Send, UserCheck, Shuffle,
   MapPin, Route, Layers, Zap, CircleAlert, Loader2,
-  ArrowRightLeft,
+  ArrowRightLeft, Upload, X, FileText,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import type {
@@ -451,6 +451,215 @@ function RouteCard({
 }
 
 // ---------------------------------------------------------------------------
+// Manifest upload panel — production CSV upload + enrichment status polling
+// ---------------------------------------------------------------------------
+
+type UploadPhase = 'idle' | 'uploading' | 'enriching' | 'ready' | 'error';
+
+function ManifestUploadPanel({
+  today,
+  onReady,
+}: {
+  today: string;
+  onReady: () => void;
+}) {
+  const [phase, setPhase]         = useState<UploadPhase>('idle');
+  const [uploadDate, setUploadDate] = useState(today);
+  const [file, setFile]           = useState<File | null>(null);
+  const [packageCount, setPackageCount] = useState(0);
+  const [failedCount, setFailedCount]   = useState(0);
+  const [warnings, setWarnings]   = useState<string[]>([]);
+  const [errorMsg, setErrorMsg]   = useState<string | null>(null);
+  const [expanded, setExpanded]   = useState(false);
+  const fileRef                   = useRef<HTMLInputElement>(null);
+  const pollRef                   = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  useEffect(() => () => stopPoll(), []);
+
+  const startPolling = (sortDate: string) => {
+    stopPoll();
+    pollRef.current = setInterval(async () => {
+      try {
+        const { data } = await axiosClient.get(`/sort/manifest/${sortDate}/status`);
+        if (data.status === 'ready') {
+          stopPoll();
+          setPackageCount(data.package_count);
+          setFailedCount(data.failed_count ?? 0);
+          setPhase('ready');
+          onReady();
+        } else if (data.status === 'failed') {
+          stopPoll();
+          setErrorMsg('Enrichment failed — check server logs.');
+          setPhase('error');
+        }
+      } catch {
+        // transient — keep polling
+      }
+    }, 5_000);
+  };
+
+  const handleUpload = async () => {
+    if (!file) return;
+    setPhase('uploading');
+    setErrorMsg(null);
+    setWarnings([]);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('sort_date', uploadDate);
+      const { data } = await axiosClient.post('/sort/upload', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setPackageCount(data.package_count);
+      setWarnings(data.warnings ?? []);
+      setPhase('enriching');
+      startPolling(uploadDate);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail ?? 'Upload failed.';
+      setErrorMsg(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      setPhase('error');
+    }
+  };
+
+  const handleReset = () => {
+    stopPoll();
+    setPhase('idle');
+    setFile(null);
+    setErrorMsg(null);
+    setWarnings([]);
+    setPackageCount(0);
+    setFailedCount(0);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  return (
+    <div className="rounded-2xl border border-primary/30 bg-primary/5 overflow-hidden">
+      {/* Header */}
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-primary/5 transition-colors text-left"
+        onClick={() => setExpanded(v => !v)}
+      >
+        <Upload className="w-5 h-5 text-primary shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground">Upload Production Manifest</p>
+          <p className="text-xs text-muted-foreground">
+            {phase === 'idle'   && 'Upload the Amazon manifest CSV for today\'s sort.'}
+            {phase === 'uploading' && 'Uploading and parsing…'}
+            {phase === 'enriching' && `Enriching ${packageCount.toLocaleString()} packages — geocoding in background…`}
+            {phase === 'ready'  && `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed enrichment` : ''} — run sort below.`}
+            {phase === 'error'  && (errorMsg ?? 'Upload failed.')}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {phase === 'ready'     && <CheckCircle2 className="w-4 h-4 text-success" />}
+          {phase === 'enriching' && <Loader2 className="w-4 h-4 text-primary animate-spin" />}
+          {phase === 'error'     && <AlertTriangle className="w-4 h-4 text-danger" />}
+          {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-primary/20 px-4 py-3 space-y-3">
+
+          {/* idle / error — show form */}
+          {(phase === 'idle' || phase === 'error') && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Sort date</label>
+                  <input
+                    type="date"
+                    value={uploadDate}
+                    onChange={e => setUploadDate(e.target.value)}
+                    className="input-field text-sm h-9 w-40"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Manifest file (CSV / XLSX)</label>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept=".csv,.xlsx,.xls,.pdf,.jpg,.jpeg,.png"
+                    onChange={e => setFile(e.target.files?.[0] ?? null)}
+                    className="block text-xs text-muted-foreground file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border file:border-border file:text-xs file:bg-surface file:text-foreground file:cursor-pointer hover:file:bg-accent"
+                  />
+                </div>
+              </div>
+              {file && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  {file.name} · {(file.size / 1024).toFixed(0)} KB
+                </div>
+              )}
+              {errorMsg && <p className="text-xs text-danger font-medium">{errorMsg}</p>}
+              <button
+                onClick={handleUpload}
+                disabled={!file}
+                className="btn-primary flex items-center gap-2 text-sm disabled:opacity-40"
+              >
+                <Upload className="w-4 h-4" />
+                Upload & Start Enrichment
+              </button>
+            </div>
+          )}
+
+          {/* uploading */}
+          {phase === 'uploading' && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+              Uploading and parsing manifest…
+            </div>
+          )}
+
+          {/* enriching */}
+          {phase === 'enriching' && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm text-foreground">
+                <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
+                <span>Geocoding {packageCount.toLocaleString()} packages — polling every 5 s…</span>
+              </div>
+              {warnings.length > 0 && (
+                <div className="space-y-0.5">
+                  {warnings.map((w, i) => (
+                    <p key={i} className="text-xs text-warning">{w}</p>
+                  ))}
+                </div>
+              )}
+              <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                <X className="w-3.5 h-3.5" /> Cancel
+              </button>
+            </div>
+          )}
+
+          {/* ready */}
+          {phase === 'ready' && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm text-success font-medium">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                {packageCount.toLocaleString()} packages enriched and ready.
+                {failedCount > 0 && <span className="text-warning font-normal"> ({failedCount} failed geocoding — will be dropped.)</span>}
+              </div>
+              {warnings.length > 0 && (
+                <div className="space-y-0.5">
+                  {warnings.map((w, i) => (
+                    <p key={i} className="text-xs text-warning">{w}</p>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">Run sort below on each truck to commit routes.</p>
+              <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                <X className="w-3.5 h-3.5" /> Upload a different file
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Truck sort panel
 // ---------------------------------------------------------------------------
 
@@ -482,6 +691,10 @@ function TruckSortPanel({
   // Wave assignment map: route_number → employee_id
   const [waveMap, setWaveMap] = useState<Record<number, string>>({});
 
+  // First-wave auto-propose state
+  const [firstWaveProposal, setFirstWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
+  const [firstWaveProposing, setFirstWaveProposing] = useState(false);
+
   // Second-wave auto-propose state
   const [secondWaveProposal, setSecondWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
   const [selectedTrainerId, setSelectedTrainerId] = useState('');
@@ -509,6 +722,31 @@ function TruckSortPanel({
     try { await onCommit(state.ta.id); }
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Commit failed.'); }
     finally { setCommitLoading(false); }
+  };
+
+  const handleFirstWaveAutoPropose = async () => {
+    setError(null);
+    setFirstWaveProposing(true);
+    try {
+      const { data } = await axiosClient.post<WaveDistributionProposal>(
+        '/walker-routes/wave-distribution',
+        { truck_assignment_id: state.ta.id, route_date: routeDate, auto_assign: true },
+      );
+      setFirstWaveProposal(data.proposed_assignments);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Auto-propose failed.');
+    } finally {
+      setFirstWaveProposing(false);
+    }
+  };
+
+  const handleFirstWaveProposalConfirm = (proposed: ProposedAssignmentEntry[]) => {
+    setWaveMap(prev => {
+      const next = { ...prev };
+      proposed.forEach(p => { next[p.route_number] = p.employee_id; });
+      return next;
+    });
+    setFirstWaveProposal(null);
   };
 
   const handleDistribute = async () => {
@@ -675,15 +913,51 @@ function TruckSortPanel({
                 </div>
               )}
 
+              {state.phase === 'committed' && firstWaveProposal && (
+                <div className="space-y-2 p-3 bg-info/5 border border-info/20 rounded-xl">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-info uppercase tracking-widest">Auto-proposed assignments</p>
+                    <button onClick={() => setFirstWaveProposal(null)} className="text-xs text-muted-foreground hover:text-foreground">Discard</button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Review and accept — assignments are applied to the route cards above.</p>
+                  <div className="space-y-1">
+                    {firstWaveProposal.map(p => (
+                      <div key={p.route_number} className="flex items-center gap-2 text-xs">
+                        <span className="font-semibold text-foreground w-8">#{p.route_number}</span>
+                        <EffortBadge effort={p.effort_class} />
+                        <span className="text-foreground">{p.employee_name}</span>
+                        {p.auto_proposed && <span className="text-info text-[10px]">auto</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => handleFirstWaveProposalConfirm(firstWaveProposal)}
+                    className="btn-primary w-full text-sm"
+                  >
+                    Accept proposals
+                  </button>
+                </div>
+              )}
+
               {state.phase === 'committed' && (
-                <button
-                  onClick={handleDistribute}
-                  disabled={distributeLoading}
-                  className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
-                >
-                  {distributeLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shuffle className="w-4 h-4" />}
-                  {distributeLoading ? 'Distributing…' : 'Send Wave Distribution'}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleFirstWaveAutoPropose}
+                    disabled={firstWaveProposing || !!firstWaveProposal}
+                    className="btn-secondary flex items-center justify-center gap-2 text-sm flex-1"
+                  >
+                    {firstWaveProposing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {firstWaveProposing ? 'Proposing…' : 'Auto-propose'}
+                  </button>
+                  <button
+                    onClick={handleDistribute}
+                    disabled={distributeLoading}
+                    className="btn-primary flex items-center justify-center gap-2 text-sm flex-1"
+                  >
+                    {distributeLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shuffle className="w-4 h-4" />}
+                    {distributeLoading ? 'Distributing…' : 'Send Wave'}
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -986,6 +1260,9 @@ export default function SortPage() {
       {error && (
         <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
       )}
+
+      {/* Manifest upload */}
+      <ManifestUploadPanel today={today} onReady={fetchAll} />
 
       {/* Zone density map — only render when truck assignments exist for today */}
       {assignments.length > 0 && (

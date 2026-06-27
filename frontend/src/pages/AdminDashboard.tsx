@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
@@ -50,6 +50,55 @@ type SeedManifestData = {
 };
 
 type SeedPhase = 'idle' | 'loading' | 'ready' | 'uploading' | 'done' | 'error';
+
+const SEED_STEPS = [
+  { label: 'Sampling addresses',   duration: 2500 },
+  { label: 'Building tote map',    duration: 2000 },
+  { label: 'Injecting misroutes',  duration: 1500 },
+  { label: 'Encoding CSV',         duration: 1000 },
+  { label: 'Returning preview',    duration: 0    },
+];
+
+function SeedProgressSteps() {
+  const [step, setStep] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    function advance(current: number) {
+      const s = SEED_STEPS[current];
+      if (!s || s.duration === 0) return;
+      timerRef.current = setTimeout(() => {
+        setStep(current + 1);
+        advance(current + 1);
+      }, s.duration);
+    }
+    advance(0);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      {SEED_STEPS.map((s, i) => {
+        const done    = i < step;
+        const active  = i === step;
+        return (
+          <div key={s.label} className={`flex items-center gap-2.5 text-sm transition-opacity ${i > step ? 'opacity-30' : 'opacity-100'}`}>
+            {done ? (
+              <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+            ) : active ? (
+              <div className="w-4 h-4 border-2 border-warning border-t-transparent rounded-full animate-spin shrink-0" />
+            ) : (
+              <div className="w-4 h-4 rounded-full border border-muted-foreground/30 shrink-0" />
+            )}
+            <span className={done ? 'text-muted-foreground line-through' : active ? 'text-foreground font-medium' : 'text-muted-foreground'}>
+              {s.label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
@@ -323,12 +372,7 @@ export default function AdminDashboard() {
             )}
 
             {/* Phase: loading */}
-            {seedPhase === 'loading' && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <div className="w-4 h-4 border-2 border-warning border-t-transparent rounded-full animate-spin" />
-                Generating manifest…
-              </div>
-            )}
+            {seedPhase === 'loading' && <SeedProgressSteps />}
 
             {/* Phase: ready — show summary + preview */}
             {seedPhase === 'ready' && seedData && (
