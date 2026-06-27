@@ -298,7 +298,6 @@ const Navbar = () => {
           <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
           <NavLink to="/audit" className={linkClass}><ScrollText className="w-3.5 h-3.5" /> Audit Log</NavLink>
           <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/dispatch-home" className={linkClass}><Navigation className="w-3.5 h-3.5" /> Dispatch Home</NavLink>
           <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
           <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
           <NavLink to="/feedback" className={linkClass}><MessageSquare className="w-3.5 h-3.5" /> Feedback</NavLink>
@@ -510,7 +509,6 @@ function MobileLinks({
         <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
         <NavLink to="/audit" onClick={onNav} className={cls}><ScrollText className="w-4 h-4" /> Audit Log</NavLink>
         <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/dispatch-home" onClick={onNav} className={cls}><Navigation className="w-4 h-4" /> Dispatch Home</NavLink>
         <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
         <NavLink to="/feedback" onClick={onNav} className={cls}><MessageSquare className="w-4 h-4" /> Feedback</NavLink>
