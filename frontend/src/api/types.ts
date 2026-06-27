@@ -383,6 +383,7 @@ export interface AssignmentChangeRequest {
 // ---------------------------------------------------------------------------
 
 export interface MisroutedPackageOut {
+  id?: string;
   tba_number: string;
   tag_number: string | null;
   current_bag_id: string;
@@ -419,6 +420,7 @@ export interface RouteResponse {
   block_keys: string[];
   tote_ids: string[];
   tba_numbers: string[];
+  normalised_addresses: string[];
   tag_numbers: string[];
   slot_cost: number;
   capacity_limit: number;
@@ -632,13 +634,24 @@ export interface StopSignal {
   urgency: number;
 }
 
+export interface BagGroup {
+  bag_id: string;
+  tba_numbers: string[];
+}
+
 export interface NextStopSuggestion {
   normalised_address: string;
   block_key: string;
   tba_numbers: string[];
+  bags: BagGroup[];
   packages_total: number;
   signals: StopSignal[];
   urgency_score: number;
+  building_type: string | null;
+  workload_class: string | null;
+  operational_note: string | null;
+  protocol_reminder: string | null;
+  has_locked_profile: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +670,8 @@ export type BuildingType =
   | 'biz_front';
 
 export interface BuildingProfileCreate {
-  tba_number: string;
+  normalised_address: string;
+  block_key?: string;
   building_type: BuildingType;
   raw_note?: string;
 }
@@ -672,11 +686,25 @@ export interface BuildingProfileResponse {
   raw_note: string | null;
   operational_note: string | null;
   note_verified: boolean;
+  protocol_reminder: string | null;
   building_type_status: 'pending' | 'verified' | 'locked';
   building_type_agreement_count: number;
   nomination_status: string | null;
   submitted_by_name: string;
   created_at: string;
+}
+
+export interface TbaReassignRequest {
+  tba_numbers: string[];
+  destination_zone_id: string;
+}
+
+export interface TbaReassignResponse {
+  source_zone_id: string;
+  destination_zone_id: string;
+  moved_tbas: string[];
+  source_remaining: number;
+  destination_total: number;
 }
 
 export interface ArrivalConfirmResponse {

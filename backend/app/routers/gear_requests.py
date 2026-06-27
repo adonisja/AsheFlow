@@ -468,7 +468,10 @@ def _get_item(item_id: UUID, company_id: UUID, db: Session) -> GearOrderItem:
 
 
 def _build_order_response(order: GearOrder, caller: Optional[Employee], db: Session) -> GearOrderResponse:
-    employee = db.query(Employee).filter(Employee.id == order.employee_id).first()
+    employee = db.query(Employee).filter(
+        Employee.id == order.employee_id,
+        Employee.company_id == order.company_id,
+    ).first()
     items = (
         db.query(GearOrderItem)
         .filter(GearOrderItem.order_id == order.id)

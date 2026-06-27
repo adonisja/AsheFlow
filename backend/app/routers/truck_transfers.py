@@ -34,6 +34,7 @@ from app.models.notification import Notification
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.truck_transfer import TruckTransfer
+from app.services.audit import write_audit
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,10 @@ def create_transfers(
     if not to_ta:
         raise HTTPException(status_code=404, detail="Destination truck has no assignment for this date.")
 
-    to_truck = db.query(Truck).filter(Truck.id == body.to_truck_id).first()
+    to_truck = db.query(Truck).filter(
+        Truck.id == body.to_truck_id,
+        Truck.company_id == caller.company_id,
+    ).first()
 
     if to_ta.status == "planned":
         raise HTTPException(
@@ -197,7 +201,8 @@ def create_transfers(
             paired = (
                 db.query(AssignmentMember)
                 .filter(
-                    AssignmentMember.assignment_id == am.assignment_id,
+                    AssignmentMember.assignment_id     == am.assignment_id,
+                    AssignmentMember.company_id        == caller.company_id,
                     AssignmentMember.paired_trainer_id == eid,
                 )
                 .all()

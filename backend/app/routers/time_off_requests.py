@@ -28,7 +28,10 @@ def get_all_time_off_requests(
     return pg.apply(
         db.query(TimeOffRequest)
         .join(Employee, TimeOffRequest.employee_id == Employee.id)
-        .filter(Employee.company_id == caller.company_id)
+        .filter(
+            TimeOffRequest.company_id == caller.company_id,
+            Employee.company_id == caller.company_id,
+        )
     ).all()
 
 @router.get("/{employee_id}", response_model=list[TimeOffRequestResponse])
@@ -89,6 +92,12 @@ def create_time_off_request(
         status="pending"
     )
     db.add(db_request)
+    db.flush()
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="pto.created", target_table="time_off_requests",
+        target_id=str(db_request.id), after={"date": str(request.date), "employee_id": str(request.employee_id)},
+    )
     db.commit()
     db.refresh(db_request)
     return db_request

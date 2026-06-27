@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   MapPin, Package, AlertTriangle, PackageX, CheckCircle2,
   Truck, Navigation, ChevronDown, ChevronUp, Building2,
-  ArrowRight, Clock, Loader2,
+  ArrowRight, Clock, Loader2, Info,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -58,7 +58,7 @@ interface StopCardProps {
   onComplete: (tbas: string[], completedAt: string) => Promise<void>;
   onRts: (tba: string) => void;
   onMissing: (tba: string) => void;
-  onBuildingProfile: (tba: string) => void;
+  onBuildingProfile: (address: string, blockKey: string) => void;
   isFirst: boolean;
   completing: boolean;
 }
@@ -93,25 +93,51 @@ function StopCard({ stop, onComplete, onRts, onMissing, onBuildingProfile, isFir
 
       {expanded && (
         <div className="mt-3 space-y-3 border-t border-border pt-3">
-          {/* TBA list */}
-          <div className="space-y-1">
-            {stop.tba_numbers.map(tba => (
-              <div key={tba} className="flex items-center justify-between gap-2">
-                <span className="text-xs font-mono text-foreground">{tba}</span>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => onRts(tba)}
-                    className="text-xs text-warning hover:text-warning/80 px-2 py-0.5 rounded border border-warning/30 hover:bg-warning/10 transition-colors"
-                  >
-                    Can't deliver
-                  </button>
-                  <button
-                    onClick={() => onMissing(tba)}
-                    className="text-xs text-destructive hover:text-destructive/80 px-2 py-0.5 rounded border border-destructive/30 hover:bg-destructive/10 transition-colors"
-                  >
-                    Missing
-                  </button>
+          {/* Building profile info */}
+          {stop.has_locked_profile && (
+            <div className="p-2 rounded-lg bg-accent/40 border border-border space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <Building2 className="w-3.5 h-3.5 text-muted-foreground" />
+                {stop.building_type?.replace(/_/g, ' ')}
+              </div>
+              {stop.operational_note && (
+                <p className="text-xs text-muted-foreground">{stop.operational_note}</p>
+              )}
+              {stop.protocol_reminder && (
+                <div className="flex items-start gap-1.5 text-xs text-info">
+                  <Info className="w-3 h-3 mt-0.5 shrink-0" />
+                  {stop.protocol_reminder}
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* Packages grouped by bag */}
+          <div className="space-y-2">
+            {(stop.bags.length > 0 ? stop.bags : [{ bag_id: 'unknown', tba_numbers: stop.tba_numbers }]).map(bag => (
+              <div key={bag.bag_id} className="space-y-1">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+                  Bag {bag.bag_id}
+                </p>
+                {bag.tba_numbers.map(tba => (
+                  <div key={tba} className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-mono text-foreground">{tba}</span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => onRts(tba)}
+                        className="text-xs text-warning hover:text-warning/80 px-2 py-0.5 rounded border border-warning/30 hover:bg-warning/10 transition-colors"
+                      >
+                        Can't deliver
+                      </button>
+                      <button
+                        onClick={() => onMissing(tba)}
+                        className="text-xs text-destructive hover:text-destructive/80 px-2 py-0.5 rounded border border-destructive/30 hover:bg-destructive/10 transition-colors"
+                      >
+                        Missing
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -137,7 +163,7 @@ function StopCard({ stop, onComplete, onRts, onMissing, onBuildingProfile, isFir
               Complete stop
             </button>
             <button
-              onClick={() => onBuildingProfile(stop.tba_numbers[0])}
+              onClick={() => onBuildingProfile(stop.normalised_address, stop.block_key)}
               className="btn-secondary flex items-center gap-1.5 text-sm"
             >
               <Building2 className="w-3.5 h-3.5" />
@@ -276,11 +302,12 @@ function MissingModal({ tba, routeId, onClose, onSubmitted }: MissingModalProps)
 // ── Building profile modal ────────────────────────────────────────────────────
 
 interface BuildingModalProps {
-  tba: string;
+  address: string;
+  blockKey?: string;
   onClose: () => void;
 }
 
-function BuildingModal({ tba, onClose }: BuildingModalProps) {
+function BuildingModal({ address, blockKey, onClose }: BuildingModalProps) {
   const [buildingType, setBuildingType] = useState<BuildingType>('walkup');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -292,7 +319,8 @@ function BuildingModal({ tba, onClose }: BuildingModalProps) {
     setError(null);
     try {
       const body: BuildingProfileCreate = {
-        tba_number: tba,
+        normalised_address: address,
+        block_key: blockKey,
         building_type: buildingType,
         raw_note: note.trim() || undefined,
       };
@@ -387,7 +415,7 @@ export default function MyRoute() {
   // Modals
   const [rtsModal, setRtsModal]     = useState<{ tba: string; routeId: string } | null>(null);
   const [missingModal, setMissingModal] = useState<{ tba: string; routeId: string } | null>(null);
-  const [buildingModal, setBuildingModal] = useState<string | null>(null); // tba
+  const [buildingModal, setBuildingModal] = useState<{ address: string; blockKey: string } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -584,21 +612,24 @@ export default function MyRoute() {
             <CheckCircle2 className="w-4 h-4 text-success" />
             <p className="font-semibold text-foreground text-sm">Arrival confirmed</p>
           </div>
-          {arrivalResult.sort_not_yet_committed ? (
-            <p className="text-xs text-muted-foreground">Sort hasn't been committed yet — your arrival is noted and rebalance will run when sort commits.</p>
-          ) : (
-            <div className="text-xs text-muted-foreground space-y-1">
-              {arrivalResult.paired_route && (
-                <p>Paired route #{arrivalResult.paired_route.route_number} — capacity {arrivalResult.paired_capacity_limit} slots</p>
-              )}
-              {arrivalResult.absorbed_route_numbers.length > 0 && (
-                <p>Absorbed from routes: {arrivalResult.absorbed_route_numbers.join(', ')}</p>
-              )}
-              {arrivalResult.trimmed_route_numbers.length > 0 && (
-                <p>Trimmed routes: {arrivalResult.trimmed_route_numbers.join(', ')}</p>
-              )}
-            </div>
-          )}
+          <div className="text-xs text-muted-foreground space-y-1">
+            {arrivalResult.sort_not_yet_committed ? (
+              <p>Sort not yet committed — capacity will be set when routes are finalized.</p>
+            ) : (
+              <>
+                <p>Paired capacity: {arrivalResult.paired_capacity_limit} slots</p>
+                {arrivalResult.absorbed_route_numbers.length > 0 && (
+                  <p>Absorbed routes: #{arrivalResult.absorbed_route_numbers.join(', #')}</p>
+                )}
+                {arrivalResult.trimmed_route_numbers.length > 0 && (
+                  <p>Trimmed routes: #{arrivalResult.trimmed_route_numbers.join(', #')}</p>
+                )}
+                {arrivalResult.absorbed_route_numbers.length === 0 && arrivalResult.trimmed_route_numbers.length === 0 && (
+                  <p>No absorption needed — route is within paired capacity.</p>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -731,7 +762,7 @@ export default function MyRoute() {
               onComplete={(tbas, completedAt) => handleCompleteStop(activeRoute.id, tbas, completedAt)}
               onRts={tba => setRtsModal({ tba, routeId: activeRoute.id })}
               onMissing={tba => setMissingModal({ tba, routeId: activeRoute.id })}
-              onBuildingProfile={tba => setBuildingModal(tba)}
+              onBuildingProfile={(address, blockKey) => setBuildingModal({ address, blockKey })}
             />
           ))}
         </div>
@@ -756,7 +787,8 @@ export default function MyRoute() {
       )}
       {buildingModal && (
         <BuildingModal
-          tba={buildingModal}
+          address={buildingModal.address}
+          blockKey={buildingModal.blockKey}
           onClose={() => setBuildingModal(null)}
         />
       )}

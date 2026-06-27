@@ -43,6 +43,7 @@ from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.notification import Notification
+from app.services.audit import write_audit
 from app.schemas.anchor_point import (
     AnchorPointCreate,
     AnchorPointArriveUpdate,
@@ -286,6 +287,16 @@ async def submit_anchor_point(
     all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
     _notify(db, all_notify, "anchor_point_submitted", notif_message, caller.company_id)
 
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="anchor_point.submitted",
+        target_table="anchor_points",
+        target_id=str(new_ap.id),
+        after={"sequence": sequence, "is_initial": is_first, "location": payload.location},
+    )
     db.commit()
     db.refresh(new_ap)
 

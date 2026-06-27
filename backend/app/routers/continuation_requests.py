@@ -12,6 +12,7 @@ from app.models.training import TrainingRecord
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.schemas.continuation_request import ContinuationRequestCreate, ContinuationRequestResponse, PriorityUpdate
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/continuation-requests", tags=["continuation-requests"])
 

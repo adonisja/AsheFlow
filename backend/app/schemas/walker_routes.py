@@ -139,26 +139,12 @@ class ArrivalConfirmRequest(BaseModel):
     trainee_id: UUID
 
 
-class RebalanceOffer(BaseModel):
-    """Presented for heavy routes — trainer must explicitly accept."""
-    route_number: int
-    effort_class: str
-    workload_source: str
-    current_slot_cost: int
-    paired_capacity_limit: int
-    absorbable_tote_ids: list[str]
-    absorbable_package_count: int
-
-
 class ArrivalConfirmResponse(BaseModel):
-    rebalanced_route_numbers: list[int]        # standard/easy routes auto-rebalanced
-    heavy_offers: list[RebalanceOffer]         # heavy routes needing manual accept
-
-
-class AcceptRebalanceRequest(BaseModel):
-    route_number: int
-    truck_assignment_id: UUID
-    route_date: date
+    sort_not_yet_committed: bool
+    paired_route: Optional["RouteResponse"]
+    absorbed_route_numbers: list[int]
+    trimmed_route_numbers: list[int]
+    paired_capacity_limit: int
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +160,7 @@ class RouteResponse(BaseModel):
     block_keys: list[str]
     tote_ids: list[str]
     tba_numbers: list[str]
+    normalised_addresses: list[str] = []
     slot_cost: int
     capacity_limit: int
     capacity_limit_paired: Optional[int] = None
