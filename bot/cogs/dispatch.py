@@ -210,12 +210,22 @@ def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> d
         lines: list[str] = []
 
         if trainers and trainees:
-            # List each trainer paired with the trainee(s) on the same truck.
-            # One trainer per truck is the standard case; show all if multiple.
+            # Use paired_trainer_id for exact matching (set at dispatch-run time).
+            claimed_trainee_ids: set[str] = set()
             for trainer in trainers:
+                paired = [
+                    t for t in trainees
+                    if t.get("paired_trainer_id") == trainer["employee_id"]
+                ]
                 lines.append(f"🎓 **{trainer['name']}**")
+                for trainee in paired:
+                    lines.append(f"  └ 📋 **{trainee['name']}**")
+                    claimed_trainee_ids.add(trainee["employee_id"])
+                if not paired:
+                    lines.append("  └ *(no trainee paired)*")
             for trainee in trainees:
-                lines.append(f"  └ 📋 **{trainee['name']}**")
+                if trainee["employee_id"] not in claimed_trainee_ids:
+                    lines.append(f"📋 **{trainee['name']}** — *(trainer not set)*")
         elif trainers:
             for trainer in trainers:
                 lines.append(f"🎓 **{trainer['name']}** — *(no trainee today)*")
