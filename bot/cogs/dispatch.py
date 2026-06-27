@@ -499,10 +499,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             except Exception as e:
                 channel_errors.append(f"{truck_name}: could not post crew card — {e}")
 
-            confirmed_trainers = [m for m in confirmed_crew if m["role"] == "trainer"]
+            confirmed_trainers = {m["employee_id"]: m for m in confirmed_crew if m["role"] == "trainer"}
             confirmed_trainees = [m for m in confirmed_crew if m["role"] == "trainee"]
-
-            trainer_by_id = {m["employee_id"]: m["name"] for m in confirmed_crew if m["role"] == "trainer"}
 
             for member in confirmed_crew:
                 discord_id = member.get("discord_id")
@@ -514,16 +512,18 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
                     extra = ""
                     if role == "trainee":
-                        paired_trainer_name = trainer_by_id.get(member.get("paired_trainer_id", ""))
-                        if paired_trainer_name:
-                            extra = f"\n**Your trainer:** {paired_trainer_name}"
+                        # paired_trainer_id is kept live — updated when a trainer
+                        # is swapped out, so this always reflects the current pairing.
+                        paired = confirmed_trainers.get(member.get("paired_trainer_id"))
+                        if paired:
+                            extra = f"\n**Your trainer:** {paired['name']}"
                     elif role == "trainer":
-                        paired_trainees = [
-                            m for m in confirmed_crew
-                            if m["role"] == "trainee" and m.get("paired_trainer_id") == member["employee_id"]
+                        my_trainees = [
+                            m for m in confirmed_trainees
+                            if m.get("paired_trainer_id") == member["employee_id"]
                         ]
-                        if paired_trainees:
-                            names = ", ".join(m["name"] for m in paired_trainees)
+                        if my_trainees:
+                            names = ", ".join(m["name"] for m in my_trainees)
                             extra = f"\n**Your trainee:** {names}"
 
                     final_embed = discord.Embed(
