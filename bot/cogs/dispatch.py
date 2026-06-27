@@ -180,23 +180,42 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
 
 
 # ---------------------------------------------------------------------------
-# Helper: build the #drivers-chat finalization post
+# Helper: build the #drivers-chat finalization embed
 # ---------------------------------------------------------------------------
 
-def _build_drivers_chat_message(trucks_data: list[dict], dispatch_date: str) -> str:
-    COL = 16
-    SEP = "-" * 38
+def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
+    """Embed posted to #drivers-chat after finalization.
 
-    inner: list[str] = [f"Finalized Dispatch  {dispatch_date}", SEP]
+    One row per truck: truck name | driver | AP count.
+    AP is 0 (or omitted) when the sort hasn't run yet.
+    """
+    embed = discord.Embed(
+        title=f"✅ Dispatch Finalized — {dispatch_date}",
+        color=0x57F287,  # green
+    )
+
+    TRUCK_COL = 10
+    NAME_COL  = 18
+
+    header = f"{'Truck':<{TRUCK_COL}}  {'Driver':<{NAME_COL}}  AP"
+    SEP    = "─" * (TRUCK_COL + 2 + NAME_COL + 2 + 6)
+    rows   = [header, SEP]
+
     for entry in trucks_data:
         truck_name = entry["truck_name"]
-        crew = entry["crew"]
-        driver = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
-        inner.append(f"{truck_name:<{COL}}  Driver: {driver}")
-    inner.append(SEP)
-    inner.append("Full crew details posted in each truck's channel.")
+        crew       = entry["crew"]
+        ap         = entry.get("ap") or 0
+        driver     = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
 
-    return "✅ **Dispatch Finalized**\n```\n" + "\n".join(inner) + "\n```"
+        ap_str = str(ap) if ap else "—"
+        rows.append(f"{truck_name:<{TRUCK_COL}}  {driver:<{NAME_COL}}  {ap_str}")
+
+    rows.append(SEP)
+    rows.append("Full crew details in each truck's channel.")
+
+    embed.description = "```\n" + "\n".join(rows) + "\n```"
+    embed.set_footer(text="Crew details have been posted to each truck's channel.")
+    return embed
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +490,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         truck_map = {str(t["id"]): t for t in trucks}
         assigned_crews: dict[str, list] = dispatch.get("assigned_crews", {})
         confirmations: dict[str, str] = confs.get("confirmations", {})
+        ap_by_truck: dict[str, int] = dispatch.get("ap_by_truck", {})
 
         if not assigned_crews:
             await drivers_channel.send(f"No dispatch found for `{dispatch_date}` — nothing to finalize.")
@@ -489,7 +509,11 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 if confirmations.get(m["employee_id"], "pending") == "confirmed"
             ]
 
-            trucks_summary.append({"truck_name": truck_name, "crew": confirmed_crew})
+            trucks_summary.append({
+                "truck_name": truck_name,
+                "crew": confirmed_crew,
+                "ap": ap_by_truck.get(truck_id, 0),
+            })
 
             if not channel_id:
                 channel_errors.append(f"{truck_name}: no discord_channel_id set in DB")
@@ -554,7 +578,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 except Exception:
                     pass
 
-        await drivers_channel.send(_build_drivers_chat_message(trucks_summary, dispatch_date))
+        await drivers_channel.send(embed=_build_drivers_chat_embed(trucks_summary, dispatch_date))
 
         # Post trainer↔trainee pairings to #trainers-chat if configured
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
