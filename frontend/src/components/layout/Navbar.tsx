@@ -321,7 +321,7 @@ const Navbar = () => {
           <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
           <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
           <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
+          <NavLink to="/dispatch-home" className={linkClass}><Navigation className="w-3.5 h-3.5" /> Dispatch Home</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
           <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
@@ -530,7 +530,7 @@ function MobileLinks({
         <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
         <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
         <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
+        <NavLink to="/dispatch-home" onClick={onNav} className={cls}><Navigation className="w-4 h-4" /> Dispatch Home</NavLink>
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
         <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
