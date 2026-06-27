@@ -66,6 +66,20 @@ class ConfirmationView(discord.ui.View):
         await self._record(interaction, "declined")
 
     async def _record(self, interaction: discord.Interaction, status: str) -> None:
+        # Guard against persistent-view mis-dispatch: after a bot restart, Discord
+        # routes button clicks to whichever view last registered custom_id="confirm_yes".
+        # Verify the clicker's Discord ID maps to this view's employee before recording.
+        try:
+            clicker = await api.get_employee_by_discord(str(interaction.user.id))
+        except Exception:
+            clicker = None
+        if clicker is None or str(clicker.get("id")) != self.employee_id:
+            await interaction.response.send_message(
+                "⚠️ This button is not for your assignment. Please check your own DM.",
+                ephemeral=True,
+            )
+            return
+
         try:
             await api.post_confirmation(self.dispatch_date, self.employee_id, status)
         except Exception as e:
