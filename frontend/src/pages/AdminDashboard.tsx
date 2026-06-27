@@ -336,11 +336,11 @@ export default function AdminDashboard() {
                 {/* Summary stats */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                   {[
-                    { label: 'Packages',     value: seedData.package_count.toLocaleString() },
-                    { label: 'Totes',        value: seedData.tote_count.toLocaleString() },
-                    { label: 'OVs',          value: seedData.ov_count.toLocaleString() },
-                    { label: 'Out-of-zone',  value: seedData.out_of_zone_count.toLocaleString() },
-                    { label: 'Misrouted',    value: seedData.misrouted_count.toLocaleString() },
+                    { label: 'Packages',     value: (seedData.package_count ?? 0).toLocaleString() },
+                    { label: 'Totes',        value: (seedData.tote_count ?? 0).toLocaleString() },
+                    { label: 'OVs',          value: (seedData.ov_count ?? 0).toLocaleString() },
+                    { label: 'Out-of-zone',  value: (seedData.out_of_zone_count ?? '—').toLocaleString() },
+                    { label: 'Misrouted',    value: (seedData.misrouted_count ?? '—').toLocaleString() },
                     { label: 'Trucks',       value: `${seedData.truck_count} (${seedData.truck_names.join(', ')})` },
                   ].map(({ label, value }) => (
                     <div key={label} className="p-2 rounded-xl border border-warning/20 bg-surface-muted/50">
