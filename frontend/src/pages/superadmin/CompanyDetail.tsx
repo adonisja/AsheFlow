@@ -729,10 +729,13 @@ function DiscordConfigCard({ companyId }: { companyId: string }) {
     setSaveError(null);
     setSaving(true);
     try {
-      const payload: Record<string, number | null> = {};
+      const payload: Record<string, number> = {};
       for (const f of DISCORD_FIELDS) {
         const raw = draft[f.key];
-        payload[f.key] = raw ? parseInt(raw, 10) : null;
+        if (raw) {
+          const n = parseInt(raw, 10);
+          if (!isNaN(n)) payload[f.key] = n;
+        }
       }
       const res = await axiosClient.patch<DiscordConfig>(
         `/admin/companies/${companyId}/discord-config`,

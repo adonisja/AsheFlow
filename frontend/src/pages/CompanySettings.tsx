@@ -256,10 +256,7 @@ function formValuesToPayload(values: Record<string, string>): Record<string, unk
 function discordValuesToPayload(values: Record<string, string>): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   for (const [k, raw] of Object.entries(values)) {
-    if (raw === '' || raw === null || raw === undefined) {
-      payload[k] = null;
-      continue;
-    }
+    if (raw === '' || raw === null || raw === undefined) continue;
     const n = parseInt(raw, 10);
     if (!isNaN(n)) payload[k] = n;
   }
