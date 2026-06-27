@@ -186,6 +186,52 @@ def _build_drivers_chat_message(trucks_data: list[dict], dispatch_date: str) -> 
 
 
 # ---------------------------------------------------------------------------
+# Helper: build the #trainers-chat pairing embed
+# ---------------------------------------------------------------------------
+
+def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
+    """One embed listing every truck with trainers and/or trainees for the day."""
+    embed = discord.Embed(
+        title=f"📋 Trainer Pairings — {dispatch_date}",
+        color=0x57F287,  # green
+    )
+
+    has_any_pairing = False
+    for entry in trucks_data:
+        truck_name = entry["truck_name"]
+        crew = entry["crew"]
+        trainers = [m for m in crew if m["role"] == "trainer"]
+        trainees = [m for m in crew if m["role"] == "trainee"]
+
+        if not trainers and not trainees:
+            continue
+
+        has_any_pairing = True
+        lines: list[str] = []
+
+        if trainers and trainees:
+            # List each trainer paired with the trainee(s) on the same truck.
+            # One trainer per truck is the standard case; show all if multiple.
+            for trainer in trainers:
+                lines.append(f"🎓 **{trainer['name']}**")
+            for trainee in trainees:
+                lines.append(f"  └ 📋 **{trainee['name']}**")
+        elif trainers:
+            for trainer in trainers:
+                lines.append(f"🎓 **{trainer['name']}** — *(no trainee today)*")
+        else:
+            for trainee in trainees:
+                lines.append(f"📋 **{trainee['name']}** — *(no trainer assigned)*")
+
+        embed.add_field(name=f"🚛 {truck_name}", value="\n".join(lines), inline=False)
+
+    if not has_any_pairing:
+        embed.description = "No trainer–trainee pairings on today's dispatch."
+
+    return embed
+
+
+# ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
 
@@ -439,6 +485,16 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                     pass
 
         await drivers_channel.send(_build_drivers_chat_message(trucks_summary, dispatch_date))
+
+        # Post trainer↔trainee pairings to #trainers-chat if configured
+        trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
+        if trainers_channel:
+            try:
+                await trainers_channel.send(embed=_build_trainers_chat_embed(trucks_summary, dispatch_date))
+            except Exception as e:
+                logger.warning("Could not post trainer pairings to #trainers-chat: %s", e)
+        else:
+            logger.info("finalize_assignments: trainers_channel_id not configured — skipping trainer pairings post.")
 
         if channel_errors:
             error_lines = "\n".join(f"• {e}" for e in channel_errors)
