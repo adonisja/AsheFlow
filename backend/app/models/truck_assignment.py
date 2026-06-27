@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -31,5 +31,6 @@ class TruckAssignment(Base):
     truck_id            = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False, index=True)
     date                = Column(Date,               nullable=False, index=True)
     status              = Column(String(50),         nullable=False, default="planned")
-    sort_initiated_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
-    sort_committed_at   = Column(DateTime(timezone=True), nullable=True)
+    sort_initiated_by       = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
+    sort_committed_at       = Column(DateTime(timezone=True), nullable=True)
+    paired_arrival_confirmed = Column(Boolean, nullable=False, default=False)
