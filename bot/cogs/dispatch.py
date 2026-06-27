@@ -14,6 +14,7 @@ Phase 2 — Finalization (triggered by dispatch clicking "Finalize" ~09:10):
   - Errors are reported back to #drivers-chat so dispatch sees them immediately.
 """
 
+import asyncio
 import logging
 
 import discord
