@@ -73,7 +73,6 @@ export default function AdminDashboard() {
       axiosClient.get(`/dispatch/${today}/confirmations`).then(r => {
         const count = Object.values(r.data.confirmations ?? {}).filter(s => s === 'pending').length;
         setPendingConfirmCount(count);
-        setDispatchPublished(true);
         setConfirmDate(today);
       }).catch(() => {}),
     ]).then(results => {
@@ -103,14 +102,15 @@ export default function AdminDashboard() {
   >('idle');
   const [confirmAllCount, setConfirmAllCount] = useState<number | null>(null);
   const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
-  const [dispatchPublished, setDispatchPublished] = useState(false);
   const [confirmDate, setConfirmDate] = useState<string>(getLocalYMD());
 
   const handleConfirmAll = async () => {
+    const date = getLocalYMD();
+    setConfirmDate(date);
     setConfirmAllState('loading');
     try {
       const res = await axiosClient.post<{ date: string; confirmed_count: number }>(
-        `/dispatch/${confirmDate}/confirmations/confirm-all`
+        `/dispatch/${date}/confirmations/confirm-all`
       );
       setConfirmAllCount(res.data.confirmed_count);
       setConfirmAllState('done');
@@ -243,8 +243,7 @@ export default function AdminDashboard() {
         />
       </div>
 
-      {/* Operations Tool — shown when a dispatch has been published for today */}
-      {(dispatchPublished || confirmAllState === 'loading' || confirmAllState === 'done' || confirmAllState === 'error') && (
+      {/* Operations Tool — always visible to admin */}
       <div className="flex items-center gap-4 px-4 py-3 rounded-2xl border border-warning/40 bg-warning/5">
         <Zap className="w-5 h-5 text-warning shrink-0" />
         <div className="flex-1 min-w-0">
@@ -276,7 +275,6 @@ export default function AdminDashboard() {
           {confirmAllState === 'loading' ? 'Working…' : 'Confirm All'}
         </button>
       </div>
-      )}
 
       {/* Operations Tool — Test Manifest Generator (admin-only) */}
       {isAdmin && (
