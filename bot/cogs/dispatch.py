@@ -582,13 +582,29 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
         # Post trainer↔trainee pairings to #trainers-chat if configured
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
+        logger.info(
+            "finalize_assignments: trainers_channel_id=%s resolved=%s",
+            cfg.trainers_channel_id,
+            trainers_channel,
+        )
         if trainers_channel:
             try:
-                await trainers_channel.send(embed=await _build_trainers_chat_embed(trucks_summary, dispatch_date))
+                embed = await _build_trainers_chat_embed(trucks_summary, dispatch_date)
+                logger.info("finalize_assignments: trainer embed built, has_fields=%d", len(embed.fields))
+                await trainers_channel.send(embed=embed)
+                logger.info("finalize_assignments: trainer pairings posted to #trainers-chat")
             except Exception as e:
-                logger.warning("Could not post trainer pairings to #trainers-chat: %s", e)
+                logger.error("finalize_assignments: failed to post trainer pairings: %s", e, exc_info=True)
+                await drivers_channel.send(f"⚠️ Failed to post trainer pairings to #trainers-chat: {e}")
         else:
-            logger.info("finalize_assignments: trainers_channel_id not configured — skipping trainer pairings post.")
+            logger.warning(
+                "finalize_assignments: trainers_channel not found — trainers_channel_id=%s guild=%s",
+                cfg.trainers_channel_id, cfg.guild_id,
+            )
+            await drivers_channel.send(
+                f"⚠️ #trainers-chat (ID `{cfg.trainers_channel_id}`) not found in guild — "
+                "trainer pairings not posted."
+            )
 
         if channel_errors:
             error_lines = "\n".join(f"• {e}" for e in channel_errors)
