@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Shield, ChevronLeft, ChevronRight, RefreshCw, X, ChevronDown, ChevronUp, User, Search } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Shield, ChevronLeft, ChevronRight, RefreshCw, X, ChevronDown, ChevronUp, User, Search, Check } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
 interface AuditEntry {
@@ -154,6 +154,67 @@ function fmtDateShort(iso: string) {
     month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
   });
+}
+
+// ---------------------------------------------------------------------------
+// Custom dropdown (avoids browser-native select styling)
+// ---------------------------------------------------------------------------
+
+function CategoryDropdown({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = options.find(o => o.value === value) ?? options[0];
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="input w-full text-sm flex items-center justify-between gap-2 text-left"
+      >
+        <span className="truncate">{selected.label}</span>
+        <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-card shadow-lg overflow-hidden">
+          <div className="max-h-64 overflow-y-auto py-1">
+            {options.map(o => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => { onChange(o.value); setOpen(false); }}
+                className={`w-full flex items-center justify-between px-3 py-2 text-sm text-left transition-colors
+                  ${o.value === value
+                    ? 'bg-primary/10 text-primary font-medium'
+                    : 'text-foreground hover:bg-surface'
+                  }`}
+              >
+                {o.label}
+                {o.value === value && <Check className="w-3.5 h-3.5 shrink-0" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -325,15 +386,11 @@ export default function AuditLog() {
           {/* Category */}
           <div>
             <label className="label mb-1 text-xs">Category</label>
-            <select
+            <CategoryDropdown
               value={category}
-              onChange={e => setCategory(e.target.value)}
-              className="input w-full text-sm"
-            >
-              {ACTION_CATEGORIES.map(o => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+              onChange={setCategory}
+              options={ACTION_CATEGORIES}
+            />
           </div>
 
           {/* Actor search */}
