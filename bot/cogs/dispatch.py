@@ -189,12 +189,26 @@ def _build_drivers_chat_message(trucks_data: list[dict], dispatch_date: str) -> 
 # Helper: build the #trainers-chat pairing embed
 # ---------------------------------------------------------------------------
 
-def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
+async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
     """One embed listing every truck with trainers and/or trainees for the day."""
     embed = discord.Embed(
         title=f"📋 Trainer Pairings — {dispatch_date}",
         color=0x57F287,  # green
     )
+
+    # Bulk-fetch phases for all trainees across all trucks in parallel.
+    all_trainees = [
+        m for entry in trucks_data
+        for m in entry["crew"] if m["role"] == "trainee"
+    ]
+    phase_results = await asyncio.gather(
+        *[api.get_trainee_current_phase(t["employee_id"]) for t in all_trainees],
+        return_exceptions=True,
+    )
+    phase_map: dict[str, int | None] = {
+        t["employee_id"]: (r if not isinstance(r, Exception) else None)
+        for t, r in zip(all_trainees, phase_results)
+    }
 
     has_any_pairing = False
     for entry in trucks_data:
@@ -219,19 +233,25 @@ def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> d
                 ]
                 lines.append(f"🎓 **{trainer['name']}**")
                 for trainee in paired:
-                    lines.append(f"  └ 📋 **{trainee['name']}**")
+                    phase = phase_map.get(trainee["employee_id"])
+                    phase_label = f"Day {phase}" if phase is not None else "Day ?"
+                    lines.append(f"  └ 📋 **{trainee['name']}** — {phase_label}")
                     claimed_trainee_ids.add(trainee["employee_id"])
                 if not paired:
                     lines.append("  └ *(no trainee paired)*")
             for trainee in trainees:
                 if trainee["employee_id"] not in claimed_trainee_ids:
-                    lines.append(f"📋 **{trainee['name']}** — *(trainer not set)*")
+                    phase = phase_map.get(trainee["employee_id"])
+                    phase_label = f"Day {phase}" if phase is not None else "Day ?"
+                    lines.append(f"📋 **{trainee['name']}** ({phase_label}) — *(trainer not set)*")
         elif trainers:
             for trainer in trainers:
                 lines.append(f"🎓 **{trainer['name']}** — *(no trainee today)*")
         else:
             for trainee in trainees:
-                lines.append(f"📋 **{trainee['name']}** — *(no trainer assigned)*")
+                phase = phase_map.get(trainee["employee_id"])
+                phase_label = f"Day {phase}" if phase is not None else "Day ?"
+                lines.append(f"📋 **{trainee['name']}** ({phase_label}) — *(no trainer assigned)*")
 
         embed.add_field(name=f"🚛 {truck_name}", value="\n".join(lines), inline=False)
 
@@ -500,7 +520,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
         if trainers_channel:
             try:
-                await trainers_channel.send(embed=_build_trainers_chat_embed(trucks_summary, dispatch_date))
+                await trainers_channel.send(embed=await _build_trainers_chat_embed(trucks_summary, dispatch_date))
             except Exception as e:
                 logger.warning("Could not post trainer pairings to #trainers-chat: %s", e)
         else:
