@@ -41,6 +41,8 @@ type SeedManifestData = {
   package_count: number;
   tote_count: number;
   ov_count: number;
+  out_of_zone_count: number;
+  misrouted_count: number;
   truck_count: number;
   truck_names: string[];
   preview_rows: SeedPreviewRow[];
@@ -285,7 +287,8 @@ export default function AdminDashboard() {
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-foreground">Operations Tool — Test Manifest Generator</p>
               <p className="text-xs text-muted-foreground">
-                Generate a synthetic 1,500-package manifest and push it through the full sort pipeline.
+                Generate a synthetic 10,000–13,000 package manifest and push it through the full sort pipeline.
+                Includes out-of-zone and intentionally misrouted packages to test tier-1 verification.
                 Requires truck dispatch to have run for the selected date.
               </p>
             </div>
@@ -323,7 +326,7 @@ export default function AdminDashboard() {
             {seedPhase === 'loading' && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <div className="w-4 h-4 border-2 border-warning border-t-transparent rounded-full animate-spin" />
-                Generating 1,500 packages…
+                Generating manifest…
               </div>
             )}
 
@@ -331,12 +334,14 @@ export default function AdminDashboard() {
             {seedPhase === 'ready' && seedData && (
               <div className="space-y-3">
                 {/* Summary stats */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                   {[
-                    { label: 'Packages', value: seedData.package_count.toLocaleString() },
-                    { label: 'Totes',    value: seedData.tote_count.toLocaleString() },
-                    { label: 'OVs',      value: seedData.ov_count.toLocaleString() },
-                    { label: 'Trucks',   value: `${seedData.truck_count} (${seedData.truck_names.join(', ')})` },
+                    { label: 'Packages',     value: seedData.package_count.toLocaleString() },
+                    { label: 'Totes',        value: seedData.tote_count.toLocaleString() },
+                    { label: 'OVs',          value: seedData.ov_count.toLocaleString() },
+                    { label: 'Out-of-zone',  value: seedData.out_of_zone_count.toLocaleString() },
+                    { label: 'Misrouted',    value: seedData.misrouted_count.toLocaleString() },
+                    { label: 'Trucks',       value: `${seedData.truck_count} (${seedData.truck_names.join(', ')})` },
                   ].map(({ label, value }) => (
                     <div key={label} className="p-2 rounded-xl border border-warning/20 bg-surface-muted/50">
                       <p className="text-xs text-muted-foreground">{label}</p>
