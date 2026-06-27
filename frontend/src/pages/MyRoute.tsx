@@ -353,7 +353,7 @@ function BuildingModal({ address, blockKey, onClose }: BuildingModalProps) {
           <Building2 className="w-4 h-4 text-primary" />
           <h3 className="font-semibold text-foreground">Log building type</h3>
         </div>
-        <p className="text-xs text-muted-foreground">TBA: {tba}</p>
+        <p className="text-xs text-muted-foreground">{address}</p>
         <div className="space-y-3">
           <select
             className="input w-full"
