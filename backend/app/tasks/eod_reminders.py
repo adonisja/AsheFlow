@@ -10,7 +10,7 @@ this handles late returns.
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
-from app.services.local_date import task_today
+from app.services.local_date import task_today, fetch_company_timezones
 from app.models.employee import Employee
 from app.models.field_ops import FuelMileageLog, CheckIn
 from app.models.notification import Notification
@@ -30,66 +30,77 @@ def remind_fuel_log_missing() -> dict:
     Sends each of them an in-app notification reminder.
     Returns a summary dict.
     """
-    today = task_today()
     db = SessionLocal()
     try:
-        # Only run on days with a dispatch
-        has_dispatch = db.query(TruckAssignment).filter(
-            TruckAssignment.date == today
-        ).first()
-        if not has_dispatch:
-            return {"status": "skipped", "reason": "no dispatch today", "date": str(today)}
+        tz_map = fetch_company_timezones(db)
+        total_reminded = 0
 
-        # Drivers dispatched today
-        dispatched_driver_ids = {
-            str(row.employee_id)
-            for row in (
-                db.query(AssignmentMember)
-                .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
-                .filter(
-                    TruckAssignment.date == today,
-                    AssignmentMember.role == "driver",
+        for company_id, tz in tz_map.items():
+            today = task_today(tz)
+
+            has_dispatch = db.query(TruckAssignment).filter(
+                TruckAssignment.company_id == company_id,
+                TruckAssignment.date == today,
+            ).first()
+            if not has_dispatch:
+                continue
+
+            dispatched_driver_ids = {
+                str(row.employee_id)
+                for row in (
+                    db.query(AssignmentMember)
+                    .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+                    .filter(
+                        TruckAssignment.company_id == company_id,
+                        TruckAssignment.date == today,
+                        AssignmentMember.role == "driver",
+                    )
+                    .all()
                 )
-                .all()
-            )
-        }
+            }
+            if not dispatched_driver_ids:
+                continue
 
-        if not dispatched_driver_ids:
-            return {"status": "skipped", "reason": "no drivers dispatched today", "date": str(today)}
+            checked_in_ids = {
+                str(row.employee_id)
+                for row in db.query(CheckIn).filter(
+                    CheckIn.company_id == company_id,
+                    CheckIn.date == today,
+                ).all()
+            }
 
-        # Drivers who checked in today (only remind those who actually showed up)
-        checked_in_ids = {
-            str(row.employee_id)
-            for row in db.query(CheckIn).filter(CheckIn.date == today).all()
-        }
+            submitted_ids = {
+                str(row.driver_id)
+                for row in db.query(FuelMileageLog).filter(
+                    FuelMileageLog.company_id == company_id,
+                    FuelMileageLog.date == today,
+                ).all()
+            }
 
-        # Drivers who already submitted a fuel log today
-        submitted_ids = {
-            str(row.driver_id)
-            for row in db.query(FuelMileageLog).filter(FuelMileageLog.date == today).all()
-        }
+            missing_ids = (dispatched_driver_ids & checked_in_ids) - submitted_ids
+            if not missing_ids:
+                continue
 
-        # Target = dispatched + checked in + not yet submitted
-        missing_ids = (dispatched_driver_ids & checked_in_ids) - submitted_ids
+            import uuid as _uuid
+            drivers = db.query(Employee).filter(
+                Employee.company_id == company_id,
+                Employee.id.in_([_uuid.UUID(eid) for eid in missing_ids]),
+            ).all()
 
-        if not missing_ids:
-            return {"status": "ok", "reminded": 0, "date": str(today)}
+            for driver in drivers:
+                db.add(Notification(
+                    company_id=company_id,
+                    employee_id=driver.id,
+                    type="fuel_log_reminder",
+                    message=(
+                        f"📋 Reminder: Please submit your fuel and mileage log for today ({today}). "
+                        f"Go to Field Ops → Fuel & Mileage to complete your submission."
+                    ),
+                ))
 
-        drivers = db.query(Employee).filter(
-            Employee.id.in_([__import__('uuid').UUID(eid) for eid in missing_ids]),
-        ).all()
-
-        for driver in drivers:
-            db.add(Notification(
-                employee_id=driver.id,
-                type="fuel_log_reminder",
-                message=(
-                    f"📋 Reminder: Please submit your fuel and mileage log for today ({today}). "
-                    f"Go to Field Ops → Fuel & Mileage to complete your submission."
-                ),
-            ))
+            total_reminded += len(drivers)
 
         db.commit()
-        return {"status": "ok", "reminded": len(drivers), "date": str(today)}
+        return {"status": "ok", "reminded": total_reminded}
     finally:
         db.close()

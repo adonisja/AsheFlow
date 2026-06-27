@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
-from app.services.local_date import task_today
+from app.services.local_date import task_today, fetch_company_timezones
 from app.models.adp_integration import ADPIntegration
 from app.models.employee import Employee
 from app.models.adp_timecard import ADPTimeCard, ADPTimeCardSegment
@@ -26,16 +26,17 @@ def sync_adp_timecards() -> dict:
     A per-company try/except ensures one company's failure does not block others.
     """
 
-    work_date: date = task_today() - timedelta(days=1)
     db = SessionLocal()
     try:
-        
+        tz_map = fetch_company_timezones(db)
+
         integrations = db.query(ADPIntegration).filter(
             ADPIntegration.is_enabled == True
         ).all()
 
         for integration in integrations:
             try:
+                work_date = task_today(tz_map.get(integration.company_id)) - timedelta(days=1)
                 employees = db.query(Employee).filter(
                     Employee.is_active == True,
                     Employee.hr_system_id_adp_verified == True,

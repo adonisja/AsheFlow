@@ -183,7 +183,7 @@ def enrich_manifest_packages(
 def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key):
     enriched: list[dict] = []
     failed: list[dict] = []
-    ov_zones: set[str] = set()
+    ov_packages: list[dict] = []   # OV packages with full context for dock-side cross-reference
 
     for pkg in packages:
         address = pkg.get("address") or ""
@@ -193,12 +193,19 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
         block_key: str | None = None
         failure_reason: str | None = None
 
-        # tag_number is Amazon's warehouse staging locator (e.g. "A-12") — informational
-        # at load time only. Collect unique values for the OV zones cache; exclude from
-        # the enriched package dict.
         tag = pkg.get("tag_number")
+        package_type = pkg.get("package_type")
+        bag_id = pkg.get("bag_id")
+
+        # Collect OV packages with full dock context so dispatch can locate bags on the
+        # loading dock (tag_number = dock slot, bag_id = physical bag label).
         if tag:
-            ov_zones.add(tag.strip())
+            ov_packages.append({
+                "tba":          tba,
+                "bag_id":       bag_id,
+                "tag_number":   tag.strip(),
+                "package_type": package_type,
+            })
 
         if address:
             # Attempt GeoClient lookup with 3 retries (network hiccups)
@@ -232,11 +239,12 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
         final_lng = (geo.lng if geo and geo.lng is not None else amazon_lng)
 
         # Build the canonical enriched package dict.
-        # address and tag_number are intentionally excluded (ephemeral / load-phase only).
+        # raw address is intentionally excluded (ephemeral / load-phase only).
         enriched_pkg = {
             "tba":                 tba,
-            "bag_id":              pkg.get("bag_id"),
-            "package_type":        pkg.get("package_type"),
+            "bag_id":              bag_id,
+            "tag_number":          tag,
+            "package_type":        package_type,
             "lat":                 final_lat,
             "lng":                 final_lng,
             "block_key":           block_key,
@@ -257,11 +265,12 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
     key = _manifest_key(company_id, sort_date)
     r.setex(key, _REDIS_TTL_SECONDS, json.dumps(enriched))
 
-    # Cache OV sort zones separately — same TTL. Surfaces to dispatch/trainer so they
-    # can locate OVs in the warehouse without re-reading the raw manifest.
-    if ov_zones:
+    # Cache OV packages separately — same TTL. Each entry carries tba + bag_id +
+    # tag_number (dock slot) + package_type so dispatch can locate every OV bag on the
+    # loading dock without re-reading the raw manifest.
+    if ov_packages:
         ov_key = f"manifest_ov_zones:{company_id}:{sort_date}"
-        r.setex(ov_key, _REDIS_TTL_SECONDS, json.dumps(sorted(ov_zones)))
+        r.setex(ov_key, _REDIS_TTL_SECONDS, json.dumps(ov_packages))
 
     # Clear any prior failure key now that enrichment succeeded
     r.delete(_failed_key)

@@ -16,7 +16,7 @@ from app.database import SessionLocal
 from app.models.adp_integration import ADPIntegration
 from app.models.employee import Employee
 from app.services.adp import fetch_adp_employees
-from app.services.local_date import task_today
+from app.services.local_date import task_today, fetch_company_timezones
 from app.core.config import settings
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
@@ -42,6 +42,8 @@ def sync_adp_employees() -> dict:
     """
     db = SessionLocal()
     try:
+        tz_map = fetch_company_timezones(db)
+
         integrations = db.query(ADPIntegration).filter(
             ADPIntegration.is_enabled == True
         ).all()
@@ -79,10 +81,11 @@ def sync_adp_employees() -> dict:
                                 employee.id, integration.company_id, cognito_err
                             )
 
+                        today = task_today(tz_map.get(integration.company_id))
                         accounts = db.query(AssignmentMember).join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id
                         ).filter(
                             AssignmentMember.employee_id == employee.id,
-                            TruckAssignment.date > task_today(),
+                            TruckAssignment.date > today,
                             TruckAssignment.company_id == integration.company_id,
                         ).all()
 

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from app.celery_app import celery_app
 
 from app.database import SessionLocal
-from app.services.local_date import task_today
+from app.services.local_date import task_today, fetch_company_timezones
 from app.models.adp_integration import ADPIntegration
 from app.models.adp_timecard import ADPTimeCard, ADPTimeCardSegment
 from app.models.flex_timesheets import FlexTimesheet
@@ -36,15 +36,18 @@ def detect_timecard_mismatches() -> dict:
     """
     db = SessionLocal()
     try:
+        tz_map = fetch_company_timezones(db)
+
         integrations = db.query(ADPIntegration).filter(
             ADPIntegration.is_enabled == True
         ).all()
 
         for integration in integrations:
             try:
+                yesterday = task_today(tz_map.get(integration.company_id)) - timedelta(days=1)
                 timecards = db.query(ADPTimeCard).filter(
                     ADPTimeCard.company_id == integration.company_id,
-                    ADPTimeCard.work_date == (task_today() - timedelta(days=1)),
+                    ADPTimeCard.work_date == yesterday,
                     ADPTimeCard.is_working_day == True
                 ).all()
 
