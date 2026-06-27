@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import axiosClient from '../../api/axiosClient';
+import { getLocalYMD } from '../../utils/date';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2,
@@ -25,7 +26,7 @@ export default function ManagementView() {
 
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getLocalYMD();
     await Promise.allSettled([
       axiosClient.get('/incidents/summary?days=7').then(r => setIncidentSummary(r.data)),
       axiosClient.get('/field-ops/walker-stats').then(r => setWalkerStats(r.data)),

@@ -16,6 +16,7 @@ import {
   ChevronDown, Download, ArrowRight, RotateCcw,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import { getLocalYMD } from '../utils/date';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -222,7 +223,7 @@ function exportResults(results: ImportResult[]) {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `import-results-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `import-results-${getLocalYMD()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }

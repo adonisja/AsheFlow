@@ -6,6 +6,7 @@ import {
   Info, ChevronLeft,
 } from 'lucide-react';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import { getLocalYMD } from '../utils/date';
 import type {
   WalkerSummary, WalkerProfile, WalkerConsistency,
   WalkerRatingDetail as RatingEntry,
@@ -73,7 +74,7 @@ function exportToCSV(walkers: WalkerSummary[], minShifts: number) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `walker-performance-${new Date().toISOString().split('T')[0]}.csv`;
+  a.download = `walker-performance-${getLocalYMD()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
