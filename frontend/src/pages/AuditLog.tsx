@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Shield, ChevronLeft, ChevronRight, RefreshCw, Filter, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Shield, ChevronLeft, ChevronRight, RefreshCw, Filter, X, ChevronDown, ChevronUp, User } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 
 interface AuditEntry {
@@ -10,22 +10,131 @@ interface AuditEntry {
   target_table: string;
   target_id: string;
   before_snapshot: Record<string, unknown> | null;
-  after_snapshot: Record<string, unknown> | null;
+  after_snapshot:  Record<string, unknown> | null;
   created_at: string;
 }
 
-const ACTION_TYPE_PREFIXES = [
-  { value: '', label: 'All actions' },
-  { value: 'pto', label: 'PTO' },
-  { value: 'incident', label: 'Incidents' },
-  { value: 'dispatch', label: 'Dispatch' },
-  { value: 'employee', label: 'Employees' },
-  { value: 'training', label: 'Training' },
-  { value: 'schedule', label: 'Schedule' },
-  { value: 'gear', label: 'Gear' },
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+const ACTION_CATEGORIES = [
+  { value: '',                label: 'All actions' },
+  { value: 'employee',        label: 'Employees' },
+  { value: 'dispatch',        label: 'Dispatch' },
+  { value: 'pto',             label: 'PTO' },
+  { value: 'off_day',         label: 'Off days' },
+  { value: 'schedule_change', label: 'Schedule changes' },
+  { value: 'incident',        label: 'Incidents' },
+  { value: 'training',        label: 'Training' },
+  { value: 'roll_call',       label: 'Roll call' },
+  { value: 'route',           label: 'Routes' },
+  { value: 'route_handoff',   label: 'Route handoffs' },
+  { value: 'rts_package',     label: 'RTS packages' },
+  { value: 'fuel_log',        label: 'Fuel logs' },
+  { value: 'shift_session',   label: 'Shift sessions' },
+  { value: 'truck',           label: 'Trucks' },
+  { value: 'assignment_change', label: 'Assignment changes' },
 ];
 
-const PAGE_SIZE = 25;
+// Human-readable sentence for each action type
+const ACTION_LABELS: Record<string, string> = {
+  'employee.create':                    'Created employee',
+  'employee.bulk_create':               'Bulk-created employees',
+  'employee.update':                    'Updated employee',
+  'employee.promoted':                  'Promoted employee',
+  'employee.demoted':                   'Demoted employee',
+  'employee.deactivated':               'Deactivated employee',
+  'employee.reactivated':               'Reactivated employee',
+  'employee.deleted':                   'Deleted employee',
+  'employee.injury_status_updated':     'Updated injury status',
+  'employee_relationship.deleted':      'Removed employee relationship',
+  'credentials.sent':                   'Sent login credentials',
+  'dispatch.cleared':                   'Cleared dispatch',
+  'pto.created':                        'Submitted PTO request',
+  'pto.approved':                       'Approved PTO',
+  'pto.rejected':                       'Rejected PTO',
+  'pto.deleted':                        'Deleted PTO request',
+  'off_day.approved':                   'Approved off day',
+  'off_day.rejected':                   'Rejected off day',
+  'off_day.deleted':                    'Deleted off day',
+  'off_day.bulk_deleted':               'Bulk-deleted off days',
+  'schedule_change.approved':           'Approved schedule change',
+  'schedule_change.rejected':           'Rejected schedule change',
+  'incident.submitted':                 'Filed incident report',
+  'incident.resolved':                  'Resolved incident',
+  'roll_call.submit':                   'Submitted roll call',
+  'roll_call.override':                 'Overrode roll call entry',
+  'roll_call.confirm':                  'Confirmed roll call',
+  'route.arrival_confirm':              'Confirmed route arrival',
+  'route_handoff.confirm':              'Confirmed route handoff',
+  'route_handoff.back_at_truck':        'Marked back at truck',
+  'route_handoff.resolve_discrepancy':  'Resolved handoff discrepancy',
+  'rts_package.create':                 'Created RTS package',
+  'fuel_log.created':                   'Logged fuel entry',
+  'fuel_log.updated':                   'Updated fuel log',
+  'shift_session.started':              'Started shift session',
+  'shift_session.gate_advanced':        'Advanced shift gate',
+  'shift_session.gate_skipped':         'Skipped shift gate',
+  'shift_session.abandoned':            'Abandoned shift session',
+  'shift_session.wiped':                'Wiped shift session',
+  'truck.deactivated':                  'Deactivated truck',
+  'truck.deleted':                      'Deleted truck',
+  'assignment_change.approved':         'Approved assignment change',
+  'assignment_change.rejected':         'Rejected assignment change',
+  'anchor_point.submitted':             'Submitted anchor point',
+  'delivery_stop.create':               'Created delivery stop',
+  'delivery_stop.reconcile':            'Reconciled delivery stop',
+  'missing_package.create':             'Reported missing package',
+  'missing_package.resolve':            'Resolved missing package',
+  'reattempt_assignment.create':        'Created reattempt assignment',
+  'reattempt_assignment.update':        'Updated reattempt assignment',
+  'timecard_adjustment.employee_signed_off': 'Employee signed off timecard',
+  'timecard_adjustment.manager_approval':    'Manager approved timecard',
+  'timecard_adjustments.reject':             'Rejected timecard adjustment',
+};
+
+// Human-readable table names
+const TABLE_LABELS: Record<string, string> = {
+  employees:               'Employees',
+  time_off_requests:       'PTO',
+  off_days:                'Off days',
+  schedule_change_requests: 'Schedule changes',
+  incidents:               'Incidents',
+  shift_roll_calls:        'Roll call',
+  routes:                  'Routes',
+  route_handoffs:          'Route handoffs',
+  rts_packages:            'RTS packages',
+  fuel_mileage_logs:       'Fuel logs',
+  shift_sessions:          'Shift sessions',
+  trucks:                  'Trucks',
+  assignment_change_requests: 'Assignment changes',
+  truck_assignments:       'Dispatch',
+  anchor_points:           'Anchor points',
+  delivery_stops:          'Delivery stops',
+  missing_packages:        'Missing packages',
+  reattempt_assignments:   'Reattempt assignments',
+  timecard_adjustments:    'Timecards',
+};
+
+type BadgeVariant = 'success' | 'danger' | 'warning' | 'info' | 'default';
+
+function getBadgeVariant(actionType: string): BadgeVariant {
+  const verb = actionType.split('.')[1] ?? '';
+  if (['approved', 'created', 'reactivated', 'confirmed', 'resolved', 'graduated', 'started'].includes(verb)) return 'success';
+  if (['rejected', 'deleted', 'deactivated', 'wiped', 'abandoned'].includes(verb)) return 'danger';
+  if (['override', 'escalat', 'skipped', 'cleared'].some(s => actionType.includes(s))) return 'warning';
+  if (['updated', 'submitted', 'sent', 'signed_off'].some(s => actionType.includes(s))) return 'info';
+  return 'default';
+}
+
+const BADGE_CLASSES: Record<BadgeVariant, string> = {
+  success: 'bg-success/10 text-success border-success/20',
+  danger:  'bg-danger/10 text-danger border-danger/20',
+  warning: 'bg-warning/10 text-warning border-warning/20',
+  info:    'bg-primary/10 text-primary border-primary/20',
+  default: 'bg-surface text-muted-foreground border-border',
+};
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleString('en-US', {
@@ -34,41 +143,87 @@ function fmtDate(iso: string) {
   });
 }
 
-function actionBadgeClass(type: string) {
-  if (type.includes('approved') || type.includes('graduated') || type.includes('created')) return 'bg-success/10 text-success border-success/20';
-  if (type.includes('rejected') || type.includes('removed') || type.includes('deleted')) return 'bg-danger/10 text-danger border-danger/20';
-  if (type.includes('override') || type.includes('escalat')) return 'bg-warning/10 text-warning border-warning/20';
-  return 'bg-primary/10 text-primary border-primary/20';
-}
-
-function SnapshotViewer({ before, after }: { before: Record<string, unknown> | null; after: Record<string, unknown> | null }) {
+// Diff-aware snapshot viewer: only show fields that changed
+function SnapshotViewer({
+  before, after,
+}: {
+  before: Record<string, unknown> | null;
+  after:  Record<string, unknown> | null;
+}) {
   const [open, setOpen] = useState(false);
   if (!before && !after) return null;
+
+  // Compute changed keys
+  const changedKeys = new Set<string>();
+  if (before && after) {
+    const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of allKeys) {
+      if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) changedKeys.add(k);
+    }
+  }
+
+  const hasDiff = changedKeys.size > 0;
+
   return (
-    <div className="mt-2">
+    <div className="mt-3 border-t border-border/40 pt-3">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
         {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         {open ? 'Hide' : 'Show'} snapshot
+        {hasDiff && !open && (
+          <span className="ml-1 px-1.5 py-0.5 rounded bg-warning/10 text-warning text-[10px] font-semibold border border-warning/20">
+            {changedKeys.size} change{changedKeys.size !== 1 ? 's' : ''}
+          </span>
+        )}
       </button>
+
       {open && (
-        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {before && (
+        <div className="mt-3 space-y-3">
+          {/* Diff view when both snapshots exist */}
+          {before && after && hasDiff && (
             <div>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Before</p>
-              <pre className="text-[10px] bg-surface rounded-lg p-2 overflow-x-auto border border-border/50 text-foreground/80 max-h-40">
-                {JSON.stringify(before, null, 2)}
-              </pre>
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Changes</p>
+              <div className="rounded-lg border border-border/50 overflow-hidden divide-y divide-border/30">
+                {Array.from(changedKeys).map(key => (
+                  <div key={key} className="grid grid-cols-[1fr_auto_1fr] items-start gap-0 text-[11px]">
+                    <div className="bg-danger/5 px-3 py-1.5">
+                      <span className="text-[9px] text-muted-foreground uppercase tracking-wider block mb-0.5">{key}</span>
+                      <span className="text-danger/90 font-mono break-all">{JSON.stringify(before[key])}</span>
+                    </div>
+                    <div className="flex items-center justify-center px-2 py-1.5 bg-surface text-muted-foreground text-[10px]">→</div>
+                    <div className="bg-success/5 px-3 py-1.5">
+                      <span className="text-[9px] text-muted-foreground uppercase tracking-wider block mb-0.5">&nbsp;</span>
+                      <span className="text-success/90 font-mono break-all">{JSON.stringify(after[key])}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-          {after && (
-            <div>
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">After</p>
-              <pre className="text-[10px] bg-surface rounded-lg p-2 overflow-x-auto border border-border/50 text-foreground/80 max-h-40">
-                {JSON.stringify(after, null, 2)}
-              </pre>
+
+          {/* Full JSON fallback for create/delete (only one snapshot) */}
+          {(!before || !after || !hasDiff) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {before && (
+                <div>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Before</p>
+                  <pre className="text-[10px] bg-surface rounded-lg p-2 overflow-x-auto border border-border/50 text-foreground/80 max-h-48">
+                    {JSON.stringify(before, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {after && (
+                <div>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                    {before ? 'After' : 'Snapshot'}
+                  </p>
+                  <pre className="text-[10px] bg-surface rounded-lg p-2 overflow-x-auto border border-border/50 text-foreground/80 max-h-48">
+                    {JSON.stringify(after, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -77,29 +232,41 @@ function SnapshotViewer({ before, after }: { before: Record<string, unknown> | n
   );
 }
 
-export default function AuditLog() {
-  const [entries, setEntries]   = useState<AuditEntry[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [page, setPage]         = useState(0);
-  const [hasMore, setHasMore]   = useState(false);
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
 
-  const [actionType, setActionType] = useState('');
-  const [targetTable, setTargetTable] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+const PAGE_SIZE = 25;
+
+export default function AuditLog() {
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage]       = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+
+  const [category, setCategory]     = useState('');
+  const [actorSearch, setActorSearch] = useState('');
+  const [startDate, setStartDate]   = useState('');
+  const [endDate, setEndDate]       = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
   const load = useCallback(async (pg: number) => {
     setLoading(true);
     try {
       const params: Record<string, string | number> = { skip: pg * PAGE_SIZE, limit: PAGE_SIZE + 1 };
-      if (actionType)  params.action_type  = actionType;
-      if (targetTable) params.target_table = targetTable;
-      if (startDate)   params.start_date   = startDate;
-      if (endDate)     params.end_date     = endDate;
+      if (category)    params.action_type = category;
+      if (startDate)   params.start_date  = startDate;
+      if (endDate)     params.end_date    = endDate;
 
       const res = await axiosClient.get<AuditEntry[]>('/audit/', { params });
-      const rows = res.data;
+      let rows = res.data;
+
+      // Actor name search is client-side (no backend actor_name filter)
+      if (actorSearch.trim()) {
+        const q = actorSearch.trim().toLowerCase();
+        rows = rows.filter(e => e.actor_name?.toLowerCase().includes(q));
+      }
+
       setHasMore(rows.length > PAGE_SIZE);
       setEntries(rows.slice(0, PAGE_SIZE));
     } catch {
@@ -107,27 +274,23 @@ export default function AuditLog() {
     } finally {
       setLoading(false);
     }
-  }, [actionType, targetTable, startDate, endDate]);
+  }, [category, actorSearch, startDate, endDate]);
 
-  useEffect(() => {
-    setPage(0);
-  }, [actionType, targetTable, startDate, endDate]);
-
-  useEffect(() => {
-    load(page);
-  }, [page, load]);
+  useEffect(() => { setPage(0); }, [category, actorSearch, startDate, endDate]);
+  useEffect(() => { load(page); }, [page, load]);
 
   const clearFilters = () => {
-    setActionType('');
-    setTargetTable('');
+    setCategory('');
+    setActorSearch('');
     setStartDate('');
     setEndDate('');
   };
 
-  const hasFilters = actionType || targetTable || startDate || endDate;
+  const activeFilters = [category, actorSearch, startDate, endDate].filter(Boolean).length;
 
   return (
     <div className="space-y-6 animate-slide-up">
+      {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="page-title flex items-center gap-2">
@@ -147,43 +310,47 @@ export default function AuditLog() {
           </button>
           <button
             onClick={() => setShowFilters(o => !o)}
-            className={`btn-ghost text-xs flex items-center gap-1.5 ${hasFilters ? 'text-primary' : ''}`}
+            className={`btn-ghost text-xs flex items-center gap-1.5 ${activeFilters ? 'text-primary' : ''}`}
           >
             <Filter className="w-3.5 h-3.5" />
             Filters
-            {hasFilters && (
+            {activeFilters > 0 && (
               <span className="flex items-center justify-center w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
-                {[actionType, targetTable, startDate, endDate].filter(Boolean).length}
+                {activeFilters}
               </span>
             )}
           </button>
         </div>
       </div>
 
+      {/* Filter panel */}
       {showFilters && (
         <div className="card p-4 space-y-4 animate-slide-up">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
-              <label className="label mb-1">Action type</label>
+              <label className="label mb-1">Category</label>
               <select
-                value={actionType}
-                onChange={e => setActionType(e.target.value)}
+                value={category}
+                onChange={e => setCategory(e.target.value)}
                 className="input w-full text-sm"
               >
-                {ACTION_TYPE_PREFIXES.map(o => (
+                {ACTION_CATEGORIES.map(o => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="label mb-1">Target table</label>
-              <input
-                type="text"
-                value={targetTable}
-                onChange={e => setTargetTable(e.target.value)}
-                placeholder="e.g. employees"
-                className="input w-full text-sm"
-              />
+              <label className="label mb-1">Actor name</label>
+              <div className="relative">
+                <User className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                <input
+                  type="text"
+                  value={actorSearch}
+                  onChange={e => setActorSearch(e.target.value)}
+                  placeholder="Search by name…"
+                  className="input w-full text-sm pl-8"
+                />
+              </div>
             </div>
             <div>
               <label className="label mb-1">From date</label>
@@ -204,14 +371,18 @@ export default function AuditLog() {
               />
             </div>
           </div>
-          {hasFilters && (
-            <button onClick={clearFilters} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+          {activeFilters > 0 && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
               <X className="w-3.5 h-3.5" /> Clear all filters
             </button>
           )}
         </div>
       )}
 
+      {/* Entries */}
       {loading ? (
         <div className="flex justify-center py-12">
           <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -223,26 +394,39 @@ export default function AuditLog() {
         </div>
       ) : (
         <div className="space-y-2">
-          {entries.map(entry => (
-            <div key={entry.id} className="card p-4">
-              <div className="flex items-start gap-3 flex-wrap">
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border shrink-0 ${actionBadgeClass(entry.action_type)}`}>
-                  {entry.action_type}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-foreground">
-                      {entry.actor_name ?? <span className="text-muted-foreground italic">system</span>}
-                    </span>
-                    <span className="text-xs text-muted-foreground">→ {entry.target_table}</span>
+          {entries.map(entry => {
+            const variant = getBadgeVariant(entry.action_type);
+            const label   = ACTION_LABELS[entry.action_type] ?? entry.action_type;
+            const table   = TABLE_LABELS[entry.target_table]  ?? entry.target_table;
+
+            return (
+              <div key={entry.id} className="card p-4">
+                <div className="flex items-start gap-3 flex-wrap">
+                  {/* Action badge */}
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border shrink-0 ${BADGE_CLASSES[variant]}`}>
+                    {label}
+                  </span>
+
+                  {/* Actor + target */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-medium text-foreground">
+                        {entry.actor_name ?? <span className="text-muted-foreground italic">system</span>}
+                      </span>
+                      <span className="text-xs text-muted-foreground">·</span>
+                      <span className="text-xs text-muted-foreground">{table}</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground/60 mt-0.5 font-mono truncate">{entry.target_id}</p>
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5 font-mono truncate">{entry.target_id}</p>
+
+                  {/* Timestamp */}
+                  <span className="text-xs text-muted-foreground shrink-0 tabular-nums">{fmtDate(entry.created_at)}</span>
                 </div>
-                <span className="text-xs text-muted-foreground shrink-0">{fmtDate(entry.created_at)}</span>
+
+                <SnapshotViewer before={entry.before_snapshot} after={entry.after_snapshot} />
               </div>
-              <SnapshotViewer before={entry.before_snapshot} after={entry.after_snapshot} />
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
