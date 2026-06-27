@@ -257,8 +257,9 @@ function discordValuesToPayload(values: Record<string, string>): Record<string, 
   const payload: Record<string, unknown> = {};
   for (const [k, raw] of Object.entries(values)) {
     if (raw === '' || raw === null || raw === undefined) continue;
-    const n = parseInt(raw, 10);
-    if (!isNaN(n)) payload[k] = n;
+    // Send as string — Discord snowflake IDs exceed Number.MAX_SAFE_INTEGER.
+    // Pydantic coerces string → int on the backend without precision loss.
+    if (/^\d+$/.test(raw)) payload[k] = raw;
   }
   return payload;
 }

@@ -207,21 +207,32 @@ class DiscordConfigUpdate(BaseModel):
 
 
 class DiscordConfigResponse(BaseModel):
-    discord_guild_id:            Optional[int]
-    discord_drivers_channel_id:  Optional[int]
-    discord_trainers_channel_id: Optional[int]
-    discord_general_channel_id:  Optional[int]
-    discord_invite_channel_id:   Optional[int]
-    discord_role_admin:          Optional[int]
-    discord_role_manager:        Optional[int]
-    discord_role_asheflow:       Optional[int]
-    discord_role_bot:            Optional[int]
-    discord_role_dispatch:       Optional[int]
-    discord_role_driver:         Optional[int]
-    discord_role_captain:        Optional[int]
-    discord_role_walker:         Optional[int]
+    discord_guild_id:            Optional[str] = None
+    discord_drivers_channel_id:  Optional[str] = None
+    discord_trainers_channel_id: Optional[str] = None
+    discord_general_channel_id:  Optional[str] = None
+    discord_invite_channel_id:   Optional[str] = None
+    discord_role_admin:          Optional[str] = None
+    discord_role_manager:        Optional[str] = None
+    discord_role_asheflow:       Optional[str] = None
+    discord_role_bot:            Optional[str] = None
+    discord_role_dispatch:       Optional[str] = None
+    discord_role_driver:         Optional[str] = None
+    discord_role_captain:        Optional[str] = None
+    discord_role_walker:         Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_config(cls, config) -> "DiscordConfigResponse":
+        fields = [
+            "discord_guild_id", "discord_drivers_channel_id", "discord_trainers_channel_id",
+            "discord_general_channel_id", "discord_invite_channel_id",
+            "discord_role_admin", "discord_role_manager", "discord_role_asheflow",
+            "discord_role_bot", "discord_role_dispatch", "discord_role_driver",
+            "discord_role_captain", "discord_role_walker",
+        ]
+        return cls(**{f: str(getattr(config, f)) if getattr(config, f) is not None else None for f in fields})
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +738,7 @@ def get_my_discord_config(
     config = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
 
 
 @company_admin_router.patch("/my-discord-config", response_model=DiscordConfigResponse)
@@ -750,7 +761,7 @@ def update_my_discord_config(
 
     db.commit()
     db.refresh(config)
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
 
 
 # ---------------------------------------------------------------------------
@@ -767,7 +778,7 @@ def get_company_discord_config(
     config = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
 
 
 @router.patch("/{company_id}/discord-config", response_model=DiscordConfigResponse)
@@ -787,4 +798,4 @@ def update_company_discord_config(
 
     db.commit()
     db.refresh(config)
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
