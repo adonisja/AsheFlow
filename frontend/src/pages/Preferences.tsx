@@ -10,6 +10,7 @@ import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
 import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users } from 'lucide-react';
+import { getLocalYMD } from '../utils/date';
 
 const selectStyles = {
   control: (base: any, state: any) => ({
@@ -364,7 +365,7 @@ const Preferences = () => {
 
   if (isAdmin) return <PreferenceAnalytics />;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getLocalYMD();
 
   const handleSubmitChangeRequest = async () => {
     if (!myId) return;

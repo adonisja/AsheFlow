@@ -12,8 +12,9 @@ import type {
   RTSPackageCreate, MissingPackageCreate, ArrivalConfirmResponse,
   BuildingProfileCreate, BuildingType,
 } from '../api/types';
+import { getLocalYMD } from '../utils/date';
 
-const TODAY = new Date().toISOString().split('T')[0];
+const TODAY = getLocalYMD();
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

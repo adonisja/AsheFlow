@@ -4,13 +4,12 @@ import axiosClient from '../api/axiosClient';
 import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
 import type { UnavailableStaff, DispatchResult } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import { getLocalYMD } from '../utils/date';
 
 export default function DispatchDashboard() {
   const { groups } = useAuth();
   const isAdmin = groups.includes('admin') || groups.includes('Admin');
-  const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+  const [selectedDate, setSelectedDate] = useState<string>(getLocalYMD());
   const [totalEmployees, setTotalEmployees] = useState<number | ''>('');
   const [totalTrucks, setTotalTrucks] = useState<number | ''>('');
   const [dispatchData, setDispatchData] = useState<DispatchResult | null>(null);
