@@ -174,6 +174,12 @@ def enrich_manifest_packages(
     _failed_key = f"manifest_failed:{company_id}:{sort_date}"
     r = _redis_client()
 
+    # Clear the worker_unreachable sentinel written at upload time — the task
+    # was received, so the worker is alive. Any real failure will re-set this key.
+    current_failed = r.get(_failed_key)
+    if current_failed == "worker_unreachable":
+        r.delete(_failed_key)
+
     try:
         return _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key)
     except Exception as exc:

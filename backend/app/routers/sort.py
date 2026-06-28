@@ -271,9 +271,14 @@ def upload_manifest(
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
 
-    # Set enriching sentinel so status endpoint returns "enriching" immediately
+    # Set enriching sentinel so status endpoint returns "enriching" immediately.
+    # Also pre-write a worker_unreachable failure key (TTL 24h) that the task
+    # clears on first receipt. If Celery discards the task (unregistered, worker
+    # down, etc.) the key persists and the status endpoint returns "failed" with
+    # an actionable message instead of silently reverting to "not_found".
     r = _redis()
     r.setex(_enriching_key(cid_str, date_str), _ENRICHING_KEY_TTL, "1")
+    r.setex(f"manifest_failed:{cid_str}:{date_str}", _REDIS_TTL_SECONDS, "worker_unreachable")
 
     # Only valid packages (with TBAs) go to the enrichment task.
     # Pending packages have no TBA — dispatch must resolve them via a separate input.
@@ -378,11 +383,12 @@ def get_manifest_status(
         )
 
     if failed_reason:
-        human_reason = (
-            "GeoClient API key is not configured on the server — contact your admin."
-            if "no_api_key" in failed_reason
-            else f"Enrichment failed: {failed_reason.replace('_', ' ')}."
-        )
+        if "worker_unreachable" in failed_reason:
+            human_reason = "Enrichment task was not received by the worker — Celery may be down or the task is not registered. Contact your admin."
+        elif "no_api_key" in failed_reason:
+            human_reason = "GeoClient API key is not configured on the server — contact your admin."
+        else:
+            human_reason = f"Enrichment failed: {failed_reason.replace('_', ' ')}."
         return ManifestStatusResponse(
             sort_date=sort_date,
             status="failed",
