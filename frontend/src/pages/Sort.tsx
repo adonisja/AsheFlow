@@ -449,16 +449,19 @@ function ManifestUploadPanel({
   today: string;
   onReady: () => void;
 }) {
-  const [phase, setPhase]               = useState<UploadPhase>('idle');
-  const [uploadDate, setUploadDate]     = useState(today);
-  const [file, setFile]                 = useState<File | null>(null);
-  const [packageCount, setPackageCount] = useState(0);
-  const [failedCount, setFailedCount]   = useState(0);
-  const [warnings, setWarnings]         = useState<string[]>([]);
-  const [errorMsg, setErrorMsg]         = useState<string | null>(null);
-  const [expanded, setExpanded]         = useState(false);
-  const fileRef                         = useRef<HTMLInputElement>(null);
-  const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [phase, setPhase]                       = useState<UploadPhase>('idle');
+  const [uploadDate, setUploadDate]             = useState(today);
+  const [file, setFile]                         = useState<File | null>(null);
+  const [packageCount, setPackageCount]         = useState(0);
+  const [failedCount, setFailedCount]           = useState(0);
+  const [warnings, setWarnings]                 = useState<string[]>([]);
+  const [errorMsg, setErrorMsg]                 = useState<string | null>(null);
+  const [expanded, setExpanded]                 = useState(false);
+  const [processedCount, setProcessedCount]     = useState<number | null>(null);
+  const [totalCount, setTotalCount]             = useState<number | null>(null);
+  const enrichStartRef                          = useRef<number | null>(null);
+  const fileRef                                 = useRef<HTMLInputElement>(null);
+  const pollRef                                 = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
@@ -469,6 +472,9 @@ function ManifestUploadPanel({
       if (data.status === 'enriching') {
         setPhase('enriching');
         setExpanded(true);
+        enrichStartRef.current = Date.now();
+        if (data.packages_processed != null) setProcessedCount(data.packages_processed);
+        if (data.packages_total != null) setTotalCount(data.packages_total);
         startPolling(today);
       } else if (data.status === 'ready') {
         setPackageCount(data.package_count);
@@ -484,15 +490,22 @@ function ManifestUploadPanel({
 
   const startPolling = (sortDate: string) => {
     stopPoll();
+    if (!enrichStartRef.current) enrichStartRef.current = Date.now();
     pollRef.current = setInterval(async () => {
       try {
         const { data } = await axiosClient.get(`/sort/manifest/${sortDate}/status`);
-        if (data.status === 'ready') {
+        if (data.status === 'enriching') {
+          if (data.packages_processed != null) setProcessedCount(data.packages_processed);
+          if (data.packages_total != null) setTotalCount(data.packages_total);
+        } else if (data.status === 'ready') {
           stopPoll();
           setPackageCount(data.package_count);
           setFailedCount(data.failed_count ?? 0);
+          setProcessedCount(null);
+          setTotalCount(null);
+          enrichStartRef.current = null;
           setPhase('ready');
-          setExpanded(false);  // collapse when done — sort is runnable
+          setExpanded(false);
           onReady();
         } else if (data.status === 'failed') {
           stopPoll();
@@ -520,6 +533,7 @@ function ManifestUploadPanel({
       });
       setPackageCount(data.package_count);
       setWarnings(data.warnings ?? []);
+      enrichStartRef.current = Date.now();
       setPhase('enriching');
       startPolling(uploadDate);
     } catch (err: any) {
@@ -537,6 +551,9 @@ function ManifestUploadPanel({
     setWarnings([]);
     setPackageCount(0);
     setFailedCount(0);
+    setProcessedCount(null);
+    setTotalCount(null);
+    enrichStartRef.current = null;
     if (fileRef.current) fileRef.current.value = '';
   };
 
@@ -550,7 +567,11 @@ function ManifestUploadPanel({
   const headerSubtext =
     phase === 'idle'      ? "Upload the Amazon manifest CSV for today's sort." :
     phase === 'uploading' ? 'Uploading and parsing…' :
-    phase === 'enriching' ? `Geocoding ${packageCount.toLocaleString()} packages — polling every 5 s…` :
+    phase === 'enriching' ? (
+      processedCount != null && totalCount != null && totalCount > 0
+        ? `Geocoding — ${Math.round((processedCount / totalCount) * 100)}% (${processedCount.toLocaleString()} / ${totalCount.toLocaleString()})`
+        : `Geocoding ${packageCount > 0 ? packageCount.toLocaleString() + ' packages' : '…'}`
+    ) :
     phase === 'ready'     ? `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — run sort below.` :
                             (errorMsg ?? 'Upload failed.');
 
@@ -638,29 +659,65 @@ function ManifestUploadPanel({
           )}
 
           {/* enriching */}
-          {phase === 'enriching' && (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Geocoding in progress</span>
-                  <span>{packageCount.toLocaleString()} packages</span>
+          {phase === 'enriching' && (() => {
+            const pct = (processedCount != null && totalCount != null && totalCount > 0)
+              ? Math.round((processedCount / totalCount) * 100)
+              : null;
+            const elapsedMs = enrichStartRef.current ? Date.now() - enrichStartRef.current : 0;
+            const etaStr = (() => {
+              if (pct == null || pct === 0 || elapsedMs < 3000) return null;
+              const totalEstMs = (elapsedMs / pct) * 100;
+              const remainMs = totalEstMs - elapsedMs;
+              if (remainMs <= 0) return null;
+              const mins = Math.ceil(remainMs / 60_000);
+              return mins <= 1 ? '< 1 min remaining' : `~${mins} min remaining`;
+            })();
+            return (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Geocoding in progress</span>
+                    <span className="tabular-nums">
+                      {processedCount != null && totalCount != null
+                        ? `${processedCount.toLocaleString()} / ${totalCount.toLocaleString()} packages`
+                        : totalCount != null
+                        ? `${totalCount.toLocaleString()} packages`
+                        : packageCount > 0
+                        ? `${packageCount.toLocaleString()} packages`
+                        : 'Starting…'}
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-accent overflow-hidden">
+                    {pct != null ? (
+                      <div
+                        className="h-full bg-primary rounded-full transition-all duration-1000 ease-out"
+                        style={{ width: `${pct}%` }}
+                      />
+                    ) : (
+                      <div
+                        className="h-full w-1/4 bg-primary rounded-full"
+                        style={{ animation: 'slide 1.5s ease-in-out infinite' }}
+                      />
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-primary font-medium">
+                      {pct != null ? `${pct}%` : ''}
+                    </span>
+                    {etaStr && <span className="text-muted-foreground">{etaStr}</span>}
+                  </div>
                 </div>
-                {/* Indeterminate progress bar */}
-                <div className="h-1.5 rounded-full bg-accent overflow-hidden">
-                  <div className="h-full w-1/3 bg-primary rounded-full"
-                       style={{ animation: 'slide 1.5s ease-in-out infinite' }} />
-                </div>
+                {warnings.length > 0 && warnings.map((w, i) => (
+                  <p key={i} className="text-xs text-warning flex items-start gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
+                  </p>
+                ))}
+                <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                  <X className="w-3.5 h-3.5" /> Cancel
+                </button>
               </div>
-              {warnings.length > 0 && warnings.map((w, i) => (
-                <p key={i} className="text-xs text-warning flex items-start gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
-                </p>
-              ))}
-              <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-                <X className="w-3.5 h-3.5" /> Cancel
-              </button>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ready */}
           {phase === 'ready' && (

@@ -123,10 +123,12 @@ class ManifestUploadResponse(BaseModel):
 
 class ManifestStatusResponse(BaseModel):
     sort_date: date
-    status: str             # "ready" | "enriching" | "failed" | "not_found"
-    package_count: int      # 0 when not_found, enriching, or failed
-    failed_count: int       # packages that could not be enriched (block_key=None)
-    failed_reason: str | None = None  # human-readable failure cause when status="failed"
+    status: str                          # "ready" | "enriching" | "failed" | "not_found"
+    package_count: int                   # 0 when not_found, enriching, or failed
+    failed_count: int                    # packages that could not be enriched (block_key=None)
+    failed_reason: str | None = None     # human-readable failure cause when status="failed"
+    packages_processed: int | None = None  # live count during enriching
+    packages_total: int | None = None      # total submitted to enrichment task
 
 
 # ── Borough inference ─────────────────────────────────────────────────────────
@@ -341,6 +343,7 @@ def get_manifest_status(
     enriching = r.exists(_enriching_key(cid_str, date_str))
     failed_reason = r.get(f"manifest_failed:{cid_str}:{date_str}")
     raw = r.get(_manifest_key(cid_str, date_str))
+    progress_raw = r.get(f"manifest_progress:{cid_str}:{date_str}")
 
     if raw is not None:
         try:
@@ -375,11 +378,22 @@ def get_manifest_status(
         )
 
     if enriching:
+        packages_processed = None
+        packages_total = None
+        if progress_raw:
+            try:
+                prog = json.loads(progress_raw)
+                packages_processed = prog.get("processed")
+                packages_total = prog.get("total")
+            except (json.JSONDecodeError, AttributeError):
+                pass
         return ManifestStatusResponse(
             sort_date=sort_date,
             status="enriching",
             package_count=0,
             failed_count=0,
+            packages_processed=packages_processed,
+            packages_total=packages_total,
         )
 
     if failed_reason:

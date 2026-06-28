@@ -126,6 +126,10 @@ def _manifest_key(company_id: str, sort_date: str) -> str:
     return f"manifest:{company_id}:{sort_date}"
 
 
+def _progress_key(company_id: str, sort_date: str) -> str:
+    return f"manifest_progress:{company_id}:{sort_date}"
+
+
 # ── notification helper ───────────────────────────────────────────────────────
 
 def _notify_dispatch(company_id: UUID, message: str, db) -> None:
@@ -301,6 +305,7 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
     # Submit all packages to the thread pool; collect results in original order.
     # ThreadPoolExecutor is safe here: _enrich_one has no shared mutable state.
     results: list[dict] = [None] * total_packages  # type: ignore[list-item]
+    prog_key = _progress_key(company_id, sort_date)
     with ThreadPoolExecutor(max_workers=_GEOCLIENT_WORKERS) as pool:
         future_to_idx = {pool.submit(_enrich_one, pkg, borough): i for i, pkg in enumerate(packages)}
         completed = 0
@@ -311,6 +316,11 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
             if completed % log_interval == 0 or completed == total_packages:
                 elapsed = time.monotonic() - t_start
                 failed_so_far = sum(1 for r2 in results[:completed] if r2 and r2["failed_entry"])
+                r.setex(
+                    prog_key,
+                    _ENRICHING_KEY_TTL,
+                    json.dumps({"processed": completed, "total": total_packages, "elapsed_s": round(elapsed, 1)}),
+                )
                 logger.info(
                     "enrich_manifest_progress",
                     extra={
@@ -369,6 +379,7 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
         r.setex(ov_key, _REDIS_TTL_SECONDS, json.dumps(ov_packages))
 
     r.delete(_failed_key)
+    r.delete(prog_key)
 
     db = SessionLocal()
     try:
