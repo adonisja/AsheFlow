@@ -463,6 +463,25 @@ function ManifestUploadPanel({
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
 
+  // On mount, check if a manifest is already in flight from another page/tool.
+  useEffect(() => {
+    axiosClient.get(`/sort/manifest/${today}/status`).then(({ data }) => {
+      if (data.status === 'enriching') {
+        setPhase('enriching');
+        setExpanded(true);
+        startPolling(today);
+      } else if (data.status === 'ready') {
+        setPackageCount(data.package_count);
+        setFailedCount(data.failed_count ?? 0);
+        setPhase('ready');
+      } else if (data.status === 'failed') {
+        setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
+        setPhase('error');
+      }
+    }).catch(() => {/* no manifest yet — stay idle */});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today]);
+
   const startPolling = (sortDate: string) => {
     stopPoll();
     pollRef.current = setInterval(async () => {
