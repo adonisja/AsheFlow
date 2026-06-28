@@ -35,6 +35,7 @@ from app.models.walker_route import RouteClusterCentroid
 from app.services.manifest_ingestor import FileManifestIngestor, ImageManifestIngestor, IngestResult
 from app.services.run_sort import run_sort, SortError
 from app.services.seed_manifest import generate_manifest
+from app.services.tier1_verify import BagOverride as _BagOverride
 from app.tasks.enrich_manifest import enrich_manifest_packages
 
 logger = logging.getLogger(__name__)
@@ -51,27 +52,27 @@ _MAX_UPLOAD_BYTES  = 10 * 1024 * 1024   # 10 MB — daily manifest should be wel
 
 # ── request / response schemas ────────────────────────────────────────────────
 
-class ToteIn(BaseModel):
-    tote_id: str
+class BagOverrideIn(BaseModel):
+    """Dispatch-confirmed truck assignment for a bag that failed tier-1."""
+    bag_id: str
     truck_id: UUID
-    tbas: list[str]     # TBA barcodes physically in this tote
 
 
 class SortRunRequest(BaseModel):
     sort_date: date
-    totes: list[ToteIn]
     force: bool = False
+    overrides: list[BagOverrideIn] = []     # empty on first run; populated on resubmit
 
 
-class ToteResultOut(BaseModel):
-    tote_id: str
-    truck_id: UUID
-    classification: str
+class BagResultOut(BaseModel):
+    bag_id: str
+    inferred_truck_id: Optional[UUID] = None
+    classification: str                     # "clean" | "stray" | "uncertain" | "misaligned"
     total_packages: int
     outside_packages: int
     outside_pct: float
     outside_tbas: list[str]
-    outlier_tbas: list[str]        # TBAs with no DBSCAN cluster — no suggested truck possible
+    outlier_tbas: list[str]
     suggested_truck_id: Optional[UUID] = None
     unresolvable: bool
 
@@ -94,7 +95,7 @@ class SortRunResponse(BaseModel):
     was_forced: bool
     zones_created: int
     assignments: list[ClusterAssignmentOut]
-    flagged_totes: list[ToteResultOut]
+    flagged_bags: list[BagResultOut]        # empty when tier1_passed=True or was_forced=True
 
 
 class ZoneOut(BaseModel):
@@ -441,15 +442,18 @@ def run_sort_endpoint(
     """Run the manifest sort pipeline for the given date.
 
     - Loads enriched packages from Redis (must have been enriched first via /sort/upload)
-    - Clusters packages with DBSCAN → assigns clusters to trucks → tier-1 tote verification
+    - Clusters packages with DBSCAN → assigns clusters to trucks
+    - Derives bag-to-truck mapping from the manifest (bag_id per package)
+    - Tier-1 verification: flags bags whose TBAs don't match their inferred truck
     - If tier-1 passes (or force=True), writes TruckZone rows and commits
-    - Returns the full assignment breakdown and any flagged totes
+    - Returns the full assignment breakdown and any flagged bags
 
-    409 Conflict when tier-1 flags totes and force=False — display flagged totes,
-    let dispatch confirm, then resubmit with force=True.
+    409 Conflict when tier-1 flags bags and force=False — display flagged bags
+    with suggested trucks, let dispatch confirm or override, then resubmit
+    with force=True and the confirmed overrides.
     """
-    # Validate tote truck IDs belong to this company's active trucks
-    if body.totes:
+    # Validate override truck IDs belong to this company's active trucks
+    if body.overrides:
         company_truck_ids = {
             t.id for t in db.query(Truck).filter(
                 Truck.company_id == caller.company_id,
@@ -457,22 +461,25 @@ def run_sort_endpoint(
             ).all()
         }
         invalid_trucks = [
-            str(t.truck_id) for t in body.totes
-            if t.truck_id not in company_truck_ids
+            str(ov.truck_id) for ov in body.overrides
+            if ov.truck_id not in company_truck_ids
         ]
         if invalid_trucks:
             raise HTTPException(
                 status_code=400,
-                detail=f"Tote references unknown or inactive truck IDs: {', '.join(invalid_trucks)}",
+                detail=f"Override references unknown or inactive truck IDs: {', '.join(invalid_trucks)}",
             )
 
-    totes_raw = [t.model_dump() for t in body.totes]
+    bag_overrides = [
+        _BagOverride(bag_id=ov.bag_id, truck_id=ov.truck_id)
+        for ov in body.overrides
+    ]
 
     try:
         result = run_sort(
             company_id      = caller.company_id,
             sort_date       = body.sort_date,
-            totes           = totes_raw,
+            overrides       = bag_overrides,
             created_by      = caller.id,
             created_by_name = caller.name,
             db              = db,
@@ -555,19 +562,19 @@ def run_sort_endpoint(
     ]
 
     flagged_out = [
-        ToteResultOut(
-            tote_id            = t.tote_id,
-            truck_id           = t.truck_id,
-            classification     = t.classification,
-            total_packages     = t.total_packages,
-            outside_packages   = t.outside_packages,
-            outside_pct        = t.outside_pct,
-            outside_tbas       = t.outside_tbas,
-            outlier_tbas       = t.outlier_tbas,
-            suggested_truck_id = t.suggested_truck_id,
-            unresolvable       = t.unresolvable,
+        BagResultOut(
+            bag_id             = b.bag_id,
+            inferred_truck_id  = b.inferred_truck_id,
+            classification     = b.classification,
+            total_packages     = b.total_packages,
+            outside_packages   = b.outside_packages,
+            outside_pct        = b.outside_pct,
+            outside_tbas       = b.outside_tbas,
+            outlier_tbas       = b.outlier_tbas,
+            suggested_truck_id = b.suggested_truck_id,
+            unresolvable       = b.unresolvable,
         )
-        for t in result.verification.flagged
+        for b in result.verification.flagged
     ]
 
     return SortRunResponse(
@@ -579,7 +586,7 @@ def run_sort_endpoint(
         was_forced    = result.was_forced,
         zones_created = len(result.zones_persisted),
         assignments   = assignments_out,
-        flagged_totes = flagged_out,
+        flagged_bags  = flagged_out,
     )
 
 

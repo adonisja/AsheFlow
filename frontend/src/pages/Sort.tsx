@@ -16,6 +16,7 @@ import type {
   CommitSortResponse, RouteResponse, WaveAssignmentEntry,
   ArrivalConfirmResponse, MisroutedPackageOut,
   WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
+  SortRunResponse, BagResultOut, BagOverride,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -756,6 +757,301 @@ function ManifestUploadPanel({
 }
 
 // ---------------------------------------------------------------------------
+// Manifest sort panel — POST /sort/run, tier-1 review, override, resubmit
+// ---------------------------------------------------------------------------
+
+type SortRunPhase = 'idle' | 'running' | 'tier1_failed' | 'done';
+
+function ManifestSortPanel({
+  today,
+  trucks,           // TruckAssignment[] for name lookup
+  onZonesCreated,   // called after zones are persisted so truck panels can enable
+}: {
+  today: string;
+  trucks: { truck_id: string; truck_name: string }[];
+  onZonesCreated: () => void;
+}) {
+  const [phase, setPhase]               = useState<SortRunPhase>('idle');
+  const [result, setResult]             = useState<SortRunResponse | null>(null);
+  const [error, setError]               = useState<string | null>(null);
+  const [expanded, setExpanded]         = useState(false);
+  const [running, setRunning]           = useState(false);
+  // override map: bag_id → truck_id (dispatch confirmed or manually chosen)
+  const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
+
+  const truckById = Object.fromEntries(trucks.map(t => [t.truck_id, t.truck_name]));
+
+  const classificationColor = (c: string) =>
+    c === 'misaligned' ? 'text-danger'
+    : c === 'uncertain' ? 'text-warning'
+    : c === 'stray'     ? 'text-warning/70'
+    : 'text-success';
+
+  const classificationBg = (c: string) =>
+    c === 'misaligned' ? 'bg-danger/5 border-danger/20'
+    : c === 'uncertain' ? 'bg-warning/5 border-warning/20'
+    : 'bg-accent/40 border-border';
+
+  async function runSort(force: boolean, overrides: BagOverride[]) {
+    setRunning(true);
+    setError(null);
+    try {
+      const { data } = await axiosClient.post<SortRunResponse>('/sort/run', {
+        sort_date: today,
+        force,
+        overrides,
+      });
+      setResult(data);
+      if (data.tier1_passed || data.was_forced) {
+        setPhase('done');
+        setExpanded(false);
+        onZonesCreated();
+      } else {
+        // 409 handled below — this branch means tier1 passed cleanly
+        setPhase('done');
+        setExpanded(false);
+        onZonesCreated();
+      }
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail ?? 'Sort failed.';
+      if (err?.response?.status === 409) {
+        // Tier-1 flagged bags — parse the response body if available
+        const data: SortRunResponse | undefined = err?.response?.data;
+        if (data && Array.isArray(data.flagged_bags)) {
+          setResult(data);
+          // Pre-fill overrides with suggested trucks
+          const suggestions: Record<string, string> = {};
+          for (const bag of data.flagged_bags) {
+            if (bag.suggested_truck_id) {
+              suggestions[bag.bag_id] = bag.suggested_truck_id;
+            }
+          }
+          setOverrideMap(suggestions);
+          setPhase('tier1_failed');
+          setExpanded(true);
+        } else {
+          setError(detail);
+          setPhase('idle');
+        }
+      } else {
+        setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
+        setPhase('idle');
+      }
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function handleInitialRun() {
+    setPhase('running');
+    setExpanded(true);
+    runSort(false, []);
+  }
+
+  function handleConfirmOverrides() {
+    const overrides: BagOverride[] = Object.entries(overrideMap)
+      .filter(([, truck_id]) => truck_id)
+      .map(([bag_id, truck_id]) => ({ bag_id, truck_id }));
+    runSort(true, overrides);
+  }
+
+  const borderClass =
+    phase === 'done'         ? 'border-success/40 bg-success/5'
+    : phase === 'tier1_failed' ? 'border-warning/40 bg-warning/5'
+    : phase === 'running'    ? 'border-primary/40 bg-primary/5'
+    : error                  ? 'border-danger/40 bg-danger/5'
+    : 'border-border bg-surface-muted/30';
+
+  const headerSubtext =
+    phase === 'idle'         ? 'Run DBSCAN zone sort and verify bag placements.'
+    : phase === 'running'    ? 'Clustering packages and assigning truck zones…'
+    : phase === 'tier1_failed' ? `${result?.flagged_bags.length ?? 0} bag(s) flagged — review and confirm below.`
+    : phase === 'done'       ? `Zones created: ${result?.zones_created ?? 0} · ${result?.package_count.toLocaleString()} packages sorted.`
+    : (error ?? 'Sort failed.');
+
+  return (
+    <div className={`rounded-2xl border overflow-hidden transition-colors ${borderClass}`}>
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-black/5 transition-colors text-left"
+        onClick={() => setExpanded(v => !v)}
+      >
+        {phase === 'running'
+          ? <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
+          : phase === 'tier1_failed'
+          ? <AlertTriangle className="w-5 h-5 text-warning shrink-0" />
+          : phase === 'done'
+          ? <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
+          : error
+          ? <AlertTriangle className="w-5 h-5 text-danger shrink-0" />
+          : <Layers className="w-5 h-5 text-muted-foreground shrink-0" />}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground">Zone Sort</p>
+          <p className={`text-xs truncate ${
+            phase === 'tier1_failed' ? 'text-warning'
+            : phase === 'done' ? 'text-success'
+            : error ? 'text-danger'
+            : 'text-muted-foreground'
+          }`}>
+            {headerSubtext}
+          </p>
+        </div>
+        {expanded
+          ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" />
+          : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="border-t border-border/50 px-4 py-3 space-y-4">
+
+          {/* Error state */}
+          {error && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-danger/10 border border-danger/20">
+              <AlertTriangle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-danger">{error}</p>
+                <button
+                  onClick={() => { setError(null); setPhase('idle'); }}
+                  className="mt-1.5 text-xs text-danger/70 hover:text-danger underline underline-offset-2"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Idle — run button */}
+          {phase === 'idle' && !error && (
+            <button
+              onClick={handleInitialRun}
+              disabled={running}
+              className="btn-primary flex items-center gap-2 text-sm"
+            >
+              <Zap className="w-4 h-4" /> Run Zone Sort
+            </button>
+          )}
+
+          {/* Running */}
+          {phase === 'running' && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin text-primary" />
+              Clustering and assigning zones…
+            </div>
+          )}
+
+          {/* Done — summary */}
+          {phase === 'done' && result && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {result.assignments.map(a => (
+                  <div key={a.truck_id} className="p-2 rounded-lg bg-accent/50 space-y-0.5">
+                    <p className="text-[10px] text-muted-foreground uppercase font-semibold truncate">{a.truck_name}</p>
+                    <p className="text-xs font-semibold text-foreground">{a.package_count.toLocaleString()} pkgs</p>
+                    <p className="text-[10px] text-muted-foreground capitalize">{a.match_type}</p>
+                  </div>
+                ))}
+              </div>
+              {result.outlier_count > 0 && (
+                <p className="text-xs text-warning flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  {result.outlier_count} packages are DBSCAN outliers — no zone assigned.
+                </p>
+              )}
+              <button
+                onClick={() => { setPhase('idle'); setResult(null); setError(null); setOverrideMap({}); }}
+                className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+              >
+                Re-run sort
+              </button>
+            </div>
+          )}
+
+          {/* Tier-1 failed — per-bag review with override selects */}
+          {phase === 'tier1_failed' && result && (
+            <div className="space-y-4">
+              <p className="text-xs text-muted-foreground">
+                The bags below contain packages that DBSCAN assigned to a different truck
+                than the majority of the bag. Confirm the suggested truck or select a different
+                one, then click <strong>Confirm &amp; Force Sort</strong>.
+              </p>
+
+              <div className="space-y-2">
+                {result.flagged_bags.map(bag => (
+                  <div
+                    key={bag.bag_id}
+                    className={`p-3 rounded-xl border space-y-2 ${classificationBg(bag.classification)}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold font-mono text-foreground">{bag.bag_id}</span>
+                          <span className={`text-[10px] font-semibold uppercase ${classificationColor(bag.classification)}`}>
+                            {bag.classification}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          {bag.outside_packages}/{bag.total_packages} packages on wrong truck
+                          {bag.inferred_truck_id && ` · currently on ${truckById[bag.inferred_truck_id] ?? bag.inferred_truck_id}`}
+                        </p>
+                      </div>
+                      {bag.unresolvable && (
+                        <span className="text-[10px] text-danger font-semibold shrink-0">Unresolvable</span>
+                      )}
+                    </div>
+
+                    {!bag.unresolvable && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-muted-foreground shrink-0">Move to:</label>
+                        <select
+                          value={overrideMap[bag.bag_id] ?? ''}
+                          onChange={e => setOverrideMap(prev => ({ ...prev, [bag.bag_id]: e.target.value }))}
+                          className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        >
+                          <option value="">Leave as-is…</option>
+                          {trucks.map(t => (
+                            <option key={t.truck_id} value={t.truck_id}>
+                              {t.truck_name}
+                              {t.truck_id === bag.suggested_truck_id ? ' (suggested)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {bag.outlier_tbas.length > 0 && (
+                      <p className="text-[10px] text-muted-foreground">
+                        {bag.outlier_tbas.length} TBA(s) are DBSCAN outliers — no truck can be suggested.
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleConfirmOverrides}
+                  disabled={running}
+                  className="btn-primary flex items-center gap-2 text-sm flex-1 justify-center"
+                >
+                  {running
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Applying…</>
+                    : <><Send className="w-4 h-4" /> Confirm &amp; Force Sort</>}
+                </button>
+                <button
+                  onClick={() => { setPhase('idle'); setResult(null); setOverrideMap({}); }}
+                  className="btn-ghost text-sm px-3"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Truck sort panel
 // ---------------------------------------------------------------------------
 
@@ -764,6 +1060,7 @@ function TruckSortPanel({
   walkers,
   trainers,
   routeDate,
+  zoneExists,
   onCommit,
   onDistribute,
   onArrivalConfirm,
@@ -773,6 +1070,7 @@ function TruckSortPanel({
   walkers: Employee[];
   trainers: Employee[];
   routeDate: string;
+  zoneExists: boolean;
   onCommit: (taId: string) => Promise<void>;
   onDistribute: (taId: string, assignments: WaveAssignmentEntry[], trainerId: string, traineeId?: string, traineePhase?: number) => Promise<void>;
   onArrivalConfirm: (taId: string, trainerId: string, traineeId: string) => Promise<void>;
@@ -923,14 +1221,21 @@ function TruckSortPanel({
               {state.phase !== 'idle' && <CheckCircle2 className="w-4 h-4 text-success" />}
             </div>
             {state.phase === 'idle' ? (
-              <button
-                onClick={handleCommit}
-                disabled={commitLoading}
-                className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
-              >
-                {commitLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                {commitLoading ? 'Running sort…' : 'Run & Commit Sort'}
-              </button>
+              zoneExists ? (
+                <button
+                  onClick={handleCommit}
+                  disabled={commitLoading}
+                  className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+                >
+                  {commitLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  {commitLoading ? 'Committing sort…' : 'Commit Sort'}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 p-3 rounded-xl bg-accent/40 border border-border text-xs text-muted-foreground">
+                  <Layers className="w-3.5 h-3.5 shrink-0" />
+                  Run Zone Sort above to assign packages to this truck before committing.
+                </div>
+              )
             ) : (
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">
@@ -1206,6 +1511,8 @@ export default function SortPage() {
   const [centroids, setCentroids] = useState<Centroid[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // truck_id set that have an active TruckZone for today — populated after zone sort runs
+  const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
 
   const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
     const phase: SortPhase =
@@ -1235,7 +1542,11 @@ export default function SortPage() {
         axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
       ]);
       // Unpack settled results — zones/centroids fail silently if sort hasn't run yet
-      if (zoneRes.status === 'fulfilled') setZones(zoneRes.value.data.zones ?? []);
+      if (zoneRes.status === 'fulfilled') {
+        const fetchedZones = zoneRes.value.data.zones ?? [];
+        setZones(fetchedZones);
+        setZonedTruckIds(new Set(fetchedZones.map((z: ZonePolygon) => z.truck_id)));
+      }
       if (centroidRes.status === 'fulfilled') setCentroids(centroidRes.value.data.centroids ?? []);
       if (taRes.status === 'rejected') throw taRes.reason;
       if (empRes.status === 'rejected') throw empRes.reason;
@@ -1367,6 +1678,30 @@ export default function SortPage() {
       {/* Manifest upload */}
       <ManifestUploadPanel today={today} onReady={fetchAll} />
 
+      {/* Zone sort — only shown when manifest is ready (manifest panel handles its own state) */}
+      {assignments.length > 0 && (
+        <ManifestSortPanel
+          today={today}
+          trucks={assignments.map(a => ({ truck_id: a.truck_id, truck_name: a.truck_name }))}
+          onZonesCreated={() => {
+            // Re-fetch zones so zonedTruckIds updates and map refreshes
+            Promise.allSettled([
+              axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
+              axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
+            ]).then(([zoneRes, centroidRes]) => {
+              if (zoneRes.status === 'fulfilled') {
+                const fetchedZones = zoneRes.value.data.zones ?? [];
+                setZones(fetchedZones);
+                setZonedTruckIds(new Set(fetchedZones.map((z: ZonePolygon) => z.truck_id)));
+              }
+              if (centroidRes.status === 'fulfilled') {
+                setCentroids(centroidRes.value.data.centroids ?? []);
+              }
+            });
+          }}
+        />
+      )}
+
       {/* Zone density map — only render when truck assignments exist for today */}
       {assignments.length > 0 && (
         <ZoneDensityMap zones={zones} centroids={centroids} className="h-80" />
@@ -1390,6 +1725,7 @@ export default function SortPage() {
               walkers={walkers}
               trainers={trainers}
               routeDate={today}
+              zoneExists={zonedTruckIds.has(state.ta.truck_id)}
               onCommit={handleCommit}
               onDistribute={handleDistribute}
               onArrivalConfirm={handleArrivalConfirm}

@@ -710,6 +710,55 @@ export interface ManifestStatusResponse {
   packages_total: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Manifest sort run
+// ---------------------------------------------------------------------------
+
+export interface BagOverride {
+  bag_id: string;
+  truck_id: string;
+}
+
+export interface SortRunRequest {
+  sort_date: string;          // ISO date "YYYY-MM-DD"
+  force: boolean;
+  overrides: BagOverride[];
+}
+
+export interface ClusterAssignmentOut {
+  truck_id: string;
+  truck_name: string;
+  match_type: 'historical' | 'sequential' | 'overflow';
+  workload_score: number | null;
+  is_overflow: boolean;
+  package_count: number;
+}
+
+export interface BagResultOut {
+  bag_id: string;
+  inferred_truck_id: string | null;
+  classification: 'clean' | 'stray' | 'uncertain' | 'misaligned';
+  total_packages: number;
+  outside_packages: number;
+  outside_pct: number;
+  outside_tbas: string[];
+  outlier_tbas: string[];
+  suggested_truck_id: string | null;
+  unresolvable: boolean;
+}
+
+export interface SortRunResponse {
+  sort_date: string;
+  package_count: number;
+  outlier_count: number;
+  cluster_count: number;
+  tier1_passed: boolean;
+  was_forced: boolean;
+  zones_created: number;
+  assignments: ClusterAssignmentOut[];
+  flagged_bags: BagResultOut[];
+}
+
 export interface TbaReassignRequest {
   tba_numbers: string[];
   destination_zone_id: string;

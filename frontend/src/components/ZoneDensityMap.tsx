@@ -9,6 +9,7 @@ import { ScatterplotLayer } from '@deck.gl/layers';
 
 export interface ZonePolygon {
   id: string;
+  truck_id: string;
   zone_label: string;
   truck_polygon: { lat: number; lng: number }[];
 }
