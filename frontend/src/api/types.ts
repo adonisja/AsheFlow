@@ -690,8 +690,24 @@ export interface BuildingProfileResponse {
   building_type_status: 'pending' | 'verified' | 'locked';
   building_type_agreement_count: number;
   nomination_status: string | null;
+  submitted_by: string | null;
   submitted_by_name: string;
+  submitted_at: string | null;
+  verified_by: string | null;
+  verified_by_name: string | null;
+  verified_at: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface ManifestStatusResponse {
+  sort_date: string;
+  status: 'ready' | 'enriching' | 'failed' | 'not_found';
+  package_count: number;
+  failed_count: number;
+  failed_reason: string | null;
+  packages_processed: number | null;
+  packages_total: number | null;
 }
 
 export interface TbaReassignRequest {

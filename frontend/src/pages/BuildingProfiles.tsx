@@ -199,8 +199,9 @@ function VerifyModal({ profile, onClose, onUpdated }: VerifyModalProps) {
             >
               <option value="">Use default</option>
               <option value="standard">Standard</option>
-              <option value="heavy">Heavy</option>
-              <option value="light">Light</option>
+              <option value="bulk_drop">Bulk Drop</option>
+              <option value="high_touch">High Touch</option>
+              <option value="high_wait">High Wait</option>
             </select>
           </div>
         </div>

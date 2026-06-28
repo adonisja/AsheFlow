@@ -86,6 +86,7 @@ class RouteOut(BaseModel):
     workload_source: str            # address_profile|block_profile|flag|default
     package_count: int
     coverage_pct: float = 0.0       # fraction of packages with locked BuildingProfile
+    normalised_addresses: list[str] = []
     misrouted_packages: list[MisroutedPackageOut] = []
 
 

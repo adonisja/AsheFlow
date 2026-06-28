@@ -161,8 +161,8 @@ async def upload_flex_timesheets(
             work_date = date.fromisoformat(row.work_date)
             break_start = datetime.fromisoformat(row.break_start_at)
             break_end = datetime.fromisoformat(row.break_end_at)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid date/time for employee {row.employee_id}: {e}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid date/time format for employee {row.employee_id}. Use ISO format: YYYY-MM-DD and YYYY-MM-DDTHH:MM:SS.")
         
         existing = db.query(FlexTimesheet).filter(
             FlexTimesheet.company_id == caller.company_id,
@@ -307,9 +307,9 @@ async def manager_sign_off(
             f"{adjustment.proposed_break_end_at.strftime('%I:%M %p')}"
         )
         logger.warning(
-            "ADP rejected timecard write for adjustment %s (employee %s, company %s) "
+            "ADP rejected timecard write for adjustment %s (employee_id %s, company %s) "
             "with status %s — marking non-retryable. ADP response: %s",
-            adjustment.id, employee.name, caller.company_id, e.status_code, e.body
+            adjustment.id, adjustment.employee_id, caller.company_id, e.status_code, e.body
         )
         notif_message = (
             f"ADP rejected the timecard correction for {employee.name.title()} "

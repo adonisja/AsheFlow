@@ -825,7 +825,10 @@ def seed_manifest(
         )
 
     truck_ids = [a.truck_id for a in assignment_rows]
-    trucks = db.query(Truck).filter(Truck.id.in_(truck_ids)).all()
+    trucks = db.query(Truck).filter(
+        Truck.id.in_(truck_ids),
+        Truck.company_id == caller.company_id,
+    ).all()
     truck_names = sorted(t.name for t in trucks)
 
     result = generate_manifest()

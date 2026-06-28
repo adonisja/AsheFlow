@@ -270,7 +270,7 @@ function App() {
             <Route
               path="/notifications"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch']}>
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
                   <NotificationsHistory />
                 </ProtectedRoute>
               }
@@ -422,7 +422,7 @@ function App() {
             <Route
               path="/building-profiles"
               element={
-                <ProtectedRoute allowedRoles={['trainer', 'driver', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'driver', 'dispatch', 'management', 'admin']}>
                   <BuildingProfilesPage />
                 </ProtectedRoute>
               }
