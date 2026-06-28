@@ -19,21 +19,31 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Rename columns — use IF EXISTS guards so re-runs on staging (where DDL
-    # was already applied directly) don't fail.
+    # Staging had DDL applied directly, leaving both old and new columns present.
+    # Strategy: rename only when the new column does NOT yet exist; otherwise
+    # drop the stale old column (data was never populated there).
+
+    # walker_route_id → route_id
     op.execute(
         "DO $$ BEGIN "
-        "  IF EXISTS (SELECT 1 FROM information_schema.columns "
-        "             WHERE table_name='misrouted_package_flags' AND column_name='walker_route_id') THEN "
+        "  IF NOT EXISTS (SELECT 1 FROM information_schema.columns "
+        "                 WHERE table_name='misrouted_package_flags' AND column_name='route_id') THEN "
         "    ALTER TABLE misrouted_package_flags RENAME COLUMN walker_route_id TO route_id; "
+        "  ELSIF EXISTS (SELECT 1 FROM information_schema.columns "
+        "                WHERE table_name='misrouted_package_flags' AND column_name='walker_route_id') THEN "
+        "    ALTER TABLE misrouted_package_flags DROP COLUMN walker_route_id; "
         "  END IF; "
         "END $$"
     )
+    # suggested_walker_route_id → suggested_route_id
     op.execute(
         "DO $$ BEGIN "
-        "  IF EXISTS (SELECT 1 FROM information_schema.columns "
-        "             WHERE table_name='misrouted_package_flags' AND column_name='suggested_walker_route_id') THEN "
+        "  IF NOT EXISTS (SELECT 1 FROM information_schema.columns "
+        "                 WHERE table_name='misrouted_package_flags' AND column_name='suggested_route_id') THEN "
         "    ALTER TABLE misrouted_package_flags RENAME COLUMN suggested_walker_route_id TO suggested_route_id; "
+        "  ELSIF EXISTS (SELECT 1 FROM information_schema.columns "
+        "                WHERE table_name='misrouted_package_flags' AND column_name='suggested_walker_route_id') THEN "
+        "    ALTER TABLE misrouted_package_flags DROP COLUMN suggested_walker_route_id; "
         "  END IF; "
         "END $$"
     )
