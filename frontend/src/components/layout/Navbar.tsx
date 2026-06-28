@@ -304,11 +304,11 @@ const Navbar = () => {
           <NavLink to="/field-ops" className={linkClass}><Shield className="w-3.5 h-3.5" /> Field Ops</NavLink>
           <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
+          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Station Sort</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
           <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
           <NavLink to="/settings" className={linkClass}><Settings className="w-3.5 h-3.5" /> Settings</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
+          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
         </>
       )}
 
@@ -322,10 +322,10 @@ const Navbar = () => {
           <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
           <NavLink to="/dispatch-home" className={linkClass}><Navigation className="w-3.5 h-3.5" /> Dispatch Home</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
+          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Station Sort</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
           <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
+          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
         </>
       )}
 
@@ -341,7 +341,7 @@ const Navbar = () => {
           <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
+          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
           <NavLink to="/trainee-management" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainees</NavLink>
           <NavLink to="/walker-performance" className={linkClass}><Star className="w-3.5 h-3.5" /> Walkers</NavLink>
         </>
@@ -357,7 +357,7 @@ const Navbar = () => {
           <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
           <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
           <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
-          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Route Sort</NavLink>
+          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Station Sort</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
           <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
           <NavLink to="/trainer-dashboard" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainer Dash</NavLink>
@@ -398,7 +398,7 @@ const Navbar = () => {
           <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
           <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
           <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> Sort Monitor</NavLink>
+          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
         </>
       )}
 
@@ -515,11 +515,11 @@ function MobileLinks({
         <NavLink to="/field-ops" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Field Ops</NavLink>
         <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>
+        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Station Sort</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
         <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
         <NavLink to="/settings" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Settings</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>
+        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
       </>}
 
       {/* ── Dispatch ───────────────────────────────────────────────────────── */}
@@ -530,10 +530,10 @@ function MobileLinks({
         <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
         <NavLink to="/dispatch-home" onClick={onNav} className={cls}><Navigation className="w-4 h-4" /> Dispatch Home</NavLink>
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>
+        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Station Sort</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
         <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>
+        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
       </>}
 
       {/* ── Management ─────────────────────────────────────────────────────── */}
@@ -546,7 +546,7 @@ function MobileLinks({
         <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>
+        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
         <NavLink to="/trainee-management" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainees</NavLink>
         <NavLink to="/walker-performance" onClick={onNav} className={cls}><Star className="w-4 h-4" /> Walkers</NavLink>
       </>}
@@ -559,7 +559,7 @@ function MobileLinks({
         <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
         <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
         <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>
-        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Route Sort</NavLink>
+        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Station Sort</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
         <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
         <NavLink to="/trainer-dashboard" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainer Dash</NavLink>
@@ -590,7 +590,7 @@ function MobileLinks({
         <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>
         <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
         <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> Sort Monitor</NavLink>
+        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
       </>}
 
       {/* ── Walker ─────────────────────────────────────────────────────────── */}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
@@ -63,20 +63,6 @@ function EffortBadge({ effort }: { effort: string }) {
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
       {effort}
-    </span>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    unassigned: 'bg-muted text-muted-foreground',
-    assigned: 'bg-info/10 text-info',
-    in_progress: 'bg-warning/10 text-warning',
-    completed: 'bg-success/10 text-success',
-  };
-  return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${map[status] ?? 'bg-muted text-muted-foreground'}`}>
-      {status.replace('_', ' ')}
     </span>
   );
 }
@@ -1271,9 +1257,9 @@ export default function SortPage() {
   return (
     <div className="space-y-8 animate-slide-up">
       <SectionHeader
-        eyebrow="Walker Operations"
-        title="Route Sort"
-        description={`Commit and distribute walker routes for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        eyebrow="Station Operations"
+        title="Station Sort"
+        description={`Upload manifest, assign packages to truck zones, and commit routes for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
           <button onClick={fetchAll} className="btn-ghost flex items-center gap-1.5 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh all

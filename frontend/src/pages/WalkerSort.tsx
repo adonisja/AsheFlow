@@ -325,7 +325,7 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
                     </div>
                     {canReassign && (
                       <button
-                        onClick={() => onResolveMisroute(route.id, m.tba_number, m.tba_number)}
+                        onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number)}
                         className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
                       >
                         Resolve
@@ -550,9 +550,9 @@ export default function WalkerSortMonitor() {
   return (
     <div className="space-y-8 animate-slide-up">
       <SectionHeader
-        eyebrow="Walker Sort"
-        title="Sort Monitor"
-        description={`Route assignment status for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        eyebrow="Anchor Point Operations"
+        title="AP Sort"
+        description={`Package sort, route assignment, and walker dispatch for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
           <button onClick={fetchAll} className="btn-ghost flex items-center gap-1.5 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
