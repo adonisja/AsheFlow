@@ -109,8 +109,21 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
             normalised_address=f"{house} {first_street}",
             lat=lat,
             lng=lng,
-            first_cross_street=addr.get("firstCrossStreetNameNormalized") or addr.get("firstCrossStreetName") or None,
-            second_cross_street=addr.get("secondCrossStreetNameNormalized") or addr.get("secondCrossStreetName") or None,
+            # GeoClient v2 uses lowCrossStreetName1/highCrossStreetName1 for
+            # the bounding cross streets. The older firstCrossStreetName* fields
+            # are absent from v2 responses but kept as fallback.
+            first_cross_street=(
+                addr.get("lowCrossStreetName1")
+                or addr.get("firstCrossStreetNameNormalized")
+                or addr.get("firstCrossStreetName")
+                or None
+            ),
+            second_cross_street=(
+                addr.get("highCrossStreetName1")
+                or addr.get("secondCrossStreetNameNormalized")
+                or addr.get("secondCrossStreetName")
+                or None
+            ),
         )
     except Exception:
         pass
