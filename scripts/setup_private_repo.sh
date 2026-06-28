@@ -109,6 +109,7 @@ SERVICES=(
   ban_override.py
   route_sort.py
   score_phase4.py
+  seed_manifest.py
 )
 
 echo ""
