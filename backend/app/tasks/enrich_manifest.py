@@ -194,7 +194,10 @@ def enrich_manifest_packages(
         raise
 
 
-_GEOCLIENT_WORKERS = 20  # concurrent GeoClient connections; API rate limit is generous for NYC geoclient v2
+# GeoClient v2 (api.nyc.gov) rate limit: 5,000 req/min per subscription key.
+# At 10 workers × ~300ms avg latency ≈ 2,000 req/min — safely under the cap.
+# Raising above 15 risks 429s which count as geoclient_error and inflate failed_count.
+_GEOCLIENT_WORKERS = 10
 
 
 def _enrich_one(pkg: dict, borough: str) -> dict:
