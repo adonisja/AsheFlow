@@ -188,7 +188,7 @@ def enrich_manifest_packages(
             type(exc).__name__,
             extra={"company_id": company_id, "sort_date": sort_date},
         )
-        r.setex(_failed_key, _REDIS_TTL_SECONDS, type(exc).__name__)
+        r.setex(_failed_key, _REDIS_TTL_SECONDS, "internal_error")
         raise
 
 

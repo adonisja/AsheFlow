@@ -387,8 +387,10 @@ def get_manifest_status(
             human_reason = "Enrichment task was not received by the worker — Celery may be down or the task is not registered. Contact your admin."
         elif "no_api_key" in failed_reason:
             human_reason = "GeoClient API key is not configured on the server — contact your admin."
+        elif "enrichment_threshold_exceeded" in failed_reason:
+            human_reason = "Too many packages could not be geocoded — fix the issue and re-upload."
         else:
-            human_reason = f"Enrichment failed: {failed_reason.replace('_', ' ')}."
+            human_reason = "Enrichment failed unexpectedly — re-upload the manifest or contact your admin."
         return ManifestStatusResponse(
             sort_date=sort_date,
             status="failed",
