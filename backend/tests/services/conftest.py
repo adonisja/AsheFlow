@@ -18,6 +18,7 @@ _PROPRIETARY = [
     ("test_calculate_weights.py", "app.services.calculate_weights"),
     ("test_run_dispatch.py", "app.services.run_dispatch"),
     ("test_route_sort.py", "app.services.route_sort"),
+    ("test_sort_pipeline_integration.py", "app.services.tier1_verify"),
 ]
 
 for _test_file, _module in _PROPRIETARY:
