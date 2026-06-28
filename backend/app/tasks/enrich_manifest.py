@@ -351,6 +351,10 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                 + ("_no_api_key" if not settings.geoclient_app_key else "")
             )
             r.setex(_failed_key, _REDIS_TTL_SECONDS, reason)
+            r.delete(prog_key)
+            # Delete the enriching sentinel so the status endpoint returns
+            # "failed" immediately rather than staying stuck on "enriching".
+            r.delete(f"manifest_enriching:{company_id}:{sort_date}")
             db = SessionLocal()
             try:
                 cid = UUID(company_id)

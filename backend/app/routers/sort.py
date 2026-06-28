@@ -377,6 +377,24 @@ def get_manifest_status(
             failed_count=failed_count,
         )
 
+    # Check failed before enriching: the task deletes the enriching sentinel on
+    # completion (success or threshold failure), but a real failure reason is the
+    # authoritative signal — surface it immediately regardless of sentinel state.
+    if failed_reason and failed_reason != "worker_unreachable":
+        if "no_api_key" in failed_reason:
+            human_reason = "GeoClient API key is not configured on the server — contact your admin."
+        elif "enrichment_threshold_exceeded" in failed_reason:
+            human_reason = "Too many packages could not be geocoded — fix the issue and re-upload."
+        else:
+            human_reason = "Enrichment failed unexpectedly — re-upload the manifest or contact your admin."
+        return ManifestStatusResponse(
+            sort_date=sort_date,
+            status="failed",
+            package_count=0,
+            failed_count=0,
+            failed_reason=human_reason,
+        )
+
     if enriching:
         packages_processed = None
         packages_total = None
@@ -396,21 +414,13 @@ def get_manifest_status(
             packages_total=packages_total,
         )
 
-    if failed_reason:
-        if "worker_unreachable" in failed_reason:
-            human_reason = "Enrichment task was not received by the worker — Celery may be down or the task is not registered. Contact your admin."
-        elif "no_api_key" in failed_reason:
-            human_reason = "GeoClient API key is not configured on the server — contact your admin."
-        elif "enrichment_threshold_exceeded" in failed_reason:
-            human_reason = "Too many packages could not be geocoded — fix the issue and re-upload."
-        else:
-            human_reason = "Enrichment failed unexpectedly — re-upload the manifest or contact your admin."
+    if failed_reason:  # worker_unreachable — enriching sentinel already expired
         return ManifestStatusResponse(
             sort_date=sort_date,
             status="failed",
             package_count=0,
             failed_count=0,
-            failed_reason=human_reason,
+            failed_reason="Enrichment task was not received by the worker — Celery may be down or the task is not registered. Contact your admin.",
         )
 
     return ManifestStatusResponse(
