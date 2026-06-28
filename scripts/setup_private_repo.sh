@@ -110,6 +110,7 @@ SERVICES=(
   route_sort.py
   score_phase4.py
   seed_manifest.py
+  derive_block_key.py
 )
 
 echo ""
