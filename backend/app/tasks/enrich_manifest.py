@@ -16,6 +16,7 @@ Endpoint: GET /geoclient/v2/address.json?houseNumber=411&street=W+36+St&borough=
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -193,14 +194,94 @@ def enrich_manifest_packages(
         raise
 
 
-def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key):
-    enriched: list[dict] = []
-    failed: list[dict] = []
-    ov_packages: list[dict] = []   # OV packages with full context for dock-side cross-reference
+_GEOCLIENT_WORKERS = 20  # concurrent GeoClient connections; API rate limit is generous for NYC geoclient v2
 
+
+def _enrich_one(pkg: dict, borough: str) -> dict:
+    """Enrich a single package: GeoClient lookup + block_key derivation.
+
+    Returns a result dict with keys: enriched_pkg, failed_entry (or None), ov_entry (or None).
+    Pure function — no shared state, safe to call from a thread pool.
+    """
+    address = pkg.get("address") or ""
+    tba = pkg.get("tba", "unknown")
+    tag = pkg.get("tag_number")
+    package_type = pkg.get("package_type")
+    bag_id = pkg.get("bag_id")
+    amazon_lat = pkg.get("lat")
+    amazon_lng = pkg.get("lng")
+
+    geo: GeoClientResult | None = None
+    block_key: str | None = None
+    failure_reason: str | None = None
+
+    ov_entry = None
+    if tag:
+        ov_entry = {
+            "tba":          tba,
+            "bag_id":       bag_id,
+            "tag_number":   tag.strip(),
+            "package_type": package_type,
+        }
+
+    if address:
+        for attempt in range(3):
+            try:
+                geo = _geoclient_normalise(address, borough=borough)
+                break
+            except Exception as geo_exc:
+                logger.warning(
+                    "geoclient_retry",
+                    extra={
+                        "attempt":    attempt + 1,
+                        "tba":        tba,
+                        "error_type": type(geo_exc).__name__,
+                        "error":      str(geo_exc)[:120],
+                    },
+                )
+                if attempt == 2:
+                    failure_reason = "geoclient_error"
+
+        if geo is None and not failure_reason:
+            failure_reason = "geoclient_no_match"
+
+        source = geo.normalised_address if geo else address
+        bk_result = derive_block_key(source, tba=tba)
+        if isinstance(bk_result, ParsedBlock):
+            block_key = bk_result.block_key
+        elif failure_reason is None:
+            failure_reason = bk_result.reason
+    else:
+        failure_reason = "missing_address"
+
+    if failure_reason:
+        logger.debug("package_enrich_failed", extra={"tba": tba, "reason": failure_reason})
+
+    final_lat = geo.lat if geo and geo.lat is not None else amazon_lat
+    final_lng = geo.lng if geo and geo.lng is not None else amazon_lng
+
+    enriched_pkg = {
+        "tba":                tba,
+        "bag_id":             bag_id,
+        "tag_number":         tag,
+        "package_type":       package_type,
+        "lat":                final_lat,
+        "lng":                final_lng,
+        "block_key":          block_key,
+        "normalised_address": geo.normalised_address if geo else None,
+        "first_cross_street": geo.first_cross_street if geo else None,
+        "second_cross_street":geo.second_cross_street if geo else None,
+    }
+
+    failed_entry = {"tba": tba, "raw_address": address, "reason": failure_reason} if failure_reason else None
+
+    return {"enriched_pkg": enriched_pkg, "failed_entry": failed_entry, "ov_entry": ov_entry}
+
+
+def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key):
     total_packages = len(packages)
     t_start = time.monotonic()
-    log_interval = max(500, total_packages // 10)  # log every 10% or every 500, whichever is larger
+    log_interval = max(500, total_packages // 10)
 
     logger.info(
         "enrich_manifest_packages started",
@@ -210,118 +291,43 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
             "total":      total_packages,
             "borough":    borough,
             "geoclient":  bool(settings.geoclient_app_key),
+            "workers":    _GEOCLIENT_WORKERS,
         },
     )
 
-    for i, pkg in enumerate(packages, 1):
-        address = pkg.get("address") or ""
-        tba = pkg.get("tba", "unknown")
+    # Submit all packages to the thread pool; collect results in original order.
+    # ThreadPoolExecutor is safe here: _enrich_one has no shared mutable state.
+    results: list[dict] = [None] * total_packages  # type: ignore[list-item]
+    with ThreadPoolExecutor(max_workers=_GEOCLIENT_WORKERS) as pool:
+        future_to_idx = {pool.submit(_enrich_one, pkg, borough): i for i, pkg in enumerate(packages)}
+        completed = 0
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results[idx] = future.result()
+            completed += 1
+            if completed % log_interval == 0 or completed == total_packages:
+                elapsed = time.monotonic() - t_start
+                failed_so_far = sum(1 for r2 in results[:completed] if r2 and r2["failed_entry"])
+                logger.info(
+                    "enrich_manifest_progress",
+                    extra={
+                        "company_id":    company_id,
+                        "sort_date":     sort_date,
+                        "processed":     completed,
+                        "total":         total_packages,
+                        "failed_so_far": failed_so_far,
+                        "elapsed_s":     round(elapsed, 1),
+                    },
+                )
 
-        geo: GeoClientResult | None = None
-        block_key: str | None = None
-        failure_reason: str | None = None
+    # Unpack results (order preserved — results list was pre-sized)
+    enriched:    list[dict] = [res["enriched_pkg"] for res in results]
+    failed:      list[dict] = [res["failed_entry"] for res in results if res["failed_entry"]]
+    ov_packages: list[dict] = [res["ov_entry"]     for res in results if res["ov_entry"]]
 
-        tag = pkg.get("tag_number")
-        package_type = pkg.get("package_type")
-        bag_id = pkg.get("bag_id")
+    total = total_packages
 
-        # Collect OV packages with full dock context so dispatch can locate bags on the
-        # loading dock (tag_number = dock slot, bag_id = physical bag label).
-        if tag:
-            ov_packages.append({
-                "tba":          tba,
-                "bag_id":       bag_id,
-                "tag_number":   tag.strip(),
-                "package_type": package_type,
-            })
-
-        if address:
-            # Attempt GeoClient lookup with 3 retries (network hiccups)
-            for attempt in range(3):
-                try:
-                    geo = _geoclient_normalise(address, borough=borough)
-                    break
-                except Exception as geo_exc:
-                    logger.warning(
-                        "geoclient_retry",
-                        extra={
-                            "attempt": attempt + 1,
-                            "tba": tba,
-                            "error_type": type(geo_exc).__name__,
-                            "error": str(geo_exc)[:120],
-                        },
-                    )
-                    if attempt == 2:
-                        failure_reason = "geoclient_error"
-
-            if geo is None and not failure_reason:
-                failure_reason = "geoclient_no_match"
-
-            # derive_block_key on normalised address; fall back to raw if GeoClient failed
-            source = geo.normalised_address if geo else address
-            result = derive_block_key(source, tba=tba)
-            if isinstance(result, ParsedBlock):
-                block_key = result.block_key
-            else:
-                if failure_reason is None:
-                    failure_reason = result.reason
-        else:
-            failure_reason = "missing_address"
-
-        if failure_reason:
-            logger.debug(
-                "package_enrich_failed",
-                extra={"tba": tba, "reason": failure_reason},
-            )
-
-        # GeoClient lat/lng is primary. Fall back to Amazon-supplied coordinates only
-        # when GeoClient returns no lat/lng (API down, address outside coverage, etc.).
-        amazon_lat = pkg.get("lat")
-        amazon_lng = pkg.get("lng")
-        final_lat = (geo.lat if geo and geo.lat is not None else amazon_lat)
-        final_lng = (geo.lng if geo and geo.lng is not None else amazon_lng)
-
-        # Build the canonical enriched package dict.
-        # raw address is intentionally excluded (ephemeral / load-phase only).
-        enriched_pkg = {
-            "tba":                 tba,
-            "bag_id":              bag_id,
-            "tag_number":          tag,
-            "package_type":        package_type,
-            "lat":                 final_lat,
-            "lng":                 final_lng,
-            "block_key":           block_key,
-            "normalised_address":  geo.normalised_address if geo else None,
-            "first_cross_street":  geo.first_cross_street if geo else None,
-            "second_cross_street": geo.second_cross_street if geo else None,
-        }
-        enriched.append(enriched_pkg)
-
-        if failure_reason:
-            failed.append({
-                "tba": tba,
-                "raw_address": address,
-                "reason": failure_reason,
-            })
-
-        if i % log_interval == 0 or i == total_packages:
-            elapsed = time.monotonic() - t_start
-            logger.info(
-                "enrich_manifest_progress",
-                extra={
-                    "company_id": company_id,
-                    "sort_date":  sort_date,
-                    "processed":  i,
-                    "total":      total_packages,
-                    "failed_so_far": len(failed),
-                    "elapsed_s":  round(elapsed, 1),
-                },
-            )
-
-    # Block sort if too many packages failed enrichment — unusable data is worse
-    # than a clear error. Only trigger when we have at least 10 packages to avoid
-    # false positives on tiny test uploads.
-    total = len(packages)
+    # Block sort if too many packages failed enrichment.
     if total >= 10 and failed:
         fail_pct = len(failed) / total
         threshold = settings.geoclient_failure_threshold
@@ -331,7 +337,6 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                 + ("_no_api_key" if not settings.geoclient_app_key else "")
             )
             r.setex(_failed_key, _REDIS_TTL_SECONDS, reason)
-            # Notify dispatch with the actionable reason
             db = SessionLocal()
             try:
                 cid = UUID(company_id)
@@ -356,17 +361,12 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
     key = _manifest_key(company_id, sort_date)
     r.setex(key, _REDIS_TTL_SECONDS, json.dumps(enriched))
 
-    # Cache OV packages separately — same TTL. Each entry carries tba + bag_id +
-    # tag_number (dock slot) + package_type so dispatch can locate every OV bag on the
-    # loading dock without re-reading the raw manifest.
     if ov_packages:
         ov_key = f"manifest_ov_zones:{company_id}:{sort_date}"
         r.setex(ov_key, _REDIS_TTL_SECONDS, json.dumps(ov_packages))
 
-    # Clear any prior failure key now that enrichment succeeded
     r.delete(_failed_key)
 
-    # Notify dispatch
     db = SessionLocal()
     try:
         cid = UUID(company_id)
