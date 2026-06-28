@@ -46,10 +46,17 @@ def derive_workload_class(building_type: str) -> str:
 # ── BuildingProfile schemas ───────────────────────────────────────────────────
 
 class BuildingProfileCreate(BaseModel):
-    """Walker submits a new building profile. normalised_address resolved server-side from TBA."""
-    tba_number:    str = Field(...)           # used server-side to resolve normalised_address
-    building_type: str = Field(...)
-    raw_note:      Optional[str] = Field(None, max_length=2000)
+    """Walker submits a new building profile for a stop they just completed.
+
+    normalised_address is passed directly from the frontend stop state — it is
+    the GeoClient-normalised address already in memory from the enriched manifest.
+    block_key may be passed from stop context to skip server-side derivation; if
+    omitted, the router derives it from normalised_address via derive_block_key.
+    """
+    normalised_address: str           = Field(..., max_length=200)
+    block_key:          Optional[str] = Field(None, max_length=60)
+    building_type:      str           = Field(...)
+    raw_note:           Optional[str] = Field(None, max_length=2000)
 
     def validate_building_type(self) -> None:
         if self.building_type not in BUILDING_TYPES:

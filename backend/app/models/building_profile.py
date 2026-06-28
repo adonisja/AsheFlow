@@ -25,8 +25,8 @@ class BuildingProfile(Base):
       When locked across 2+ independent companies → auto-nominated for BuildingProfileLibrary.
 
     Submission flow:
-      Walker scans TBA → app resolves normalised_address from enriched Redis manifest
-      → walker submits building_type + optional raw_note
+      Walker arrives at stop → normalised_address is already in frontend state from
+      enriched manifest → walker selects building_type + optional raw_note and submits
       → captain sets operational_note from raw_note
       → captain verifies → agreement_count increments → locks at threshold
     """

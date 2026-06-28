@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw,
-  ChevronDown, ChevronUp, Loader2, FileEdit, Search,
+  ChevronDown, ChevronUp, Loader2, FileEdit, Search, Plus, Info,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import type { BuildingProfileResponse, BuildingType } from '../api/types';
+import type { BuildingProfileResponse, BuildingProfileCreate, BuildingType } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +37,99 @@ function StatusPill({ status }: { status: string }) {
     <span className={`text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${map[status] ?? 'bg-muted text-muted-foreground'}`}>
       {status}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Submit modal (captain manually registers a building by TBA)
+// ---------------------------------------------------------------------------
+
+interface SubmitModalProps {
+  onClose: () => void;
+  onCreated: (p: BuildingProfileResponse) => void;
+}
+
+function SubmitModal({ onClose, onCreated }: SubmitModalProps) {
+  const [address, setAddress]           = useState('');
+  const [buildingType, setBuildingType] = useState<BuildingType>('walkup');
+  const [rawNote, setRawNote]           = useState('');
+  const [saving, setSaving]             = useState(false);
+  const [error, setError]               = useState<string | null>(null);
+
+  async function submit() {
+    const trimmed = address.trim();
+    if (!trimmed) { setError('Address is required.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const body: BuildingProfileCreate = {
+        normalised_address: trimmed,
+        building_type: buildingType,
+        raw_note: rawNote.trim() || undefined,
+      };
+      const { data } = await axiosClient.post<BuildingProfileResponse>('/building-profiles/', body);
+      onCreated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Submission failed.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <Plus className="w-4 h-4 text-primary" />
+          <h3 className="font-semibold text-foreground">Submit building profile</h3>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Enter the normalised address exactly as it appears in the manifest (e.g. "433 W 32 ST").
+        </p>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Normalised address</label>
+            <input
+              type="text"
+              className="input w-full font-mono"
+              placeholder="433 W 32 ST"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Building type</label>
+            <select
+              className="input w-full"
+              value={buildingType}
+              onChange={e => setBuildingType(e.target.value as BuildingType)}
+            >
+              {BUILDING_TYPES.map(t => (
+                <option key={t} value={t}>{BUILDING_TYPE_LABELS[t]}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Raw note (optional)</label>
+            <textarea
+              className="input w-full h-20 resize-none"
+              placeholder="Any observation notes…"
+              value={rawNote}
+              onChange={e => setRawNote(e.target.value)}
+            />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+          <button onClick={submit} disabled={saving} className="btn-primary text-sm flex items-center gap-1.5">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -248,6 +341,12 @@ function ProfileCard({ profile, canLock, onVerify, onNote, onLock }: ProfileCard
               <p className="text-xs text-foreground">{profile.operational_note}</p>
             </div>
           )}
+          {profile.protocol_reminder && (
+            <div className="flex items-start gap-1.5 p-2 bg-info/5 border border-info/20 rounded-lg">
+              <Info className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />
+              <p className="text-xs text-info">{profile.protocol_reminder}</p>
+            </div>
+          )}
 
           <p className="text-xs text-muted-foreground">Submitted by {profile.submitted_by_name} · {new Date(profile.created_at).toLocaleDateString()}</p>
 
@@ -298,6 +397,7 @@ export default function BuildingProfilesPage() {
   const [lockError, setLockError] = useState<string | null>(null);
 
   // Modal state
+  const [submitOpen,   setSubmitOpen]   = useState(false);
   const [verifyTarget, setVerifyTarget] = useState<BuildingProfileResponse | null>(null);
   const [noteTarget,   setNoteTarget]   = useState<BuildingProfileResponse | null>(null);
 
@@ -320,6 +420,10 @@ export default function BuildingProfilesPage() {
 
   function applyUpdate(updated: BuildingProfileResponse) {
     setProfiles(prev => prev.map(p => p.id === updated.id ? updated : p));
+  }
+
+  function handleCreated(profile: BuildingProfileResponse) {
+    setProfiles(prev => [profile, ...prev]);
   }
 
   async function handleLock(profile: BuildingProfileResponse) {
@@ -356,9 +460,14 @@ export default function BuildingProfilesPage() {
         title="Building Profiles"
         description="Review and verify walker-submitted building type observations"
         actions={
-          <button onClick={load} className="btn-ghost flex items-center gap-1.5 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center gap-1.5 text-sm">
+              <Plus className="w-4 h-4" /> Submit profile
+            </button>
+            <button onClick={load} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         }
       />
 
@@ -439,6 +548,12 @@ export default function BuildingProfilesPage() {
       )}
 
       {/* Modals */}
+      {submitOpen && (
+        <SubmitModal
+          onClose={() => setSubmitOpen(false)}
+          onCreated={handleCreated}
+        />
+      )}
       {verifyTarget && (
         <VerifyModal
           profile={verifyTarget}

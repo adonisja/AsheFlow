@@ -30,7 +30,6 @@ import AnchorPoints from './pages/AnchorPoints';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
 import AuditLog from './pages/AuditLog';
-import LocationProfiles from './pages/LocationProfiles';
 import SortPage from './pages/Sort';
 import WalkerSortMonitor from './pages/WalkerSort';
 import NotificationsHistory from './pages/NotificationsHistory';
@@ -417,14 +416,6 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
                   <AnchorPoints />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/location-profiles"
-              element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
-                  <LocationProfiles />
                 </ProtectedRoute>
               }
             />

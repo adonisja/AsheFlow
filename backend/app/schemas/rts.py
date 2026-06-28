@@ -223,11 +223,24 @@ class StopSignal(BaseModel):
     urgency: int         # 1 (highest) – 5 (lowest), used for sorting
 
 
+class BagGroup(BaseModel):
+    """TBA numbers grouped by their physical bag/tote container."""
+    bag_id: str
+    tba_numbers: list[str]
+
+
 class NextStopSuggestion(BaseModel):
     """One uncompleted stop entry in the next-suggestion list."""
     normalised_address: str
     block_key: str
     tba_numbers: list[str]
+    bags: list[BagGroup]           # packages grouped by bag_id for dock-side prep
     packages_total: int
     signals: list[StopSignal]
-    urgency_score: int   # sum of signal urgency values; lower = more urgent
+    urgency_score: int             # sum of signal urgency values; lower = more urgent
+    # BuildingProfile / library join — null when no profile exists for this address
+    building_type:      Optional[str] = None
+    workload_class:     Optional[str] = None
+    operational_note:   Optional[str] = None
+    protocol_reminder:  Optional[str] = None
+    has_locked_profile: bool = False

@@ -24,7 +24,7 @@ from app.services.adp_exceptions import ADPAuthError, ADPClientError, ADPServerE
 logger = logging.getLogger(__name__)
 
 allow_admin = RoleChecker(["admin"])
-allow_manager_or_admin = RoleChecker(["admin", "manager"])
+allow_manager_or_admin = RoleChecker(["admin", "management"])
 
 
 def require_adp_enabled():
@@ -226,7 +226,7 @@ async def employee_signoff(
 
     managers_and_admins = db.query(Employee).filter(
         Employee.company_id == caller.company_id,
-        Employee.role.in_(["admin", "manager"]),
+        Employee.role.in_(["admin", "management"]),
         Employee.is_active == True
     ).all()
     for person in managers_and_admins:
@@ -321,7 +321,7 @@ async def manager_sign_off(
         adjustment.is_retryable = False
         managers_and_admins = db.query(Employee).filter(
             Employee.company_id == caller.company_id,
-            Employee.role.in_(["admin", "manager"]),
+            Employee.role.in_(["admin", "management"]),
             Employee.is_active == True
         ).all()
         for person in managers_and_admins:
@@ -391,7 +391,7 @@ def reject_adjustment(
             raise HTTPException(status_code=403, detail="Only the employee on record or an admin can reject at this stage")
     
     elif adjustment.status == "pending_manager":
-        if caller.role not in ["admin", "manager"]:
+        if caller.role not in ["admin", "management"]:
             raise HTTPException(status_code=403, detail="Only a manager or admin can reject at this stage")
 
     else:
@@ -415,7 +415,7 @@ def reject_adjustment(
         # Employee disputed — notify managers/admins
         managers_and_admins = db.query(Employee).filter(
             Employee.company_id == caller.company_id,
-            Employee.role.in_(["admin", "manager"]),
+            Employee.role.in_(["admin", "management"]),
             Employee.is_active == True
         ).all()
         for person in managers_and_admins:
