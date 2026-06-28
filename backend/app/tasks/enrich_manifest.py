@@ -142,6 +142,7 @@ def _notify_dispatch(company_id: UUID, message: str, db) -> None:
         db.add(Notification(
             company_id=company_id,
             employee_id=emp.id,
+            type="manifest_enrichment",
             message=message,
             created_at=now,
         ))
