@@ -34,7 +34,7 @@ from app.services.derive_block_key import derive_block_key, ParsedBlock
 
 logger = logging.getLogger(__name__)
 
-_GEOCLIENT_BASE = "https://api.nyc.gov/space/1/services/nyc-geo-client/api/geoclient/v2"
+_GEOCLIENT_BASE = "https://api.nyc.gov/geoclient/v2"
 _REDIS_TTL_SECONDS = 86_400   # 24 hours
 _ENRICHING_KEY_TTL = 300      # 5 min — progress key; deleted on completion
 
