@@ -483,6 +483,7 @@ function ManifestUploadPanel({
       } else if (data.status === 'failed') {
         setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
         setPhase('error');
+        setExpanded(true);
       }
     }).catch(() => {/* no manifest yet — stay idle */});
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -609,7 +610,15 @@ function ManifestUploadPanel({
               {errorMsg && (
                 <div className="flex items-start gap-2 p-3 rounded-xl bg-danger/10 border border-danger/20">
                   <AlertTriangle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
-                  <p className="text-xs text-danger">{errorMsg}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-danger">{errorMsg}</p>
+                    <button
+                      onClick={handleReset}
+                      className="mt-1.5 text-xs text-danger/70 hover:text-danger underline underline-offset-2"
+                    >
+                      Dismiss and start over
+                    </button>
+                  </div>
                 </div>
               )}
               <div className="flex flex-wrap items-end gap-3">
