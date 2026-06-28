@@ -8,8 +8,8 @@ Flow:
   5. Failed packages collected; dispatch notified with TBA + raw address + reason
   6. On completion: dispatch notified "manifest sort-ready"
 
-GeoClient: NYC Department of City Planning free API.
-Docs: https://api.nyc.gov/space/1/services/nyc-geo-client/docs
+GeoClient: NYC Department of City Planning free API (v2).
+Auth: Ocp-Apim-Subscription-Key HTTP header — get key from api-portal.nyc.gov ("Geoclient - v2" product).
 Endpoint: GET /geoclient/v2/address.json?houseNumber=411&street=W+36+St&borough=manhattan
 """
 
@@ -62,7 +62,7 @@ class GeoClientResult:
 def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientResult | None:
     """Call GeoClient v2 address endpoint; return enriched location data or None.
 
-    v2 auth uses subscription-key as a query param (not app_id + app_key).
+    v2 auth: Ocp-Apim-Subscription-Key HTTP header (not query param; app_id/app_key are v1 only).
     Returns None when key is unset — caller falls back to raw address parsing.
     """
     if not settings.geoclient_app_key:
@@ -77,10 +77,12 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
         resp = requests.get(
             f"{_GEOCLIENT_BASE}/address.json",
             params={
-                "houseNumber":     house,
-                "street":          street,
-                "borough":         borough,
-                "subscription-key": settings.geoclient_app_key,
+                "houseNumber": house,
+                "street":      street,
+                "borough":     borough,
+            },
+            headers={
+                "Ocp-Apim-Subscription-Key": settings.geoclient_app_key,
             },
             timeout=5,
         )

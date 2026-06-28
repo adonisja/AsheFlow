@@ -83,11 +83,16 @@ class Settings(BaseSettings):
     # Default is 1095 (3 years); set to 0 to disable automatic purge.
     operational_record_retention_days: int = 1095
 
-    # NYC GeoClient API — used for address enrichment at manifest ingestion time.
-    # Register at https://api.nyc.gov/  (free, requires NYC account).
-    # Leave unset in development/test; enrichment task will skip GeoClient calls.
-    geoclient_app_id: str = ""
+    # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
+    # Register at https://api.nyc.gov/ (free, requires NYC account).
+    # v2 auth: subscription-key query param only — no app_id needed.
+    # Leave unset in development/test; enrichment falls back to raw address parsing.
     geoclient_app_key: str = ""
+
+    # If the fraction of packages that fail GeoClient enrichment exceeds this
+    # threshold, the task marks the manifest as "failed" (not "ready") so that
+    # sort is blocked rather than silently running on unusable data.
+    geoclient_failure_threshold: float = 0.80
 
     # Fernet key for encrypting trainee credentials (flex email, clock-in code).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
