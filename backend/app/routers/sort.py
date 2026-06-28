@@ -1,6 +1,6 @@
 """Sort router — manifest sort pipeline endpoints.
 
-POST /sort/upload            — upload CSV/XLSX manifest, trigger async enrichment
+POST /sort/upload            — upload CSV/XLSX/PDF/image manifest, trigger async enrichment
 GET  /sort/manifest/{date}/status — poll enrichment status (ready / enriching / not_found)
 POST /sort/run               — run the full sort pipeline for a given date
 GET  /sort/{date}            — fetch existing zone results for a date
@@ -32,7 +32,7 @@ from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.truck_zone import TruckZone
 from app.models.walker_route import RouteClusterCentroid
-from app.services.manifest_ingestor import FileManifestIngestor, IngestResult
+from app.services.manifest_ingestor import FileManifestIngestor, ImageManifestIngestor, IngestResult
 from app.services.run_sort import run_sort, SortError
 from app.services.seed_manifest import generate_manifest
 from app.tasks.enrich_manifest import enrich_manifest_packages
@@ -126,6 +126,7 @@ class ManifestStatusResponse(BaseModel):
     status: str             # "ready" | "enriching" | "failed" | "not_found"
     package_count: int      # 0 when not_found, enriching, or failed
     failed_count: int       # packages that could not be enriched (block_key=None)
+    failed_reason: str | None = None  # human-readable failure cause when status="failed"
 
 
 # ── Borough inference ─────────────────────────────────────────────────────────
@@ -195,8 +196,9 @@ def upload_manifest(
     _: dict = Depends(allow_sort),
     db: Session = Depends(get_db),
 ):
-    """Upload a CSV or XLSX manifest file and trigger async address enrichment.
+    """Upload a manifest file and trigger async address enrichment.
 
+    Accepts CSV, XLSX, XLS (tabular) or PDF, JPG, PNG (Textract OCR path).
     The file is parsed immediately (synchronous) to validate it and get a
     package count.  Address enrichment (GeoClient calls + block_key derivation)
     runs asynchronously via Celery.  Poll GET /sort/manifest/{date}/status to
@@ -206,10 +208,12 @@ def upload_manifest(
     used as the Redis cache key so run_sort() can find the enriched packages.
     """
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    if ext not in ("csv", "xlsx", "xls"):
+    _IMAGE_EXTS = {"pdf", "jpg", "jpeg", "png"}
+    _SHEET_EXTS = {"csv", "xlsx", "xls"}
+    if ext not in _SHEET_EXTS | _IMAGE_EXTS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Unsupported file type. Upload a CSV or XLSX file.",
+            detail="Unsupported file type. Upload a CSV, XLSX, PDF, JPG, or PNG file.",
         )
 
     # Enforce size limit before writing to disk
@@ -220,18 +224,35 @@ def upload_manifest(
             detail=f"File exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
         )
 
-    # Write to a temp file so FileManifestIngestor can read it by path
-    suffix = f".{ext}"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    try:
-        tmp.write(contents)
-        tmp.flush()
-        tmp.close()
-        result: IngestResult = FileManifestIngestor(tmp.name).ingest()
-    finally:
-        os.unlink(tmp.name)
+    if ext in _IMAGE_EXTS:
+        try:
+            result: IngestResult = ImageManifestIngestor(contents).ingest()
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Image parsing (Textract) is not available in this environment.",
+            ) from exc
+    else:
+        # Write to a temp file so FileManifestIngestor can read it by path
+        suffix = f".{ext}"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            tmp.write(contents)
+            tmp.flush()
+            tmp.close()
+            result = FileManifestIngestor(tmp.name).ingest()
+        finally:
+            os.unlink(tmp.name)
 
     if not result.packages and not result.pending:
+        logger.warning(
+            "manifest_ingest_empty",
+            extra={
+                "company_id": str(caller.company_id),
+                "sort_date":  sort_date.isoformat(),
+                "filename":   file.filename,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="No packages could be parsed from the file. Check column headers.",
@@ -317,8 +338,30 @@ def get_manifest_status(
     raw = r.get(_manifest_key(cid_str, date_str))
 
     if raw is not None:
-        packages = json.loads(raw)
+        try:
+            packages = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "manifest_cache_corrupt",
+                extra={"company_id": cid_str, "sort_date": date_str, "error": str(exc)[:200]},
+            )
+            return ManifestStatusResponse(
+                sort_date=sort_date,
+                status="failed",
+                package_count=0,
+                failed_count=0,
+                failed_reason="Manifest data in cache is corrupted — re-upload the file.",
+            )
         failed_count = sum(1 for p in packages if p.get("block_key") is None)
+        logger.info(
+            "manifest_status_ready",
+            extra={
+                "company_id":   cid_str,
+                "sort_date":    date_str,
+                "package_count": len(packages),
+                "failed_count": failed_count,
+            },
+        )
         return ManifestStatusResponse(
             sort_date=sort_date,
             status="ready",
@@ -335,11 +378,17 @@ def get_manifest_status(
         )
 
     if failed_reason:
+        human_reason = (
+            "GeoClient API key is not configured on the server — contact your admin."
+            if "no_api_key" in failed_reason
+            else f"Enrichment failed: {failed_reason.replace('_', ' ')}."
+        )
         return ManifestStatusResponse(
             sort_date=sort_date,
             status="failed",
             package_count=0,
             failed_count=0,
+            failed_reason=human_reason,
         )
 
     return ManifestStatusResponse(
@@ -559,6 +608,134 @@ def get_sort_status(
     )
 
 
+# ── Tote / TBA reassignment ───────────────────────────────────────────────────
+
+class TbaReassignRequest(BaseModel):
+    """Move a set of TBA numbers from one TruckZone to another.
+
+    Used when dispatch physically moves a tote (or individual packages) from
+    one truck to another after the sort has already been committed.  The caller
+    supplies the TBA numbers to move — not the tote_id, which is not persisted
+    in TruckZone — and the destination zone id.
+    """
+    tba_numbers:         list[str]
+    destination_zone_id: UUID
+
+
+class TbaReassignResponse(BaseModel):
+    source_zone_id:      UUID
+    destination_zone_id: UUID
+    moved_tbas:          list[str]
+    source_remaining:    int
+    destination_total:   int
+
+
+@router.post(
+    "/zones/{zone_id}/reassign-tbas",
+    response_model=TbaReassignResponse,
+    status_code=status.HTTP_200_OK,
+)
+def reassign_tbas(
+    zone_id: UUID,
+    body: TbaReassignRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+    db: Session = Depends(get_db),
+):
+    """Move TBA numbers from one TruckZone to another after sort has run.
+
+    Dispatch uses this when a tote is physically moved between trucks at the
+    anchor point — e.g. an overflow bag was placed on the wrong truck.
+    Both zones must belong to the same company and be active.
+    Only TBAs actually present in the source zone are moved; any unknown TBAs
+    in the request are silently ignored.
+    """
+    if not body.tba_numbers:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="tba_numbers must not be empty.",
+        )
+
+    source = (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.id == zone_id,
+            TruckZone.company_id == caller.company_id,
+            TruckZone.is_active.is_(True),
+        )
+        .first()
+    )
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source zone not found.")
+
+    destination = (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.id == body.destination_zone_id,
+            TruckZone.company_id == caller.company_id,
+            TruckZone.is_active.is_(True),
+        )
+        .first()
+    )
+    if not destination:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destination zone not found.")
+    if source.id == destination.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Source and destination zones must be different.",
+        )
+
+    source_zone_tbas: list[str] = list(source.package_tbas or [])
+    dest_zone_tbas:   list[str] = list(destination.package_tbas or [])
+    requested_tbas = set(body.tba_numbers)
+    tbas_to_move = [tba for tba in source_zone_tbas if tba in requested_tbas]
+
+    if not tbas_to_move:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="None of the supplied TBA numbers are present in the source zone.",
+        )
+
+    tbas_to_move_set = set(tbas_to_move)
+    updated_source_tbas = [tba for tba in source_zone_tbas if tba not in tbas_to_move_set]
+    updated_dest_tbas   = dest_zone_tbas + tbas_to_move
+
+    source.package_tbas      = updated_source_tbas
+    destination.package_tbas = updated_dest_tbas
+
+    db.add(AuditLog(
+        company_id    = caller.company_id,
+        actor_id      = caller.id,
+        action_type   = "sort.tba_reassign",
+        target_table  = "truck_zones",
+        target_id     = source.id,
+        after_snapshot = {
+            "source_zone_id":      str(source.id),
+            "destination_zone_id": str(destination.id),
+            "moved_tbas":          tbas_to_move,
+        },
+    ))
+    db.commit()
+
+    logger.info(
+        "tba_reassign",
+        extra={
+            "company_id":          str(caller.company_id),
+            "source_zone_id":      str(source.id),
+            "destination_zone_id": str(destination.id),
+            "moved_count":         len(tbas_to_move),
+        },
+    )
+
+    return TbaReassignResponse(
+        source_zone_id      = source.id,
+        destination_zone_id = destination.id,
+        moved_tbas          = tbas_to_move,
+        source_remaining    = len(updated_source_tbas),
+        destination_total   = len(updated_dest_tbas),
+    )
+
+
 # ── Seed manifest (admin-only dev tool) ───────────────────────────────────────
 
 class SeedManifestPackagePreview(BaseModel):
@@ -571,14 +748,16 @@ class SeedManifestPackagePreview(BaseModel):
 
 
 class SeedManifestResponse(BaseModel):
-    sort_date:     date
-    package_count: int
-    tote_count:    int
-    ov_count:      int
-    truck_count:   int
-    truck_names:   list[str]
-    preview_rows:  list[SeedManifestPackagePreview]   # first 20 rows for in-browser review
-    csv_b64:       str                                 # base64-encoded CSV for the upload step
+    sort_date:         date
+    package_count:     int
+    tote_count:        int
+    ov_count:          int
+    out_of_zone_count: int
+    misrouted_count:   int
+    truck_count:       int
+    truck_names:       list[str]
+    preview_rows:      list[SeedManifestPackagePreview]
+    csv_b64:           str
 
 
 @router.post(
@@ -593,7 +772,7 @@ def seed_manifest(
     _: dict = Depends(allow_admin),
     db: Session = Depends(get_db),
 ):
-    """Generate a 1 500-package synthetic manifest for end-to-end pipeline testing.
+    """Generate a synthetic manifest (10 000–13 000 packages) for end-to-end pipeline testing.
 
     Only callable by admin role.  Requires that truck dispatch has already run for
     the requested date (at least one TruckAssignment must exist) so the caller
@@ -642,12 +821,14 @@ def seed_manifest(
     ]
 
     return SeedManifestResponse(
-        sort_date     = sort_date,
-        package_count = result.package_count,
-        tote_count    = result.tote_count,
-        ov_count      = result.ov_count,
-        truck_count   = len(assignment_rows),
-        truck_names   = truck_names,
-        preview_rows  = preview,
-        csv_b64       = base64.b64encode(result.csv_bytes).decode("ascii"),
+        sort_date         = sort_date,
+        package_count     = result.package_count,
+        tote_count        = result.tote_count,
+        ov_count          = result.ov_count,
+        out_of_zone_count = result.out_of_zone_count,
+        misrouted_count   = result.misrouted_count,
+        truck_count       = len(assignment_rows),
+        truck_names       = truck_names,
+        preview_rows      = preview,
+        csv_b64           = base64.b64encode(result.csv_bytes).decode("ascii"),
     )

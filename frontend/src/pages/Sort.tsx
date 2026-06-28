@@ -463,16 +463,16 @@ function ManifestUploadPanel({
   today: string;
   onReady: () => void;
 }) {
-  const [phase, setPhase]         = useState<UploadPhase>('idle');
-  const [uploadDate, setUploadDate] = useState(today);
-  const [file, setFile]           = useState<File | null>(null);
+  const [phase, setPhase]               = useState<UploadPhase>('idle');
+  const [uploadDate, setUploadDate]     = useState(today);
+  const [file, setFile]                 = useState<File | null>(null);
   const [packageCount, setPackageCount] = useState(0);
   const [failedCount, setFailedCount]   = useState(0);
-  const [warnings, setWarnings]   = useState<string[]>([]);
-  const [errorMsg, setErrorMsg]   = useState<string | null>(null);
-  const [expanded, setExpanded]   = useState(false);
-  const fileRef                   = useRef<HTMLInputElement>(null);
-  const pollRef                   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [warnings, setWarnings]         = useState<string[]>([]);
+  const [errorMsg, setErrorMsg]         = useState<string | null>(null);
+  const [expanded, setExpanded]         = useState(false);
+  const fileRef                         = useRef<HTMLInputElement>(null);
+  const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
@@ -487,14 +487,15 @@ function ManifestUploadPanel({
           setPackageCount(data.package_count);
           setFailedCount(data.failed_count ?? 0);
           setPhase('ready');
+          setExpanded(false);  // collapse when done — sort is runnable
           onReady();
         } else if (data.status === 'failed') {
           stopPoll();
-          setErrorMsg('Enrichment failed — check server logs.');
+          setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
           setPhase('error');
         }
       } catch {
-        // transient — keep polling
+        // transient network hiccup — keep polling
       }
     }, 5_000);
   };
@@ -504,6 +505,7 @@ function ManifestUploadPanel({
     setPhase('uploading');
     setErrorMsg(null);
     setWarnings([]);
+    setExpanded(true);  // auto-expand so user sees progress
     try {
       const form = new FormData();
       form.append('file', file);
@@ -533,38 +535,57 @@ function ManifestUploadPanel({
     if (fileRef.current) fileRef.current.value = '';
   };
 
+  // Border colour reflects state
+  const borderClass =
+    phase === 'error'     ? 'border-danger/40 bg-danger/5' :
+    phase === 'ready'     ? 'border-success/40 bg-success/5' :
+    phase === 'enriching' ? 'border-primary/40 bg-primary/5' :
+                            'border-border bg-surface-muted/30';
+
+  const headerSubtext =
+    phase === 'idle'      ? "Upload the Amazon manifest CSV for today's sort." :
+    phase === 'uploading' ? 'Uploading and parsing…' :
+    phase === 'enriching' ? `Geocoding ${packageCount.toLocaleString()} packages — polling every 5 s…` :
+    phase === 'ready'     ? `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — run sort below.` :
+                            (errorMsg ?? 'Upload failed.');
+
   return (
-    <div className="rounded-2xl border border-primary/30 bg-primary/5 overflow-hidden">
-      {/* Header */}
+    <div className={`rounded-2xl border overflow-hidden transition-colors ${borderClass}`}>
+      {/* Header — always visible */}
       <button
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-primary/5 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-black/5 transition-colors text-left"
         onClick={() => setExpanded(v => !v)}
       >
-        <Upload className="w-5 h-5 text-primary shrink-0" />
+        {phase === 'enriching'
+          ? <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
+          : phase === 'error'
+          ? <AlertTriangle className="w-5 h-5 text-danger shrink-0" />
+          : phase === 'ready'
+          ? <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
+          : <Upload className="w-5 h-5 text-muted-foreground shrink-0" />}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-foreground">Upload Production Manifest</p>
-          <p className="text-xs text-muted-foreground">
-            {phase === 'idle'   && 'Upload the Amazon manifest CSV for today\'s sort.'}
-            {phase === 'uploading' && 'Uploading and parsing…'}
-            {phase === 'enriching' && `Enriching ${packageCount.toLocaleString()} packages — geocoding in background…`}
-            {phase === 'ready'  && `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed enrichment` : ''} — run sort below.`}
-            {phase === 'error'  && (errorMsg ?? 'Upload failed.')}
+          <p className={`text-xs truncate ${phase === 'error' ? 'text-danger' : phase === 'ready' ? 'text-success' : 'text-muted-foreground'}`}>
+            {headerSubtext}
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {phase === 'ready'     && <CheckCircle2 className="w-4 h-4 text-success" />}
-          {phase === 'enriching' && <Loader2 className="w-4 h-4 text-primary animate-spin" />}
-          {phase === 'error'     && <AlertTriangle className="w-4 h-4 text-danger" />}
-          {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-        </div>
+        {expanded
+          ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" />
+          : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
       </button>
 
       {expanded && (
-        <div className="border-t border-primary/20 px-4 py-3 space-y-3">
+        <div className="border-t border-border/50 px-4 py-3 space-y-3">
 
           {/* idle / error — show form */}
           {(phase === 'idle' || phase === 'error') && (
             <div className="space-y-3">
+              {errorMsg && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-danger/10 border border-danger/20">
+                  <AlertTriangle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                  <p className="text-xs text-danger">{errorMsg}</p>
+                </div>
+              )}
               <div className="flex flex-wrap items-end gap-3">
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Sort date</label>
@@ -592,7 +613,6 @@ function ManifestUploadPanel({
                   {file.name} · {(file.size / 1024).toFixed(0)} KB
                 </div>
               )}
-              {errorMsg && <p className="text-xs text-danger font-medium">{errorMsg}</p>}
               <button
                 onClick={handleUpload}
                 disabled={!file}
@@ -614,18 +634,23 @@ function ManifestUploadPanel({
 
           {/* enriching */}
           {phase === 'enriching' && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-sm text-foreground">
-                <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
-                <span>Geocoding {packageCount.toLocaleString()} packages — polling every 5 s…</span>
-              </div>
-              {warnings.length > 0 && (
-                <div className="space-y-0.5">
-                  {warnings.map((w, i) => (
-                    <p key={i} className="text-xs text-warning">{w}</p>
-                  ))}
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Geocoding in progress</span>
+                  <span>{packageCount.toLocaleString()} packages</span>
                 </div>
-              )}
+                {/* Indeterminate progress bar */}
+                <div className="h-1.5 rounded-full bg-accent overflow-hidden">
+                  <div className="h-full w-1/3 bg-primary rounded-full"
+                       style={{ animation: 'slide 1.5s ease-in-out infinite' }} />
+                </div>
+              </div>
+              {warnings.length > 0 && warnings.map((w, i) => (
+                <p key={i} className="text-xs text-warning flex items-start gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
+                </p>
+              ))}
               <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                 <X className="w-3.5 h-3.5" /> Cancel
               </button>
@@ -638,16 +663,16 @@ function ManifestUploadPanel({
               <div className="flex items-center gap-2 text-sm text-success font-medium">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 {packageCount.toLocaleString()} packages enriched and ready.
-                {failedCount > 0 && <span className="text-warning font-normal"> ({failedCount} failed geocoding — will be dropped.)</span>}
+                {failedCount > 0 && (
+                  <span className="text-warning font-normal">({failedCount} failed geocoding — will be dropped from sort.)</span>
+                )}
               </div>
-              {warnings.length > 0 && (
-                <div className="space-y-0.5">
-                  {warnings.map((w, i) => (
-                    <p key={i} className="text-xs text-warning">{w}</p>
-                  ))}
-                </div>
-              )}
-              <p className="text-xs text-muted-foreground">Run sort below on each truck to commit routes.</p>
+              {warnings.length > 0 && warnings.map((w, i) => (
+                <p key={i} className="text-xs text-warning flex items-start gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
+                </p>
+              ))}
+              <p className="text-xs text-muted-foreground">Use the truck panels below to commit routes.</p>
               <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                 <X className="w-3.5 h-3.5" /> Upload a different file
               </button>
@@ -836,9 +861,16 @@ function TruckSortPanel({
                 {commitLoading ? 'Running sort…' : 'Run & Commit Sort'}
               </button>
             ) : (
-              <div className="text-xs text-muted-foreground">
-                {state.routes.length} routes committed · {pkgCount} packages
-                {state.packages_dropped > 0 && ` · ${state.packages_dropped} packages dropped`}
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">
+                  {state.routes.length} routes committed · {pkgCount} packages
+                </div>
+                {state.packages_dropped > 0 && (
+                  <div className="flex items-center gap-1.5 text-xs text-warning">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {state.packages_dropped} package{state.packages_dropped === 1 ? '' : 's'} dropped — TBAs not found in enriched manifest. Check notifications.
+                  </div>
+                )}
               </div>
             )}
           </div>

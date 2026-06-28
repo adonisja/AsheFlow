@@ -15,6 +15,7 @@ Endpoint: GET /geoclient/v2/address.json?houseNumber=411&street=W+36+St&borough=
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -59,8 +60,12 @@ class GeoClientResult:
 
 
 def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientResult | None:
-    """Call GeoClient address endpoint; return enriched location data or None."""
-    if not settings.geoclient_app_id or not settings.geoclient_app_key:
+    """Call GeoClient v2 address endpoint; return enriched location data or None.
+
+    v2 auth uses subscription-key as a query param (not app_id + app_key).
+    Returns None when key is unset — caller falls back to raw address parsing.
+    """
+    if not settings.geoclient_app_key:
         return None
 
     parsed = _parse_house_and_street(address)
@@ -72,11 +77,10 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
         resp = requests.get(
             f"{_GEOCLIENT_BASE}/address.json",
             params={
-                "houseNumber": house,
-                "street": street,
-                "borough": borough,
-                "app_id": settings.geoclient_app_id,
-                "app_key": settings.geoclient_app_key,
+                "houseNumber":     house,
+                "street":          street,
+                "borough":         borough,
+                "subscription-key": settings.geoclient_app_key,
             },
             timeout=5,
         )
@@ -185,7 +189,22 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
     failed: list[dict] = []
     ov_packages: list[dict] = []   # OV packages with full context for dock-side cross-reference
 
-    for pkg in packages:
+    total_packages = len(packages)
+    t_start = time.monotonic()
+    log_interval = max(500, total_packages // 10)  # log every 10% or every 500, whichever is larger
+
+    logger.info(
+        "enrich_manifest_packages started",
+        extra={
+            "company_id": company_id,
+            "sort_date":  sort_date,
+            "total":      total_packages,
+            "borough":    borough,
+            "geoclient":  bool(settings.geoclient_app_key),
+        },
+    )
+
+    for i, pkg in enumerate(packages, 1):
         address = pkg.get("address") or ""
         tba = pkg.get("tba", "unknown")
 
@@ -213,7 +232,16 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                 try:
                     geo = _geoclient_normalise(address, borough=borough)
                     break
-                except Exception:
+                except Exception as geo_exc:
+                    logger.warning(
+                        "geoclient_retry",
+                        extra={
+                            "attempt": attempt + 1,
+                            "tba": tba,
+                            "error_type": type(geo_exc).__name__,
+                            "error": str(geo_exc)[:120],
+                        },
+                    )
                     if attempt == 2:
                         failure_reason = "geoclient_error"
 
@@ -230,6 +258,12 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                     failure_reason = result.reason
         else:
             failure_reason = "missing_address"
+
+        if failure_reason:
+            logger.debug(
+                "package_enrich_failed",
+                extra={"tba": tba, "reason": failure_reason},
+            )
 
         # GeoClient lat/lng is primary. Fall back to Amazon-supplied coordinates only
         # when GeoClient returns no lat/lng (API down, address outside coverage, etc.).
@@ -260,6 +294,54 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                 "raw_address": address,
                 "reason": failure_reason,
             })
+
+        if i % log_interval == 0 or i == total_packages:
+            elapsed = time.monotonic() - t_start
+            logger.info(
+                "enrich_manifest_progress",
+                extra={
+                    "company_id": company_id,
+                    "sort_date":  sort_date,
+                    "processed":  i,
+                    "total":      total_packages,
+                    "failed_so_far": len(failed),
+                    "elapsed_s":  round(elapsed, 1),
+                },
+            )
+
+    # Block sort if too many packages failed enrichment — unusable data is worse
+    # than a clear error. Only trigger when we have at least 10 packages to avoid
+    # false positives on tiny test uploads.
+    total = len(packages)
+    if total >= 10 and failed:
+        fail_pct = len(failed) / total
+        threshold = settings.geoclient_failure_threshold
+        if fail_pct > threshold:
+            reason = (
+                f"enrichment_threshold_exceeded:{len(failed)}/{total}_failed"
+                + ("_no_api_key" if not settings.geoclient_app_key else "")
+            )
+            r.setex(_failed_key, _REDIS_TTL_SECONDS, reason)
+            # Notify dispatch with the actionable reason
+            db = SessionLocal()
+            try:
+                cid = UUID(company_id)
+                key_hint = " GeoClient API key is not configured." if not settings.geoclient_app_key else ""
+                _notify_dispatch(
+                    cid,
+                    f"Manifest enrichment failed for {sort_date}: "
+                    f"{len(failed)}/{total} packages could not be geocoded ({fail_pct:.0%}).{key_hint} "
+                    f"Sort is blocked — fix the issue and re-upload.",
+                    db,
+                )
+            finally:
+                db.close()
+            logger.error(
+                "enrich_manifest_packages: failure threshold exceeded",
+                extra={"company_id": company_id, "date": sort_date,
+                       "failed": len(failed), "total": total, "pct": fail_pct},
+            )
+            return {"total": total, "enriched": total - len(failed), "failed": len(failed), "threshold_exceeded": True}
 
     # Cache enriched packages in Redis
     key = _manifest_key(company_id, sort_date)
@@ -293,7 +375,6 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
                 db,
             )
 
-        total = len(packages)
         ok = total - len(failed)
         _notify_dispatch(
             cid,
@@ -305,9 +386,17 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
     finally:
         db.close()
 
+    elapsed_total = round(time.monotonic() - t_start, 1)
     logger.info(
         "enrich_manifest_packages complete",
-        extra={"company_id": company_id, "date": sort_date, "total": len(packages), "failed": len(failed)},
+        extra={
+            "company_id": company_id,
+            "date":       sort_date,
+            "total":      total_packages,
+            "enriched":   total_packages - len(failed),
+            "failed":     len(failed),
+            "elapsed_s":  elapsed_total,
+        },
     )
 
-    return {"total": len(packages), "enriched": len(packages) - len(failed), "failed": len(failed)}
+    return {"total": total_packages, "enriched": total_packages - len(failed), "failed": len(failed)}

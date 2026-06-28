@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
 import openpyxl
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -194,7 +197,16 @@ class APIManifestIngestor(ManifestIngestor):
                     lat=lat,
                     lng=lng,
                 ))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "manifest_row_parse_failed",
+                    extra={
+                        "ingestor": "api",
+                        "row_index": i,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:120],
+                    },
+                )
                 continue
 
         counts = _extract_header_counts(self.packages)
@@ -252,7 +264,16 @@ class FileManifestIngestor(ManifestIngestor):
                     lat=lat,
                     lng=lng,
                 ))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "manifest_row_parse_failed",
+                    extra={
+                        "ingestor": "file",
+                        "row_index": i,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:120],
+                    },
+                )
                 continue
 
         counts = _extract_header_counts(rows)
@@ -425,7 +446,16 @@ class ImageManifestIngestor(ManifestIngestor):
                     lat=lat,
                     lng=lng,
                 ))
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "manifest_row_parse_failed",
+                    extra={
+                        "ingestor": "image",
+                        "row_index": i,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:120],
+                    },
+                )
                 continue
 
         counts = _extract_header_counts(rows)
