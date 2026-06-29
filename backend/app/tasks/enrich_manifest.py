@@ -42,14 +42,28 @@ _ENRICHING_KEY_TTL = 300      # 5 min — progress key; deleted on completion
 # ── GeoClient helpers ─────────────────────────────────────────────────────────
 
 def _parse_house_and_street(address: str) -> tuple[str, str] | None:
-    """Split '411 W 36 St' into ('411', 'W 36 St').  Returns None if unparseable."""
+    """Split '411 W 36 St' or '47-10 Vernon Blvd' into (house, street).
+
+    Accepts plain integers, fractional house numbers (411/2), and the
+    Queens/outer-borough hyphenated format (47-10) where the hyphen is
+    part of the house number, not a range separator.
+    """
     parts = address.strip().split(None, 1)
     if len(parts) != 2:
         return None
     house, street = parts
-    if not house.rstrip("-").replace("/", "").isdigit():
-        return None
-    return house, street
+    # Strip trailing hyphen/slash artifacts then validate:
+    #   plain:      "411"    → isdigit() → True
+    #   fractional: "411/2"  → replace("/","") → "4112" → isdigit() → True
+    #   hyphenated: "47-10"  → split("-") → ["47","10"] → all digit parts → True
+    cleaned = house.rstrip("-").replace("/", "")
+    if cleaned.isdigit():
+        return house, street
+    # Queens-style hyphenated house number: digits-digits (e.g. 47-10, 136-20)
+    hyphen_parts = cleaned.split("-")
+    if len(hyphen_parts) == 2 and all(p.isdigit() for p in hyphen_parts):
+        return house, street
+    return None
 
 
 @dataclass
