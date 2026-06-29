@@ -111,6 +111,9 @@ SERVICES=(
   score_phase4.py
   seed_manifest.py
   derive_block_key.py
+  tier1_verify.py
+  run_sort.py
+  persist_zones.py
 )
 
 echo ""
@@ -220,6 +223,9 @@ CI clones the branch that matches the environment it is deploying to.
 - `backend/app/services/ban_override.py`
 - `backend/app/services/route_sort.py`
 - `backend/app/services/score_phase4.py`
+- `backend/app/services/tier1_verify.py`
+- `backend/app/services/run_sort.py`
+- `backend/app/services/persist_zones.py`
 EOF
 
   cat > .gitignore << 'EOF'
