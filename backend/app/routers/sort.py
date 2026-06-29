@@ -746,6 +746,20 @@ def run_sort_endpoint(
     # Pre-write worker_unreachable so status returns "error" if the task is never picked up
     r.setex(_failed_key(cid_str, date_str, task_id), _REDIS_TTL_SECONDS, json.dumps({"detail": "worker_unreachable"}))
 
+    # Strip raw_address from every package before sort runs — it served its purpose
+    # in the dispatch correction window and must not persist beyond this point.
+    manifest_key = _manifest_key(cid_str, date_str)
+    manifest_raw = r.get(manifest_key)
+    if manifest_raw:
+        try:
+            packages = json.loads(manifest_raw)
+            for pkg in packages:
+                pkg.pop("raw_address", None)
+            ttl = r.ttl(manifest_key)
+            r.setex(manifest_key, max(ttl, _REDIS_TTL_SECONDS), json.dumps(packages))
+        except (json.JSONDecodeError, AttributeError):
+            pass  # manifest already gone or malformed — sort will surface the error
+
     overrides_raw = [{"bag_id": ov.bag_id, "truck_id": str(ov.truck_id)} for ov in body.overrides]
 
     run_zone_sort.delay(
