@@ -1396,7 +1396,7 @@ def upsert_company_zone(
         target_id=str(zone.id),
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
-        detail={"sw_lat": body.sw_lat, "sw_lng": body.sw_lng, "ne_lat": body.ne_lat, "ne_lng": body.ne_lng},
+        after={"sw_lat": body.sw_lat, "sw_lng": body.sw_lng, "ne_lat": body.ne_lat, "ne_lng": body.ne_lng},
     )
     db.commit()
     db.refresh(zone)
@@ -1504,7 +1504,7 @@ def upsert_company_zone_from_streets(
         target_id=str(zone.id),
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
-        detail={
+        after={
             "from_street": from_st, "to_street": to_st,
             "from_avenue": from_av, "to_avenue": to_av,
             "sw_lat": sw_lat, "sw_lng": sw_lng,
