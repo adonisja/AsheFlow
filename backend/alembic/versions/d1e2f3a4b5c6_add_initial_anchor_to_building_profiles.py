@@ -1,15 +1,17 @@
 """add initial anchor point fields to building_profiles
 
-Revision ID: a4b5c6d7e8f9
+Revision ID: d1e2f3a4b5c6
 Revises: z3a4b5c6d7e8
-Create Date: 2026-06-28
+Create Date: 2026-06-29
 
+Renamed from a4b5c6d7e8f9 which collided with the pre-existing
+a4b5c6d7e8f9_add_dispatch_confirmation_cutoff_to_company_config migration.
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-revision = 'a4b5c6d7e8f9'
+revision = 'd1e2f3a4b5c6'
 down_revision = 'z3a4b5c6d7e8'
 branch_labels = None
 depends_on = None
