@@ -34,16 +34,15 @@ from uuid import UUID
 import pytest
 
 # Proprietary services are only present locally and on EC2 (injected at deploy time).
-# Skip the entire module on CI rather than failing collection.
-tier1_verify_mod = pytest.importorskip(
-    "app.services.tier1_verify",
-    reason="app.services.tier1_verify not available (proprietary — CI skip)",
-)
-
-from app.services.assign_clusters import assign_clusters, AssignmentProposal, ClusterAssignment
-from app.services.cluster_packages import cluster_packages, Cluster, ClusterResult, BoundingBox
-from app.services.tier1_verify import BagOverride, BagResult, tier1_verify, VerificationResult
-from app.services.persist_zones import persist_zones
+# The public repo ships the old tier1_verify without BagOverride — skip the entire
+# module at collection time if the updated private version is not present.
+try:
+    from app.services.tier1_verify import BagOverride, BagResult, tier1_verify, VerificationResult
+    from app.services.persist_zones import persist_zones
+    from app.services.assign_clusters import assign_clusters, AssignmentProposal, ClusterAssignment
+    from app.services.cluster_packages import cluster_packages, Cluster, ClusterResult, BoundingBox
+except ImportError:
+    pytest.skip("proprietary sort services not available (CI skip)", allow_module_level=True)
 
 
 # ---------------------------------------------------------------------------
