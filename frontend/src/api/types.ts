@@ -800,7 +800,19 @@ export interface ManifestPreviewResponse {
   total_packages: number;
   enriched_count: number;
   failed_count: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
   preview_rows: ManifestPreviewRow[];
+}
+
+export interface ManifestPackagePatchResponse {
+  tba: string;
+  normalised_address: string | null;
+  block_key: string | null;
+  lat: number | null;
+  lng: number | null;
+  enriched: boolean;
 }
 
 export interface SortPreviewAssignment {

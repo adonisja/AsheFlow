@@ -17,7 +17,8 @@ import type {
   ArrivalConfirmResponse, MisroutedPackageOut,
   WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
   SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride,
-  ManifestPreviewResponse, SortPreviewResponse,
+  ManifestPreviewResponse, ManifestPreviewRow, ManifestPackagePatchResponse,
+  SortPreviewResponse,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -439,21 +440,108 @@ function RouteCard({
 }
 
 // ---------------------------------------------------------------------------
+// Inline address editor for a single failed package row
+// ---------------------------------------------------------------------------
+
+function PackageAddressEditor({
+  row,
+  sortDate,
+  onPatched,
+}: {
+  row: ManifestPreviewRow;
+  sortDate: string;
+  onPatched: (updated: ManifestPackagePatchResponse) => void;
+}) {
+  const [editing, setEditing]   = useState(false);
+  const [address, setAddress]   = useState('');
+  const [saving, setSaving]     = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => { setAddress(''); setSaveError(null); setEditing(true); }}
+        className="text-[10px] text-primary hover:underline ml-1"
+        title="Edit address"
+      >
+        Edit
+      </button>
+    );
+  }
+
+  const handleSave = async () => {
+    if (!address.trim()) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const { data } = await axiosClient.patch<ManifestPackagePatchResponse>(
+        `/sort/manifest/${sortDate}/package/${encodeURIComponent(row.tba)}`,
+        { corrected_address: address.trim() },
+      );
+      onPatched(data);
+      setEditing(false);
+    } catch (e: any) {
+      setSaveError(e?.response?.data?.detail ?? 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1 py-0.5">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          type="text"
+          value={address}
+          onChange={e => setAddress(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setEditing(false); }}
+          placeholder="e.g. 123 West 34 St"
+          className="input-field text-[11px] h-6 py-0 px-1.5 flex-1 min-w-0"
+        />
+        <button
+          onClick={handleSave}
+          disabled={saving || !address.trim()}
+          className="text-[10px] text-success font-semibold hover:underline disabled:opacity-40 shrink-0"
+        >
+          {saving ? '…' : 'Save'}
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
+        >
+          ✕
+        </button>
+      </div>
+      {saveError && <p className="text-[10px] text-danger">{saveError}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Manifest preview panel — shown after enrichment is ready
 // ---------------------------------------------------------------------------
 
-function ManifestPreviewPanel({ today }: { today: string }) {
-  const [preview, setPreview]   = useState<ManifestPreviewResponse | null>(null);
-  const [loading, setLoading]   = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [error, setError]       = useState<string | null>(null);
+function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
+  const [preview, setPreview]     = useState<ManifestPreviewResponse | null>(null);
+  const [loading, setLoading]     = useState(false);
+  const [expanded, setExpanded]   = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const [page, setPage]           = useState(1);
+  const [failedOnly, setFailedOnly] = useState(false);
+  // Local overrides so patched rows update without refetching the whole page
+  const [patches, setPatches]     = useState<Record<string, ManifestPackagePatchResponse>>({});
 
-  const load = async () => {
+  const load = async (p: number, fo: boolean) => {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await axiosClient.get<ManifestPreviewResponse>(`/sort/manifest/${today}/preview`);
+      const { data } = await axiosClient.get<ManifestPreviewResponse>(
+        `/sort/manifest/${sortDate}/preview`,
+        { params: { page: p, failed_only: fo } },
+      );
       setPreview(data);
+      setPage(p);
       setExpanded(true);
     } catch (e: any) {
       const detail = e?.response?.data?.detail ?? 'Failed to load preview.';
@@ -463,78 +551,137 @@ function ManifestPreviewPanel({ today }: { today: string }) {
     }
   };
 
-  if (!preview && !error) {
+  const handleToggleFailedOnly = () => {
+    const next = !failedOnly;
+    setFailedOnly(next);
+    setPage(1);
+    load(1, next);
+  };
+
+  if (!preview && !error && !loading) {
     return (
       <button
-        onClick={load}
-        disabled={loading}
+        onClick={() => load(1, false)}
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
-        {loading
-          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading preview…</>
-          : <><FileText className="w-3.5 h-3.5" /> Preview enriched packages</>}
+        <FileText className="w-3.5 h-3.5" /> Preview enriched packages
       </button>
     );
   }
 
-  if (error) {
-    return <p className="text-xs text-warning">{error}</p>;
+  if (loading && !preview) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading preview…
+      </div>
+    );
   }
 
+  if (error) return <p className="text-xs text-warning">{error}</p>;
   if (!preview) return null;
 
   const failPct = preview.total_packages > 0
     ? Math.round((preview.failed_count / preview.total_packages) * 100)
     : 0;
 
+  const resolvedRows = preview.preview_rows.map(row =>
+    patches[row.tba] ? { ...row, ...patches[row.tba] } : row
+  );
+
   return (
     <div className="space-y-2">
-      <button
-        onClick={() => setExpanded(v => !v)}
-        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <FileText className="w-3.5 h-3.5" />
-        <span>
-          {preview.enriched_count.toLocaleString()} enriched
-          {preview.failed_count > 0 && (
-            <span className="text-warning ml-1">· {preview.failed_count} failed ({failPct}%)</span>
-          )}
-        </span>
-        {expanded ? <ChevronUp className="w-3.5 h-3.5 ml-auto" /> : <ChevronDown className="w-3.5 h-3.5 ml-auto" />}
-      </button>
+      {/* Summary row + toggle */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <FileText className="w-3.5 h-3.5" />
+          <span>
+            {preview.enriched_count.toLocaleString()} enriched
+            {preview.failed_count > 0 && (
+              <span className="text-warning ml-1">· {preview.failed_count} failed ({failPct}%)</span>
+            )}
+          </span>
+          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
+        {preview.failed_count > 0 && expanded && (
+          <button
+            onClick={handleToggleFailedOnly}
+            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+              failedOnly
+                ? 'border-warning/60 bg-warning/10 text-warning font-semibold'
+                : 'border-border text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {failedOnly ? 'Show all' : 'Failed only'}
+          </button>
+        )}
+        {loading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+      </div>
 
       {expanded && (
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full text-[11px]">
-            <thead>
-              <tr className="border-b border-border bg-accent/40">
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">TBA</th>
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Normalised address</th>
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Block key</th>
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Bag</th>
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.preview_rows.map((row, i) => (
-                <tr key={i} className={`border-b border-border/50 last:border-0 ${!row.enriched ? 'bg-warning/5' : ''}`}>
-                  <td className="px-2 py-1 font-mono text-foreground">{row.tba}</td>
-                  <td className="px-2 py-1 text-muted-foreground truncate max-w-[180px]">{row.normalised_address ?? '—'}</td>
-                  <td className="px-2 py-1 font-mono text-foreground">{row.block_key ?? '—'}</td>
-                  <td className="px-2 py-1 text-muted-foreground">{row.bag_id ?? '—'}</td>
-                  <td className="px-2 py-1">
-                    {row.enriched
-                      ? <span className="text-success font-semibold">✓</span>
-                      : <span className="text-warning font-semibold">✗</span>}
-                  </td>
+        <div className="space-y-2">
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-border bg-accent/40">
+                  <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">TBA</th>
+                  <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Normalised address</th>
+                  <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Block key</th>
+                  <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Bag</th>
+                  <th className="text-center px-2 py-1.5 text-muted-foreground font-semibold">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {preview.total_packages > 50 && (
-            <p className="text-[10px] text-muted-foreground px-2 py-1.5 border-t border-border/50">
-              Showing first 50 of {preview.total_packages.toLocaleString()} packages.
-            </p>
+              </thead>
+              <tbody>
+                {resolvedRows.map((row, i) => (
+                  <tr key={i} className={`border-b border-border/50 last:border-0 ${!row.enriched ? 'bg-warning/5' : ''}`}>
+                    <td className="px-2 py-1 font-mono text-foreground whitespace-nowrap">{row.tba}</td>
+                    <td className="px-2 py-1 text-muted-foreground">
+                      {row.enriched
+                        ? <span>{row.normalised_address ?? '—'}</span>
+                        : <PackageAddressEditor
+                            row={row}
+                            sortDate={sortDate}
+                            onPatched={updated => setPatches(prev => ({ ...prev, [row.tba]: updated }))}
+                          />
+                      }
+                    </td>
+                    <td className="px-2 py-1 font-mono text-foreground whitespace-nowrap">{row.block_key ?? '—'}</td>
+                    <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">{row.bag_id ?? '—'}</td>
+                    <td className="px-2 py-1 text-center">
+                      {row.enriched
+                        ? <span className="text-success">✓</span>
+                        : <span className="text-warning">✗</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {preview.total_pages > 1 && (
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <button
+                disabled={page <= 1 || loading}
+                onClick={() => load(page - 1, failedOnly)}
+                className="px-2 py-0.5 rounded border border-border hover:bg-accent disabled:opacity-40 transition-colors"
+              >
+                ‹ Prev
+              </button>
+              <span className="tabular-nums">
+                Page {page} of {preview.total_pages}
+                {' '}· {(failedOnly ? preview.failed_count : preview.total_packages).toLocaleString()} packages
+              </span>
+              <button
+                disabled={page >= preview.total_pages || loading}
+                onClick={() => load(page + 1, failedOnly)}
+                className="px-2 py-0.5 rounded border border-border hover:bg-accent disabled:opacity-40 transition-colors"
+              >
+                Next ›
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -553,7 +700,7 @@ function ManifestUploadPanel({
   onReady,
 }: {
   today: string;
-  onReady: () => void;
+  onReady: (uploadedDate: string) => void;
 }) {
   const [phase, setPhase]                       = useState<UploadPhase>('idle');
   const [uploadDate, setUploadDate]             = useState(today);
@@ -586,6 +733,7 @@ function ManifestUploadPanel({
         setPackageCount(data.package_count);
         setFailedCount(data.failed_count ?? 0);
         setPhase('ready');
+        onReady(today);
       } else if (data.status === 'failed') {
         setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
         setPhase('error');
@@ -613,7 +761,7 @@ function ManifestUploadPanel({
           enrichStartRef.current = null;
           setPhase('ready');
           setExpanded(false);
-          onReady();
+          onReady(sortDate);
         } else if (data.status === 'failed') {
           stopPoll();
           setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
@@ -849,7 +997,7 @@ function ManifestUploadPanel({
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
                 </p>
               ))}
-              <ManifestPreviewPanel today={uploadDate} />
+              <ManifestPreviewPanel sortDate={uploadDate} />
               <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                 <X className="w-3.5 h-3.5" /> Upload a different file
               </button>
@@ -1743,6 +1891,8 @@ export default function SortPage() {
   const [error, setError] = useState<string | null>(null);
   // truck_id set that have an active TruckZone for today — populated after zone sort runs
   const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
+  // The date of the manifest that was last enriched — may differ from today (seed, back-date)
+  const [activeManifestDate, setActiveManifestDate] = useState<string>(today);
 
   const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
     const phase: SortPhase =
@@ -1906,18 +2056,24 @@ export default function SortPage() {
       )}
 
       {/* Manifest upload */}
-      <ManifestUploadPanel today={today} onReady={fetchAll} />
+      <ManifestUploadPanel
+        today={today}
+        onReady={uploadedDate => {
+          setActiveManifestDate(uploadedDate);
+          fetchAll();
+        }}
+      />
 
       {/* Zone sort — only shown when manifest is ready (manifest panel handles its own state) */}
       {assignments.length > 0 && (
         <ManifestSortPanel
-          today={today}
+          today={activeManifestDate}
           trucks={assignments.map(a => ({ truck_id: a.truck_id, truck_name: a.truck_name }))}
           onZonesCreated={() => {
             // Re-fetch zones so zonedTruckIds updates and map refreshes
             Promise.allSettled([
-              axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
-              axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
+              axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${activeManifestDate}`),
+              axiosClient.get<{ centroids: Centroid[] }>(`/sort/${activeManifestDate}/centroids`),
             ]).then(([zoneRes, centroidRes]) => {
               if (zoneRes.status === 'fulfilled') {
                 const fetchedZones = zoneRes.value.data.zones ?? [];

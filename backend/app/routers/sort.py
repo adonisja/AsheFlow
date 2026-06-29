@@ -137,7 +137,23 @@ class ManifestPreviewResponse(BaseModel):
     total_packages: int
     enriched_count: int
     failed_count: int
-    preview_rows: list[ManifestPreviewRow]   # first 50 rows
+    page: int
+    page_size: int
+    total_pages: int
+    preview_rows: list[ManifestPreviewRow]
+
+
+class ManifestPackagePatchRequest(BaseModel):
+    corrected_address: str
+
+
+class ManifestPackagePatchResponse(BaseModel):
+    tba: str
+    normalised_address: Optional[str] = None
+    block_key: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    enriched: bool
 
 
 class SortPreviewAssignment(BaseModel):
@@ -488,16 +504,22 @@ def get_manifest_status(
     )
 
 
+_PREVIEW_PAGE_SIZE = 50
+
+
 @router.get("/manifest/{sort_date}/preview", response_model=ManifestPreviewResponse)
 def get_manifest_preview(
     sort_date: date,
+    page: int = 1,
+    failed_only: bool = False,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_sort),
 ):
-    """Return the first 50 enriched packages for a given sort date.
+    """Return a paginated page of enriched packages for a given sort date.
 
-    Only available when status is "ready". Returns counts and a preview table
-    so dispatch can spot-check geocoding results before running sort.
+    Query params:
+      page        — 1-indexed page number (default 1)
+      failed_only — when True, only return packages with block_key=None
     """
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
@@ -519,6 +541,12 @@ def get_manifest_preview(
     enriched_count = sum(1 for p in packages if p.get("block_key") is not None)
     failed_count = len(packages) - enriched_count
 
+    visible = [p for p in packages if p.get("block_key") is None] if failed_only else packages
+    total_pages = max(1, (len(visible) + _PREVIEW_PAGE_SIZE - 1) // _PREVIEW_PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * _PREVIEW_PAGE_SIZE
+    page_items = visible[start: start + _PREVIEW_PAGE_SIZE]
+
     preview_rows = [
         ManifestPreviewRow(
             tba=p.get("tba", ""),
@@ -529,7 +557,7 @@ def get_manifest_preview(
             bag_id=p.get("bag_id"),
             enriched=p.get("block_key") is not None,
         )
-        for p in packages[:50]
+        for p in page_items
     ]
 
     return ManifestPreviewResponse(
@@ -537,7 +565,118 @@ def get_manifest_preview(
         total_packages=len(packages),
         enriched_count=enriched_count,
         failed_count=failed_count,
+        page=page,
+        page_size=_PREVIEW_PAGE_SIZE,
+        total_pages=total_pages,
         preview_rows=preview_rows,
+    )
+
+
+@router.patch(
+    "/manifest/{sort_date}/package/{tba}",
+    response_model=ManifestPackagePatchResponse,
+    status_code=status.HTTP_200_OK,
+)
+def patch_manifest_package(
+    sort_date: date,
+    tba: str,
+    body: ManifestPackagePatchRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+):
+    """Re-geocode a single failed package with a corrected address.
+
+    Reads the enriched manifest from Redis, finds the package by TBA,
+    re-runs GeoClient + derive_block_key with the corrected address, updates
+    the package in-place, and writes the manifest back to Redis.
+
+    Only updates the package in the Redis cache — the DB is not touched until
+    sort runs. If GeoClient still cannot resolve the address, the package
+    remains failed (block_key=None) and the response reflects that.
+    """
+    from app.tasks.enrich_manifest import _geoclient_normalise
+    from app.services.derive_block_key import derive_block_key, ParsedBlock
+    from app.models.company import CompanyConfig
+
+    cid_str = str(caller.company_id)
+    date_str = sort_date.isoformat()
+    r = _redis()
+    key = _manifest_key(cid_str, date_str)
+    raw = r.get(key)
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No enriched manifest found for this date.",
+        )
+    try:
+        packages: list[dict] = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Manifest data corrupted.")
+
+    # Find the package
+    pkg_index = next((i for i, p in enumerate(packages) if p.get("tba") == tba), None)
+    if pkg_index is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"TBA {tba} not found in manifest.")
+
+    # Resolve borough for this company
+    from app.database import get_db as _get_db
+    db_gen = _get_db()
+    db = next(db_gen)
+    try:
+        cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+        borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    address = body.corrected_address.strip()
+    geo = _geoclient_normalise(address, borough=borough)
+
+    block_key: Optional[str] = None
+    normalised_address: Optional[str] = None
+    lat = packages[pkg_index].get("lat")
+    lng = packages[pkg_index].get("lng")
+
+    if geo:
+        normalised_address = geo.normalised_address
+        if geo.lat is not None:
+            lat = geo.lat
+        if geo.lng is not None:
+            lng = geo.lng
+        bk = derive_block_key(geo.normalised_address, tba=tba)
+        if isinstance(bk, ParsedBlock):
+            block_key = bk.block_key
+
+    # Update the package in-place and write back to Redis (preserve existing TTL)
+    ttl = r.ttl(key)
+    packages[pkg_index] = {
+        **packages[pkg_index],
+        "normalised_address": normalised_address,
+        "block_key": block_key,
+        "lat": lat,
+        "lng": lng,
+    }
+    r.setex(key, max(ttl, _REDIS_TTL_SECONDS), json.dumps(packages))
+
+    logger.info(
+        "manifest_package_patched",
+        extra={
+            "company_id": cid_str,
+            "sort_date":  date_str,
+            "tba":        tba,
+            "resolved":   block_key is not None,
+        },
+    )
+
+    return ManifestPackagePatchResponse(
+        tba=tba,
+        normalised_address=normalised_address,
+        block_key=block_key,
+        lat=lat,
+        lng=lng,
+        enriched=block_key is not None,
     )
 
 
