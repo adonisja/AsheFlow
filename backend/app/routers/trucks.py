@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from uuid import UUID
 
 import aiohttp
@@ -9,7 +10,7 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.employee import Employee
 from app.models.truck import Truck
-from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse
+from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse, TruckAnchorPatch
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/trucks", tags=["trucks"])
@@ -140,6 +141,76 @@ def reactivate_truck(
     if not db_truck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
     db_truck.is_active = True
+    db.commit()
+    db.refresh(db_truck)
+    return db_truck
+
+
+@router.patch("/{truck_id}/anchor", response_model=TruckResponse)
+def set_truck_anchor(
+    truck_id: UUID,
+    body: TruckAnchorPatch,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_write),
+    db: Session = Depends(get_db),
+):
+    """Set or clear a truck's initial anchor point.
+
+    Pass address + borough to geocode and store coordinates.
+    Pass address=null to clear the anchor entirely.
+    GeoClient resolves the address to lat/lng — users never enter raw coordinates.
+    """
+    from app.tasks.enrich_manifest import _geoclient_normalise
+    from app.models.company import CompanyConfig
+
+    db_truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
+    if not db_truck:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found.")
+
+    if body.address is None:
+        # Clear the anchor
+        db_truck.initial_anchor_address         = None
+        db_truck.initial_anchor_display_address = None
+        db_truck.initial_anchor_lat             = None
+        db_truck.initial_anchor_lng             = None
+        db_truck.initial_anchor_set_by          = None
+        db_truck.initial_anchor_set_at          = None
+    else:
+        address = body.address.strip()
+        if not address:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Address cannot be blank.")
+
+        # Resolve borough: body override → company config → default manhattan
+        borough = body.borough
+        if not borough:
+            cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+            borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
+
+        geo = _geoclient_normalise(address, borough=borough)
+        if geo is None or geo.lat is None or geo.lng is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Address could not be geocoded. Check the address and borough and try again.",
+            )
+
+        # Store GeoClient normalised form as the canonical address (reliable for re-geocoding,
+        # API round-tripping, and sort seeds). Keep raw user input as display-only field.
+        db_truck.initial_anchor_address         = geo.normalised_address or address
+        db_truck.initial_anchor_display_address = address
+        db_truck.initial_anchor_lat             = geo.lat
+        db_truck.initial_anchor_lng             = geo.lng
+        db_truck.initial_anchor_set_by          = caller.id
+        db_truck.initial_anchor_set_at          = datetime.now(timezone.utc)
+
+    write_audit(
+        db,
+        action_type="truck.anchor_updated",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        detail={"address": db_truck.initial_anchor_address},
+    )
     db.commit()
     db.refresh(db_truck)
     return db_truck

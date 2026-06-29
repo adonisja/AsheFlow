@@ -19,13 +19,13 @@ from typing import Optional
 
 import redis as redis_lib
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
 from app.core.config import settings
 from app.database import get_db
-from app.models.company import CompanyConfig
+from app.models.company import CompanyConfig, CompanyZone
 from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
@@ -92,6 +92,8 @@ class SortRunResponse(BaseModel):
     tier1_passed: bool
     was_forced: bool
     zones_created: int
+    volume_alert: bool = False
+    volume_alert_msg: str = ""
     assignments: list[ClusterAssignmentOut]
     flagged_bags: list[BagResultOut]        # empty when tier1_passed=True or was_forced=True
 
@@ -114,6 +116,8 @@ class SortRunStatusResponse(BaseModel):
     tier1_passed: Optional[bool] = None
     was_forced: Optional[bool] = None
     zones_created: Optional[int] = None
+    volume_alert: Optional[bool] = None
+    volume_alert_msg: Optional[str] = None
     assignments: list[ClusterAssignmentOut] = []
     # Populated when status == "tier1_failed":
     flagged_bags: list[BagResultOut] = []
@@ -179,6 +183,8 @@ class SortPreviewResponse(BaseModel):
     tier1_passed: bool
     was_forced: bool
     zones_created: int
+    volume_alert: bool = False
+    volume_alert_msg: str = ""
     assignments: list[SortPreviewAssignment]
 
 
@@ -818,17 +824,19 @@ def get_sort_run_status(
 
         if s == "done":
             return SortRunStatusResponse(
-                task_id       = task_id,
-                status        = "done",
-                sort_date     = date.fromisoformat(data["sort_date"]),
-                package_count = data["package_count"],
-                outlier_count = data["outlier_count"],
-                cluster_count = data["cluster_count"],
-                tier1_passed  = data["tier1_passed"],
-                was_forced    = data["was_forced"],
-                zones_created = data["zones_created"],
-                assignments   = [ClusterAssignmentOut(**a) for a in data.get("assignments", [])],
-                flagged_bags  = [],
+                task_id          = task_id,
+                status           = "done",
+                sort_date        = date.fromisoformat(data["sort_date"]),
+                package_count    = data["package_count"],
+                outlier_count    = data["outlier_count"],
+                cluster_count    = data["cluster_count"],
+                tier1_passed     = data["tier1_passed"],
+                was_forced       = data["was_forced"],
+                zones_created    = data["zones_created"],
+                volume_alert     = data.get("volume_alert", False),
+                volume_alert_msg = data.get("volume_alert_msg", ""),
+                assignments      = [ClusterAssignmentOut(**a) for a in data.get("assignments", [])],
+                flagged_bags     = [],
             )
 
         if s == "tier1_failed":
@@ -903,23 +911,25 @@ def get_sort_run_preview(
         )
 
     return SortPreviewResponse(
-        sort_date     = date.fromisoformat(data["sort_date"]),
-        task_id       = task_id,
-        package_count = data["package_count"],
-        outlier_count = data["outlier_count"],
-        cluster_count = data["cluster_count"],
-        tier1_passed  = data["tier1_passed"],
-        was_forced    = data["was_forced"],
-        zones_created = data["zones_created"],
-        assignments   = [
+        sort_date        = date.fromisoformat(data["sort_date"]),
+        task_id          = task_id,
+        package_count    = data["package_count"],
+        outlier_count    = data["outlier_count"],
+        cluster_count    = data["cluster_count"],
+        tier1_passed     = data["tier1_passed"],
+        was_forced       = data["was_forced"],
+        zones_created    = data["zones_created"],
+        volume_alert     = data.get("volume_alert", False),
+        volume_alert_msg = data.get("volume_alert_msg", ""),
+        assignments      = [
             SortPreviewAssignment(
-                truck_id      = a["truck_id"],
-                truck_name    = a["truck_name"],
-                match_type    = a["match_type"],
-                workload_score= a.get("workload_score"),
-                is_overflow   = a["is_overflow"],
-                package_count = a["package_count"],
-                outlier_count = data["outlier_count"],
+                truck_id       = a["truck_id"],
+                truck_name     = a["truck_name"],
+                match_type     = a["match_type"],
+                workload_score = a.get("workload_score"),
+                is_overflow    = a["is_overflow"],
+                package_count  = a["package_count"],
+                outlier_count  = data["outlier_count"],
             )
             for a in data.get("assignments", [])
         ],
@@ -1209,4 +1219,264 @@ def seed_manifest(
         truck_names       = truck_names,
         preview_rows      = preview,
         csv_b64           = base64.b64encode(result.csv_bytes).decode("ascii"),
+    )
+
+
+# ── Company operating zone ────────────────────────────────────────────────────
+# Bounding-box entry form → stored as a GeoJSON Polygon CompanyZone row.
+# GET returns current config; POST creates or replaces.
+# Gated to admin only: this is a one-time company-level setup, not daily dispatch.
+
+class OperatingZoneIn(BaseModel):
+    sw_lat: float
+    sw_lng: float
+    ne_lat: float
+    ne_lng: float
+    name: str = "Operating Zone"
+
+
+class OperatingZoneFromStreetsIn(BaseModel):
+    from_street: str = Field(..., max_length=100, description="Starting cross-street, e.g. 'W 23 St'")
+    to_street:   str = Field(..., max_length=100, description="Ending cross-street, e.g. 'W 57 St'")
+    from_avenue: str = Field(..., max_length=100, description="Starting avenue, e.g. '6 Ave'")
+    to_avenue:   str = Field(..., max_length=100, description="Ending avenue, e.g. '12 Ave'")
+    borough:     str = Field("manhattan", max_length=30)
+    name:        str = Field("Operating Zone", max_length=100)
+
+
+class OperatingZoneOut(BaseModel):
+    id: UUID
+    name: str
+    sw_lat: float
+    sw_lng: float
+    ne_lat: float
+    ne_lng: float
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+def _bbox_to_geojson(sw_lat: float, sw_lng: float, ne_lat: float, ne_lng: float) -> dict:
+    """Convert SW/NE corners to a closed GeoJSON Polygon rectangle."""
+    return {
+        "type": "Polygon",
+        "coordinates": [[
+            [sw_lng, sw_lat],
+            [ne_lng, sw_lat],
+            [ne_lng, ne_lat],
+            [sw_lng, ne_lat],
+            [sw_lng, sw_lat],   # closed ring
+        ]],
+    }
+
+
+def _geojson_to_bbox(bounds: dict) -> tuple[float, float, float, float] | None:
+    """Extract SW/NE corners from a GeoJSON Polygon rectangle (5-point closed ring)."""
+    try:
+        coords = bounds["coordinates"][0]
+        lngs = [c[0] for c in coords]
+        lats = [c[1] for c in coords]
+        return min(lats), min(lngs), max(lats), max(lngs)
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+@router.get("/company-zone", response_model=Optional[OperatingZoneOut])
+def get_company_zone(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+    db: Session = Depends(get_db),
+):
+    """Return the company's operating zone bounding box, or null if not configured."""
+    zone = (
+        db.query(CompanyZone)
+        .filter(
+            CompanyZone.company_id == caller.company_id,
+            CompanyZone.parent_zone_id.is_(None),
+            CompanyZone.is_active.is_(True),
+        )
+        .order_by(CompanyZone.created_at.desc())
+        .first()
+    )
+    if zone is None or not zone.bounds:
+        return None
+    bbox = _geojson_to_bbox(zone.bounds)
+    if bbox is None:
+        return None
+    sw_lat, sw_lng, ne_lat, ne_lng = bbox
+    return OperatingZoneOut(
+        id=zone.id,
+        name=zone.name,
+        sw_lat=sw_lat,
+        sw_lng=sw_lng,
+        ne_lat=ne_lat,
+        ne_lng=ne_lng,
+    )
+
+
+@router.post("/company-zone", response_model=OperatingZoneOut, status_code=status.HTTP_200_OK)
+def upsert_company_zone(
+    body: OperatingZoneIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Create or replace the company's operating zone from a SW/NE bounding box.
+
+    Deactivates any existing top-level zone before inserting the new one.
+    Gated to admin only — this is a one-time company-level configuration.
+    """
+    from datetime import datetime, timezone
+    from app.services.audit import write_audit
+
+    if body.sw_lat >= body.ne_lat:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="SW latitude must be less than NE latitude.")
+    if body.sw_lng >= body.ne_lng:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="SW longitude must be less than NE longitude.")
+
+    # Deactivate existing top-level zone
+    db.query(CompanyZone).filter(
+        CompanyZone.company_id == caller.company_id,
+        CompanyZone.parent_zone_id.is_(None),
+        CompanyZone.is_active.is_(True),
+    ).update({"is_active": False}, synchronize_session="fetch")
+
+    bounds = _bbox_to_geojson(body.sw_lat, body.sw_lng, body.ne_lat, body.ne_lng)
+    import uuid as _uuid
+    zone = CompanyZone(
+        id=_uuid.uuid4(),
+        company_id=caller.company_id,
+        parent_zone_id=None,
+        name=body.name,
+        bounds=bounds,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(zone)
+    db.flush()
+    write_audit(
+        db,
+        action_type="company_zone.upserted",
+        target_table="company_zones",
+        target_id=str(zone.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        detail={"sw_lat": body.sw_lat, "sw_lng": body.sw_lng, "ne_lat": body.ne_lat, "ne_lng": body.ne_lng},
+    )
+    db.commit()
+    db.refresh(zone)
+
+    return OperatingZoneOut(
+        id=zone.id,
+        name=zone.name,
+        sw_lat=body.sw_lat,
+        sw_lng=body.sw_lng,
+        ne_lat=body.ne_lat,
+        ne_lng=body.ne_lng,
+    )
+
+
+@router.post("/company-zone/from-streets", response_model=OperatingZoneOut, status_code=status.HTTP_200_OK)
+def upsert_company_zone_from_streets(
+    body: OperatingZoneFromStreetsIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Create or replace the company's operating zone from street/avenue range inputs.
+
+    Geocodes the four boundary intersections (from_street & from_avenue,
+    from_street & to_avenue, to_street & from_avenue, to_street & to_avenue)
+    via GeoClient to derive the bounding box SW/NE corners. Non-technical admins
+    enter familiar cross-street ranges instead of raw coordinates.
+
+    Example input:
+        from_street="W 23 St", to_street="W 57 St",
+        from_avenue="6 Ave",   to_avenue="12 Ave",
+        borough="manhattan"
+    """
+    from app.tasks.enrich_manifest import _geoclient_normalise
+    from datetime import datetime, timezone
+    from app.services.audit import write_audit
+    import uuid as _uuid
+
+    from_st = body.from_street.strip()
+    to_st   = body.to_street.strip()
+    from_av = body.from_avenue.strip()
+    to_av   = body.to_avenue.strip()
+
+    # Geocode all 4 boundary intersections to derive the bounding box.
+    # The intersections form the 4 corners of the operating zone rectangle.
+    corners = [
+        f"{from_st} and {from_av}",
+        f"{from_st} and {to_av}",
+        f"{to_st}   and {from_av}",
+        f"{to_st}   and {to_av}",
+    ]
+    results = []
+    for corner in corners:
+        geo = _geoclient_normalise(corner, borough=body.borough)
+        if geo is None or geo.lat is None or geo.lng is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Could not geocode intersection: {corner}. "
+                       f"Check street names and borough and try again.",
+            )
+        results.append(geo)
+
+    lats = [g.lat for g in results]
+    lngs = [g.lng for g in results]
+    sw_lat, sw_lng = min(lats), min(lngs)
+    ne_lat, ne_lng = max(lats), max(lngs)
+
+    if sw_lat >= ne_lat or sw_lng >= ne_lng:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Derived bounding box is degenerate — check that from/to streets and avenues differ.",
+        )
+
+    # Deactivate existing top-level zone
+    db.query(CompanyZone).filter(
+        CompanyZone.company_id == caller.company_id,
+        CompanyZone.parent_zone_id.is_(None),
+        CompanyZone.is_active.is_(True),
+    ).update({"is_active": False}, synchronize_session="fetch")
+
+    bounds = _bbox_to_geojson(sw_lat, sw_lng, ne_lat, ne_lng)
+    zone = CompanyZone(
+        id=_uuid.uuid4(),
+        company_id=caller.company_id,
+        parent_zone_id=None,
+        name=body.name,
+        bounds=bounds,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(zone)
+    db.flush()
+    write_audit(
+        db,
+        action_type="company_zone.upserted",
+        target_table="company_zones",
+        target_id=str(zone.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        detail={
+            "from_street": from_st, "to_street": to_st,
+            "from_avenue": from_av, "to_avenue": to_av,
+            "sw_lat": sw_lat, "sw_lng": sw_lng,
+            "ne_lat": ne_lat, "ne_lng": ne_lng,
+        },
+    )
+    db.commit()
+    db.refresh(zone)
+
+    return OperatingZoneOut(
+        id=zone.id,
+        name=zone.name,
+        sw_lat=sw_lat,
+        sw_lng=sw_lng,
+        ne_lat=ne_lat,
+        ne_lng=ne_lng,
     )

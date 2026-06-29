@@ -1184,15 +1184,17 @@ function ManifestSortPanel({
   function handleStatusPayload(data: SortRunStatusResponse) {
     if (data.status === 'done') {
       const synth: SortRunResponse = {
-        sort_date:     data.sort_date!,
-        package_count: data.package_count!,
-        outlier_count: data.outlier_count!,
-        cluster_count: data.cluster_count!,
-        tier1_passed:  data.tier1_passed!,
-        was_forced:    data.was_forced!,
-        zones_created: data.zones_created!,
-        assignments:   data.assignments,
-        flagged_bags:  [],
+        sort_date:        data.sort_date!,
+        package_count:    data.package_count!,
+        outlier_count:    data.outlier_count!,
+        cluster_count:    data.cluster_count!,
+        tier1_passed:     data.tier1_passed!,
+        was_forced:       data.was_forced!,
+        zones_created:    data.zones_created!,
+        assignments:      data.assignments,
+        flagged_bags:     [],
+        volume_alert:     data.volume_alert    ?? false,
+        volume_alert_msg: data.volume_alert_msg ?? '',
       };
       setResult(synth);
       setDoneTaskId(data.task_id);
@@ -1202,15 +1204,17 @@ function ManifestSortPanel({
       onZonesCreated();
     } else if (data.status === 'tier1_failed') {
       const synth: SortRunResponse = {
-        sort_date:     today,
-        package_count: 0,
-        outlier_count: 0,
-        cluster_count: 0,
-        tier1_passed:  false,
-        was_forced:    false,
-        zones_created: 0,
-        assignments:   [],
-        flagged_bags:  data.flagged_bags,
+        sort_date:        today,
+        package_count:    0,
+        outlier_count:    0,
+        cluster_count:    0,
+        tier1_passed:     false,
+        was_forced:       false,
+        zones_created:    0,
+        assignments:      [],
+        flagged_bags:     data.flagged_bags,
+        volume_alert:     false,
+        volume_alert_msg: '',
       };
       const suggestions: Record<string, string> = {};
       for (const bag of data.flagged_bags) {
@@ -1363,6 +1367,12 @@ function ManifestSortPanel({
           {/* Done — summary */}
           {phase === 'done' && result && (
             <div className="space-y-3">
+              {result.volume_alert && (
+                <div className="flex items-start gap-2 p-3 bg-warning/5 border border-warning/30 rounded-xl text-xs text-warning">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{result.volume_alert_msg}</span>
+                </div>
+              )}
               {doneTaskId && <SortPreviewPanel today={today} taskId={doneTaskId} />}
               <button
                 onClick={() => { setPhase('idle'); setResult(null); setError(null); setOverrideMap({}); setDoneTaskId(null); }}

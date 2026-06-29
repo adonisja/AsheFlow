@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
   RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail, ArrowUp, ArrowDown,
   Copy, Check, Hash, Search, ToggleLeft, ToggleRight, ShieldAlert, ShieldOff, Phone,
+  MapPin, Loader2, Map,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -54,6 +55,11 @@ type TruckRecord = {
   name: string;
   is_active: boolean;
   discord_channel_id: string | null;
+  initial_anchor_address: string | null;         // GeoClient-normalised canonical form
+  initial_anchor_display_address: string | null; // raw user input — shown in UI
+  initial_anchor_lat: number | null;
+  initial_anchor_lng: number | null;
+  initial_anchor_set_at: string | null;
 };
 
 type Tab = 'people' | 'fleet' | 'system';
@@ -1086,14 +1092,162 @@ function CopyableId({ value }: { value: string }) {
   );
 }
 
+const BOROUGH_OPTIONS = [
+  { value: 'manhattan', label: 'Manhattan' },
+  { value: 'queens',    label: 'Queens' },
+  { value: 'brooklyn',  label: 'Brooklyn' },
+  { value: 'bronx',     label: 'Bronx' },
+  { value: 'staten island', label: 'Staten Island' },
+];
+
+function TruckAnchorModal({
+  truck,
+  onClose,
+  onUpdated,
+}: {
+  truck: TruckRecord;
+  onClose: () => void;
+  onUpdated: (t: TruckRecord) => void;
+}) {
+  const [address, setAddress] = useState(truck.initial_anchor_display_address ?? truck.initial_anchor_address ?? '');
+  const [borough, setBorough] = useState('manhattan');
+  const [saving, setSaving]   = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [error, setError]     = useState<string | null>(null);
+
+  const hasAnchor = truck.initial_anchor_lat != null;
+
+  async function save() {
+    const trimmed = address.trim();
+    if (!trimmed) { setError('Enter a street address or intersection.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const { data } = await axiosClient.patch<TruckRecord>(`/trucks/${truck.id}/anchor`, {
+        address: trimmed,
+        borough,
+      });
+      onUpdated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Geocoding failed. Check the address and try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    setClearing(true);
+    setError(null);
+    try {
+      const { data } = await axiosClient.patch<TruckRecord>(`/trucks/${truck.id}/anchor`, { address: null });
+      onUpdated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to clear anchor.');
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-primary" />
+            <h3 className="font-semibold text-foreground">{hasAnchor ? 'Update' : 'Set'} anchor — {truck.name}</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-accent text-muted-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Enter the street address or intersection that marks this truck's home territory.
+          The system will geocode it to coordinates automatically.
+        </p>
+
+        {hasAnchor && (
+          <div className="flex items-start gap-2 p-2.5 bg-success/5 border border-success/20 rounded-xl">
+            <MapPin className="w-3.5 h-3.5 text-success shrink-0 mt-0.5" />
+            <div className="text-xs space-y-0.5">
+              <p className="text-foreground font-medium">
+                {truck.initial_anchor_display_address ?? truck.initial_anchor_address}
+              </p>
+              {truck.initial_anchor_display_address && truck.initial_anchor_address &&
+                truck.initial_anchor_display_address !== truck.initial_anchor_address && (
+                <p className="text-muted-foreground text-[10px]">
+                  Normalised: {truck.initial_anchor_address}
+                </p>
+              )}
+              <p className="text-muted-foreground font-mono">
+                {truck.initial_anchor_lat?.toFixed(5)}, {truck.initial_anchor_lng?.toFixed(5)}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Address or intersection</label>
+            <input
+              type="text"
+              className="input w-full"
+              placeholder="e.g. 34th St & 9th Ave"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && save()}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
+            <select className="input w-full" value={borough} onChange={e => setBorough(e.target.value)}>
+              {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+
+        <div className="flex gap-2 justify-between">
+          {hasAnchor && (
+            <button
+              onClick={clear}
+              disabled={clearing || saving}
+              className="btn-secondary text-sm text-destructive flex items-center gap-1.5"
+            >
+              {clearing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Clear
+            </button>
+          )}
+          <div className="flex gap-2 ml-auto">
+            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+            <button
+              onClick={save}
+              disabled={saving || clearing}
+              className="btn-primary text-sm flex items-center gap-1.5"
+            >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {saving ? 'Geocoding…' : 'Save anchor'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TruckCard({
   truck,
   onEdit,
+  onAnchor,
   onDeactivate,
   onReactivate,
 }: {
   truck: TruckRecord;
   onEdit: () => void;
+  onAnchor: () => void;
   onDeactivate: () => void;
   onReactivate: () => void;
 }) {
@@ -1138,6 +1292,29 @@ function TruckCard({
         )}
       </div>
 
+      {/* Anchor row */}
+      <div className="min-w-0">
+        {truck.initial_anchor_lat != null ? (
+          <button
+            onClick={onAnchor}
+            className="group/ap flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+            title="Edit anchor point"
+          >
+            <MapPin className="w-3 h-3 text-success shrink-0" />
+            <span className="truncate">{truck.initial_anchor_display_address ?? truck.initial_anchor_address}</span>
+            <Pencil className="w-3 h-3 shrink-0 opacity-0 group-hover/ap:opacity-60 transition-opacity ml-auto" />
+          </button>
+        ) : (
+          <button
+            onClick={onAnchor}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
+          >
+            <MapPin className="w-3 h-3 shrink-0 opacity-50" />
+            <span>Set anchor point</span>
+          </button>
+        )}
+      </div>
+
       {/* Footer: toggle */}
       <div className="pt-1 border-t border-border">
         {truck.is_active ? (
@@ -1162,12 +1339,13 @@ function TruckCard({
 
 function FleetTab() {
   const { confirmState: fleetConfirmState, confirm: fleetConfirm, cancelConfirm: fleetCancelConfirm } = useConfirm();
-  const [trucks, setTrucks]           = useState<TruckRecord[]>([]);
-  const [loading, setLoading]         = useState(true);
-  const [loadError, setLoadError]     = useState<string | null>(null);
-  const [showModal, setShowModal]     = useState(false);
-  const [editTarget, setEditTarget]   = useState<TruckRecord | null>(null);
-  const [search, setSearch]           = useState('');
+  const [trucks, setTrucks]             = useState<TruckRecord[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [loadError, setLoadError]       = useState<string | null>(null);
+  const [showModal, setShowModal]       = useState(false);
+  const [editTarget, setEditTarget]     = useState<TruckRecord | null>(null);
+  const [anchorTarget, setAnchorTarget] = useState<TruckRecord | null>(null);
+  const [search, setSearch]             = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   const load = () => {
@@ -1306,6 +1484,7 @@ function FleetTab() {
               key={truck.id}
               truck={truck}
               onEdit={() => setEditTarget(truck)}
+              onAnchor={() => setAnchorTarget(truck)}
               onDeactivate={() => handleDeactivate(truck)}
               onReactivate={() => handleReactivate(truck)}
             />
@@ -1328,6 +1507,16 @@ function FleetTab() {
           onClose={() => setEditTarget(null)}
         />
       )}
+      {anchorTarget && (
+        <TruckAnchorModal
+          truck={anchorTarget}
+          onClose={() => setAnchorTarget(null)}
+          onUpdated={updated => {
+            setTrucks(prev => prev.map(t => t.id === updated.id ? updated : t));
+            setAnchorTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1336,7 +1525,288 @@ function FleetTab() {
 // System Tab
 // ---------------------------------------------------------------------------
 
+const BOROUGH_PRESETS: Record<string, { sw_lat: number; sw_lng: number; ne_lat: number; ne_lng: number }> = {
+  manhattan: { sw_lat: 40.6995, sw_lng: -74.0196, ne_lat: 40.8820, ne_lng: -73.9070 },
+  queens:    { sw_lat: 40.5420, sw_lng: -73.9626, ne_lat: 40.8007, ne_lng: -73.7004 },
+  brooklyn:  { sw_lat: 40.5707, sw_lng: -74.0421, ne_lat: 40.7394, ne_lng: -73.8330 },
+  bronx:     { sw_lat: 40.7855, sw_lng: -73.9338, ne_lat: 40.9176, ne_lng: -73.7654 },
+};
+
+interface OperatingZone {
+  id: string;
+  name: string;
+  sw_lat: number;
+  sw_lng: number;
+  ne_lat: number;
+  ne_lng: number;
+}
+
+function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
+  const [zone, setZone]           = useState<OperatingZone | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [editing, setEditing]     = useState(false);
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+  const [success, setSuccess]     = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Street/avenue range inputs (primary mode)
+  const [fromStreet, setFromStreet] = useState('');
+  const [toStreet,   setToStreet]   = useState('');
+  const [fromAvenue, setFromAvenue] = useState('');
+  const [toAvenue,   setToAvenue]   = useState('');
+  const [borough,    setBorough]    = useState('manhattan');
+
+  // Raw coordinate inputs (advanced fallback)
+  const [swLat, setSwLat] = useState('');
+  const [swLng, setSwLng] = useState('');
+  const [neLat, setNeLat] = useState('');
+  const [neLng, setNeLng] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await axiosClient.get<OperatingZone | null>('/sort/company-zone');
+      setZone(data);
+      if (data) {
+        setSwLat(data.sw_lat.toFixed(6));
+        setSwLng(data.sw_lng.toFixed(6));
+        setNeLat(data.ne_lat.toFixed(6));
+        setNeLng(data.ne_lng.toFixed(6));
+      }
+    } catch {
+      // zone not configured — not an error
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function saveFromStreets() {
+    if (!fromStreet.trim() || !toStreet.trim() || !fromAvenue.trim() || !toAvenue.trim()) {
+      setError('All four street/avenue fields are required.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const { data } = await axiosClient.post<OperatingZone>('/sort/company-zone/from-streets', {
+        from_street: fromStreet.trim(),
+        to_street:   toStreet.trim(),
+        from_avenue: fromAvenue.trim(),
+        to_avenue:   toAvenue.trim(),
+        borough,
+      });
+      setZone(data);
+      setSwLat(data.sw_lat.toFixed(6));
+      setSwLng(data.sw_lng.toFixed(6));
+      setNeLat(data.ne_lat.toFixed(6));
+      setNeLng(data.ne_lng.toFixed(6));
+      setEditing(false);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to save operating zone.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveFromCoords() {
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const { data } = await axiosClient.post<OperatingZone>('/sort/company-zone', {
+        sw_lat: parseFloat(swLat),
+        sw_lng: parseFloat(swLng),
+        ne_lat: parseFloat(neLat),
+        ne_lng: parseFloat(neLng),
+      });
+      setZone(data);
+      setEditing(false);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to save operating zone.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between border-b border-border pb-3">
+        <div className="flex items-center gap-2">
+          <Map className="w-4 h-4 text-primary" />
+          <h2 className="text-sm font-semibold text-foreground">Operating Zone</h2>
+        </div>
+        {isAdmin && !editing && (
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-1.5 text-xs text-primary hover:bg-primary/10 px-2.5 py-1.5 rounded-lg transition-colors"
+          >
+            <Pencil className="w-3.5 h-3.5" /> {zone ? 'Edit' : 'Configure'}
+          </button>
+        )}
+      </div>
+
+      <p className="text-sm text-muted-foreground">
+        The bounding box that defines your company's delivery area.
+        Used by the sort algorithm to detect out-of-area packages.
+        {!isAdmin && ' Contact your admin to configure this.'}
+      </p>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        </div>
+      ) : zone && !editing ? (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: 'SW corner (bottom-left)', lat: zone.sw_lat, lng: zone.sw_lng },
+              { label: 'NE corner (top-right)',   lat: zone.ne_lat, lng: zone.ne_lng },
+            ].map(({ label, lat, lng }) => (
+              <div key={label} className="p-2.5 bg-accent/40 rounded-xl space-y-0.5">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">{label}</p>
+                <p className="text-xs font-mono text-foreground">{lat.toFixed(5)}, {lng.toFixed(5)}</p>
+              </div>
+            ))}
+          </div>
+          {success && (
+            <div className="flex items-center gap-2 text-xs text-success bg-success/10 border border-success/20 rounded-xl px-3 py-2">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Operating zone saved.
+            </div>
+          )}
+        </div>
+      ) : !zone && !editing ? (
+        <div className="flex items-center gap-2 p-3 bg-warning/5 border border-warning/20 rounded-xl text-xs text-warning">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          No operating zone configured — overflow detection is disabled.
+        </div>
+      ) : null}
+
+      {editing && isAdmin && (
+        <div className="space-y-4">
+          {/* Primary: street/avenue range */}
+          <div className="space-y-3">
+            <p className="text-xs font-medium text-foreground">Enter the street and avenue range for your delivery area:</p>
+
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
+              <select className="input w-full text-sm" value={borough} onChange={e => setBorough(e.target.value)}>
+                {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">From street</label>
+                <input
+                  type="text"
+                  className="input w-full text-sm"
+                  placeholder="e.g. W 23 St"
+                  value={fromStreet}
+                  onChange={e => setFromStreet(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">To street</label>
+                <input
+                  type="text"
+                  className="input w-full text-sm"
+                  placeholder="e.g. W 57 St"
+                  value={toStreet}
+                  onChange={e => setToStreet(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">From avenue</label>
+                <input
+                  type="text"
+                  className="input w-full text-sm"
+                  placeholder="e.g. 6 Ave"
+                  value={fromAvenue}
+                  onChange={e => setFromAvenue(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">To avenue</label>
+                <input
+                  type="text"
+                  className="input w-full text-sm"
+                  placeholder="e.g. 12 Ave"
+                  value={toAvenue}
+                  onChange={e => setToAvenue(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              The system geocodes the four corner intersections to build the bounding box automatically.
+            </p>
+          </div>
+
+          {error && <p className="text-xs text-destructive">{error}</p>}
+
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setEditing(false); setError(null); }} className="btn-secondary text-sm">Cancel</button>
+            <button onClick={saveFromStreets} disabled={saving} className="btn-primary text-sm flex items-center gap-1.5">
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {saving ? 'Geocoding…' : 'Save zone'}
+            </button>
+          </div>
+
+          {/* Advanced: raw coordinates */}
+          <div className="border-t border-border pt-3">
+            <button
+              onClick={() => setShowAdvanced(v => !v)}
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors"
+            >
+              <span>{showAdvanced ? '▾' : '▸'}</span> Advanced — enter coordinates directly
+            </button>
+            {showAdvanced && (
+              <div className="mt-3 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">SW corner — bottom-left</p>
+                    <input type="number" step="any" placeholder="Latitude" value={swLat}
+                      onChange={e => setSwLat(e.target.value)} className="input w-full text-sm font-mono" />
+                    <input type="number" step="any" placeholder="Longitude" value={swLng}
+                      onChange={e => setSwLng(e.target.value)} className="input w-full text-sm font-mono" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">NE corner — top-right</p>
+                    <input type="number" step="any" placeholder="Latitude" value={neLat}
+                      onChange={e => setNeLat(e.target.value)} className="input w-full text-sm font-mono" />
+                    <input type="number" step="any" placeholder="Longitude" value={neLng}
+                      onChange={e => setNeLng(e.target.value)} className="input w-full text-sm font-mono" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Tip: search any intersection on Google Maps, right-click the pin, and copy the coordinates shown.
+                </p>
+                <div className="flex justify-end">
+                  <button onClick={saveFromCoords} disabled={saving} className="btn-secondary text-sm flex items-center gap-1.5">
+                    {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Save from coordinates
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SystemTab() {
+  const { groups } = useAuth();
+  const isAdmin = groups.includes('admin');
   const { confirmState: sysConfirmState, confirm: sysConfirm, cancelConfirm: sysCancelConfirm } = useConfirm();
   const [days, setDays]         = useState(30);
   const [pruning, setPruning]   = useState(false);
@@ -1367,6 +1837,9 @@ function SystemTab() {
   return (
     <div className="space-y-6 max-w-lg">
       <ConfirmDialog {...sysConfirmState} onCancel={sysCancelConfirm} />
+
+      <OperatingZoneCard isAdmin={isAdmin} />
+
       <div className="card space-y-4">
         <div className="flex items-center gap-2 border-b border-border pb-3">
           <Trash2 className="w-4 h-4 text-danger" />

@@ -218,16 +218,18 @@ def run_zone_sort(
         ]
 
         payload = {
-            "status":        "done",
-            "sort_date":     result.sort_date.isoformat(),
-            "package_count": result.package_count,
-            "outlier_count": result.outlier_count,
-            "cluster_count": result.cluster_count,
-            "tier1_passed":  result.tier1_passed,
-            "was_forced":    result.was_forced,
-            "zones_created": len(result.zones_persisted),
-            "assignments":   assignments_out,
-            "flagged_bags":  [],
+            "status":            "done",
+            "sort_date":         result.sort_date.isoformat(),
+            "package_count":     result.package_count,
+            "outlier_count":     result.outlier_count,
+            "cluster_count":     result.cluster_count,
+            "tier1_passed":      result.tier1_passed,
+            "was_forced":        result.was_forced,
+            "zones_created":     len(result.zones_persisted),
+            "assignments":       assignments_out,
+            "flagged_bags":      [],
+            "volume_alert":      result.volume_alert,
+            "volume_alert_msg":  result.volume_alert_msg,
         }
         r.setex(resk, _RESULT_TTL, json.dumps(payload))
         r.delete(rk)

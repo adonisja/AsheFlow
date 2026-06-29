@@ -775,6 +775,8 @@ export interface SortRunResponse {
   zones_created: number;
   assignments: ClusterAssignmentOut[];
   flagged_bags: BagResultOut[];
+  volume_alert: boolean;
+  volume_alert_msg: string;
 }
 
 export interface SortRunAccepted {
@@ -795,6 +797,8 @@ export interface SortRunStatusResponse {
   tier1_passed?: boolean;
   was_forced?: boolean;
   zones_created?: number;
+  volume_alert?: boolean;
+  volume_alert_msg?: string;
   assignments: ClusterAssignmentOut[];
   // populated when status == "tier1_failed"
   flagged_bags: BagResultOut[];
@@ -856,6 +860,8 @@ export interface SortPreviewResponse {
   tier1_passed: boolean;
   was_forced: boolean;
   zones_created: number;
+  volume_alert: boolean;
+  volume_alert_msg: string;
   assignments: SortPreviewAssignment[];
 }
 
