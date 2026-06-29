@@ -76,8 +76,8 @@ class CompanyConfig(Base):
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
 
     # ── Tier 1 tote verification (DBSCAN + classification thresholds) ─────────
-    tier1_dbscan_eps           = Column(Float,   nullable=True)   # default 0.015 degrees (~1 mile)
-    tier1_dbscan_min_samples   = Column(Integer, nullable=True)   # default 30
+    tier1_dbscan_eps           = Column(Float,   nullable=True, default=0.005)   # 0.005° ≈ 5 city blocks — truck zone radius
+    tier1_dbscan_min_samples   = Column(Integer, nullable=True, default=30)
     tier1_small_tote_cutoff    = Column(Integer, nullable=True)   # default 10 packages
     tier1_small_stray_max      = Column(Integer, nullable=True)   # default 1 (count)
     tier1_small_uncertain_max  = Column(Integer, nullable=True)   # default 3 (count)
