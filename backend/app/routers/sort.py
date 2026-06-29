@@ -1401,6 +1401,12 @@ def upsert_company_zone_from_streets(
     from app.services.audit import write_audit
     import uuid as _uuid
 
+    if not settings.geoclient_app_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GeoClient API key is not configured on this server. Use the Advanced section to enter coordinates directly.",
+        )
+
     from_st = body.from_street.strip()
     to_st   = body.to_street.strip()
     from_av = body.from_avenue.strip()
@@ -1421,8 +1427,8 @@ def upsert_company_zone_from_streets(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
-                    f"Could not geocode intersection: {street} & {avenue} in {body.borough}. "
-                    f"Use GeoClient-compatible street names, e.g. 'W 23 ST', '6 AVE'."
+                    f"Could not geocode '{street} & {avenue}' in {body.borough}. "
+                    f"Check the spelling — use formats like 'W 23 ST', '6 AVE', 'BROADWAY'."
                 ),
             )
         lat, lng = result

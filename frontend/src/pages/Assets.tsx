@@ -1613,7 +1613,12 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to save operating zone.');
+      const detail = e?.response?.data?.detail;
+      setError(
+        typeof detail === 'string' ? detail
+        : Array.isArray(detail)   ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
+        : `Failed to save operating zone (HTTP ${e?.response?.status ?? 'unknown'}).`
+      );
     } finally {
       setSaving(false);
     }
@@ -1635,7 +1640,12 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to save operating zone.');
+      const detail = e?.response?.data?.detail;
+      setError(
+        typeof detail === 'string' ? detail
+        : Array.isArray(detail)   ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
+        : `Failed to save operating zone (HTTP ${e?.response?.status ?? 'unknown'}).`
+      );
     } finally {
       setSaving(false);
     }

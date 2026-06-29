@@ -162,6 +162,7 @@ def set_truck_anchor(
     """
     from app.tasks.enrich_manifest import _geoclient_normalise
     from app.models.company import CompanyConfig
+    from app.core.config import settings
 
     db_truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
     if not db_truck:
@@ -179,6 +180,12 @@ def set_truck_anchor(
         address = body.address.strip()
         if not address:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Address cannot be blank.")
+
+        if not settings.geoclient_app_key:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="GeoClient API key is not configured on this server. Contact your admin.",
+            )
 
         # Resolve borough: body override → company config → default manhattan
         borough = body.borough

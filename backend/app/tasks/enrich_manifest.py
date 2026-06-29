@@ -171,15 +171,28 @@ def _geoclient_intersection(
             },
             timeout=5,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            logger.warning(
+                "geoclient_intersection HTTP %s for '%s & %s' borough=%s",
+                resp.status_code, cross_street_one, cross_street_two, borough,
+            )
+            return None
         data = resp.json()
         ix = data.get("intersection", {})
         lat_raw = ix.get("latitude")
         lng_raw = ix.get("longitude")
         if lat_raw is None or lng_raw is None:
+            logger.warning(
+                "geoclient_intersection no coords for '%s & %s' borough=%s — response keys: %s",
+                cross_street_one, cross_street_two, borough, list(ix.keys()),
+            )
             return None
         return float(lat_raw), float(lng_raw)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "geoclient_intersection exception for '%s & %s': %s",
+            cross_street_one, cross_street_two, type(exc).__name__,
+        )
         return None
 
 
