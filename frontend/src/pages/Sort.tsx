@@ -443,6 +443,13 @@ function RouteCard({
 // Inline address editor for a single failed package row
 // ---------------------------------------------------------------------------
 
+const GEOCODE_REASON_LABELS: Record<string, string> = {
+  geoclient_no_match:  'No match',
+  geoclient_error:     'API error',
+  missing_address:     'No address',
+  block_key_parse:     'Parse failed',
+};
+
 function PackageAddressEditor({
   row,
   sortDate,
@@ -457,15 +464,31 @@ function PackageAddressEditor({
   const [saving, setSaving]     = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const reasonLabel = row.geocode_reason
+    ? (GEOCODE_REASON_LABELS[row.geocode_reason] ?? row.geocode_reason)
+    : null;
+
   if (!editing) {
     return (
-      <button
-        onClick={() => { setAddress(''); setSaveError(null); setEditing(true); }}
-        className="text-[10px] text-primary hover:underline ml-1"
-        title="Edit address"
-      >
-        Edit
-      </button>
+      <div className="flex flex-col gap-0.5">
+        {row.raw_address && (
+          <span className="text-foreground/80">{row.raw_address}</span>
+        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {reasonLabel && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-warning/15 text-warning font-medium">
+              {reasonLabel}
+            </span>
+          )}
+          <button
+            onClick={() => { setAddress(row.raw_address ?? ''); setSaveError(null); setEditing(true); }}
+            className="text-[10px] text-primary hover:underline"
+            title="Correct address"
+          >
+            Edit
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -496,7 +519,7 @@ function PackageAddressEditor({
           value={address}
           onChange={e => setAddress(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setEditing(false); }}
-          placeholder="e.g. 123 West 34 St"
+          placeholder={row.raw_address ?? 'e.g. 123 West 34 St'}
           className="input-field text-[11px] h-6 py-0 px-1.5 flex-1 min-w-0"
         />
         <button
@@ -627,7 +650,7 @@ function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
               <thead>
                 <tr className="border-b border-border bg-accent/40">
                   <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">TBA</th>
-                  <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Normalised address</th>
+                  <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Address</th>
                   <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Block key</th>
                   <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Bag</th>
                   <th className="text-center px-2 py-1.5 text-muted-foreground font-semibold">Status</th>
@@ -639,7 +662,14 @@ function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
                     <td className="px-2 py-1 font-mono text-foreground whitespace-nowrap">{row.tba}</td>
                     <td className="px-2 py-1 text-muted-foreground">
                       {row.enriched
-                        ? <span>{row.normalised_address ?? '—'}</span>
+                        ? (
+                          <div className="flex flex-col gap-0">
+                            <span className="text-foreground/80">{row.normalised_address ?? '—'}</span>
+                            {row.raw_address && row.raw_address !== row.normalised_address && (
+                              <span className="text-[9px] text-muted-foreground/60">{row.raw_address}</span>
+                            )}
+                          </div>
+                        )
                         : <PackageAddressEditor
                             row={row}
                             sortDate={sortDate}

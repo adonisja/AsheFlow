@@ -289,9 +289,11 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
         "lat":                final_lat,
         "lng":                final_lng,
         "block_key":          block_key,
+        "raw_address":        address,           # original manifest address — always preserved
         "normalised_address": geo.normalised_address if geo else None,
         "first_cross_street": geo.first_cross_street if geo else None,
         "second_cross_street":geo.second_cross_street if geo else None,
+        "geocode_reason":     failure_reason,    # None for success; error code for failures
     }
 
     failed_entry = {"tba": tba, "raw_address": address, "reason": failure_reason} if failure_reason else None

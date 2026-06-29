@@ -124,12 +124,14 @@ class SortRunStatusResponse(BaseModel):
 
 class ManifestPreviewRow(BaseModel):
     tba: str
+    raw_address: Optional[str] = None        # original address from manifest
     normalised_address: Optional[str] = None
     block_key: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     bag_id: Optional[str] = None
     enriched: bool   # False when block_key is None (geocoding failed)
+    geocode_reason: Optional[str] = None     # failure code when not enriched
 
 
 class ManifestPreviewResponse(BaseModel):
@@ -149,11 +151,13 @@ class ManifestPackagePatchRequest(BaseModel):
 
 class ManifestPackagePatchResponse(BaseModel):
     tba: str
+    raw_address: Optional[str] = None
     normalised_address: Optional[str] = None
     block_key: Optional[str] = None
     lat: Optional[float] = None
     lng: Optional[float] = None
     enriched: bool
+    geocode_reason: Optional[str] = None
 
 
 class SortPreviewAssignment(BaseModel):
@@ -557,12 +561,14 @@ def get_manifest_preview(
     preview_rows = [
         ManifestPreviewRow(
             tba=p.get("tba", ""),
+            raw_address=p.get("raw_address"),
             normalised_address=p.get("normalised_address"),
             block_key=p.get("block_key"),
             lat=p.get("lat"),
             lng=p.get("lng"),
             bag_id=p.get("bag_id"),
             enriched=p.get("block_key") is not None,
+            geocode_reason=p.get("geocode_reason"),
         )
         for p in page_items
     ]
@@ -656,14 +662,18 @@ def patch_manifest_package(
         if isinstance(bk, ParsedBlock):
             block_key = bk.block_key
 
-    # Update the package in-place and write back to Redis (preserve existing TTL)
+    # Update the package in-place and write back to Redis (preserve existing TTL).
+    # Preserve raw_address (original manifest value) and clear geocode_reason on success.
+    failure_reason = None if block_key else "geoclient_no_match"
     ttl = r.ttl(key)
     packages[pkg_index] = {
         **packages[pkg_index],
+        "raw_address":        packages[pkg_index].get("raw_address") or address,
         "normalised_address": normalised_address,
-        "block_key": block_key,
-        "lat": lat,
-        "lng": lng,
+        "block_key":          block_key,
+        "lat":                lat,
+        "lng":                lng,
+        "geocode_reason":     failure_reason,
     }
     r.setex(key, max(ttl, _REDIS_TTL_SECONDS), json.dumps(packages))
 
@@ -679,11 +689,13 @@ def patch_manifest_package(
 
     return ManifestPackagePatchResponse(
         tba=tba,
+        raw_address=packages[pkg_index].get("raw_address"),
         normalised_address=normalised_address,
         block_key=block_key,
         lat=lat,
         lng=lng,
         enriched=block_key is not None,
+        geocode_reason=failure_reason,
     )
 
 

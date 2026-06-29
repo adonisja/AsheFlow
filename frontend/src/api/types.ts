@@ -805,12 +805,14 @@ export interface SortRunStatusResponse {
 
 export interface ManifestPreviewRow {
   tba: string;
+  raw_address: string | null;
   normalised_address: string | null;
   block_key: string | null;
   lat: number | null;
   lng: number | null;
   bag_id: string | null;
   enriched: boolean;
+  geocode_reason: string | null;
 }
 
 export interface ManifestPreviewResponse {
@@ -826,11 +828,13 @@ export interface ManifestPreviewResponse {
 
 export interface ManifestPackagePatchResponse {
   tba: string;
+  raw_address: string | null;
   normalised_address: string | null;
   block_key: string | null;
   lat: number | null;
   lng: number | null;
   enriched: boolean;
+  geocode_reason: string | null;
 }
 
 export interface SortPreviewAssignment {
