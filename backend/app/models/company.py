@@ -78,11 +78,11 @@ class CompanyConfig(Base):
     # ── Tier 1 tote verification (DBSCAN + classification thresholds) ─────────
     tier1_dbscan_eps           = Column(Float,   nullable=True, default=0.005)   # 0.005° ≈ 5 city blocks — truck zone radius
     tier1_dbscan_min_samples   = Column(Integer, nullable=True, default=30)
-    tier1_small_tote_cutoff    = Column(Integer, nullable=True)   # default 10 packages
-    tier1_small_stray_max      = Column(Integer, nullable=True)   # default 1 (count)
-    tier1_small_uncertain_max  = Column(Integer, nullable=True)   # default 3 (count)
-    tier1_stray_pct            = Column(Float,   nullable=True)   # default 0.10
-    tier1_uncertain_pct        = Column(Float,   nullable=True)   # default 0.40
+    tier1_small_tote_cutoff    = Column(Integer, nullable=True, default=10)
+    tier1_small_stray_max      = Column(Integer, nullable=True, default=1)
+    tier1_small_uncertain_max  = Column(Integer, nullable=True, default=3)
+    tier1_stray_pct            = Column(Float,   nullable=True, default=0.10)
+    tier1_uncertain_pct        = Column(Float,   nullable=True, default=0.25)
 
     # ── Route effort scoring tuning ───────────────────────────────────────────
     # Weights applied to time_weight and physical_weight per workload_class.
