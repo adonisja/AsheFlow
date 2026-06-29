@@ -33,6 +33,13 @@ from uuid import UUID
 
 import pytest
 
+# Proprietary services are only present locally and on EC2 (injected at deploy time).
+# Skip the entire module on CI rather than failing collection.
+tier1_verify_mod = pytest.importorskip(
+    "app.services.tier1_verify",
+    reason="app.services.tier1_verify not available (proprietary — CI skip)",
+)
+
 from app.services.assign_clusters import assign_clusters, AssignmentProposal, ClusterAssignment
 from app.services.cluster_packages import cluster_packages, Cluster, ClusterResult, BoundingBox
 from app.services.tier1_verify import BagOverride, BagResult, tier1_verify, VerificationResult
