@@ -785,6 +785,46 @@ export interface SortRunStatusResponse {
   http_status?: number;
 }
 
+export interface ManifestPreviewRow {
+  tba: string;
+  normalised_address: string | null;
+  block_key: string | null;
+  lat: number | null;
+  lng: number | null;
+  bag_id: string | null;
+  enriched: boolean;
+}
+
+export interface ManifestPreviewResponse {
+  sort_date: string;
+  total_packages: number;
+  enriched_count: number;
+  failed_count: number;
+  preview_rows: ManifestPreviewRow[];
+}
+
+export interface SortPreviewAssignment {
+  truck_id: string;
+  truck_name: string;
+  match_type: string;
+  workload_score: number | null;
+  is_overflow: boolean;
+  package_count: number;
+  outlier_count: number;
+}
+
+export interface SortPreviewResponse {
+  sort_date: string;
+  task_id: string;
+  package_count: number;
+  outlier_count: number;
+  cluster_count: number;
+  tier1_passed: boolean;
+  was_forced: boolean;
+  zones_created: number;
+  assignments: SortPreviewAssignment[];
+}
+
 export interface TbaReassignRequest {
   tba_numbers: string[];
   destination_zone_id: string;

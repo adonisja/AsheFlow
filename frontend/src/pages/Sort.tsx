@@ -17,6 +17,7 @@ import type {
   ArrivalConfirmResponse, MisroutedPackageOut,
   WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
   SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride,
+  ManifestPreviewResponse, SortPreviewResponse,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -438,6 +439,110 @@ function RouteCard({
 }
 
 // ---------------------------------------------------------------------------
+// Manifest preview panel — shown after enrichment is ready
+// ---------------------------------------------------------------------------
+
+function ManifestPreviewPanel({ today }: { today: string }) {
+  const [preview, setPreview]   = useState<ManifestPreviewResponse | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await axiosClient.get<ManifestPreviewResponse>(`/sort/manifest/${today}/preview`);
+      setPreview(data);
+      setExpanded(true);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail ?? 'Failed to load preview.';
+      setError(typeof detail === 'string' ? detail : 'Failed to load preview.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!preview && !error) {
+    return (
+      <button
+        onClick={load}
+        disabled={loading}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {loading
+          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading preview…</>
+          : <><FileText className="w-3.5 h-3.5" /> Preview enriched packages</>}
+      </button>
+    );
+  }
+
+  if (error) {
+    return <p className="text-xs text-warning">{error}</p>;
+  }
+
+  if (!preview) return null;
+
+  const failPct = preview.total_packages > 0
+    ? Math.round((preview.failed_count / preview.total_packages) * 100)
+    : 0;
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <FileText className="w-3.5 h-3.5" />
+        <span>
+          {preview.enriched_count.toLocaleString()} enriched
+          {preview.failed_count > 0 && (
+            <span className="text-warning ml-1">· {preview.failed_count} failed ({failPct}%)</span>
+          )}
+        </span>
+        {expanded ? <ChevronUp className="w-3.5 h-3.5 ml-auto" /> : <ChevronDown className="w-3.5 h-3.5 ml-auto" />}
+      </button>
+
+      {expanded && (
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="border-b border-border bg-accent/40">
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">TBA</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Normalised address</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Block key</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Bag</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.preview_rows.map((row, i) => (
+                <tr key={i} className={`border-b border-border/50 last:border-0 ${!row.enriched ? 'bg-warning/5' : ''}`}>
+                  <td className="px-2 py-1 font-mono text-foreground">{row.tba}</td>
+                  <td className="px-2 py-1 text-muted-foreground truncate max-w-[180px]">{row.normalised_address ?? '—'}</td>
+                  <td className="px-2 py-1 font-mono text-foreground">{row.block_key ?? '—'}</td>
+                  <td className="px-2 py-1 text-muted-foreground">{row.bag_id ?? '—'}</td>
+                  <td className="px-2 py-1">
+                    {row.enriched
+                      ? <span className="text-success font-semibold">✓</span>
+                      : <span className="text-warning font-semibold">✗</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {preview.total_packages > 50 && (
+            <p className="text-[10px] text-muted-foreground px-2 py-1.5 border-t border-border/50">
+              Showing first 50 of {preview.total_packages.toLocaleString()} packages.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Manifest upload panel — production CSV upload + enrichment status polling
 // ---------------------------------------------------------------------------
 
@@ -731,7 +836,7 @@ function ManifestUploadPanel({
 
           {/* ready */}
           {phase === 'ready' && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="flex items-center gap-2 text-sm text-success font-medium">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 {packageCount.toLocaleString()} packages enriched and ready.
@@ -744,11 +849,110 @@ function ManifestUploadPanel({
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />{w}
                 </p>
               ))}
-              <p className="text-xs text-muted-foreground">Use the truck panels below to commit routes.</p>
+              <ManifestPreviewPanel today={uploadDate} />
               <button onClick={handleReset} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                 <X className="w-3.5 h-3.5" /> Upload a different file
               </button>
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sort result preview — shown after sort completes
+// ---------------------------------------------------------------------------
+
+function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) {
+  const [preview, setPreview]   = useState<SortPreviewResponse | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const [expanded, setExpanded] = useState(true);
+  const [error, setError]       = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    axiosClient
+      .get<SortPreviewResponse>(`/sort/run/preview/${taskId}`, { params: { sort_date: today } })
+      .then(({ data }) => { if (!cancelled) { setPreview(data); setLoading(false); } })
+      .catch((e: any) => {
+        if (!cancelled) {
+          setError(e?.response?.data?.detail ?? 'Preview unavailable.');
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [taskId, today]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading sort summary…
+      </div>
+    );
+  }
+
+  if (error || !preview) return null;
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+      >
+        <Route className="w-3.5 h-3.5" />
+        <span className="font-semibold">Zone breakdown</span>
+        <span className="text-muted-foreground ml-1">
+          {preview.zones_created} zones · {preview.package_count.toLocaleString()} packages
+          {preview.outlier_count > 0 && <span className="text-warning ml-1">· {preview.outlier_count} outliers</span>}
+        </span>
+        {expanded ? <ChevronUp className="w-3.5 h-3.5 ml-auto" /> : <ChevronDown className="w-3.5 h-3.5 ml-auto" />}
+      </button>
+
+      {expanded && (
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="border-b border-border bg-accent/40">
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Truck</th>
+                <th className="text-right px-2 py-1.5 text-muted-foreground font-semibold">Packages</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Match</th>
+                <th className="text-right px-2 py-1.5 text-muted-foreground font-semibold">Workload</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Flags</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.assignments.map(a => (
+                <tr key={a.truck_id} className="border-b border-border/50 last:border-0">
+                  <td className="px-2 py-1 font-semibold text-foreground">
+                    {a.truck_name}
+                    {a.is_overflow && (
+                      <span className="ml-1 text-[9px] text-warning font-semibold uppercase">overflow</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1 text-right tabular-nums text-foreground">{a.package_count.toLocaleString()}</td>
+                  <td className="px-2 py-1 text-muted-foreground capitalize">{a.match_type}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
+                    {a.workload_score != null ? a.workload_score.toFixed(2) : '—'}
+                  </td>
+                  <td className="px-2 py-1">
+                    {!preview.tier1_passed && !preview.was_forced
+                      ? <span className="text-warning">⚠</span>
+                      : preview.was_forced
+                      ? <span className="text-warning text-[9px] uppercase font-semibold">forced</span>
+                      : <span className="text-success">✓</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {preview.outlier_count > 0 && (
+            <p className="text-[10px] text-warning px-2 py-1.5 border-t border-border/50 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3 shrink-0" />
+              {preview.outlier_count} package{preview.outlier_count !== 1 ? 's' : ''} could not be assigned to any zone (DBSCAN outliers).
+            </p>
           )}
         </div>
       )}
@@ -778,6 +982,7 @@ function ManifestSortPanel({
   const [error, setError]               = useState<string | null>(null);
   const [expanded, setExpanded]         = useState(false);
   const [running, setRunning]           = useState(false);
+  const [doneTaskId, setDoneTaskId]     = useState<string | null>(null);
   // override map: bag_id → truck_id (dispatch confirmed or manually chosen)
   const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
   const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -812,6 +1017,7 @@ function ManifestSortPanel({
         flagged_bags:  [],
       };
       setResult(synth);
+      setDoneTaskId(data.task_id);
       setPhase('done');
       setExpanded(false);
       setRunning(false);
@@ -979,23 +1185,9 @@ function ManifestSortPanel({
           {/* Done — summary */}
           {phase === 'done' && result && (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {result.assignments.map(a => (
-                  <div key={a.truck_id} className="p-2 rounded-lg bg-accent/50 space-y-0.5">
-                    <p className="text-[10px] text-muted-foreground uppercase font-semibold truncate">{a.truck_name}</p>
-                    <p className="text-xs font-semibold text-foreground">{a.package_count.toLocaleString()} pkgs</p>
-                    <p className="text-[10px] text-muted-foreground capitalize">{a.match_type}</p>
-                  </div>
-                ))}
-              </div>
-              {result.outlier_count > 0 && (
-                <p className="text-xs text-warning flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  {result.outlier_count} packages are DBSCAN outliers — no zone assigned.
-                </p>
-              )}
+              {doneTaskId && <SortPreviewPanel today={today} taskId={doneTaskId} />}
               <button
-                onClick={() => { setPhase('idle'); setResult(null); setError(null); setOverrideMap({}); }}
+                onClick={() => { setPhase('idle'); setResult(null); setError(null); setOverrideMap({}); setDoneTaskId(null); }}
                 className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
               >
                 Re-run sort

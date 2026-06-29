@@ -122,6 +122,46 @@ class SortRunStatusResponse(BaseModel):
     http_status: Optional[int] = None
 
 
+class ManifestPreviewRow(BaseModel):
+    tba: str
+    normalised_address: Optional[str] = None
+    block_key: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    bag_id: Optional[str] = None
+    enriched: bool   # False when block_key is None (geocoding failed)
+
+
+class ManifestPreviewResponse(BaseModel):
+    sort_date: date
+    total_packages: int
+    enriched_count: int
+    failed_count: int
+    preview_rows: list[ManifestPreviewRow]   # first 50 rows
+
+
+class SortPreviewAssignment(BaseModel):
+    truck_id: str
+    truck_name: str
+    match_type: str
+    workload_score: Optional[float] = None
+    is_overflow: bool
+    package_count: int
+    outlier_count: int
+
+
+class SortPreviewResponse(BaseModel):
+    sort_date: date
+    task_id: str
+    package_count: int
+    outlier_count: int
+    cluster_count: int
+    tier1_passed: bool
+    was_forced: bool
+    zones_created: int
+    assignments: list[SortPreviewAssignment]
+
+
 class ZoneOut(BaseModel):
     id: UUID
     truck_id: UUID
@@ -448,6 +488,59 @@ def get_manifest_status(
     )
 
 
+@router.get("/manifest/{sort_date}/preview", response_model=ManifestPreviewResponse)
+def get_manifest_preview(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+):
+    """Return the first 50 enriched packages for a given sort date.
+
+    Only available when status is "ready". Returns counts and a preview table
+    so dispatch can spot-check geocoding results before running sort.
+    """
+    cid_str = str(caller.company_id)
+    date_str = sort_date.isoformat()
+    r = _redis()
+    raw = r.get(_manifest_key(cid_str, date_str))
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No enriched manifest found for this date. Upload and enrich a manifest first.",
+        )
+    try:
+        packages = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Manifest data is corrupted — re-upload the file.",
+        )
+
+    enriched_count = sum(1 for p in packages if p.get("block_key") is not None)
+    failed_count = len(packages) - enriched_count
+
+    preview_rows = [
+        ManifestPreviewRow(
+            tba=p.get("tba", ""),
+            normalised_address=p.get("normalised_address"),
+            block_key=p.get("block_key"),
+            lat=p.get("lat"),
+            lng=p.get("lng"),
+            bag_id=p.get("bag_id"),
+            enriched=p.get("block_key") is not None,
+        )
+        for p in packages[:50]
+    ]
+
+    return ManifestPreviewResponse(
+        sort_date=sort_date,
+        total_packages=len(packages),
+        enriched_count=enriched_count,
+        failed_count=failed_count,
+        preview_rows=preview_rows,
+    )
+
+
 _SORT_RUN_RUNNING_TTL = 300   # 5-min sentinel written at dispatch time
 
 
@@ -599,6 +692,66 @@ def get_sort_run_status(
         return SortRunStatusResponse(task_id=task_id, status="error", detail=detail)
 
     return SortRunStatusResponse(task_id=task_id, status="error", detail="Sort task result not found — it may have expired.")
+
+
+@router.get("/run/preview/{task_id}", response_model=SortPreviewResponse)
+def get_sort_run_preview(
+    task_id: str,
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+):
+    """Return a summary preview of a completed sort run.
+
+    Only available when status is "done". Includes per-zone assignment breakdown
+    with package counts and workload scores so dispatch can review before committing
+    routes per truck.
+    """
+    from app.tasks.run_sort_task import _result_key
+
+    cid_str = str(caller.company_id)
+    date_str = sort_date.isoformat()
+    r = _redis()
+
+    raw = r.get(_result_key(cid_str, date_str, task_id))
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sort result not found — run sort first or result may have expired.",
+        )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Sort result data corrupted.")
+
+    if data.get("status") != "done":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Sort is not complete (status={data.get('status')}). Preview is only available after a successful sort.",
+        )
+
+    return SortPreviewResponse(
+        sort_date     = date.fromisoformat(data["sort_date"]),
+        task_id       = task_id,
+        package_count = data["package_count"],
+        outlier_count = data["outlier_count"],
+        cluster_count = data["cluster_count"],
+        tier1_passed  = data["tier1_passed"],
+        was_forced    = data["was_forced"],
+        zones_created = data["zones_created"],
+        assignments   = [
+            SortPreviewAssignment(
+                truck_id      = a["truck_id"],
+                truck_name    = a["truck_name"],
+                match_type    = a["match_type"],
+                workload_score= a.get("workload_score"),
+                is_overflow   = a["is_overflow"],
+                package_count = a["package_count"],
+                outlier_count = data["outlier_count"],
+            )
+            for a in data.get("assignments", [])
+        ],
+    )
 
 
 class CentroidOut(BaseModel):
