@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
   RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail, ArrowUp, ArrowDown,
-  Copy, Check, Hash, Search, ToggleLeft, ToggleRight, ShieldAlert, ShieldOff,
+  Copy, Check, Hash, Search, ToggleLeft, ToggleRight, ShieldAlert, ShieldOff, Phone,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,17 +95,38 @@ function toE164Phone(formatted: string): string {
 // Utility
 // ---------------------------------------------------------------------------
 
+const ROLE_COLORS: Record<string, string> = {
+  driver:     'bg-blue-500/10 text-blue-500',
+  walker:     'bg-emerald-500/10 text-emerald-600',
+  trainer:    'bg-purple-500/10 text-purple-600',
+  trainee:    'bg-amber-500/10 text-amber-600',
+  dispatch:   'bg-indigo-500/10 text-indigo-600',
+  management: 'bg-teal-500/10 text-teal-600',
+  admin:      'bg-rose-500/10 text-rose-600',
+};
+
+const ROLE_AVATAR_COLORS: Record<string, string> = {
+  driver:     'bg-blue-100 text-blue-700',
+  walker:     'bg-emerald-100 text-emerald-700',
+  trainer:    'bg-purple-100 text-purple-700',
+  trainee:    'bg-amber-100 text-amber-700',
+  dispatch:   'bg-indigo-100 text-indigo-700',
+  management: 'bg-teal-100 text-teal-700',
+  admin:      'bg-rose-100 text-rose-700',
+};
+
 function badge(role: string) {
-  const colors: Record<string, string> = {
-    driver:     'bg-info/10 text-info',
-    walker:     'bg-success/10 text-success',
-    trainer:    'bg-violet/10 text-violet',
-    trainee:    'bg-warning/10 text-warning',
-    dispatch:   'bg-primary/10 text-primary',
-    management: 'bg-teal/10 text-teal',
-    admin:      'bg-danger/10 text-danger',
-  };
-  return `inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize ${colors[role] ?? 'bg-accent text-foreground'}`;
+  return `inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize ${ROLE_COLORS[role] ?? 'bg-accent text-foreground'}`;
+}
+
+function RoleAvatar({ name, role }: { name: string; role: string }) {
+  const initials = name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+  const cls = ROLE_AVATAR_COLORS[role] ?? 'bg-accent text-muted-foreground';
+  return (
+    <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${cls}`}>
+      {initials}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -801,24 +822,32 @@ function PeopleTab() {
                   return (
                     <tr key={emp.id} className={`transition-colors hover:bg-accent/20 ${lc === 'deactivated' ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-foreground">{emp.name}</span>
-                          {emp.injury_status === 'injured' && (
-                            <span
-                              title={`Injured${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold bg-orange-500/10 text-orange-500 border border-orange-500/20 px-1.5 py-0.5 rounded-full"
-                            >
-                              <ShieldAlert className="w-2.5 h-2.5" /> Injured
-                            </span>
-                          )}
-                          {emp.injury_status === 'disabled' && (
-                            <span
-                              title={`Disabled${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger border border-danger/20 px-1.5 py-0.5 rounded-full"
-                            >
-                              <ShieldOff className="w-2.5 h-2.5" /> Disabled
-                            </span>
-                          )}
+                        <div className="flex items-center gap-2.5">
+                          <RoleAvatar name={emp.name} role={emp.role} />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-foreground text-sm">{emp.name}</span>
+                              {emp.injury_status === 'injured' && (
+                                <span
+                                  title={`Injured${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold bg-orange-500/10 text-orange-500 border border-orange-500/20 px-1.5 py-0.5 rounded-full"
+                                >
+                                  <ShieldAlert className="w-2.5 h-2.5" /> Injured
+                                </span>
+                              )}
+                              {emp.injury_status === 'disabled' && (
+                                <span
+                                  title={`Disabled${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger border border-danger/20 px-1.5 py-0.5 rounded-full"
+                                >
+                                  <ShieldOff className="w-2.5 h-2.5" /> Disabled
+                                </span>
+                              )}
+                            </div>
+                            {emp.username && (
+                              <span className="text-[11px] text-muted-foreground font-mono">{emp.username}</span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -832,8 +861,20 @@ function PeopleTab() {
                           ? <CopyableId value={emp.discord_id} />
                           : <span className="text-xs text-warning italic">not set</span>}
                       </td>
-                      <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
-                        {emp.phone_number ?? <span className="text-subtle italic">—</span>}
+                      <td className="px-4 py-3 hidden lg:table-cell">
+                        {emp.phone_number
+                          ? (
+                            <button
+                              onClick={() => navigator.clipboard.writeText(emp.phone_number!)}
+                              className="group flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                              title="Copy phone number"
+                            >
+                              <Phone className="w-3 h-3 shrink-0" />
+                              <span>{emp.phone_number}</span>
+                              <Copy className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-50 transition-opacity" />
+                            </button>
+                          )
+                          : <span className="text-subtle italic text-xs">—</span>}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>

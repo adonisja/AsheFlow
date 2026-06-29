@@ -136,9 +136,8 @@ jobs:
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo AWS_REGION=us-east-2 > /home/ubuntu/AsheFlow/backend/.env",
-              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/backend/.env",
-              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/backend/.env",
+              "cp /home/ubuntu/AsheFlow/.env /home/ubuntu/AsheFlow/backend/.env",
+              "grep -q GEOCLIENT_APP_KEY /home/ubuntu/AsheFlow/backend/.env && echo GEOCLIENT_APP_KEY_OK || (echo GEOCLIENT_APP_KEY_MISSING && exit 1)",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
@@ -364,9 +363,8 @@ jobs:
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo AWS_REGION=us-east-2 > /home/ubuntu/AsheFlow/backend/.env",
-              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/backend/.env",
-              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/backend/.env",
+              "cp /home/ubuntu/AsheFlow/.env /home/ubuntu/AsheFlow/backend/.env",
+              "grep -q GEOCLIENT_APP_KEY /home/ubuntu/AsheFlow/backend/.env && echo GEOCLIENT_APP_KEY_OK || (echo GEOCLIENT_APP_KEY_MISSING && exit 1)",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
