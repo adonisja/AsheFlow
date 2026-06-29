@@ -1396,7 +1396,7 @@ def upsert_company_zone_from_streets(
         from_avenue="6 Ave",   to_avenue="12 Ave",
         borough="manhattan"
     """
-    from app.tasks.enrich_manifest import _geoclient_normalise
+    from app.tasks.enrich_manifest import _geoclient_intersection
     from datetime import datetime, timezone
     from app.services.audit import write_audit
     import uuid as _uuid
@@ -1406,27 +1406,29 @@ def upsert_company_zone_from_streets(
     from_av = body.from_avenue.strip()
     to_av   = body.to_avenue.strip()
 
-    # Geocode all 4 boundary intersections to derive the bounding box.
-    # The intersections form the 4 corners of the operating zone rectangle.
-    corners = [
-        f"{from_st} and {from_av}",
-        f"{from_st} and {to_av}",
-        f"{to_st}   and {from_av}",
-        f"{to_st}   and {to_av}",
+    # Geocode the 4 boundary intersections using GeoClient /intersection.json.
+    # Each pair of (street, avenue) is passed as crossStreetOne/crossStreetTwo.
+    corner_pairs = [
+        (from_st, from_av),
+        (from_st, to_av),
+        (to_st,   from_av),
+        (to_st,   to_av),
     ]
-    results = []
-    for corner in corners:
-        geo = _geoclient_normalise(corner, borough=body.borough)
-        if geo is None or geo.lat is None or geo.lng is None:
+    lats, lngs = [], []
+    for street, avenue in corner_pairs:
+        result = _geoclient_intersection(street, avenue, borough=body.borough)
+        if result is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Could not geocode intersection: {corner}. "
-                       f"Check street names and borough and try again.",
+                detail=(
+                    f"Could not geocode intersection: {street} & {avenue} in {body.borough}. "
+                    f"Use GeoClient-compatible street names, e.g. 'W 23 ST', '6 AVE'."
+                ),
             )
-        results.append(geo)
+        lat, lng = result
+        lats.append(lat)
+        lngs.append(lng)
 
-    lats = [g.lat for g in results]
-    lngs = [g.lng for g in results]
     sw_lat, sw_lng = min(lats), min(lngs)
     ne_lat, ne_lng = max(lats), max(lngs)
 

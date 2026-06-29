@@ -144,6 +144,45 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
     return None
 
 
+def _geoclient_intersection(
+    cross_street_one: str,
+    cross_street_two: str,
+    borough: str = "manhattan",
+) -> tuple[float, float] | None:
+    """Call GeoClient v2 /intersection.json and return (lat, lng) or None.
+
+    GeoClient expects street names without a house number — pass each street
+    of the intersection separately as crossStreetOne and crossStreetTwo.
+    Returns None if the key is unset, the API errors, or no match is found.
+    """
+    if not settings.geoclient_app_key:
+        return None
+
+    try:
+        resp = requests.get(
+            f"{_GEOCLIENT_BASE}/intersection.json",
+            params={
+                "crossStreetOne": cross_street_one,
+                "crossStreetTwo": cross_street_two,
+                "borough":        borough,
+            },
+            headers={
+                "Ocp-Apim-Subscription-Key": settings.geoclient_app_key,
+            },
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        ix = data.get("intersection", {})
+        lat_raw = ix.get("latitude")
+        lng_raw = ix.get("longitude")
+        if lat_raw is None or lng_raw is None:
+            return None
+        return float(lat_raw), float(lng_raw)
+    except Exception:
+        return None
+
+
 # ── Redis helpers ─────────────────────────────────────────────────────────────
 
 def _redis_client() -> redis_lib.Redis:

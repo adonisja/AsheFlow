@@ -1164,9 +1164,14 @@ function TruckAnchorModal({
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Enter the street address or intersection that marks this truck's home territory.
-          The system will geocode it to coordinates automatically.
+          Enter a street address (with house number) for this truck's home territory.
+          The system geocodes it to coordinates automatically.
         </p>
+        <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
+          <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
+          <p className="text-[11px] text-muted-foreground">Use: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">100 9 AVE</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
+          <p className="text-[11px] text-muted-foreground">Requires a house number — intersections are not supported here.</p>
+        </div>
 
         {hasAnchor && (
           <div className="flex items-start gap-2 p-2.5 bg-success/5 border border-success/20 rounded-xl">
@@ -1190,11 +1195,11 @@ function TruckAnchorModal({
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Address or intersection</label>
+            <label className="text-xs text-muted-foreground mb-1 block">Street address</label>
             <input
               type="text"
               className="input w-full"
-              placeholder="e.g. 34th St & 9th Ave"
+              placeholder="e.g. 411 W 36 ST"
               value={address}
               onChange={e => setAddress(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && save()}
@@ -1708,7 +1713,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
                 <input
                   type="text"
                   className="input w-full text-sm"
-                  placeholder="e.g. W 23 St"
+                  placeholder="e.g. W 23 ST"
                   value={fromStreet}
                   onChange={e => setFromStreet(e.target.value)}
                 />
@@ -1718,7 +1723,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
                 <input
                   type="text"
                   className="input w-full text-sm"
-                  placeholder="e.g. W 57 St"
+                  placeholder="e.g. W 57 ST"
                   value={toStreet}
                   onChange={e => setToStreet(e.target.value)}
                 />
@@ -1728,7 +1733,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
                 <input
                   type="text"
                   className="input w-full text-sm"
-                  placeholder="e.g. 6 Ave"
+                  placeholder="e.g. 6 AVE"
                   value={fromAvenue}
                   onChange={e => setFromAvenue(e.target.value)}
                 />
@@ -1738,16 +1743,19 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
                 <input
                   type="text"
                   className="input w-full text-sm"
-                  placeholder="e.g. 12 Ave"
+                  placeholder="e.g. 12 AVE"
                   value={toAvenue}
                   onChange={e => setToAvenue(e.target.value)}
                 />
               </div>
             </div>
 
-            <p className="text-[11px] text-muted-foreground">
-              The system geocodes the four corner intersections to build the bounding box automatically.
-            </p>
+            <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
+              <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
+              <p className="text-[11px] text-muted-foreground">Streets: <span className="font-mono text-foreground">W 23 ST</span>, <span className="font-mono text-foreground">E 57 ST</span>, <span className="font-mono text-foreground">FULTON ST</span></p>
+              <p className="text-[11px] text-muted-foreground">Avenues: <span className="font-mono text-foreground">6 AVE</span>, <span className="font-mono text-foreground">12 AVE</span>, <span className="font-mono text-foreground">LEXINGTON AVE</span>, <span className="font-mono text-foreground">BROADWAY</span></p>
+              <p className="text-[11px] text-muted-foreground">The system geocodes all four corner intersections to build the bounding box.</p>
+            </div>
           </div>
 
           {error && <p className="text-xs text-destructive">{error}</p>}
