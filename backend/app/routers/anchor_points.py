@@ -37,6 +37,7 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.anchor_point import AnchorPoint
 from app.models.anchor_point_late_flag import AnchorPointLateFlag
+from app.models.building_profile import BuildingProfile
 from app.models.employee import Employee
 from app.services.company_config import get_discord_config
 from app.models.truck import Truck
@@ -670,3 +671,65 @@ def get_anchor_points_for_truck(
         .limit(limit)
         .all()
     )
+
+
+@router.get("/truck/{truck_id}/location-hints")
+def get_location_hints_for_truck(
+    truck_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_truck_read),
+):
+    """Return suggested starting locations for a truck's AP submission form.
+
+    Sources (in priority order):
+      1. Historical is_initial APs for this truck (last 5, most recent first)
+      2. Building profile initial anchor points for this company (fallback when no AP history)
+
+    Returns a flat list: [{label, sublabel, source}]
+    where source is "history" or "building_profile".
+    """
+    # 1. Historical APs
+    historical = (
+        db.query(AnchorPoint)
+        .join(Truck, AnchorPoint.truck_id == Truck.id)
+        .filter(
+            AnchorPoint.truck_id == truck_id,
+            AnchorPoint.is_initial == True,
+            Truck.company_id == caller.company_id,
+        )
+        .order_by(AnchorPoint.date.desc())
+        .limit(5)
+        .all()
+    )
+
+    if historical:
+        return [
+            {
+                "label":    h.location,
+                "sublabel": h.date.isoformat(),
+                "source":   "history",
+            }
+            for h in historical
+        ]
+
+    # 2. Fallback: building profile initial anchors (label = note if set, else lat/lng)
+    bp_anchors = (
+        db.query(BuildingProfile)
+        .filter(
+            BuildingProfile.company_id == caller.company_id,
+            BuildingProfile.initial_anchor_lat.isnot(None),
+            BuildingProfile.initial_anchor_lng.isnot(None),
+        )
+        .limit(5)
+        .all()
+    )
+
+    return [
+        {
+            "label":    bp.initial_anchor_note or f"{bp.initial_anchor_lat:.5f}, {bp.initial_anchor_lng:.5f}",
+            "sublabel": "Station anchor",
+            "source":   "building_profile",
+        }
+        for bp in bp_anchors
+    ]

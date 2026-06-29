@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
   RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail, ArrowUp, ArrowDown,
+  Copy, Check, Hash, Search, ToggleLeft, ToggleRight, ShieldAlert, ShieldOff,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,6 +26,8 @@ type Employee = {
   account_status: string;
   phone_number: string | null;
   invited_at: string | null;
+  injury_status: 'injured' | 'disabled' | null;
+  injury_status_since: string | null;
 };
 
 type EmployeeLifecycle = 'not_invited' | 'invited' | 'registered' | 'active' | 'deactivated';
@@ -654,7 +657,11 @@ function PeopleTab() {
     const matchSearch = !search || e.name.toLowerCase().includes(search.toLowerCase())
       || (e.email ?? '').toLowerCase().includes(search.toLowerCase())
       || (e.discord_id ?? '').toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === 'all' || getLifecycle(e) === statusFilter;
+    const lc = getLifecycle(e);
+    const matchStatus = statusFilter === 'all'
+      || (statusFilter === 'pending' && (lc === 'not_invited' || lc === 'invited' || lc === 'registered'))
+      || (statusFilter === 'active' && lc === 'active')
+      || (statusFilter === 'deactivated' && lc === 'deactivated');
     return matchRole && matchSearch && matchStatus;
   });
 
@@ -662,18 +669,52 @@ function PeopleTab() {
   const currentPage = Math.min(page, Math.max(0, totalPages - 1));
   const pageSlice   = visible.slice(currentPage * PEOPLE_PAGE_SIZE, (currentPage + 1) * PEOPLE_PAGE_SIZE);
 
+  const injuredCount  = employees.filter(e => e.injury_status === 'injured').length;
+  const disabledCount = employees.filter(e => e.injury_status === 'disabled').length;
+  const activeCount   = employees.filter(e => e.account_status === 'active' && e.is_active).length;
+  const pendingCount  = employees.filter(e => e.account_status === 'pending_verification').length;
+  const deactivatedCount = employees.filter(e => e.account_status === 'active' && !e.is_active).length;
+
   return (
     <div className="space-y-5">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
+
+      {/* KPI summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        {[
+          { label: 'Active',      value: activeCount,      color: 'text-success',          filterVal: 'active'      as typeof statusFilter },
+          { label: 'Pending',     value: pendingCount,     color: 'text-warning',          filterVal: 'pending'     as typeof statusFilter },
+          { label: 'Deactivated', value: deactivatedCount, color: 'text-muted-foreground', filterVal: 'deactivated' as typeof statusFilter },
+          { label: 'Injured',     value: injuredCount,     color: 'text-orange-500',       filterVal: null },
+          { label: 'Disabled',    value: disabledCount,    color: 'text-danger',           filterVal: null },
+        ].map(({ label, value, color, filterVal }) => (
+          <button
+            key={label}
+            onClick={() => {
+              if (!filterVal) return;
+              setStatusFilter(prev => prev === filterVal ? 'all' : filterVal);
+              setPage(0);
+            }}
+            className={`card text-center py-3 transition-colors ${filterVal ? 'hover:bg-accent/50 cursor-pointer' : 'cursor-default'} ${statusFilter === filterVal && filterVal ? 'ring-2 ring-primary/30' : ''}`}
+          >
+            <p className={`text-2xl font-bold ${color}`}>{value}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+          </button>
+        ))}
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
-        <input
-          type="search"
-          placeholder="Search name, email, Discord…"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setPage(0); }}
-          className="input flex-1 min-w-[180px] max-w-xs"
-        />
+        <div className="relative flex-1 min-w-[180px] max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <input
+            type="search"
+            placeholder="Search name, email, Discord…"
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(0); }}
+            className="input pl-8 w-full"
+          />
+        </div>
         <div className="relative">
           <select
             value={filter}
@@ -692,15 +733,13 @@ function PeopleTab() {
             className="input pr-8 appearance-none"
           >
             <option value="all">All Statuses</option>
-            <option value="not_invited">Not Invited</option>
-            <option value="invited">Invited</option>
-            <option value="registered">Registered</option>
+            <option value="pending">Pending</option>
             <option value="active">Active</option>
             <option value="deactivated">Deactivated</option>
           </select>
           <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         </div>
-        <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
+        <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
           <RefreshCw className="w-4 h-4" />
         </button>
         {canImport && (
@@ -719,24 +758,27 @@ function PeopleTab() {
         </button>
       </div>
 
-      {/* Count */}
-      <p className="text-xs text-subtle">
-        {employees.filter(e => e.account_status === 'active' && e.is_active).length} active ·{' '}
-        {employees.filter(e => e.account_status === 'pending_verification').length} pending ·{' '}
-        {employees.filter(e => e.account_status === 'active' && !e.is_active).length} deactivated
-        {visible.length !== employees.length && ` · ${visible.length} shown`}
-      </p>
+      {visible.length !== employees.length && (
+        <p className="text-xs text-subtle">{visible.length} of {employees.length} shown</p>
+      )}
 
       {/* Table */}
       {loadError && (
-        <div className="card border-danger/30 bg-danger/5 text-danger text-sm px-4 py-3 rounded-xl">{loadError}</div>
+        <div className="card border-danger/30 bg-danger/5 text-danger text-sm px-4 py-3 rounded-xl flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" /> {loadError}
+        </div>
       )}
       {loading ? (
-        <div className="flex justify-center py-16">
-          <div className="w-7 h-7 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div className="space-y-2">
+          {[0,1,2,3,4,5].map(i => (
+            <div key={i} className="card h-12 animate-pulse bg-accent/40" />
+          ))}
         </div>
       ) : visible.length === 0 ? (
-        <div className="text-center py-16 text-subtle">No employees found.</div>
+        <div className="card text-center py-16 space-y-2">
+          <Users className="w-8 h-8 text-muted-foreground mx-auto" />
+          <p className="text-muted-foreground text-sm">No employees found.</p>
+        </div>
       ) : (
         <div className="card overflow-hidden p-0">
           <div className="overflow-x-auto">
@@ -746,152 +788,169 @@ function PeopleTab() {
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Role</th>
                   <th className="px-4 py-3 hidden sm:table-cell">Email</th>
-                  <th className="px-4 py-3 hidden md:table-cell">Discord ID</th>
+                  <th className="px-4 py-3 hidden md:table-cell">Discord</th>
                   <th className="px-4 py-3 hidden lg:table-cell">Phone</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {pageSlice.map(emp => (
-                  <tr key={emp.id} className={`transition-colors hover:bg-accent/20 ${emp.account_status === 'active' && !emp.is_active ? 'opacity-50' : ''}`}>
-                    <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">{emp.name}</td>
-                    <td className="px-4 py-3">
-                      <span className={badge(emp.role)}>{emp.role}</span>
-                    </td>
-                    <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs truncate max-w-[180px]">
-                      {emp.email ?? <span className="text-subtle italic">—</span>}
-                    </td>
-                    <td className="px-4 py-3 hidden md:table-cell font-mono text-xs text-muted-foreground">
-                      {emp.discord_id
-                        ? emp.discord_id
-                        : <span className="text-warning italic">not set</span>}
-                    </td>
-                    <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
-                      {emp.phone_number ?? <span className="text-subtle italic">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      {(() => {
-                        const { label, cls } = LIFECYCLE_BADGE[getLifecycle(emp)];
-                        return (
-                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-                            {label}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-2">
-                        {promoteMsg?.id === emp.id && (
-                          <span
-                            className={`text-xs font-medium max-w-[160px] truncate ${promoteMsg.ok ? 'text-success' : 'text-danger'}`}
-                            title={promoteMsg.text}
-                          >
-                            {promoteMsg.ok ? 'Done' : 'Failed'}
-                          </span>
-                        )}
-                        {resendMsg?.id === emp.id && (
-                          <span
-                            className={`text-xs font-medium max-w-[160px] truncate ${resendMsg.ok ? 'text-success' : 'text-danger'}`}
-                            title={resendMsg.text}
-                          >
-                            {resendMsg.ok ? 'Invite sent' : 'Failed'}
-                          </span>
-                        )}
-                        {/* Resend invite — only for not-invited / invited states */}
-                        {(getLifecycle(emp) === 'not_invited' || getLifecycle(emp) === 'invited') && emp.email && (
-                          <button
-                            onClick={() => handleResendInvite(emp)}
-                            disabled={resendingId === emp.id}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                            title="Re-send registration invite email"
-                          >
-                            {resendingId === emp.id
-                              ? <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                              : <Mail className="w-3 h-3" />}
-                            {getLifecycle(emp) === 'not_invited' ? 'Send Invite' : 'Resend Invite'}
-                          </button>
-                        )}
-                        {/* Resend credentials — only for registered state (form done, not yet signed in) */}
-                        {getLifecycle(emp) === 'registered' && emp.email && (
-                          <button
-                            onClick={() => handleResendCredentials(emp)}
-                            disabled={resendingId === emp.id}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-info hover:bg-info/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                            title="Re-send credentials email (username + temp password)"
-                          >
-                            {resendingId === emp.id
-                              ? <div className="w-3 h-3 border-2 border-info border-t-transparent rounded-full animate-spin" />
-                              : <Mail className="w-3 h-3" />}
-                            Resend Credentials
-                          </button>
-                        )}
-                        {emp.role === 'walker' && emp.account_status === 'active' && (
-                          <button
-                            onClick={() => handlePromote(emp)}
-                            disabled={promotingId === emp.id}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-violet hover:bg-violet/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                            title="Promote to trainer"
-                          >
-                            {promotingId === emp.id
-                              ? <div className="w-3 h-3 border-2 border-violet border-t-transparent rounded-full animate-spin" />
-                              : <ArrowUp className="w-3 h-3" />}
-                            Promote
-                          </button>
-                        )}
-                        {emp.role === 'trainer' && emp.account_status === 'active' && (
-                          <button
-                            onClick={() => handleDemote(emp)}
-                            disabled={promotingId === emp.id}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-warning hover:bg-warning/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                            title="Demote to walker"
-                          >
-                            {promotingId === emp.id
-                              ? <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" />
-                              : <ArrowDown className="w-3 h-3" />}
-                            Demote
-                          </button>
-                        )}
-                        {(!isManagement || !PROTECTED_ROLES.includes(emp.role)) && (
-                          <>
-                            <button
-                              onClick={() => setEditTarget(emp)}
-                              className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                              title="Edit"
+                {pageSlice.map(emp => {
+                  const lc = getLifecycle(emp);
+                  const { label, cls } = LIFECYCLE_BADGE[lc];
+                  return (
+                    <tr key={emp.id} className={`transition-colors hover:bg-accent/20 ${lc === 'deactivated' ? 'opacity-50' : ''}`}>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-foreground">{emp.name}</span>
+                          {emp.injury_status === 'injured' && (
+                            <span
+                              title={`Injured${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold bg-orange-500/10 text-orange-500 border border-orange-500/20 px-1.5 py-0.5 rounded-full"
                             >
-                              <Pencil className="w-3.5 h-3.5" />
+                              <ShieldAlert className="w-2.5 h-2.5" /> Injured
+                            </span>
+                          )}
+                          {emp.injury_status === 'disabled' && (
+                            <span
+                              title={`Disabled${emp.injury_status_since ? ` since ${new Date(emp.injury_status_since).toLocaleDateString()}` : ''}`}
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger border border-danger/20 px-1.5 py-0.5 rounded-full"
+                            >
+                              <ShieldOff className="w-2.5 h-2.5" /> Disabled
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={badge(emp.role)}>{emp.role}</span>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs truncate max-w-[180px]">
+                        {emp.email ?? <span className="text-subtle italic">—</span>}
+                      </td>
+                      <td className="px-4 py-3 hidden md:table-cell">
+                        {emp.discord_id
+                          ? <CopyableId value={emp.discord_id} />
+                          : <span className="text-xs text-warning italic">not set</span>}
+                      </td>
+                      <td className="px-4 py-3 hidden lg:table-cell text-xs text-muted-foreground">
+                        {emp.phone_number ?? <span className="text-subtle italic">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
+                          {label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-2">
+                          {promoteMsg?.id === emp.id && (
+                            <span
+                              className={`text-xs font-medium max-w-[160px] truncate ${promoteMsg.ok ? 'text-success' : 'text-danger'}`}
+                              title={promoteMsg.text}
+                            >
+                              {promoteMsg.ok ? 'Done' : 'Failed'}
+                            </span>
+                          )}
+                          {resendMsg?.id === emp.id && (
+                            <span
+                              className={`text-xs font-medium max-w-[160px] truncate ${resendMsg.ok ? 'text-success' : 'text-danger'}`}
+                              title={resendMsg.text}
+                            >
+                              {resendMsg.ok ? 'Invite sent' : 'Failed'}
+                            </span>
+                          )}
+                          {(lc === 'not_invited' || lc === 'invited') && emp.email && (
+                            <button
+                              onClick={() => handleResendInvite(emp)}
+                              disabled={resendingId === emp.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                              title="Re-send registration invite email"
+                            >
+                              {resendingId === emp.id
+                                ? <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                                : <Mail className="w-3 h-3" />}
+                              {lc === 'not_invited' ? 'Send Invite' : 'Resend Invite'}
                             </button>
-                            {(getLifecycle(emp) === 'active' || getLifecycle(emp) === 'deactivated') && (
+                          )}
+                          {lc === 'registered' && emp.email && (
+                            <button
+                              onClick={() => handleResendCredentials(emp)}
+                              disabled={resendingId === emp.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-info hover:bg-info/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                              title="Re-send credentials email (username + temp password)"
+                            >
+                              {resendingId === emp.id
+                                ? <div className="w-3 h-3 border-2 border-info border-t-transparent rounded-full animate-spin" />
+                                : <Mail className="w-3 h-3" />}
+                              Resend Credentials
+                            </button>
+                          )}
+                          {emp.role === 'walker' && emp.account_status === 'active' && (
+                            <button
+                              onClick={() => handlePromote(emp)}
+                              disabled={promotingId === emp.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-violet hover:bg-violet/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                              title="Promote to trainer"
+                            >
+                              {promotingId === emp.id
+                                ? <div className="w-3 h-3 border-2 border-violet border-t-transparent rounded-full animate-spin" />
+                                : <ArrowUp className="w-3 h-3" />}
+                              Promote
+                            </button>
+                          )}
+                          {emp.role === 'trainer' && emp.account_status === 'active' && (
+                            <button
+                              onClick={() => handleDemote(emp)}
+                              disabled={promotingId === emp.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-warning hover:bg-warning/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                              title="Demote to walker"
+                            >
+                              {promotingId === emp.id
+                                ? <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" />
+                                : <ArrowDown className="w-3 h-3" />}
+                              Demote
+                            </button>
+                          )}
+                          {(!isManagement || !PROTECTED_ROLES.includes(emp.role)) && (
+                            <>
                               <button
-                                onClick={() => handleToggleActive(emp)}
-                                className={`text-xs font-medium px-2 py-1 rounded-lg transition-colors ${
-                                  getLifecycle(emp) === 'active'
-                                    ? 'text-danger hover:bg-danger/10'
-                                    : 'text-success hover:bg-success/10'
-                                }`}
+                                onClick={() => setEditTarget(emp)}
+                                className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                                title="Edit"
                               >
-                                {getLifecycle(emp) === 'active' ? 'Deactivate' : 'Reactivate'}
+                                <Pencil className="w-3.5 h-3.5" />
                               </button>
-                            )}
-                            {isAdmin && (
-                              <button
-                                onClick={() => handleDelete(emp)}
-                                className="p-1.5 rounded-lg hover:bg-danger/10 text-muted-foreground hover:text-danger transition-colors"
-                                title="Delete employee"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                              {(lc === 'active' || lc === 'deactivated') && (
+                                <button
+                                  onClick={() => handleToggleActive(emp)}
+                                  className={`text-xs font-medium px-2 py-1 rounded-lg transition-colors ${
+                                    lc === 'active'
+                                      ? 'text-danger hover:bg-danger/10'
+                                      : 'text-success hover:bg-success/10'
+                                  }`}
+                                >
+                                  {lc === 'active' ? 'Deactivate' : 'Reactivate'}
+                                </button>
+                              )}
+                              {isAdmin && (
+                                <button
+                                  onClick={() => handleDelete(emp)}
+                                  className="p-1.5 rounded-lg hover:bg-danger/10 text-muted-foreground hover:text-danger transition-colors"
+                                  title="Delete employee"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {/* Pagination controls */}
+          {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-border">
               <p className="text-xs text-subtle">
@@ -963,6 +1022,103 @@ function PeopleTab() {
 // Fleet Tab
 // ---------------------------------------------------------------------------
 
+function CopyableId({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  };
+  return (
+    <button
+      onClick={copy}
+      className="group flex items-center gap-1.5 font-mono text-xs text-muted-foreground bg-accent/60 hover:bg-accent border border-border px-2.5 py-1 rounded-lg transition-colors"
+      title="Copy channel ID"
+    >
+      <Hash className="w-3 h-3 shrink-0 text-muted-foreground/60" />
+      <span className="truncate max-w-[140px]">{value}</span>
+      {copied
+        ? <Check className="w-3 h-3 text-success shrink-0" />
+        : <Copy className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" />}
+    </button>
+  );
+}
+
+function TruckCard({
+  truck,
+  onEdit,
+  onDeactivate,
+  onReactivate,
+}: {
+  truck: TruckRecord;
+  onEdit: () => void;
+  onDeactivate: () => void;
+  onReactivate: () => void;
+}) {
+  return (
+    <div className={`card group flex flex-col gap-3 transition-all hover:shadow-md ${!truck.is_active ? 'opacity-60' : ''}`}>
+      {/* Top row: icon + name + edit */}
+      <div className="flex items-start gap-3">
+        <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${
+          truck.is_active ? 'bg-primary/10' : 'bg-accent'
+        }`}>
+          <Truck className={`w-5 h-5 ${truck.is_active ? 'text-primary' : 'text-muted-foreground'}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground truncate">{truck.name}</p>
+          <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full mt-1 ${
+            truck.is_active
+              ? 'bg-success/10 text-success'
+              : 'bg-accent text-muted-foreground'
+          }`}>
+            {truck.is_active
+              ? <><CheckCircle2 className="w-3 h-3" /> Active</>
+              : 'Inactive'}
+          </span>
+        </div>
+        <button
+          onClick={onEdit}
+          className="shrink-0 p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors opacity-0 group-hover:opacity-100"
+          title="Edit truck"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Discord row */}
+      <div className="flex items-center gap-2 min-w-0">
+        {truck.discord_channel_id ? (
+          <CopyableId value={truck.discord_channel_id} />
+        ) : (
+          <span className="flex items-center gap-1 text-xs text-warning bg-warning/8 border border-warning/20 px-2.5 py-1 rounded-lg">
+            <AlertTriangle className="w-3 h-3 shrink-0" /> No Discord channel
+          </span>
+        )}
+      </div>
+
+      {/* Footer: toggle */}
+      <div className="pt-1 border-t border-border">
+        {truck.is_active ? (
+          <button
+            onClick={onDeactivate}
+            className="flex items-center gap-1.5 text-xs font-medium text-danger hover:bg-danger/8 px-2 py-1 rounded-lg transition-colors w-full"
+          >
+            <ToggleRight className="w-3.5 h-3.5" /> Deactivate
+          </button>
+        ) : (
+          <button
+            onClick={onReactivate}
+            className="flex items-center gap-1.5 text-xs font-medium text-success hover:bg-success/8 px-2 py-1 rounded-lg transition-colors w-full"
+          >
+            <ToggleLeft className="w-3.5 h-3.5" /> Reactivate
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FleetTab() {
   const { confirmState: fleetConfirmState, confirm: fleetConfirm, cancelConfirm: fleetCancelConfirm } = useConfirm();
   const [trucks, setTrucks]           = useState<TruckRecord[]>([]);
@@ -970,6 +1126,8 @@ function FleetTab() {
   const [loadError, setLoadError]     = useState<string | null>(null);
   const [showModal, setShowModal]     = useState(false);
   const [editTarget, setEditTarget]   = useState<TruckRecord | null>(null);
+  const [search, setSearch]           = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   const load = () => {
     setLoading(true);
@@ -1012,12 +1170,65 @@ function FleetTab() {
     setTrucks(prev => prev.map(t => t.id === truck.id ? res.data : t));
   };
 
+  const activeCount   = trucks.filter(t => t.is_active).length;
+  const inactiveCount = trucks.filter(t => !t.is_active).length;
+  const discordLinked = trucks.filter(t => t.discord_channel_id).length;
+
+  const visible = trucks.filter(t => {
+    const matchStatus = statusFilter === 'all'
+      || (statusFilter === 'active' && t.is_active)
+      || (statusFilter === 'inactive' && !t.is_active);
+    const matchSearch = !search || t.name.toLowerCase().includes(search.toLowerCase());
+    return matchStatus && matchSearch;
+  });
+
   return (
     <div className="space-y-5">
       <ConfirmDialog {...fleetConfirmState} onCancel={fleetCancelConfirm} />
+
+      {/* Summary KPIs */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Active',          value: activeCount,   color: 'text-success', filter: 'active'   as const },
+          { label: 'Inactive',        value: inactiveCount, color: 'text-muted-foreground', filter: 'inactive' as const },
+          { label: 'Discord Linked',  value: discordLinked, color: 'text-primary', filter: 'all'      as const },
+        ].map(({ label, value, color, filter }) => (
+          <button
+            key={label}
+            onClick={() => setStatusFilter(prev => prev === filter && label !== 'Discord Linked' ? 'all' : filter)}
+            className={`card text-center py-3 transition-colors hover:bg-accent/50 ${statusFilter === filter && label !== 'Discord Linked' ? 'ring-2 ring-primary/30' : ''}`}
+          >
+            <p className={`text-2xl font-bold ${color}`}>{value}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+          </button>
+        ))}
+      </div>
+
       {/* Toolbar */}
       <div className="flex items-center gap-3">
-        <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          <input
+            type="search"
+            placeholder="Search trucks…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="input pl-8 w-full"
+          />
+        </div>
+        <div className="relative">
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
+            className="input pr-8 appearance-none"
+          >
+            <option value="all">All</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        </div>
+        <button onClick={load} className="btn-ghost text-muted-foreground p-2" title="Refresh">
           <RefreshCw className="w-4 h-4" />
         </button>
         <button
@@ -1028,84 +1239,35 @@ function FleetTab() {
         </button>
       </div>
 
-      <p className="text-xs text-subtle">
-        {trucks.filter(t => t.is_active).length} active · {trucks.filter(t => !t.is_active).length} inactive
-      </p>
-
       {loadError && (
-        <div className="card border-danger/30 bg-danger/5 text-danger text-sm px-4 py-3 rounded-xl">{loadError}</div>
-      )}
-      {loading ? (
-        <div className="flex justify-center py-16">
-          <div className="w-7 h-7 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div className="card border-danger/30 bg-danger/5 text-danger text-sm px-4 py-3 rounded-xl flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" /> {loadError}
         </div>
-      ) : trucks.length === 0 ? (
-        <div className="text-center py-16 text-subtle">No trucks in the fleet yet.</div>
+      )}
+
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {[0,1,2,3,4,5,6].map(i => (
+            <div key={i} className="card animate-pulse h-32 bg-accent/40" />
+          ))}
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="card text-center py-16 space-y-2">
+          <Truck className="w-8 h-8 text-muted-foreground mx-auto" />
+          <p className="text-muted-foreground text-sm">
+            {trucks.length === 0 ? 'No trucks in the fleet yet.' : 'No trucks match your filter.'}
+          </p>
+        </div>
       ) : (
-        <div className="card divide-y divide-border overflow-hidden">
-          {trucks.map(truck => (
-            <div
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {visible.map(truck => (
+            <TruckCard
               key={truck.id}
-              className={`flex items-center gap-4 px-4 py-3 transition-colors hover:bg-accent/30 ${
-                !truck.is_active ? 'opacity-50' : ''
-              }`}
-            >
-              {/* Icon */}
-              <div className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${
-                truck.is_active ? 'bg-primary/10' : 'bg-accent'
-              }`}>
-                <Truck className={`w-4 h-4 ${truck.is_active ? 'text-primary' : 'text-muted-foreground'}`} />
-              </div>
-
-              {/* Name + status */}
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-foreground truncate">{truck.name}</p>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <span className={`text-xs font-medium ${truck.is_active ? 'text-success' : 'text-muted-foreground'}`}>
-                    {truck.is_active ? 'Active' : 'Inactive'}
-                  </span>
-                  <span className={`text-xs flex items-center gap-1 ${truck.discord_channel_id ? 'text-success' : 'text-warning'}`}>
-                    {truck.discord_channel_id
-                      ? <><CheckCircle2 className="w-3 h-3" /> Discord linked</>
-                      : <><AlertTriangle className="w-3 h-3" /> No channel</>
-                    }
-                  </span>
-                </div>
-              </div>
-
-              {/* Channel ID chip */}
-              {truck.discord_channel_id && (
-                <span className="hidden sm:block text-xs font-mono text-muted-foreground bg-accent px-2 py-0.5 rounded-lg truncate max-w-[160px]">
-                  {truck.discord_channel_id}
-                </span>
-              )}
-
-              {/* Actions */}
-              <div className="shrink-0 flex items-center gap-1">
-                <button
-                  onClick={() => setEditTarget(truck)}
-                  className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                  title="Edit"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                {truck.is_active ? (
-                  <button
-                    onClick={() => handleDeactivate(truck)}
-                    className="text-xs font-medium text-danger hover:bg-danger/10 px-2.5 py-1 rounded-lg transition-colors"
-                  >
-                    Deactivate
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleReactivate(truck)}
-                    className="text-xs font-medium text-success hover:bg-success/10 px-2.5 py-1 rounded-lg transition-colors"
-                  >
-                    Reactivate
-                  </button>
-                )}
-              </div>
-            </div>
+              truck={truck}
+              onEdit={() => setEditTarget(truck)}
+              onDeactivate={() => handleDeactivate(truck)}
+              onReactivate={() => handleReactivate(truck)}
+            />
           ))}
         </div>
       )}

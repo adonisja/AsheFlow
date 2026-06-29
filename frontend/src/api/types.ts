@@ -676,6 +676,18 @@ export interface BuildingProfileCreate {
   raw_note?: string;
 }
 
+export interface LocationHint {
+  label: string;
+  sublabel: string;
+  source: 'history' | 'building_profile';
+}
+
+export interface BuildingProfileAnchorPatch {
+  lat: number | null;
+  lng: number | null;
+  note?: string | null;
+}
+
 export interface BuildingProfileResponse {
   id: string;
   company_id: string;
@@ -696,6 +708,12 @@ export interface BuildingProfileResponse {
   verified_by: string | null;
   verified_by_name: string | null;
   verified_at: string | null;
+  initial_anchor_lat: number | null;
+  initial_anchor_lng: number | null;
+  initial_anchor_note: string | null;
+  initial_anchor_set_by: string | null;
+  initial_anchor_set_by_name: string | null;
+  initial_anchor_set_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw,
-  ChevronDown, ChevronUp, Loader2, FileEdit, Search, Plus, Info,
+  ChevronDown, ChevronUp, Loader2, FileEdit, Search, Plus, Info, MapPin,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import type { BuildingProfileResponse, BuildingProfileCreate, BuildingType } from '../api/types';
+import type { BuildingProfileResponse, BuildingProfileCreate, BuildingProfileAnchorPatch, BuildingType } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -288,19 +288,149 @@ function NoteModal({ profile, onClose, onUpdated }: NoteModalProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Anchor point modal (dispatch sets initial anchor)
+// ---------------------------------------------------------------------------
+
+interface AnchorModalProps {
+  profile: BuildingProfileResponse;
+  onClose: () => void;
+  onUpdated: (p: BuildingProfileResponse) => void;
+}
+
+function AnchorModal({ profile, onClose, onUpdated }: AnchorModalProps) {
+  const [lat,  setLat]  = useState(profile.initial_anchor_lat?.toString()  ?? '');
+  const [lng,  setLng]  = useState(profile.initial_anchor_lng?.toString()  ?? '');
+  const [note, setNote] = useState(profile.initial_anchor_note ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error,  setError]  = useState<string | null>(null);
+
+  const hasExisting = profile.initial_anchor_lat != null;
+
+  async function save() {
+    const latNum = parseFloat(lat);
+    const lngNum = parseFloat(lng);
+    if (isNaN(latNum) || isNaN(lngNum)) { setError('Enter valid lat/lng coordinates.'); return; }
+    if (latNum < -90 || latNum > 90)    { setError('Latitude must be between -90 and 90.'); return; }
+    if (lngNum < -180 || lngNum > 180)  { setError('Longitude must be between -180 and 180.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const body: BuildingProfileAnchorPatch = { lat: latNum, lng: lngNum, note: note.trim() || null };
+      const { data } = await axiosClient.patch<BuildingProfileResponse>(
+        `/building-profiles/${profile.id}/anchor`, body,
+      );
+      onUpdated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to save anchor point.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    setSaving(true);
+    setError(null);
+    try {
+      const body: BuildingProfileAnchorPatch = { lat: null, lng: null };
+      const { data } = await axiosClient.patch<BuildingProfileResponse>(
+        `/building-profiles/${profile.id}/anchor`, body,
+      );
+      onUpdated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to clear anchor point.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <MapPin className="w-4 h-4 text-primary" />
+          <h3 className="font-semibold text-foreground">{hasExisting ? 'Update' : 'Set'} initial anchor point</h3>
+        </div>
+        <p className="text-xs text-muted-foreground truncate">{profile.normalised_address}</p>
+        <p className="text-xs text-muted-foreground">
+          This anchor feeds the Field Ops driver AP workflow as a starting location suggestion,
+          and seeds the DBSCAN sort pipeline when no historical zone exists.
+        </p>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Latitude</label>
+              <input
+                type="number"
+                step="any"
+                className="input w-full font-mono text-sm"
+                placeholder="40.7128"
+                value={lat}
+                onChange={e => setLat(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Longitude</label>
+              <input
+                type="number"
+                step="any"
+                className="input w-full font-mono text-sm"
+                placeholder="-74.0060"
+                value={lng}
+                onChange={e => setLng(e.target.value)}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Label (optional)</label>
+            <input
+              type="text"
+              className="input w-full text-sm"
+              placeholder="e.g. Corner of 9th Ave & 34th St"
+              maxLength={200}
+              value={note}
+              onChange={e => setNote(e.target.value)}
+            />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 justify-between">
+          {hasExisting && (
+            <button onClick={clear} disabled={saving} className="btn-secondary text-sm text-destructive">
+              Clear
+            </button>
+          )}
+          <div className="flex gap-2 ml-auto">
+            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+            <button onClick={save} disabled={saving} className="btn-primary text-sm flex items-center gap-1.5">
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Save anchor
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
 // Profile card
 // ---------------------------------------------------------------------------
 
 interface ProfileCardProps {
   profile: BuildingProfileResponse;
   canLock: boolean;
+  canAnchor: boolean;
   onVerify: (p: BuildingProfileResponse) => void;
   onNote: (p: BuildingProfileResponse) => void;
   onLock: (p: BuildingProfileResponse) => void;
+  onAnchor: (p: BuildingProfileResponse) => void;
   onUpdated: (p: BuildingProfileResponse) => void;
 }
 
-function ProfileCard({ profile, canLock, onVerify, onNote, onLock }: ProfileCardProps) {
+function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, onAnchor }: ProfileCardProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -349,6 +479,32 @@ function ProfileCard({ profile, canLock, onVerify, onNote, onLock }: ProfileCard
             </div>
           )}
 
+          {/* Initial anchor point */}
+          {profile.initial_anchor_lat != null ? (
+            <div className="space-y-0.5">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold flex items-center gap-1">
+                <MapPin className="w-3 h-3" /> Initial anchor point
+              </p>
+              <p className="text-xs text-foreground font-mono">
+                {profile.initial_anchor_lat.toFixed(6)}, {profile.initial_anchor_lng?.toFixed(6)}
+              </p>
+              {profile.initial_anchor_note && (
+                <p className="text-xs text-muted-foreground">{profile.initial_anchor_note}</p>
+              )}
+              {profile.initial_anchor_set_by_name && (
+                <p className="text-[10px] text-muted-foreground">
+                  Set by {profile.initial_anchor_set_by_name}
+                  {profile.initial_anchor_set_at ? ` · ${new Date(profile.initial_anchor_set_at).toLocaleDateString()}` : ''}
+                </p>
+              )}
+            </div>
+          ) : canAnchor && (
+            <div className="flex items-center gap-1.5 p-2 bg-accent/30 rounded-lg">
+              <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              <p className="text-xs text-muted-foreground">No initial anchor point set — feeds sort pipeline and AP workflow.</p>
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground">Submitted by {profile.submitted_by_name} · {new Date(profile.created_at).toLocaleDateString()}</p>
 
           {/* Actions */}
@@ -367,6 +523,14 @@ function ProfileCard({ profile, canLock, onVerify, onNote, onLock }: ProfileCard
             >
               <FileEdit className="w-3.5 h-3.5" /> {profile.operational_note ? 'Edit note' : 'Add note'}
             </button>
+            {canAnchor && (
+              <button
+                onClick={() => onAnchor(profile)}
+                className="text-xs btn-secondary flex items-center gap-1"
+              >
+                <MapPin className="w-3.5 h-3.5" /> {profile.initial_anchor_lat != null ? 'Edit anchor' : 'Set anchor'}
+              </button>
+            )}
             {canLock && profile.building_type_status === 'verified' && (
               <button
                 onClick={() => onLock(profile)}
@@ -398,11 +562,13 @@ export default function BuildingProfilesPage() {
   const [lockError, setLockError] = useState<string | null>(null);
 
   // Modal state
-  const [submitOpen,   setSubmitOpen]   = useState(false);
-  const [verifyTarget, setVerifyTarget] = useState<BuildingProfileResponse | null>(null);
-  const [noteTarget,   setNoteTarget]   = useState<BuildingProfileResponse | null>(null);
+  const [submitOpen,    setSubmitOpen]    = useState(false);
+  const [verifyTarget,  setVerifyTarget]  = useState<BuildingProfileResponse | null>(null);
+  const [noteTarget,    setNoteTarget]    = useState<BuildingProfileResponse | null>(null);
+  const [anchorTarget,  setAnchorTarget]  = useState<BuildingProfileResponse | null>(null);
 
-  const canLock = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
+  const canLock   = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
+  const canAnchor = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -533,9 +699,11 @@ export default function BuildingProfilesPage() {
               <ProfileCard
                 profile={p}
                 canLock={canLock}
+                canAnchor={canAnchor}
                 onVerify={setVerifyTarget}
                 onNote={setNoteTarget}
                 onLock={handleLock}
+                onAnchor={setAnchorTarget}
                 onUpdated={applyUpdate}
               />
               {lockBusy === p.id && (
@@ -567,6 +735,13 @@ export default function BuildingProfilesPage() {
           profile={noteTarget}
           onClose={() => setNoteTarget(null)}
           onUpdated={p => { applyUpdate(p); setNoteTarget(null); }}
+        />
+      )}
+      {anchorTarget && (
+        <AnchorModal
+          profile={anchorTarget}
+          onClose={() => setAnchorTarget(null)}
+          onUpdated={p => { applyUpdate(p); setAnchorTarget(null); }}
         />
       )}
     </div>

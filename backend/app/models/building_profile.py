@@ -92,6 +92,16 @@ class BuildingProfile(Base):
     hours_verified_by_name = Column(String(100), nullable=True)
     hours_verified_at   = Column(DateTime(timezone=True), nullable=True)
 
+    # Initial anchor point — the default starting location for deliveries in this building's zone.
+    # Null until dispatch explicitly sets it. Feeds Field Ops AP workflow (fallback suggestion)
+    # and the DBSCAN sort pipeline (centroid hint when no historical TruckZone exists).
+    initial_anchor_lat  = Column(Float, nullable=True)
+    initial_anchor_lng  = Column(Float, nullable=True)
+    initial_anchor_note = Column(String(200), nullable=True)   # brief label e.g. "Corner of 9th Ave"
+    initial_anchor_set_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    initial_anchor_set_by_name = Column(String(100), nullable=True)
+    initial_anchor_set_at      = Column(DateTime(timezone=True), nullable=True)
+
     # Row creation audit
     created_by          = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     created_by_name     = Column(String(100), nullable=True)

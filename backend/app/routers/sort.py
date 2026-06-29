@@ -351,7 +351,11 @@ def upload_manifest(
     # clears on first receipt. If Celery discards the task (unregistered, worker
     # down, etc.) the key persists and the status endpoint returns "failed" with
     # an actionable message instead of silently reverting to "not_found".
+    # Delete the old manifest key immediately so re-uploads never serve stale data
+    # while the new enrichment is still in flight.
     r = _redis()
+    r.delete(_manifest_key(cid_str, date_str))
+    r.delete(f"manifest_progress:{cid_str}:{date_str}")
     r.setex(_enriching_key(cid_str, date_str), _ENRICHING_KEY_TTL, "1")
     r.setex(f"manifest_failed:{cid_str}:{date_str}", _REDIS_TTL_SECONDS, "worker_unreachable")
 
@@ -418,6 +422,28 @@ def get_manifest_status(
     raw = r.get(_manifest_key(cid_str, date_str))
     progress_raw = r.get(f"manifest_progress:{cid_str}:{date_str}")
 
+    # Enriching sentinel takes priority over stale cached data. Without this check,
+    # a re-upload for the same date would immediately return "ready" with the old
+    # manifest key still in Redis before the new enrichment task finishes.
+    if enriching:
+        packages_processed = None
+        packages_total = None
+        if progress_raw:
+            try:
+                prog = json.loads(progress_raw)
+                packages_processed = prog.get("processed")
+                packages_total = prog.get("total")
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        return ManifestStatusResponse(
+            sort_date=sort_date,
+            status="enriching",
+            package_count=0,
+            failed_count=0,
+            packages_processed=packages_processed,
+            packages_total=packages_total,
+        )
+
     if raw is not None:
         try:
             packages = json.loads(raw)
@@ -466,25 +492,6 @@ def get_manifest_status(
             package_count=0,
             failed_count=0,
             failed_reason=human_reason,
-        )
-
-    if enriching:
-        packages_processed = None
-        packages_total = None
-        if progress_raw:
-            try:
-                prog = json.loads(progress_raw)
-                packages_processed = prog.get("processed")
-                packages_total = prog.get("total")
-            except (json.JSONDecodeError, AttributeError):
-                pass
-        return ManifestStatusResponse(
-            sort_date=sort_date,
-            status="enriching",
-            package_count=0,
-            failed_count=0,
-            packages_processed=packages_processed,
-            packages_total=packages_total,
         )
 
     if failed_reason:  # worker_unreachable — enriching sentinel already expired

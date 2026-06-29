@@ -75,6 +75,13 @@ class BuildingProfileNotePatch(BaseModel):
     operational_note: str = Field(..., max_length=2000)
 
 
+class BuildingProfileAnchorPatch(BaseModel):
+    """Dispatch sets or clears the initial anchor point for a building profile."""
+    lat:  Optional[float] = Field(None, ge=-90,  le=90)
+    lng:  Optional[float] = Field(None, ge=-180, le=180)
+    note: Optional[str]   = Field(None, max_length=200)
+
+
 class BuildingProfileResponse(BaseModel):
     id:                  UUID
     company_id:          UUID
@@ -94,6 +101,13 @@ class BuildingProfileResponse(BaseModel):
     verified_by:         Optional[UUID] = None
     verified_by_name:    Optional[str] = None
     verified_at:         Optional[datetime] = None
+    # Initial anchor point — set by dispatch; feeds AP workflow + sort pipeline
+    initial_anchor_lat:          Optional[float]    = None
+    initial_anchor_lng:          Optional[float]    = None
+    initial_anchor_note:         Optional[str]      = None
+    initial_anchor_set_by:       Optional[UUID]     = None
+    initial_anchor_set_by_name:  Optional[str]      = None
+    initial_anchor_set_at:       Optional[datetime] = None
     created_at:          datetime
     updated_at:          datetime
     # Derived — not stored
