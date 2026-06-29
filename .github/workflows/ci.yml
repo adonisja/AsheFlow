@@ -119,7 +119,6 @@ jobs:
       # No secret values pass through the CI runner or CLI arguments.
       - name: Write staging backend .env via SSM Parameter Store
         run: |
-          GEOCLIENT_APP_KEY="${{ secrets.GEOCLIENT_APP_KEY }}"
           COMMAND_ID=$(aws ssm send-command \
             --region us-east-2 \
             --instance-ids ${{ secrets.STAGING_EC2_INSTANCE_ID }} \
@@ -142,8 +141,7 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
-              "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env",
-              "echo GEOCLIENT_APP_KEY=$GEOCLIENT_APP_KEY >> /home/ubuntu/AsheFlow/backend/.env"
+              "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
