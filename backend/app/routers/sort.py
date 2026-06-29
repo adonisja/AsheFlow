@@ -1280,6 +1280,40 @@ def _geojson_to_bbox(bounds: dict) -> tuple[float, float, float, float] | None:
         return None
 
 
+@router.get("/geoclient-probe")
+def geoclient_probe(
+    street_one: str = "W 23 ST",
+    street_two: str = "6 AVE",
+    borough: str = "manhattan",
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+):
+    """Admin-only probe: returns the raw GeoClient v2 response for an intersection.
+
+    Use this to verify the API key works and inspect the exact response shape.
+    Example: GET /sort/geoclient-probe?street_one=W+23+ST&street_two=6+AVE&borough=manhattan
+    """
+    import requests as _requests
+
+    if not settings.geoclient_app_key:
+        return {"error": "GEOCLIENT_APP_KEY is not set on this server."}
+
+    results = {}
+    for path in ("/intersection.json", "/intersection"):
+        try:
+            resp = _requests.get(
+                f"{_GEOCLIENT_BASE}{path}",
+                params={"crossStreetOne": street_one, "crossStreetTwo": street_two, "borough": borough},
+                headers={"Ocp-Apim-Subscription-Key": settings.geoclient_app_key},
+                timeout=5,
+            )
+            results[path] = {"status": resp.status_code, "body": resp.json() if resp.ok else resp.text[:500]}
+        except Exception as exc:
+            results[path] = {"error": type(exc).__name__}
+
+    return results
+
+
 @router.get("/company-zone", response_model=Optional[OperatingZoneOut])
 def get_company_zone(
     caller: Employee = Depends(get_caller_employee),

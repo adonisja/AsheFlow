@@ -149,51 +149,69 @@ def _geoclient_intersection(
     cross_street_two: str,
     borough: str = "manhattan",
 ) -> tuple[float, float] | None:
-    """Call GeoClient v2 /intersection.json and return (lat, lng) or None.
+    """Call GeoClient v2 intersection endpoint and return (lat, lng) or None.
 
-    GeoClient expects street names without a house number — pass each street
-    of the intersection separately as crossStreetOne and crossStreetTwo.
+    Tries both /intersection.json (v2 with .json suffix) and /intersection
+    (v2 without suffix) since the public portal docs are ambiguous about
+    whether the .json extension is required for v2.
+
+    GeoClient v2 wraps the result under data["intersection"]["latitude/longitude"].
+    Falls back to checking the top-level dict if the wrapper key is absent.
     Returns None if the key is unset, the API errors, or no match is found.
     """
     if not settings.geoclient_app_key:
         return None
 
-    try:
-        resp = requests.get(
-            f"{_GEOCLIENT_BASE}/intersection.json",
-            params={
-                "crossStreetOne": cross_street_one,
-                "crossStreetTwo": cross_street_two,
-                "borough":        borough,
-            },
-            headers={
-                "Ocp-Apim-Subscription-Key": settings.geoclient_app_key,
-            },
-            timeout=5,
-        )
-        if not resp.ok:
-            logger.warning(
-                "geoclient_intersection HTTP %s for '%s & %s' borough=%s",
-                resp.status_code, cross_street_one, cross_street_two, borough,
+    params = {
+        "crossStreetOne": cross_street_one,
+        "crossStreetTwo": cross_street_two,
+        "borough":        borough,
+    }
+    headers = {"Ocp-Apim-Subscription-Key": settings.geoclient_app_key}
+
+    for path in ("/intersection.json", "/intersection"):
+        try:
+            resp = requests.get(
+                f"{_GEOCLIENT_BASE}{path}",
+                params=params,
+                headers=headers,
+                timeout=5,
             )
-            return None
-        data = resp.json()
-        ix = data.get("intersection", {})
-        lat_raw = ix.get("latitude")
-        lng_raw = ix.get("longitude")
-        if lat_raw is None or lng_raw is None:
-            logger.warning(
-                "geoclient_intersection no coords for '%s & %s' borough=%s — response keys: %s",
-                cross_street_one, cross_street_two, borough, list(ix.keys()),
+            if not resp.ok:
+                logger.warning(
+                    "geoclient_intersection HTTP %s on %s for '%s & %s' borough=%s",
+                    resp.status_code, path, cross_street_one, cross_street_two, borough,
+                )
+                continue
+
+            data = resp.json()
+            logger.debug(
+                "geoclient_intersection %s response top-level keys: %s",
+                path, list(data.keys()),
             )
-            return None
-        return float(lat_raw), float(lng_raw)
-    except Exception as exc:
-        logger.warning(
-            "geoclient_intersection exception for '%s & %s': %s",
-            cross_street_one, cross_street_two, type(exc).__name__,
-        )
-        return None
+
+            # v2 wraps under "intersection"; fall back to top-level for safety
+            inner = data.get("intersection") or data
+            lat_raw = inner.get("latitude")
+            lng_raw = inner.get("longitude")
+
+            if lat_raw is None or lng_raw is None:
+                logger.warning(
+                    "geoclient_intersection no lat/lng on %s for '%s & %s' — inner keys: %s",
+                    path, cross_street_one, cross_street_two, list(inner.keys()),
+                )
+                continue
+
+            return float(lat_raw), float(lng_raw)
+
+        except Exception as exc:
+            logger.warning(
+                "geoclient_intersection exception on %s for '%s & %s': %s",
+                path, cross_street_one, cross_street_two, type(exc).__name__,
+            )
+            continue
+
+    return None
 
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
