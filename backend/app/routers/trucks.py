@@ -216,7 +216,7 @@ def set_truck_anchor(
         target_id=str(db_truck.id),
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
-        detail={"address": db_truck.initial_anchor_address},
+        after={"address": db_truck.initial_anchor_address},
     )
     db.commit()
     db.refresh(db_truck)

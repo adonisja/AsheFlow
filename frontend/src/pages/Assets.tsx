@@ -9,6 +9,7 @@ import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import OperatingZoneMap from '../components/OperatingZoneMap';
 import { useConfirm } from '../hooks/useConfirm';
 
 // ---------------------------------------------------------------------------
@@ -1588,6 +1589,10 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
 
   useEffect(() => { load(); }, [load]);
 
+  function cacheZone(z: OperatingZone) {
+    try { localStorage.setItem('asheflow.companyZone.v1', JSON.stringify(z)); } catch {}
+  }
+
   async function saveFromStreets() {
     if (!fromStreet.trim() || !toStreet.trim() || !fromAvenue.trim() || !toAvenue.trim()) {
       setError('All four street/avenue fields are required.');
@@ -1604,6 +1609,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         to_avenue:   toAvenue.trim(),
         borough,
       });
+      cacheZone(data);
       setZone(data);
       setSwLat(data.sw_lat.toFixed(6));
       setSwLng(data.sw_lng.toFixed(6));
@@ -1635,6 +1641,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         ne_lat: parseFloat(neLat),
         ne_lng: parseFloat(neLng),
       });
+      cacheZone(data);
       setZone(data);
       setEditing(false);
       setSuccess(true);
@@ -1680,6 +1687,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : zone && !editing ? (
         <div className="space-y-2">
+          <OperatingZoneMap bounds={zone} className="w-full h-56" />
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'SW corner (bottom-left)', lat: zone.sw_lat, lng: zone.sw_lng },

@@ -4,7 +4,7 @@ import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import ZoneDensityMap from '../components/ZoneDensityMap';
-import type { ZonePolygon, Centroid } from '../components/ZoneDensityMap';
+import type { ZonePolygon, Centroid, CompanyZoneBounds } from '../components/ZoneDensityMap';
 import {
   Package, Users, AlertTriangle, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, Send, UserCheck, Shuffle,
@@ -1927,6 +1927,12 @@ export default function SortPage() {
   const [trainers, setTrainers] = useState<Employee[]>([]);
   const [zones, setZones] = useState<ZonePolygon[]>([]);
   const [centroids, setCentroids] = useState<Centroid[]>([]);
+  const [companyZone, setCompanyZone] = useState<CompanyZoneBounds | null>(() => {
+    try {
+      const raw = localStorage.getItem('asheflow.companyZone.v1');
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // truck_id set that have an active TruckZone for today — populated after zone sort runs
@@ -1955,11 +1961,12 @@ export default function SortPage() {
     setLoading(true);
     setError(null);
     try {
-      const [taRes, empRes, zoneRes, centroidRes] = await Promise.allSettled([
+      const [taRes, empRes, zoneRes, centroidRes, czRes] = await Promise.allSettled([
         axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<Employee[]>('/employees/', { params: { is_active: true } }),
         axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
         axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
+        axiosClient.get<CompanyZoneBounds | null>('/sort/company-zone'),
       ]);
       // Unpack settled results — zones/centroids fail silently if sort hasn't run yet
       if (zoneRes.status === 'fulfilled') {
@@ -1968,6 +1975,15 @@ export default function SortPage() {
         setZonedTruckIds(new Set(fetchedZones.map((z: ZonePolygon) => z.truck_id)));
       }
       if (centroidRes.status === 'fulfilled') setCentroids(centroidRes.value.data.centroids ?? []);
+      if (czRes.status === 'fulfilled' && czRes.value.data) {
+        const cz = czRes.value.data;
+        setCompanyZone(prev => {
+          if (prev?.id !== cz.id) {
+            try { localStorage.setItem('asheflow.companyZone.v1', JSON.stringify(cz)); } catch {}
+          }
+          return cz;
+        });
+      }
       if (taRes.status === 'rejected') throw taRes.reason;
       if (empRes.status === 'rejected') throw empRes.reason;
       // Re-assign for downstream use
@@ -2128,9 +2144,9 @@ export default function SortPage() {
         />
       )}
 
-      {/* Zone density map — only render when truck assignments exist for today */}
-      {assignments.length > 0 && (
-        <ZoneDensityMap zones={zones} centroids={centroids} className="h-80" />
+      {/* Zone density map — show whenever company zone is configured; truck zones overlay after sort */}
+      {(companyZone || assignments.length > 0) && (
+        <ZoneDensityMap zones={zones} centroids={centroids} companyZone={companyZone} className="h-80" />
       )}
 
       {/* Truck panels */}
