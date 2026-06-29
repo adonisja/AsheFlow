@@ -759,6 +759,32 @@ export interface SortRunResponse {
   flagged_bags: BagResultOut[];
 }
 
+export interface SortRunAccepted {
+  task_id: string;
+  status: 'queued';
+}
+
+export type SortRunTaskStatus = 'running' | 'done' | 'tier1_failed' | 'error';
+
+export interface SortRunStatusResponse {
+  task_id: string;
+  status: SortRunTaskStatus;
+  // populated when status == "done"
+  sort_date?: string;
+  package_count?: number;
+  outlier_count?: number;
+  cluster_count?: number;
+  tier1_passed?: boolean;
+  was_forced?: boolean;
+  zones_created?: number;
+  assignments: ClusterAssignmentOut[];
+  // populated when status == "tier1_failed"
+  flagged_bags: BagResultOut[];
+  // populated when status == "error" or "tier1_failed"
+  detail?: string;
+  http_status?: number;
+}
+
 export interface TbaReassignRequest {
   tba_numbers: string[];
   destination_zone_id: string;

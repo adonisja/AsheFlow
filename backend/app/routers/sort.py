@@ -13,7 +13,7 @@ import logging
 import os
 import tempfile
 import uuid as _uuid_mod
-from datetime import date, datetime, timezone
+from datetime import date
 from uuid import UUID
 from typing import Optional
 
@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 from app.api.deps import RoleChecker, get_caller_employee
 from app.core.config import settings
 from app.database import get_db
-from app.models.audit_log import AuditLog
 from app.models.company import CompanyConfig
 from app.models.employee import Employee
 from app.models.truck import Truck
@@ -33,10 +32,9 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.truck_zone import TruckZone
 from app.models.walker_route import RouteClusterCentroid
 from app.services.manifest_ingestor import FileManifestIngestor, ImageManifestIngestor, IngestResult
-from app.services.run_sort import run_sort, SortError
 from app.services.seed_manifest import generate_manifest
-from app.services.tier1_verify import BagOverride as _BagOverride
 from app.tasks.enrich_manifest import enrich_manifest_packages
+from app.tasks.run_sort_task import run_zone_sort
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +94,32 @@ class SortRunResponse(BaseModel):
     zones_created: int
     assignments: list[ClusterAssignmentOut]
     flagged_bags: list[BagResultOut]        # empty when tier1_passed=True or was_forced=True
+
+
+class SortRunAccepted(BaseModel):
+    """Immediate response from POST /sort/run — task has been queued."""
+    task_id: str
+    status: str   # always "queued"
+
+
+class SortRunStatusResponse(BaseModel):
+    """Response from GET /sort/run/status/{task_id}."""
+    task_id: str
+    status: str   # "running" | "done" | "tier1_failed" | "error"
+    # Populated when status == "done":
+    sort_date: Optional[date] = None
+    package_count: Optional[int] = None
+    outlier_count: Optional[int] = None
+    cluster_count: Optional[int] = None
+    tier1_passed: Optional[bool] = None
+    was_forced: Optional[bool] = None
+    zones_created: Optional[int] = None
+    assignments: list[ClusterAssignmentOut] = []
+    # Populated when status == "tier1_failed":
+    flagged_bags: list[BagResultOut] = []
+    # Populated when status == "error" or "tier1_failed":
+    detail: Optional[str] = None
+    http_status: Optional[int] = None
 
 
 class ZoneOut(BaseModel):
@@ -181,14 +205,6 @@ def _enriching_key(company_id: str, sort_date: str) -> str:
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
-
-_SORT_ERROR_STATUS = {
-    "no_manifest":    status.HTTP_422_UNPROCESSABLE_CONTENT,
-    "no_trucks":      status.HTTP_422_UNPROCESSABLE_CONTENT,
-    "no_packages":    status.HTTP_422_UNPROCESSABLE_CONTENT,
-    "tier1_failed":   status.HTTP_409_CONFLICT,
-    "config_missing": status.HTTP_503_SERVICE_UNAVAILABLE,
-}
 
 
 @router.post("/upload", response_model=ManifestUploadResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -432,27 +448,24 @@ def get_manifest_status(
     )
 
 
-@router.post("/run", response_model=SortRunResponse, status_code=status.HTTP_200_OK)
+_SORT_RUN_RUNNING_TTL = 300   # 5-min sentinel written at dispatch time
+
+
+@router.post("/run", response_model=SortRunAccepted, status_code=status.HTTP_202_ACCEPTED)
 def run_sort_endpoint(
     body: SortRunRequest,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_sort),
     db: Session = Depends(get_db),
 ):
-    """Run the manifest sort pipeline for the given date.
+    """Queue the manifest sort pipeline for the given date.
 
-    - Loads enriched packages from Redis (must have been enriched first via /sort/upload)
-    - Clusters packages with DBSCAN → assigns clusters to trucks
-    - Derives bag-to-truck mapping from the manifest (bag_id per package)
-    - Tier-1 verification: flags bags whose TBAs don't match their inferred truck
-    - If tier-1 passes (or force=True), writes TruckZone rows and commits
-    - Returns the full assignment breakdown and any flagged bags
+    Returns immediately with a task_id. The caller polls
+    GET /sort/run/status/{task_id} to retrieve the result.
 
-    409 Conflict when tier-1 flags bags and force=False — display flagged bags
-    with suggested trucks, let dispatch confirm or override, then resubmit
-    with force=True and the confirmed overrides.
+    Override validation runs synchronously before queuing so the caller
+    gets an immediate 400 rather than a delayed task failure.
     """
-    # Validate override truck IDs belong to this company's active trucks
     if body.overrides:
         company_truck_ids = {
             t.id for t in db.query(Truck).filter(
@@ -470,124 +483,122 @@ def run_sort_endpoint(
                 detail=f"Override references unknown or inactive truck IDs: {', '.join(invalid_trucks)}",
             )
 
-    bag_overrides = [
-        _BagOverride(bag_id=ov.bag_id, truck_id=ov.truck_id)
-        for ov in body.overrides
-    ]
+    task_id = str(_uuid_mod.uuid4())
+    cid_str = str(caller.company_id)
+    date_str = body.sort_date.isoformat()
 
-    try:
-        result = run_sort(
-            company_id      = caller.company_id,
-            sort_date       = body.sort_date,
-            overrides       = bag_overrides,
-            created_by      = caller.id,
-            created_by_name = caller.name,
-            db              = db,
-            force           = body.force,
-        )
-    except SortError as exc:
-        http_status = _SORT_ERROR_STATUS.get(exc.code, status.HTTP_400_BAD_REQUEST)
-        raise HTTPException(status_code=http_status, detail=exc.detail)
+    # Write running sentinel before dispatching — status endpoint returns "running"
+    # immediately even before the worker picks up the task.
+    r = _redis()
+    from app.tasks.run_sort_task import _running_key, _failed_key
+    r.setex(_running_key(cid_str, date_str, task_id), _SORT_RUN_RUNNING_TTL, "1")
+    # Pre-write worker_unreachable so status returns "error" if the task is never picked up
+    r.setex(_failed_key(cid_str, date_str, task_id), _REDIS_TTL_SECONDS, json.dumps({"detail": "worker_unreachable"}))
 
-    # Stamp sort actor + timestamp on every TruckAssignment for this company + date.
-    # Only runs when zones were actually persisted (tier1 passed or force=True).
-    if result.zones_persisted:
-        db.query(TruckAssignment).filter(
-            TruckAssignment.company_id == caller.company_id,
-            TruckAssignment.date == body.sort_date,
-        ).update(
-            {
-                "sort_initiated_by": caller.id,
-                "sort_committed_at": datetime.now(timezone.utc),
-            },
-            synchronize_session="fetch",
-        )
+    overrides_raw = [{"bag_id": ov.bag_id, "truck_id": str(ov.truck_id)} for ov in body.overrides]
 
-    # Write RouteClusterCentroid rows — one per assigned cluster, for the Deck.gl density layer.
-    # Delete stale rows for this date first (idempotent re-sort).
-    if result.zones_persisted:
-        db.query(RouteClusterCentroid).filter(
-            RouteClusterCentroid.company_id == caller.company_id,
-            RouteClusterCentroid.route_date == body.sort_date,
-        ).delete(synchronize_session="fetch")
-
-        # Resolve truck_assignment_id for each truck in the proposal
-        ta_by_truck: dict = {
-            ta.truck_id: ta.id
-            for ta in db.query(TruckAssignment).filter(
-                TruckAssignment.company_id == caller.company_id,
-                TruckAssignment.date == body.sort_date,
-            ).all()
-        }
-
-        for assignment in result.proposal.assignments:
-            c = assignment.cluster
-            db.add(RouteClusterCentroid(
-                company_id          = caller.company_id,
-                truck_assignment_id = ta_by_truck.get(assignment.truck_id),
-                route_date          = body.sort_date,
-                centroid_lat        = c.centroid["lat"],
-                centroid_lng        = c.centroid["lng"],
-                package_count       = len(c.packages),
-                truck_zone_label    = assignment.truck_name,
-            ))
-
-    # Audit log when dispatch overrides a tier-1 failure
-    if result.was_forced:
-        db.add(AuditLog(
-            company_id      = caller.company_id,
-            actor_id        = caller.id,
-            action_type     = "sort.tier1_force_override",
-            target_table    = "truck_zones",
-            target_id       = _uuid_mod.uuid4(),   # synthetic — no single row; use new UUID as event ID
-            after_snapshot  = {
-                "sort_date":    body.sort_date.isoformat(),
-                "flagged_totes": len(result.verification.flagged),
-                "zones_created": len(result.zones_persisted),
-            },
-        ))
-
-    db.commit()
-
-    assignments_out = [
-        ClusterAssignmentOut(
-            truck_id       = a.truck_id,
-            truck_name     = a.truck_name,
-            match_type     = a.match_type,
-            workload_score = a.workload_score,
-            is_overflow    = a.is_overflow,
-            package_count  = len(a.cluster.packages),
-        )
-        for a in result.proposal.assignments
-    ]
-
-    flagged_out = [
-        BagResultOut(
-            bag_id             = b.bag_id,
-            inferred_truck_id  = b.inferred_truck_id,
-            classification     = b.classification,
-            total_packages     = b.total_packages,
-            outside_packages   = b.outside_packages,
-            outside_pct        = b.outside_pct,
-            outside_tbas       = b.outside_tbas,
-            outlier_tbas       = b.outlier_tbas,
-            suggested_truck_id = b.suggested_truck_id,
-            unresolvable       = b.unresolvable,
-        )
-        for b in result.verification.flagged
-    ]
-
-    return SortRunResponse(
-        sort_date     = result.sort_date,
-        package_count = result.package_count,
-        outlier_count = result.outlier_count,
-        cluster_count = result.cluster_count,
-        tier1_passed  = result.tier1_passed,
-        was_forced    = result.was_forced,
-        zones_created = len(result.zones_persisted),
-        assignments   = assignments_out,
-        flagged_bags  = flagged_out,
+    run_zone_sort.delay(
+        company_id      = cid_str,
+        sort_date       = date_str,
+        task_id         = task_id,
+        overrides       = overrides_raw,
+        created_by      = str(caller.id),
+        created_by_name = caller.name,
+        force           = body.force,
     )
+
+    logger.info(
+        "sort run queued",
+        extra={
+            "company_id": cid_str,
+            "sort_date":  date_str,
+            "task_id":    task_id,
+            "force":      body.force,
+            "overrides":  len(body.overrides),
+        },
+    )
+
+    return SortRunAccepted(task_id=task_id, status="queued")
+
+
+@router.get("/run/status/{task_id}", response_model=SortRunStatusResponse)
+def get_sort_run_status(
+    task_id: str,
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+):
+    """Poll the status of a queued sort run.
+
+    Returns:
+      status="running"      — task picked up but not yet complete
+      status="done"         — zones persisted; full result included
+      status="tier1_failed" — bags flagged; flagged_bags included for override UI
+      status="error"        — unrecoverable error; detail included
+    """
+    from app.tasks.run_sort_task import _running_key, _result_key, _failed_key
+
+    cid_str = str(caller.company_id)
+    date_str = sort_date.isoformat()
+    r = _redis()
+
+    result_raw = r.get(_result_key(cid_str, date_str, task_id))
+    if result_raw:
+        try:
+            data = json.loads(result_raw)
+        except json.JSONDecodeError:
+            return SortRunStatusResponse(task_id=task_id, status="error", detail="Result data corrupted.")
+
+        s = data.get("status", "error")
+
+        if s == "done":
+            return SortRunStatusResponse(
+                task_id       = task_id,
+                status        = "done",
+                sort_date     = date.fromisoformat(data["sort_date"]),
+                package_count = data["package_count"],
+                outlier_count = data["outlier_count"],
+                cluster_count = data["cluster_count"],
+                tier1_passed  = data["tier1_passed"],
+                was_forced    = data["was_forced"],
+                zones_created = data["zones_created"],
+                assignments   = [ClusterAssignmentOut(**a) for a in data.get("assignments", [])],
+                flagged_bags  = [],
+            )
+
+        if s == "tier1_failed":
+            return SortRunStatusResponse(
+                task_id      = task_id,
+                status       = "tier1_failed",
+                detail       = data.get("detail"),
+                http_status  = data.get("http_status"),
+                flagged_bags = [BagResultOut(**b) for b in data.get("flagged_bags", [])],
+            )
+
+        # "error" or unknown
+        return SortRunStatusResponse(
+            task_id     = task_id,
+            status      = "error",
+            detail      = data.get("detail"),
+            http_status = data.get("http_status"),
+        )
+
+    running = r.exists(_running_key(cid_str, date_str, task_id))
+    if running:
+        return SortRunStatusResponse(task_id=task_id, status="running")
+
+    failed_raw = r.get(_failed_key(cid_str, date_str, task_id))
+    if failed_raw:
+        try:
+            data = json.loads(failed_raw)
+            detail = data.get("detail", "Sort task failed unexpectedly.")
+        except (json.JSONDecodeError, AttributeError):
+            detail = "Sort task failed unexpectedly."
+        if detail == "worker_unreachable":
+            detail = "Sort task was not received by the worker — Celery may be down. Contact your admin."
+        return SortRunStatusResponse(task_id=task_id, status="error", detail=detail)
+
+    return SortRunStatusResponse(task_id=task_id, status="error", detail="Sort task result not found — it may have expired.")
 
 
 class CentroidOut(BaseModel):

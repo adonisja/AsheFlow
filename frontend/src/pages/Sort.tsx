@@ -16,7 +16,7 @@ import type {
   CommitSortResponse, RouteResponse, WaveAssignmentEntry,
   ArrivalConfirmResponse, MisroutedPackageOut,
   WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
-  SortRunResponse, BagResultOut, BagOverride,
+  SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -762,6 +762,8 @@ function ManifestUploadPanel({
 
 type SortRunPhase = 'idle' | 'running' | 'tier1_failed' | 'done';
 
+const _SORT_POLL_INTERVAL = 3_000;   // 3 s between status checks
+
 function ManifestSortPanel({
   today,
   trucks,           // TruckAssignment[] for name lookup
@@ -778,6 +780,10 @@ function ManifestSortPanel({
   const [running, setRunning]           = useState(false);
   // override map: bag_id → truck_id (dispatch confirmed or manually chosen)
   const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
+  const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  useEffect(() => () => stopPoll(), []);
 
   const truckById = Object.fromEntries(trucks.map(t => [t.truck_id, t.truck_name]));
 
@@ -792,52 +798,84 @@ function ManifestSortPanel({
     : c === 'uncertain' ? 'bg-warning/5 border-warning/20'
     : 'bg-accent/40 border-border';
 
+  function handleStatusPayload(data: SortRunStatusResponse) {
+    if (data.status === 'done') {
+      const synth: SortRunResponse = {
+        sort_date:     data.sort_date!,
+        package_count: data.package_count!,
+        outlier_count: data.outlier_count!,
+        cluster_count: data.cluster_count!,
+        tier1_passed:  data.tier1_passed!,
+        was_forced:    data.was_forced!,
+        zones_created: data.zones_created!,
+        assignments:   data.assignments,
+        flagged_bags:  [],
+      };
+      setResult(synth);
+      setPhase('done');
+      setExpanded(false);
+      setRunning(false);
+      onZonesCreated();
+    } else if (data.status === 'tier1_failed') {
+      const synth: SortRunResponse = {
+        sort_date:     today,
+        package_count: 0,
+        outlier_count: 0,
+        cluster_count: 0,
+        tier1_passed:  false,
+        was_forced:    false,
+        zones_created: 0,
+        assignments:   [],
+        flagged_bags:  data.flagged_bags,
+      };
+      const suggestions: Record<string, string> = {};
+      for (const bag of data.flagged_bags) {
+        if (bag.suggested_truck_id) suggestions[bag.bag_id] = bag.suggested_truck_id;
+      }
+      setResult(synth);
+      setOverrideMap(suggestions);
+      setPhase('tier1_failed');
+      setExpanded(true);
+      setRunning(false);
+    } else if (data.status === 'error') {
+      setError(data.detail ?? 'Sort failed.');
+      setPhase('idle');
+      setRunning(false);
+    }
+    // status === 'running' → keep polling
+  }
+
   async function runSort(force: boolean, overrides: BagOverride[]) {
     setRunning(true);
     setError(null);
+    stopPoll();
     try {
-      const { data } = await axiosClient.post<SortRunResponse>('/sort/run', {
+      const { data: accepted } = await axiosClient.post<SortRunAccepted>('/sort/run', {
         sort_date: today,
         force,
         overrides,
       });
-      setResult(data);
-      if (data.tier1_passed || data.was_forced) {
-        setPhase('done');
-        setExpanded(false);
-        onZonesCreated();
-      } else {
-        // 409 handled below — this branch means tier1 passed cleanly
-        setPhase('done');
-        setExpanded(false);
-        onZonesCreated();
-      }
+      const taskId = accepted.task_id;
+
+      // Poll status until terminal
+      pollRef.current = setInterval(async () => {
+        try {
+          const { data } = await axiosClient.get<SortRunStatusResponse>(
+            `/sort/run/status/${taskId}`,
+            { params: { sort_date: today } },
+          );
+          if (data.status !== 'running') {
+            stopPoll();
+            handleStatusPayload(data);
+          }
+        } catch {
+          // transient network hiccup — keep polling
+        }
+      }, _SORT_POLL_INTERVAL);
     } catch (err: any) {
       const detail = err?.response?.data?.detail ?? 'Sort failed.';
-      if (err?.response?.status === 409) {
-        // Tier-1 flagged bags — parse the response body if available
-        const data: SortRunResponse | undefined = err?.response?.data;
-        if (data && Array.isArray(data.flagged_bags)) {
-          setResult(data);
-          // Pre-fill overrides with suggested trucks
-          const suggestions: Record<string, string> = {};
-          for (const bag of data.flagged_bags) {
-            if (bag.suggested_truck_id) {
-              suggestions[bag.bag_id] = bag.suggested_truck_id;
-            }
-          }
-          setOverrideMap(suggestions);
-          setPhase('tier1_failed');
-          setExpanded(true);
-        } else {
-          setError(detail);
-          setPhase('idle');
-        }
-      } else {
-        setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
-        setPhase('idle');
-      }
-    } finally {
+      setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      setPhase('idle');
       setRunning(false);
     }
   }
