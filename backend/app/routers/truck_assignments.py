@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
+from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.schemas.truck_assignment import TruckAssignmentCreate, TruckAssignmentUpdate, TruckAssignmentResponse
 
@@ -35,8 +36,23 @@ def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(g
 
 @router.get("/", response_model=list[TruckAssignmentResponse])
 def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth), caller: Employee = Depends(get_caller_employee)):
-    """Return all truck assignments for the caller's company."""
-    return db.query(TruckAssignment).filter(TruckAssignment.company_id == caller.company_id).all()
+    """Return all truck assignments for the caller's company, including resolved truck name."""
+    rows = (
+        db.query(TruckAssignment, Truck.name.label("truck_name"))
+        .join(Truck, Truck.id == TruckAssignment.truck_id)
+        .filter(TruckAssignment.company_id == caller.company_id)
+        .all()
+    )
+    return [
+        TruckAssignmentResponse(
+            id         = ta.id,
+            truck_id   = ta.truck_id,
+            truck_name = name or "",
+            date       = ta.date,
+            status     = ta.status,
+        )
+        for ta, name in rows
+    ]
 
 
 @router.get("/{assignment_id}", response_model=TruckAssignmentResponse)

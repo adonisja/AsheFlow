@@ -16,6 +16,7 @@ class TruckAssignmentUpdate(BaseModel):
 class TruckAssignmentResponse(BaseModel):
     id: UUID
     truck_id: UUID
+    truck_name: str = ""
     date: date
     status: str
 
