@@ -1592,10 +1592,11 @@ function ManifestSortPanel({
                           t.truck_id !== bag.suggested_truck_id &&
                           t.truck_id !== bag.inferred_truck_id
                         );
-                        const ordered = [
-                          ...(suggested ? [{ ...suggested, label: `${suggested.truck_name} — suggested` }] : []),
-                          ...(current   ? [{ ...current,   label: `${current.truck_name} — current`   }] : []),
-                          ...rest.map(t => ({ ...t, label: t.truck_name })),
+                        type TruckOption = { truck_id: string; truck_name: string; annotation?: 'suggested' | 'current' };
+                        const ordered: TruckOption[] = [
+                          ...(suggested ? [{ ...suggested, annotation: 'suggested' as const }] : []),
+                          ...(current   ? [{ ...current,   annotation: 'current'   as const }] : []),
+                          ...rest,
                         ];
 
                         const displayLabel = chosenId
@@ -1642,9 +1643,17 @@ function ManifestSortPanel({
                                       setOverrideMap(prev => ({ ...prev, [bag.bag_id]: t.truck_id }));
                                       setOpenDropdown(null);
                                     }}
-                                    className={`w-full text-left px-3 py-2 text-xs hover:bg-accent transition-colors flex items-center justify-between gap-2 ${chosenId === t.truck_id ? 'bg-accent/60 font-medium text-foreground' : 'text-foreground'}`}
+                                    className={`w-full text-left px-3 py-2 text-xs hover:bg-accent transition-colors flex items-center justify-between gap-2 ${chosenId === t.truck_id ? 'bg-accent/60 text-foreground' : 'text-foreground'}`}
                                   >
-                                    <span>{t.label}</span>
+                                    <span className="flex items-baseline gap-1.5">
+                                      <span className={chosenId === t.truck_id ? 'font-medium' : ''}>{t.truck_name}</span>
+                                      {t.annotation === 'suggested' && (
+                                        <span className="font-bold text-primary text-[10px]">suggested</span>
+                                      )}
+                                      {t.annotation === 'current' && (
+                                        <span className="italic text-muted-foreground text-[10px]">current</span>
+                                      )}
+                                    </span>
                                     {chosenId === t.truck_id && <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />}
                                   </button>
                                 ))}
