@@ -845,7 +845,7 @@ function ManifestSortPanel({
         worker_unreachable: 'Sort worker did not pick up the task — Celery may be down. Contact your admin.',
       };
       const raw = data.detail ?? '';
-      setError(SENTINEL[raw] ?? raw || 'Sort failed.');
+      setError(SENTINEL[raw] ?? (raw || 'Sort failed.'));
       setPhase('idle');
       setRunning(false);
     }
