@@ -844,13 +844,12 @@ function TruckSortPanel({
                 </div>
 
                 {/* Route cards — committed shows assignment dropdown; distributed/arrived shows operational controls */}
-                {state.phase !== 'idle' && (
-                  <div className="space-y-2">
-                    {state.routes
-                      .slice()
-                      .sort((a, b) => a.route_number - b.route_number)
-                      .map(r => (
-                        <RouteCard
+                <div className="space-y-2">
+                  {state.routes
+                    .slice()
+                    .sort((a, b) => a.route_number - b.route_number)
+                    .map(r => (
+                      <RouteCard
                           key={r.id}
                           route={r}
                           phase={state.phase}
@@ -862,8 +861,7 @@ function TruckSortPanel({
                           onResolveMisroute={(routeId, flagId, tba) => setMisrouteTarget({ routeId, flagId, tba })}
                         />
                       ))}
-                  </div>
-                )}
+                </div>
 
                 {/* Trainer / trainee selectors (committed phase only) */}
                 {state.phase === 'committed' && (
