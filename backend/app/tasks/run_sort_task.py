@@ -24,6 +24,7 @@ from app.celery_app import celery_app
 from app.core.config import settings
 from app.database import SessionLocal
 from app.models.audit_log import AuditLog
+from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import RouteClusterCentroid
 
@@ -145,6 +146,24 @@ def run_zone_sort(
 
             r.setex(resk, _RESULT_TTL, json.dumps(payload))
             r.delete(rk)
+
+            # Notify dispatcher: sort needs manual review
+            if exc.code == "tier1_failed":
+                try:
+                    flagged_count = len(exc.verification.flagged) if exc.verification else 0
+                    db.add(Notification(
+                        company_id  = company_uuid,
+                        employee_id = created_by_uuid,
+                        type        = "zone_sort_review",
+                        message     = (
+                            f"Zone assignment for {sort_date} needs review — "
+                            f"{flagged_count} bag(s) flagged. Return to Sort to confirm."
+                        ),
+                    ))
+                    db.commit()
+                except Exception:
+                    pass
+
             db.close()
             return payload
 
@@ -204,6 +223,23 @@ def run_zone_sort(
             ))
 
         db.commit()
+
+        # Notify the dispatcher who triggered the sort so the SSE stream wakes
+        # them up regardless of which page they're on when the task finishes.
+        try:
+            db.add(Notification(
+                company_id  = company_uuid,
+                employee_id = created_by_uuid,
+                type        = "zone_sort_complete",
+                message     = (
+                    f"Zone assignment for {sort_date} finished — "
+                    f"{len(result.zones_persisted)} zone(s) created."
+                ),
+            ))
+            db.commit()
+        except Exception:
+            pass  # notification failure must never crash the sort task
+
         db.close()
 
         assignments_out = [

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
+import { useNotificationContext } from '../contexts/NotificationContext';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
@@ -1147,6 +1148,8 @@ type SortRunPhase = 'idle' | 'running' | 'tier1_failed' | 'done';
 
 const _SORT_POLL_INTERVAL = 3_000;   // 3 s between status checks
 
+const _SORT_TASK_KEY = (date: string) => `asheflow.sortTask.${date}`;
+
 function ManifestSortPanel({
   today,
   trucks,
@@ -1158,6 +1161,7 @@ function ManifestSortPanel({
   manifestReady: boolean;
   onZonesCreated: () => void;
 }) {
+  const { setOnNotification } = useNotificationContext();
   const [phase, setPhase]               = useState<SortRunPhase>('idle');
   const [result, setResult]             = useState<SortRunResponse | null>(null);
   const [error, setError]               = useState<string | null>(null);
@@ -1168,6 +1172,8 @@ function ManifestSortPanel({
   const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
   // set of bag_ids whose package detail list is expanded
   const [expandedBags, setExpandedBags] = useState<Set<string>>(new Set());
+  // bag_id of the currently open truck-picker dropdown (null = all closed)
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   // pagination for tier1_failed bag list
   const [bagPage, setBagPage]           = useState(0);
   const BAG_PAGE_SIZE                   = 25;
@@ -1175,6 +1181,14 @@ function ManifestSortPanel({
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
+
+  // Close any open truck-picker dropdown when clicking outside
+  useEffect(() => {
+    if (!openDropdown) return;
+    const handler = () => setOpenDropdown(null);
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [openDropdown]);
 
   const truckById = Object.fromEntries(trucks.map(t => [t.truck_id, t.truck_name]));
 
@@ -1190,6 +1204,7 @@ function ManifestSortPanel({
     : 'bg-accent/40 border-border';
 
   function handleStatusPayload(data: SortRunStatusResponse) {
+    setOnNotification(null); // clear SSE callback on any terminal status
     if (data.status === 'done') {
       const synth: SortRunResponse = {
         sort_date:        data.sort_date!,
@@ -1224,12 +1239,8 @@ function ManifestSortPanel({
         volume_alert:     false,
         volume_alert_msg: '',
       };
-      const suggestions: Record<string, string> = {};
-      for (const bag of data.flagged_bags) {
-        if (bag.suggested_truck_id) suggestions[bag.bag_id] = bag.suggested_truck_id;
-      }
       setResult(synth);
-      setOverrideMap(suggestions);
+      setOverrideMap({});
       setBagPage(0);
       setPhase('tier1_failed');
       setExpanded(true);
@@ -1241,6 +1252,53 @@ function ManifestSortPanel({
     }
     // status === 'running' → keep polling
   }
+
+  // Fetch status for a known task_id once and handle the payload.
+  // Used both by SSE callback and by the fallback poller.
+  const fetchStatus = useCallback(async (taskId: string) => {
+    try {
+      const { data } = await axiosClient.get<SortRunStatusResponse>(
+        `/sort/run/status/${taskId}`,
+        { params: { sort_date: today } },
+      );
+      if (data.status !== 'running') {
+        stopPoll();
+        sessionStorage.removeItem(_SORT_TASK_KEY(today));
+        handleStatusPayload(data);
+      }
+    } catch {
+      // transient — leave polling running
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today]);
+
+  // On mount: re-attach to any in-progress task stored in sessionStorage.
+  // This lets the user navigate away and come back — the task runs on the
+  // backend regardless and the SSE stream will fire when it finishes.
+  useEffect(() => {
+    const stored = sessionStorage.getItem(_SORT_TASK_KEY(today));
+    if (!stored) return;
+    const { taskId } = JSON.parse(stored) as { taskId: string };
+    setPhase('running');
+    setRunning(true);
+    setExpanded(true);
+
+    // Start fallback poller in case SSE notification arrives late or is missed
+    pollRef.current = setInterval(() => fetchStatus(taskId), _SORT_POLL_INTERVAL);
+
+    // Register SSE callback — fires immediately if the task already finished
+    // while we were away, or as soon as the worker pushes the notification.
+    setOnNotification((type: string) => {
+      if (type === 'zone_sort_complete' || type === 'zone_sort_review') {
+        stopPoll();
+        fetchStatus(taskId);
+        setOnNotification(null);
+      }
+    });
+
+    return () => { setOnNotification(null); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function runSort(force: boolean, overrides: BagOverride[]) {
     setRunning(true);
@@ -1254,21 +1312,21 @@ function ManifestSortPanel({
       });
       const taskId = accepted.task_id;
 
-      // Poll status until terminal
-      pollRef.current = setInterval(async () => {
-        try {
-          const { data } = await axiosClient.get<SortRunStatusResponse>(
-            `/sort/run/status/${taskId}`,
-            { params: { sort_date: today } },
-          );
-          if (data.status !== 'running') {
-            stopPoll();
-            handleStatusPayload(data);
-          }
-        } catch {
-          // transient network hiccup — keep polling
+      // Persist task_id so re-mounting the panel can re-attach
+      sessionStorage.setItem(_SORT_TASK_KEY(today), JSON.stringify({ taskId }));
+
+      // Primary: wait for SSE notification (task complete/review) then fetch once
+      setOnNotification((type: string) => {
+        if (type === 'zone_sort_complete' || type === 'zone_sort_review') {
+          stopPoll();
+          fetchStatus(taskId);
+          setOnNotification(null);
         }
-      }, _SORT_POLL_INTERVAL);
+      });
+
+      // Fallback poller: catches the result if SSE notification is missed
+      // (e.g. notification already read, SSE reconnecting, token refresh gap)
+      pollRef.current = setInterval(() => fetchStatus(taskId), _SORT_POLL_INTERVAL);
     } catch (err: any) {
       const detail = err?.response?.data?.detail ?? 'Sort failed.';
       setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
@@ -1519,31 +1577,85 @@ function ManifestSortPanel({
                           <p>Currently on: <span className="font-medium text-foreground">{currentTruck}</span></p>
                         )}
                         {suggestedTruck && !bag.unresolvable && (
-                          <p>Suggested move: <span className="font-medium text-foreground">{suggestedTruck}</span></p>
+                          <p>Suggested: <span className="font-medium text-foreground">{suggestedTruck}</span></p>
                         )}
                       </div>
 
-                      {/* Row 3: override select */}
-                      {!bag.unresolvable && (
-                        <div className="flex items-center gap-2">
-                          <label className="text-xs text-muted-foreground shrink-0 w-20">Move bag to:</label>
-                          <select
-                            value={chosenId ?? ''}
-                            onChange={e => setOverrideMap(prev => ({ ...prev, [bag.bag_id]: e.target.value }))}
-                            className="flex-1 text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                          >
-                            <option value="">Keep on current truck</option>
-                            {trucks.map(t => (
-                              <option key={t.truck_id} value={t.truck_id}>
-                                {t.truck_name}{t.truck_id === bag.suggested_truck_id ? ' — suggested' : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                      {/* Row 3: custom truck picker */}
+                      {!bag.unresolvable && (() => {
+                        const isOpen = openDropdown === bag.bag_id;
 
-                      {/* Row 4: chosen confirmation */}
-                      {chosenTruck && (
+                        // Build ordered option list: suggested → current → rest
+                        const suggested = trucks.find(t => t.truck_id === bag.suggested_truck_id);
+                        const current   = trucks.find(t => t.truck_id === bag.inferred_truck_id);
+                        const rest      = trucks.filter(t =>
+                          t.truck_id !== bag.suggested_truck_id &&
+                          t.truck_id !== bag.inferred_truck_id
+                        );
+                        const ordered = [
+                          ...(suggested ? [{ ...suggested, label: `${suggested.truck_name} — suggested` }] : []),
+                          ...(current   ? [{ ...current,   label: `${current.truck_name} — current`   }] : []),
+                          ...rest.map(t => ({ ...t, label: t.truck_name })),
+                        ];
+
+                        const displayLabel = chosenId
+                          ? (truckById[chosenId] ?? chosenId)
+                          : 'No change — keep on current truck';
+
+                        return (
+                          <div className="relative">
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-muted-foreground shrink-0 w-20">Move bag to:</label>
+                              <button
+                                onClick={() => setOpenDropdown(isOpen ? null : bag.bag_id)}
+                                className={`flex-1 flex items-center justify-between gap-2 text-xs border rounded-lg px-2.5 py-1.5 bg-background transition-colors text-left ${
+                                  isOpen ? 'border-primary/60 ring-1 ring-primary/30' : 'border-border hover:border-primary/40'
+                                } ${chosenId ? 'text-foreground' : 'text-muted-foreground'}`}
+                              >
+                                <span>{displayLabel}</span>
+                                <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                            </div>
+
+                            {isOpen && (
+                              <div className="absolute left-[5.5rem] right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg shadow-lg overflow-hidden">
+                                {/* Keep as-is option */}
+                                <button
+                                  onClick={() => {
+                                    setOverrideMap(prev => {
+                                      const next = { ...prev };
+                                      delete next[bag.bag_id];
+                                      return next;
+                                    });
+                                    setOpenDropdown(null);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs hover:bg-accent transition-colors flex items-center justify-between ${!chosenId ? 'bg-accent/60 font-medium text-foreground' : 'text-muted-foreground'}`}
+                                >
+                                  No change — keep on current truck
+                                  {!chosenId && <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />}
+                                </button>
+                                <div className="border-t border-border/60" />
+                                {ordered.map(t => (
+                                  <button
+                                    key={t.truck_id}
+                                    onClick={() => {
+                                      setOverrideMap(prev => ({ ...prev, [bag.bag_id]: t.truck_id }));
+                                      setOpenDropdown(null);
+                                    }}
+                                    className={`w-full text-left px-3 py-2 text-xs hover:bg-accent transition-colors flex items-center justify-between gap-2 ${chosenId === t.truck_id ? 'bg-accent/60 font-medium text-foreground' : 'text-foreground'}`}
+                                  >
+                                    <span>{t.label}</span>
+                                    {chosenId === t.truck_id && <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Row 4: explicit selection confirmation only */}
+                      {chosenId && chosenTruck && (
                         <p className="text-[10px] text-success font-medium flex items-center gap-1">
                           <CheckCircle2 className="w-3 h-3" /> Will move to {chosenTruck}
                         </p>
