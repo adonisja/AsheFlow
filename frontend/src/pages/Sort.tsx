@@ -9,7 +9,8 @@ import type { CompanyZone } from '../api/types';
 import {
   Package, Truck, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, MapPin, Layers, Loader2,
-  Upload, X, FileText, ArrowRight,
+  Upload, X, FileText, ArrowRight, AlertTriangle,
+  Route, Zap, Send,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import type {
@@ -30,10 +31,103 @@ interface TruckAssignment {
   date: string;
 }
 
-// ---------------------------------------------------------------------------
-// (WavePoolPanel, ProposalReviewPanel, RouteCard moved to WalkerSort.tsx)
-// ---------------------------------------------------------------------------
+const GEOCODE_REASON_LABELS: Record<string, string> = {
+  geoclient_no_match:  'No match',
+  geoclient_error:     'API error',
+  missing_address:     'No address',
+  block_key_parse:     'Parse failed',
+};
 
+function PackageAddressEditor({
+  row,
+  sortDate,
+  onPatched,
+}: {
+  row: ManifestPreviewRow;
+  sortDate: string;
+  onPatched: (updated: ManifestPackagePatchResponse) => void;
+}) {
+  const [editing, setEditing]     = useState(false);
+  const [address, setAddress]     = useState('');
+  const [saving, setSaving]       = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const reasonLabel = row.geocode_reason
+    ? (GEOCODE_REASON_LABELS[row.geocode_reason] ?? row.geocode_reason)
+    : null;
+
+  if (!editing) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        {row.raw_address && (
+          <span className="text-foreground/80">{row.raw_address}</span>
+        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {reasonLabel && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-warning/15 text-warning font-medium">
+              {reasonLabel}
+            </span>
+          )}
+          <button
+            onClick={() => { setAddress(row.raw_address ?? ''); setSaveError(null); setEditing(true); }}
+            className="text-[10px] text-primary hover:underline"
+            title="Correct address"
+          >
+            Edit
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const handleSave = async () => {
+    if (!address.trim()) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const { data } = await axiosClient.patch<ManifestPackagePatchResponse>(
+        `/sort/manifest/${sortDate}/package/${encodeURIComponent(row.tba)}`,
+        { corrected_address: address.trim() },
+      );
+      onPatched(data);
+      setEditing(false);
+    } catch (e: any) {
+      setSaveError(e?.response?.data?.detail ?? 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1 py-0.5">
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          type="text"
+          value={address}
+          onChange={e => setAddress(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setEditing(false); }}
+          placeholder={row.raw_address ?? 'e.g. 123 West 34 St'}
+          className="input-field text-[11px] h-6 py-0 px-1.5 flex-1 min-w-0"
+        />
+        <button
+          onClick={handleSave}
+          disabled={saving || !address.trim()}
+          className="text-[10px] text-success font-semibold hover:underline disabled:opacity-40 shrink-0"
+        >
+          {saving ? '…' : 'Save'}
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="text-[10px] text-muted-foreground hover:text-foreground shrink-0"
+        >
+          ✕
+        </button>
+      </div>
+      {saveError && <p className="text-[10px] text-danger">{saveError}</p>}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Manifest preview panel — shown after enrichment is ready
