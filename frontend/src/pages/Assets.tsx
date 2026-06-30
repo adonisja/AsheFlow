@@ -1687,7 +1687,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : zone && !editing ? (
         <div className="space-y-2">
-          <OperatingZoneMap bounds={zone} className="w-full h-56" />
+          <OperatingZoneMap bounds={zone} className="w-full h-80" />
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'SW corner (bottom-left)', lat: zone.sw_lat, lng: zone.sw_lng },

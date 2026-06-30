@@ -67,10 +67,11 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
     });
   }, [mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Draw/update the rectangle whenever bounds change
+  // Draw/update the rectangle and fit bounds whenever the map is ready or bounds change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
+    const map = mapInstanceRef.current;
     const rectBounds = {
       south: bounds.sw_lat,
       west:  bounds.sw_lng,
@@ -80,20 +81,23 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
 
     if (rectRef.current) {
       rectRef.current.setBounds(rectBounds);
+      map.fitBounds(rectBounds, 32);
     } else {
       rectRef.current = new window.google.maps.Rectangle({
         bounds: rectBounds,
         strokeColor: '#6366f1',
         strokeOpacity: 0.9,
-        strokeWeight: 2,
+        strokeWeight: 2.5,
         fillColor: '#6366f1',
-        fillOpacity: 0.12,
-        map: mapInstanceRef.current,
+        fillOpacity: 0.10,
+        map,
         clickable: false,
       });
+      // fitBounds after first idle so the map has painted and has a real pixel size
+      window.google.maps.event.addListenerOnce(map, 'idle', () => {
+        map.fitBounds(rectBounds, 32);
+      });
     }
-
-    mapInstanceRef.current.fitBounds(rectBounds, 40);
   }, [mapReady, bounds]);
 
   if (loadError) {

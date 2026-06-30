@@ -143,6 +143,8 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
+    const map = mapInstanceRef.current;
+
     if (companyZone) {
       const rectBounds = {
         south: companyZone.sw_lat,
@@ -152,24 +154,31 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
       };
       if (companyRectRef.current) {
         companyRectRef.current.setBounds(rectBounds);
+        // Only fit if no truck zones are overriding the viewport
+        if (zones.length === 0) map.fitBounds(rectBounds, 32);
       } else {
         companyRectRef.current = new window.google.maps.Rectangle({
           bounds: rectBounds,
           strokeColor: '#6366f1',
           strokeOpacity: 0.85,
-          strokeWeight: 2,
+          strokeWeight: 2.5,
           fillColor: '#6366f1',
           fillOpacity: 0.06,
-          map: mapInstanceRef.current,
+          map,
           clickable: false,
           zIndex: 0,
         });
+        if (zones.length === 0) {
+          window.google.maps.event.addListenerOnce(map, 'idle', () => {
+            map.fitBounds(rectBounds, 32);
+          });
+        }
       }
     } else if (companyRectRef.current) {
       companyRectRef.current.setMap(null);
       companyRectRef.current = null;
     }
-  }, [mapReady, companyZone]);
+  }, [mapReady, companyZone, zones.length]);
 
   // Update deck.gl layers whenever truck zone / centroid data changes
   useEffect(() => {
