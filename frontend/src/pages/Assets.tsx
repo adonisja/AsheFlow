@@ -6,10 +6,11 @@ import {
   MapPin, Loader2, Map,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import type { CompanyZone } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import OperatingZoneMap from '../components/OperatingZoneMap';
+import CompanyZoneMap from '../components/OperatingZoneMap';
 import { useConfirm } from '../hooks/useConfirm';
 
 // ---------------------------------------------------------------------------
@@ -1538,18 +1539,9 @@ const BOROUGH_PRESETS: Record<string, { sw_lat: number; sw_lng: number; ne_lat: 
   bronx:     { sw_lat: 40.7855, sw_lng: -73.9338, ne_lat: 40.9176, ne_lng: -73.7654 },
 };
 
-interface OperatingZone {
-  id: string;
-  name: string;
-  sw_lat: number;
-  sw_lng: number;
-  ne_lat: number;
-  ne_lng: number;
-}
-
-function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
+function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
   const { isLoading: authLoading } = useAuth();
-  const [zone, setZone]           = useState<OperatingZone | null>(null);
+  const [zone, setZone]           = useState<CompanyZone | null>(null);
   const [loading, setLoading]     = useState(true);
   const [editing, setEditing]     = useState(false);
   const [saving, setSaving]       = useState(false);
@@ -1573,7 +1565,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await axiosClient.get<OperatingZone | null>('/sort/company-zone');
+      const { data } = await axiosClient.get<CompanyZone | null>('/sort/company-zone');
       setError(null);
       setZone(data);
       if (data) {
@@ -1597,7 +1589,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
   // from OAuth2PasswordBearer when the token isn't available yet on page refresh
   useEffect(() => { if (!authLoading) load(); }, [load, authLoading]);
 
-  function cacheZone(z: OperatingZone) {
+  function cacheZone(z: CompanyZone) {
     try { localStorage.setItem('asheflow.companyZone.v1', JSON.stringify(z)); } catch {}
   }
 
@@ -1610,7 +1602,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
     setError(null);
     setSuccess(false);
     try {
-      const { data } = await axiosClient.post<OperatingZone>('/sort/company-zone/from-streets', {
+      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone/from-streets', {
         from_street: fromStreet.trim(),
         to_street:   toStreet.trim(),
         from_avenue: fromAvenue.trim(),
@@ -1643,7 +1635,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
     setError(null);
     setSuccess(false);
     try {
-      const { data } = await axiosClient.post<OperatingZone>('/sort/company-zone', {
+      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone', {
         sw_lat: parseFloat(swLat),
         sw_lng: parseFloat(swLng),
         ne_lat: parseFloat(neLat),
@@ -1701,11 +1693,13 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : zone && !editing ? (
         <div className="space-y-2">
-          <OperatingZoneMap bounds={zone} className="w-full h-80" />
+          <CompanyZoneMap bounds={zone} className="w-full h-[520px]" />
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: 'SW corner (bottom-left)', lat: zone.sw_lat, lng: zone.sw_lng },
+              { label: 'NW corner (top-left)',    lat: zone.ne_lat, lng: zone.sw_lng },
               { label: 'NE corner (top-right)',   lat: zone.ne_lat, lng: zone.ne_lng },
+              { label: 'SW corner (bottom-left)', lat: zone.sw_lat, lng: zone.sw_lng },
+              { label: 'SE corner (bottom-right)', lat: zone.sw_lat, lng: zone.ne_lng },
             ].map(({ label, lat, lng }) => (
               <div key={label} className="p-2.5 bg-accent/40 rounded-xl space-y-0.5">
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">{label}</p>
@@ -1875,10 +1869,10 @@ function SystemTab() {
   };
 
   return (
-    <div className="space-y-6 max-w-lg">
+    <div className="space-y-6 max-w-3xl mx-auto">
       <ConfirmDialog {...sysConfirmState} onCancel={sysCancelConfirm} />
 
-      <OperatingZoneCard isAdmin={isAdmin} />
+      <CompanyZoneCard isAdmin={isAdmin} />
 
       <div className="card space-y-4">
         <div className="flex items-center gap-2 border-b border-border pb-3">

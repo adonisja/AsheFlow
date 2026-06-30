@@ -907,6 +907,15 @@ export interface TrainerLoadRow {
   phases: Record<string, number>;
 }
 
+export interface CompanyZone {
+  id: string;
+  name: string;
+  sw_lat: number;
+  sw_lng: number;
+  ne_lat: number;
+  ne_lng: number;
+}
+
 export interface BanOverrideFreqResponse {
   total_overrides: number;
   weeks: number;

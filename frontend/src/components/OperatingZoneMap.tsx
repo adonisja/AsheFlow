@@ -81,7 +81,7 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
 
     if (rectRef.current) {
       rectRef.current.setBounds(rectBounds);
-      map.fitBounds(rectBounds, 32);
+      map.fitBounds(rectBounds, 8);
     } else {
       rectRef.current = new window.google.maps.Rectangle({
         bounds: rectBounds,
@@ -95,7 +95,7 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
       });
       // fitBounds after first idle so the map has painted and has a real pixel size
       window.google.maps.event.addListenerOnce(map, 'idle', () => {
-        map.fitBounds(rectBounds, 32);
+        map.fitBounds(rectBounds, 8);
       });
     }
   }, [mapReady, bounds]);

@@ -4,7 +4,8 @@ import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import ZoneDensityMap from '../components/ZoneDensityMap';
-import type { ZonePolygon, Centroid, CompanyZoneBounds } from '../components/ZoneDensityMap';
+import type { ZonePolygon, Centroid } from '../components/ZoneDensityMap';
+import type { CompanyZone } from '../api/types';
 import {
   Package, Users, AlertTriangle, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, Send, UserCheck, Shuffle,
@@ -1927,7 +1928,7 @@ export default function SortPage() {
   const [trainers, setTrainers] = useState<Employee[]>([]);
   const [zones, setZones] = useState<ZonePolygon[]>([]);
   const [centroids, setCentroids] = useState<Centroid[]>([]);
-  const [companyZone, setCompanyZone] = useState<CompanyZoneBounds | null>(() => {
+  const [companyZone, setCompanyZone] = useState<CompanyZone | null>(() => {
     try {
       const raw = localStorage.getItem('asheflow.companyZone.v1');
       return raw ? JSON.parse(raw) : null;
@@ -1966,7 +1967,7 @@ export default function SortPage() {
         axiosClient.get<Employee[]>('/employees/', { params: { is_active: true } }),
         axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
         axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
-        axiosClient.get<CompanyZoneBounds | null>('/sort/company-zone'),
+        axiosClient.get<CompanyZone | null>('/sort/company-zone'),
       ]);
       // Unpack settled results — zones/centroids fail silently if sort hasn't run yet
       if (zoneRes.status === 'fulfilled') {

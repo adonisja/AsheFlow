@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { GoogleMapsOverlay } from '@deck.gl/google-maps';
 import { PolygonLayer } from '@deck.gl/layers';
 import { ScatterplotLayer } from '@deck.gl/layers';
+import type { CompanyZone } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,18 +22,10 @@ export interface Centroid {
   truck_zone_label: string | null;
 }
 
-export interface CompanyZoneBounds {
-  id: string;
-  sw_lat: number;
-  sw_lng: number;
-  ne_lat: number;
-  ne_lng: number;
-}
-
 interface Props {
   zones: ZonePolygon[];
   centroids: Centroid[];
-  companyZone?: CompanyZoneBounds | null;
+  companyZone?: CompanyZone | null;
   className?: string;
 }
 
