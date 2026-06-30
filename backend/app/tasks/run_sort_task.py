@@ -124,6 +124,7 @@ def run_zone_sort(
                         "outside_pct":        b.outside_pct,
                         "outside_tbas":       b.outside_tbas,
                         "outlier_tbas":       b.outlier_tbas,
+                        "outside_packages_detail": b.outside_packages_detail,
                         "suggested_truck_id": str(b.suggested_truck_id) if b.suggested_truck_id else None,
                         "unresolvable":       b.unresolvable,
                     }

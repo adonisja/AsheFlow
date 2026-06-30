@@ -62,6 +62,11 @@ class SortRunRequest(BaseModel):
     overrides: list[BagOverrideIn] = []     # empty on first run; populated on resubmit
 
 
+class BagPackageDetail(BaseModel):
+    tba: str
+    normalised_address: Optional[str] = None
+
+
 class BagResultOut(BaseModel):
     bag_id: str
     inferred_truck_id: Optional[UUID] = None
@@ -73,6 +78,7 @@ class BagResultOut(BaseModel):
     outlier_tbas: list[str]
     suggested_truck_id: Optional[UUID] = None
     unresolvable: bool
+    outside_packages_detail: list[BagPackageDetail] = []
 
 
 class ClusterAssignmentOut(BaseModel):

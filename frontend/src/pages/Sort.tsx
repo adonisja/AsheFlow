@@ -17,7 +17,7 @@ import type {
   CommitSortResponse, RouteResponse, WaveAssignmentEntry,
   ArrivalConfirmResponse, MisroutedPackageOut,
   WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
-  SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride,
+  SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride, BagPackageDetail,
   ManifestPreviewResponse, ManifestPreviewRow, ManifestPackagePatchResponse,
   SortPreviewResponse,
 } from '../api/types';
@@ -851,7 +851,7 @@ function ManifestUploadPanel({
                             'border-border bg-surface-muted/30';
 
   const headerSubtext =
-    phase === 'idle'      ? "Upload the Amazon manifest CSV for today's sort." :
+    phase === 'idle'      ? 'Select a manifest file and upload to begin geocoding.' :
     phase === 'uploading' ? 'Uploading and parsing…' :
     phase === 'enriching' ? (
       processedCount != null && totalCount != null && totalCount > 0
@@ -876,7 +876,7 @@ function ManifestUploadPanel({
           ? <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
           : <Upload className="w-5 h-5 text-muted-foreground shrink-0" />}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">Upload Production Manifest</p>
+          <p className="text-sm font-semibold text-foreground">Manifest</p>
           <p className={`text-xs truncate ${phase === 'error' ? 'text-danger' : phase === 'ready' ? 'text-success' : 'text-muted-foreground'}`}>
             {headerSubtext}
           </p>
@@ -1130,7 +1130,7 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
           {preview.outlier_count > 0 && (
             <p className="text-[10px] text-warning px-2 py-1.5 border-t border-border/50 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3 shrink-0" />
-              {preview.outlier_count} package{preview.outlier_count !== 1 ? 's' : ''} could not be assigned to any zone (DBSCAN outliers).
+              {preview.outlier_count} package{preview.outlier_count !== 1 ? 's' : ''} could not be matched to any zone by K-Means and will stay on their current truck.
             </p>
           )}
         </div>
@@ -1149,11 +1149,13 @@ const _SORT_POLL_INTERVAL = 3_000;   // 3 s between status checks
 
 function ManifestSortPanel({
   today,
-  trucks,           // TruckAssignment[] for name lookup
-  onZonesCreated,   // called after zones are persisted so truck panels can enable
+  trucks,
+  manifestReady,
+  onZonesCreated,
 }: {
   today: string;
   trucks: { truck_id: string; truck_name: string }[];
+  manifestReady: boolean;
   onZonesCreated: () => void;
 }) {
   const [phase, setPhase]               = useState<SortRunPhase>('idle');
@@ -1164,6 +1166,8 @@ function ManifestSortPanel({
   const [doneTaskId, setDoneTaskId]     = useState<string | null>(null);
   // override map: bag_id → truck_id (dispatch confirmed or manually chosen)
   const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
+  // set of bag_ids whose package detail list is expanded
+  const [expandedBags, setExpandedBags] = useState<Set<string>>(new Set());
   const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
@@ -1290,7 +1294,7 @@ function ManifestSortPanel({
     : 'border-border bg-surface-muted/30';
 
   const headerSubtext =
-    phase === 'idle'         ? 'Run DBSCAN zone sort and verify bag placements.'
+    phase === 'idle'         ? (manifestReady ? 'Manifest ready — assign packages to truck zones.' : 'Upload a manifest first to enable zone sort.')
     : phase === 'running'    ? 'Clustering packages and assigning truck zones…'
     : phase === 'tier1_failed' ? `${result?.flagged_bags.length ?? 0} bag(s) flagged — review and confirm below.`
     : phase === 'done'       ? `Zones created: ${result?.zones_created ?? 0} · ${result?.package_count.toLocaleString()} packages sorted.`
@@ -1312,7 +1316,7 @@ function ManifestSortPanel({
           ? <AlertTriangle className="w-5 h-5 text-danger shrink-0" />
           : <Layers className="w-5 h-5 text-muted-foreground shrink-0" />}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">Zone Sort</p>
+          <p className="text-sm font-semibold text-foreground">Zone Assignment</p>
           <p className={`text-xs truncate ${
             phase === 'tier1_failed' ? 'text-warning'
             : phase === 'done' ? 'text-success'
@@ -1348,13 +1352,20 @@ function ManifestSortPanel({
 
           {/* Idle — run button */}
           {phase === 'idle' && !error && (
-            <button
-              onClick={handleInitialRun}
-              disabled={running}
-              className="btn-primary flex items-center gap-2 text-sm"
-            >
-              <Zap className="w-4 h-4" /> Run Zone Sort
-            </button>
+            <div className="space-y-2">
+              {!manifestReady && (
+                <p className="text-xs text-muted-foreground">
+                  Upload and geocode a manifest before running zone assignment.
+                </p>
+              )}
+              <button
+                onClick={handleInitialRun}
+                disabled={running || !manifestReady}
+                className="btn-primary flex items-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Zap className="w-4 h-4" /> Run Zone Assignment
+              </button>
+            </div>
           )}
 
           {/* Running */}
@@ -1384,76 +1395,165 @@ function ManifestSortPanel({
             </div>
           )}
 
-          {/* Tier-1 failed — per-bag review with override selects */}
+          {/* Tier-1 failed — per-bag review */}
           {phase === 'tier1_failed' && result && (
             <div className="space-y-4">
-              <p className="text-xs text-muted-foreground">
-                The bags below contain packages that DBSCAN assigned to a different truck
-                than the majority of the bag. Confirm the suggested truck or select a different
-                one, then click <strong>Confirm &amp; Force Sort</strong>.
-              </p>
+
+              {/* Legend */}
+              <div className="p-3 bg-accent/40 rounded-xl space-y-2">
+                <p className="text-xs font-semibold text-foreground">What needs review</p>
+                <p className="text-xs text-muted-foreground">
+                  K-Means assigned packages in these bags across multiple truck zones.
+                  Each bag must stay on one truck — confirm or change the destination below.
+                </p>
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-semibold uppercase text-danger">Misaligned</span>
+                    <p className="text-[10px] text-muted-foreground">Majority of packages belong on a different truck than the bag is on now.</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-semibold uppercase text-warning">Uncertain</span>
+                    <p className="text-[10px] text-muted-foreground">Split is close — no clear majority. Manual decision needed.</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-semibold uppercase text-warning/70">Stray</span>
+                    <p className="text-[10px] text-muted-foreground">Small minority of packages are outliers with no clear zone match.</p>
+                  </div>
+                </div>
+              </div>
 
               <div className="space-y-2">
-                {result.flagged_bags.map(bag => (
-                  <div
-                    key={bag.bag_id}
-                    className={`p-3 rounded-xl border space-y-2 ${classificationBg(bag.classification)}`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-0.5 min-w-0">
-                        <div className="flex items-center gap-2">
+                {result.flagged_bags.map(bag => {
+                  const currentTruck  = bag.inferred_truck_id  ? (truckById[bag.inferred_truck_id]  ?? bag.inferred_truck_id)  : null;
+                  const suggestedTruck = bag.suggested_truck_id ? (truckById[bag.suggested_truck_id] ?? bag.suggested_truck_id) : null;
+                  const chosenId = overrideMap[bag.bag_id];
+                  const chosenTruck = chosenId ? (truckById[chosenId] ?? chosenId) : null;
+
+                  return (
+                    <div
+                      key={bag.bag_id}
+                      className={`p-3 rounded-xl border space-y-2.5 ${classificationBg(bag.classification)}`}
+                    >
+                      {/* Row 1: bag ID + classification badge */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
                           <span className="text-xs font-semibold font-mono text-foreground">{bag.bag_id}</span>
-                          <span className={`text-[10px] font-semibold uppercase ${classificationColor(bag.classification)}`}>
+                          <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md ${
+                            bag.classification === 'misaligned' ? 'bg-danger/10 text-danger'
+                            : bag.classification === 'uncertain' ? 'bg-warning/10 text-warning'
+                            : 'bg-accent text-muted-foreground'
+                          }`}>
                             {bag.classification}
                           </span>
                         </div>
-                        <p className="text-[10px] text-muted-foreground">
-                          {bag.outside_packages}/{bag.total_packages} packages on wrong truck
-                          {bag.inferred_truck_id && ` · currently on ${truckById[bag.inferred_truck_id] ?? bag.inferred_truck_id}`}
-                        </p>
+                        {bag.unresolvable && (
+                          <span className="text-[10px] text-danger font-semibold shrink-0 bg-danger/10 px-1.5 py-0.5 rounded-md">
+                            Cannot auto-resolve
+                          </span>
+                        )}
                       </div>
-                      {bag.unresolvable && (
-                        <span className="text-[10px] text-danger font-semibold shrink-0">Unresolvable</span>
+
+                      {/* Row 2: human-readable summary */}
+                      <div className="text-xs text-muted-foreground space-y-0.5">
+                        <p>
+                          <span className="font-medium text-foreground">{bag.outside_packages}</span> of{' '}
+                          <span className="font-medium text-foreground">{bag.total_packages}</span> packages
+                          {' '}sorted to a different zone than the bag's current truck.
+                        </p>
+                        {currentTruck && (
+                          <p>Currently on: <span className="font-medium text-foreground">{currentTruck}</span></p>
+                        )}
+                        {suggestedTruck && !bag.unresolvable && (
+                          <p>Suggested move: <span className="font-medium text-foreground">{suggestedTruck}</span></p>
+                        )}
+                      </div>
+
+                      {/* Row 3: override select */}
+                      {!bag.unresolvable && (
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-muted-foreground shrink-0 w-20">Move bag to:</label>
+                          <select
+                            value={chosenId ?? ''}
+                            onChange={e => setOverrideMap(prev => ({ ...prev, [bag.bag_id]: e.target.value }))}
+                            className="flex-1 text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                          >
+                            <option value="">Keep on current truck</option>
+                            {trucks.map(t => (
+                              <option key={t.truck_id} value={t.truck_id}>
+                                {t.truck_name}{t.truck_id === bag.suggested_truck_id ? ' — suggested' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Row 4: chosen confirmation */}
+                      {chosenTruck && (
+                        <p className="text-[10px] text-success font-medium flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Will move to {chosenTruck}
+                        </p>
+                      )}
+
+                      {bag.outlier_tbas.length > 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          {bag.outlier_tbas.length} package{bag.outlier_tbas.length !== 1 ? 's' : ''} could not be matched to any zone — they will stay on the current truck.
+                        </p>
+                      )}
+
+                      {/* Expandable package list */}
+                      {bag.outside_packages_detail.length > 0 && (
+                        <div className="border-t border-border/40 pt-2 mt-1">
+                          <button
+                            onClick={() => setExpandedBags(prev => {
+                              const next = new Set(prev);
+                              next.has(bag.bag_id) ? next.delete(bag.bag_id) : next.add(bag.bag_id);
+                              return next;
+                            })}
+                            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            {expandedBags.has(bag.bag_id)
+                              ? <ChevronUp className="w-3 h-3" />
+                              : <ChevronDown className="w-3 h-3" />
+                            }
+                            {expandedBags.has(bag.bag_id) ? 'Hide' : 'Show'} {bag.outside_packages_detail.length} misplaced package{bag.outside_packages_detail.length !== 1 ? 's' : ''}
+                          </button>
+
+                          {expandedBags.has(bag.bag_id) && (
+                            <div className="mt-1.5 rounded-lg overflow-hidden border border-border/40">
+                              <table className="w-full text-[10px]">
+                                <thead>
+                                  <tr className="bg-accent/60">
+                                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">TBA</th>
+                                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Address</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {bag.outside_packages_detail.map((pkg: BagPackageDetail, i: number) => (
+                                    <tr key={pkg.tba} className={i % 2 === 0 ? 'bg-background' : 'bg-accent/20'}>
+                                      <td className="px-2 py-1 font-mono text-foreground">{pkg.tba}</td>
+                                      <td className="px-2 py-1 text-muted-foreground">{pkg.normalised_address ?? '—'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
-
-                    {!bag.unresolvable && (
-                      <div className="flex items-center gap-2">
-                        <label className="text-[10px] text-muted-foreground shrink-0">Move to:</label>
-                        <select
-                          value={overrideMap[bag.bag_id] ?? ''}
-                          onChange={e => setOverrideMap(prev => ({ ...prev, [bag.bag_id]: e.target.value }))}
-                          className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                        >
-                          <option value="">Leave as-is…</option>
-                          {trucks.map(t => (
-                            <option key={t.truck_id} value={t.truck_id}>
-                              {t.truck_name}
-                              {t.truck_id === bag.suggested_truck_id ? ' (suggested)' : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    {bag.outlier_tbas.length > 0 && (
-                      <p className="text-[10px] text-muted-foreground">
-                        {bag.outlier_tbas.length} TBA(s) are DBSCAN outliers — no truck can be suggested.
-                      </p>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 pt-1">
                 <button
                   onClick={handleConfirmOverrides}
                   disabled={running}
                   className="btn-primary flex items-center gap-2 text-sm flex-1 justify-center"
                 >
                   {running
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Applying…</>
-                    : <><Send className="w-4 h-4" /> Confirm &amp; Force Sort</>}
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Applying overrides…</>
+                    : <><Send className="w-4 h-4" /> Confirm &amp; Finalize Sort</>}
                 </button>
                 <button
                   onClick={() => { setPhase('idle'); setResult(null); setOverrideMap({}); }}
@@ -1940,6 +2040,7 @@ export default function SortPage() {
   const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
   // The date of the manifest that was last enriched — may differ from today (seed, back-date)
   const [activeManifestDate, setActiveManifestDate] = useState<string>(today);
+  const [manifestReady, setManifestReady] = useState(false);
 
   const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
     const phase: SortPhase =
@@ -2117,6 +2218,7 @@ export default function SortPage() {
         today={today}
         onReady={uploadedDate => {
           setActiveManifestDate(uploadedDate);
+          setManifestReady(true);
           fetchAll();
         }}
       />
@@ -2125,6 +2227,7 @@ export default function SortPage() {
       {assignments.length > 0 && (
         <ManifestSortPanel
           today={activeManifestDate}
+          manifestReady={manifestReady}
           trucks={assignments.map(a => ({ truck_id: a.truck_id, truck_name: a.truck_name }))}
           onZonesCreated={() => {
             // Re-fetch zones so zonedTruckIds updates and map refreshes

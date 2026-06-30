@@ -752,6 +752,11 @@ export interface ClusterAssignmentOut {
   package_count: number;
 }
 
+export interface BagPackageDetail {
+  tba: string;
+  normalised_address: string | null;
+}
+
 export interface BagResultOut {
   bag_id: string;
   inferred_truck_id: string | null;
@@ -763,6 +768,7 @@ export interface BagResultOut {
   outlier_tbas: string[];
   suggested_truck_id: string | null;
   unresolvable: boolean;
+  outside_packages_detail: BagPackageDetail[];
 }
 
 export interface SortRunResponse {
