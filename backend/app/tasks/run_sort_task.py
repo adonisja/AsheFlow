@@ -284,10 +284,12 @@ def run_zone_sort(
         return payload
 
     except Exception as exc:
-        logger.error(
-            "run_zone_sort unhandled exception: %s",
+        logger.exception(
+            "run_zone_sort unhandled exception: %s — company=%s sort_date=%s task_id=%s",
             type(exc).__name__,
-            extra={"company_id": company_id, "sort_date": sort_date, "task_id": task_id},
+            company_id,
+            sort_date,
+            task_id,
         )
         r.setex(failk, _RESULT_TTL, json.dumps({"detail": "internal_error"}))
         r.delete(rk)
