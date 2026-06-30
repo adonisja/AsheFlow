@@ -1584,10 +1584,9 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
       }
     } catch (e: any) {
       const status = e?.response?.status;
-      const detail = JSON.stringify(e?.response?.data ?? 'no response');
       // 404 = not configured yet (expected); anything else is a real error worth showing
       if (status !== 404) {
-        setError(`Failed to load operating zone (HTTP ${status ?? 'network error'}): ${detail}`);
+        setError(`Failed to load operating zone (HTTP ${status ?? 'network error'}).`);
       }
     } finally {
       setLoading(false);
