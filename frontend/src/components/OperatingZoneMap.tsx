@@ -1,19 +1,11 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import type { CompanyZone, CornerPoint } from '../api/types';
 
-// ---------------------------------------------------------------------------
-// View-mode props (read-only display of a saved zone)
-// ---------------------------------------------------------------------------
-
 interface ViewProps {
   mode: 'view';
   bounds: CompanyZone;
   className?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Draw-mode props (interactive polygon editor)
-// ---------------------------------------------------------------------------
 
 interface DrawProps {
   mode: 'draw';
@@ -26,37 +18,43 @@ interface DrawProps {
 type Props = ViewProps | DrawProps;
 
 declare global {
-  interface Window {
-    initGoogleMaps?: () => void;
-  }
+  interface Window { initGoogleMaps?: () => void; }
 }
 
 const SHAPE_STYLE = {
-  strokeColor:   '#6366f1',
-  strokeOpacity: 0.9,
-  strokeWeight:  2.5,
-  fillColor:     '#6366f1',
-  fillOpacity:   0.10,
-  clickable:     false,
+  strokeColor: '#6366f1', strokeOpacity: 0.9, strokeWeight: 2.5,
+  fillColor: '#6366f1',   fillOpacity: 0.10,  clickable: false,
 };
 
 export default function OperatingZoneMap(props: Props) {
-  const mapRef         = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const shapeRef       = useRef<google.maps.Polygon | google.maps.Rectangle | null>(null);
-  const markersRef     = useRef<google.maps.Marker[]>([]);
-  const previewRef     = useRef<google.maps.Polygon | null>(null);
+  const mapRef          = useRef<HTMLDivElement>(null);
+  const mapInstanceRef  = useRef<google.maps.Map | null>(null);
+  const shapeRef        = useRef<google.maps.Polygon | google.maps.Rectangle | null>(null);
+  const markersRef      = useRef<google.maps.Marker[]>([]);
+  const previewRef      = useRef<google.maps.Polygon | null>(null);
   const clickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+
+  // Ref mirror of vertices so drag handlers always see the current array
+  // without causing re-renders during the drag gesture itself.
+  const verticesRef = useRef<CornerPoint[]>(
+    props.mode === 'draw' ? (props.initialCorners ?? []) : []
+  );
+  const [vertices, setVerticesState] = useState<CornerPoint[]>(verticesRef.current);
+
+  const setVertices = useCallback((updater: CornerPoint[] | ((prev: CornerPoint[]) => CornerPoint[])) => {
+    setVerticesState(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      verticesRef.current = next;
+      return next;
+    });
+  }, []);
 
   const [mapReady, setMapReady]     = useState(false);
   const [loadError, setLoadError]   = useState(false);
-  const [vertices, setVertices]     = useState<CornerPoint[]>(
-    props.mode === 'draw' ? (props.initialCorners ?? []) : []
-  );
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Load Maps SDK (shared gmap-script tag)
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
@@ -79,9 +77,9 @@ export default function OperatingZoneMap(props: Props) {
     document.head.appendChild(script);
   }, []);
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Init map instance
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || mapInstanceRef.current) return;
@@ -100,8 +98,7 @@ export default function OperatingZoneMap(props: Props) {
     }
 
     mapInstanceRef.current = new window.google.maps.Map(mapRef.current, {
-      center,
-      zoom,
+      center, zoom,
       mapTypeId: 'roadmap',
       disableDefaultUI: false,
       zoomControl: true,
@@ -115,9 +112,9 @@ export default function OperatingZoneMap(props: Props) {
     });
   }, [mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // VIEW MODE — draw saved polygon / rectangle and fit
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     if (props.mode !== 'view' || !mapInstanceRef.current) return;
@@ -157,9 +154,16 @@ export default function OperatingZoneMap(props: Props) {
     });
   }, [mapReady, props.mode === 'view' && props.bounds]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // -------------------------------------------------------------------------
-  // DRAW MODE — click listener + vertex markers + live preview polygon
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // DRAW MODE — helpers
+  // ---------------------------------------------------------------------------
+
+  // Sync preview polygon path from verticesRef without triggering marker rebuild.
+  const syncPreview = useCallback(() => {
+    const pts = verticesRef.current;
+    if (!previewRef.current) return;
+    previewRef.current.setPath(pts.map(p => ({ lat: p.lat, lng: p.lng })));
+  }, []);
 
   const clearDrawOverlays = useCallback(() => {
     markersRef.current.forEach(m => m.setMap(null));
@@ -167,75 +171,73 @@ export default function OperatingZoneMap(props: Props) {
     if (previewRef.current) { previewRef.current.setMap(null); previewRef.current = null; }
   }, []);
 
-  // Rebuild markers + preview polygon whenever vertices change (draw mode only)
+  // Build a single marker for vertex at index i.
+  // Drag updates verticesRef + preview path directly; setVertices only on dragend.
+  const buildMarker = useCallback((v: CornerPoint, i: number, map: google.maps.Map) => {
+    const marker = new window.google.maps.Marker({
+      position: { lat: v.lat, lng: v.lng },
+      map,
+      draggable: true,
+      title: `Vertex ${i + 1}`,
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: i === 0 ? 8 : 6,
+        fillColor:   i === 0 ? '#f59e0b' : '#6366f1',
+        fillOpacity: 1,
+        strokeColor: '#ffffff',
+        strokeWeight: 2,
+      },
+    });
+
+    // During drag: mutate the ref and sync the preview polygon path — no React re-render
+    marker.addListener('drag', (e: google.maps.MapMouseEvent) => {
+      if (!e.latLng) return;
+      verticesRef.current = verticesRef.current.map((p, idx) =>
+        idx === i ? { lat: e.latLng!.lat(), lng: e.latLng!.lng() } : p
+      );
+      syncPreview();
+    });
+
+    // On dragend: commit to React state so the UI vertex count / save button reflect truth
+    marker.addListener('dragend', (e: google.maps.MapMouseEvent) => {
+      if (!e.latLng) return;
+      // verticesRef already updated in drag handler; just flush to state
+      setVertices([...verticesRef.current]);
+    });
+
+    return marker;
+  }, [syncPreview, setVertices]);
+
+  // Rebuild markers + preview polygon when vertices change (but NOT during a drag).
+  // Because drag only calls setVertices on dragend, this runs at most once per complete drag.
   useEffect(() => {
     if (props.mode !== 'draw' || !mapInstanceRef.current) return;
 
     const map = mapInstanceRef.current;
     clearDrawOverlays();
 
-    // Redraw vertex markers
+    // Rebuild all vertex markers
     vertices.forEach((v, i) => {
-      const marker = new window.google.maps.Marker({
-        position: { lat: v.lat, lng: v.lng },
-        map,
-        draggable: true,
-        title: `Vertex ${i + 1}`,
-        icon: {
-          path: window.google.maps.SymbolPath.CIRCLE,
-          scale: i === 0 ? 8 : 6,
-          fillColor:    i === 0 ? '#f59e0b' : '#6366f1',
-          fillOpacity:  1,
-          strokeColor:  '#ffffff',
-          strokeWeight: 2,
-        },
-      });
-
-      marker.addListener('drag', (e: google.maps.MapMouseEvent) => {
-        if (!e.latLng) return;
-        setVertices(prev => {
-          const next = [...prev];
-          next[i] = { lat: e.latLng!.lat(), lng: e.latLng!.lng() };
-          return next;
-        });
-      });
-
-      // Click on first marker closes the polygon
-      if (i === 0) {
-        marker.addListener('click', () => {
-          if (vertices.length >= 3) {
-            // polygon is already closed by having first === last in the preview;
-            // clicking the first vertex when ≥3 points is just a UX confirmation — no-op here
-          }
-        });
-      }
-
-      markersRef.current.push(marker);
+      markersRef.current.push(buildMarker(v, i, map));
     });
 
-    // Live preview polygon (3+ vertices)
-    if (vertices.length >= 3) {
+    // Rebuild preview polygon
+    if (vertices.length >= 2) {
       previewRef.current = new window.google.maps.Polygon({
         paths: vertices.map(v => ({ lat: v.lat, lng: v.lng })),
         map,
-        ...SHAPE_STYLE,
-        clickable: false,
-      });
-    } else if (vertices.length === 2) {
-      // Draw a line while fewer than 3 points
-      previewRef.current = new window.google.maps.Polygon({
-        paths: vertices.map(v => ({ lat: v.lat, lng: v.lng })),
-        map,
-        strokeColor:  '#6366f1',
-        strokeOpacity: 0.6,
-        strokeWeight: 2,
-        fillOpacity:  0,
-        clickable:    false,
+        ...(vertices.length >= 3 ? SHAPE_STYLE : {
+          strokeColor: '#6366f1', strokeOpacity: 0.6,
+          strokeWeight: 2, fillOpacity: 0, clickable: false,
+        }),
       });
     }
-  }, [mapReady, vertices, props.mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapReady, vertices, props.mode, clearDrawOverlays, buildMarker]);
 
-  // Attach / detach click listener for adding vertices
+  // ---------------------------------------------------------------------------
+  // DRAW MODE — map click listener (add new vertex)
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     if (props.mode !== 'draw' || !mapInstanceRef.current) return;
 
@@ -255,9 +257,12 @@ export default function OperatingZoneMap(props: Props) {
         clickListenerRef.current = null;
       }
     };
-  }, [mapReady, props.mode]);
+  }, [mapReady, props.mode, setVertices]);
 
-  // Cleanup draw overlays when unmounting or switching modes
+  // ---------------------------------------------------------------------------
+  // Cleanup on unmount
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     return () => {
       clearDrawOverlays();
@@ -267,9 +272,9 @@ export default function OperatingZoneMap(props: Props) {
     };
   }, [clearDrawOverlays]);
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Fit map to initial corners when draw mode opens with existing data
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     if (props.mode !== 'draw' || !mapInstanceRef.current) return;
@@ -283,9 +288,9 @@ export default function OperatingZoneMap(props: Props) {
     });
   }, [mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Render
-  // -------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
 
   if (loadError) {
     return (
@@ -305,18 +310,15 @@ export default function OperatingZoneMap(props: Props) {
         </div>
       )}
 
-      {/* Draw mode overlays */}
       {props.mode === 'draw' && mapReady && (
         <>
-          {/* Instruction banner */}
           <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-card/95 backdrop-blur border border-border rounded-xl px-3 py-1.5 text-xs text-foreground shadow-lg whitespace-nowrap pointer-events-none">
             {vertices.length === 0 && 'Click on the map to place the first vertex'}
             {vertices.length === 1 && 'Click to add more vertices'}
             {vertices.length === 2 && 'Click to add more vertices (need at least 3)'}
-            {vertices.length >= 3  && `${vertices.length} vertices — drag to adjust, or keep clicking to add more`}
+            {vertices.length >= 3  && `${vertices.length} vertices — drag markers to adjust, or click to add more`}
           </div>
 
-          {/* Vertex count + action buttons */}
           <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto">
             {vertices.length > 0 && (
               <button
