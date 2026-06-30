@@ -971,6 +971,22 @@ class OperatingZoneFromStreetsIn(BaseModel):
     name:        str = Field("Operating Zone", max_length=100)
 
 
+class IntersectionIn(BaseModel):
+    street: str = Field(..., max_length=100)
+    avenue: str = Field(..., max_length=100)
+
+
+class OperatingZoneFromIntersectionsIn(BaseModel):
+    intersections: list[IntersectionIn] = Field(..., min_length=3, max_length=50)
+    borough: str = Field("manhattan", max_length=30)
+    name:    str = Field("Operating Zone", max_length=100)
+
+
+class OperatingZoneFromCornersIn(BaseModel):
+    corners: list[CornerPoint] = Field(..., min_length=3, max_length=50)
+    name:    str = Field("Operating Zone", max_length=100)
+
+
 class CornerPoint(BaseModel):
     lat: float
     lng: float
@@ -1244,6 +1260,148 @@ def upsert_company_zone_from_streets(
             "sw_lat": sw_lat, "sw_lng": sw_lng,
             "ne_lat": ne_lat, "ne_lng": ne_lng,
         },
+    )
+    db.commit()
+    db.refresh(zone)
+
+    return OperatingZoneOut(
+        id=zone.id,
+        name=zone.name,
+        sw_lat=sw_lat,
+        sw_lng=sw_lng,
+        ne_lat=ne_lat,
+        ne_lng=ne_lng,
+        corners=_geojson_to_corners(bounds),
+    )
+
+
+@router.post("/company-zone/from-intersections", response_model=OperatingZoneOut, status_code=status.HTTP_200_OK)
+def upsert_company_zone_from_intersections(
+    body: OperatingZoneFromIntersectionsIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Create or replace the company zone from an ordered list of street+avenue intersections.
+
+    Each intersection is geocoded in order; the resulting lat/lng points form the polygon
+    vertices. Minimum 3 intersections required to define a valid polygon.
+    """
+    from app.tasks.enrich_manifest import _geoclient_intersection
+    from datetime import datetime, timezone
+    from app.services.audit import write_audit
+    import uuid as _uuid
+
+    if not settings.geoclient_app_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GeoClient API key is not configured. Use draw mode or raw coordinates instead.",
+        )
+
+    geocoded: list[tuple[float, float]] = []
+    for ix in body.intersections:
+        result = _geoclient_intersection(ix.street.strip(), ix.avenue.strip(), borough=body.borough)
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Could not geocode '{ix.street} & {ix.avenue}' in {body.borough}. "
+                    f"Use formats like 'W 23 ST', '6 AVE', 'BROADWAY'."
+                ),
+            )
+        geocoded.append(result)
+
+    lats = [p[0] for p in geocoded]
+    lngs = [p[1] for p in geocoded]
+    sw_lat, sw_lng = min(lats), min(lngs)
+    ne_lat, ne_lng = max(lats), max(lngs)
+
+    bounds = _corners_to_geojson(geocoded)
+
+    db.query(CompanyZone).filter(
+        CompanyZone.company_id == caller.company_id,
+        CompanyZone.parent_zone_id.is_(None),
+        CompanyZone.is_active.is_(True),
+    ).update({"is_active": False}, synchronize_session="fetch")
+
+    zone = CompanyZone(
+        id=_uuid.uuid4(),
+        company_id=caller.company_id,
+        parent_zone_id=None,
+        name=body.name,
+        bounds=bounds,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(zone)
+    db.flush()
+    write_audit(
+        db,
+        action_type="company_zone.upserted",
+        target_table="company_zones",
+        target_id=str(zone.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"method": "intersections", "count": len(geocoded), "borough": body.borough},
+    )
+    db.commit()
+    db.refresh(zone)
+
+    return OperatingZoneOut(
+        id=zone.id,
+        name=zone.name,
+        sw_lat=sw_lat,
+        sw_lng=sw_lng,
+        ne_lat=ne_lat,
+        ne_lng=ne_lng,
+        corners=_geojson_to_corners(bounds),
+    )
+
+
+@router.post("/company-zone/from-corners", response_model=OperatingZoneOut, status_code=status.HTTP_200_OK)
+def upsert_company_zone_from_corners(
+    body: OperatingZoneFromCornersIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Create or replace the company zone from raw lat/lng corner points (click-to-draw output)."""
+    from datetime import datetime, timezone
+    from app.services.audit import write_audit
+    import uuid as _uuid
+
+    lats = [c.lat for c in body.corners]
+    lngs = [c.lng for c in body.corners]
+    sw_lat, sw_lng = min(lats), min(lngs)
+    ne_lat, ne_lng = max(lats), max(lngs)
+
+    bounds = _corners_to_geojson([(c.lat, c.lng) for c in body.corners])
+
+    db.query(CompanyZone).filter(
+        CompanyZone.company_id == caller.company_id,
+        CompanyZone.parent_zone_id.is_(None),
+        CompanyZone.is_active.is_(True),
+    ).update({"is_active": False}, synchronize_session="fetch")
+
+    zone = CompanyZone(
+        id=_uuid.uuid4(),
+        company_id=caller.company_id,
+        parent_zone_id=None,
+        name=body.name,
+        bounds=bounds,
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(zone)
+    db.flush()
+    write_audit(
+        db,
+        action_type="company_zone.upserted",
+        target_table="company_zones",
+        target_id=str(zone.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"method": "draw", "vertex_count": len(body.corners)},
     )
     db.commit()
     db.refresh(zone)

@@ -3,10 +3,10 @@ import {
   Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
   RefreshCw, X, ChevronDown, Settings, Trash2, FileUp, Mail, ArrowUp, ArrowDown,
   Copy, Check, Hash, Search, ToggleLeft, ToggleRight, ShieldAlert, ShieldOff, Phone,
-  MapPin, Loader2, Map,
+  MapPin, Loader2, Map, MousePointer2, Navigation,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-import type { CompanyZone } from '../api/types';
+import type { CompanyZone, CornerPoint } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import BulkImportModal from '../components/BulkImportModal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -1539,24 +1539,32 @@ const BOROUGH_PRESETS: Record<string, { sw_lat: number; sw_lng: number; ne_lat: 
   bronx:     { sw_lat: 40.7855, sw_lng: -73.9338, ne_lat: 40.9176, ne_lng: -73.7654 },
 };
 
+type EditTab = 'draw' | 'intersections' | 'advanced';
+
+interface IntersectionRow { street: string; avenue: string; }
+
 function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
   const { isLoading: authLoading } = useAuth();
-  const [zone, setZone]           = useState<CompanyZone | null>(null);
-  const [loading, setLoading]     = useState(true);
-  const [editing, setEditing]     = useState(false);
-  const [saving, setSaving]       = useState(false);
-  const [error, setError]         = useState<string | null>(null);
-  const [success, setSuccess]     = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [zone, setZone]     = useState<CompanyZone | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [editTab, setEditTab] = useState<EditTab>('draw');
 
-  // Street/avenue range inputs (primary mode)
-  const [fromStreet, setFromStreet] = useState('');
-  const [toStreet,   setToStreet]   = useState('');
-  const [fromAvenue, setFromAvenue] = useState('');
-  const [toAvenue,   setToAvenue]   = useState('');
-  const [borough,    setBorough]    = useState('manhattan');
+  // Draw mode state — corners committed from the map
+  const [drawnCorners, setDrawnCorners] = useState<CornerPoint[]>([]);
 
-  // Raw coordinate inputs (advanced fallback)
+  // Intersection list state
+  const [borough, setBorough]       = useState('manhattan');
+  const [intersections, setIntersections] = useState<IntersectionRow[]>([
+    { street: '', avenue: '' },
+    { street: '', avenue: '' },
+    { street: '', avenue: '' },
+  ]);
+
+  // Advanced raw-coord state
   const [swLat, setSwLat] = useState('');
   const [swLng, setSwLng] = useState('');
   const [neLat, setNeLat] = useState('');
@@ -1573,10 +1581,12 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
         setSwLng(data.sw_lng.toFixed(6));
         setNeLat(data.ne_lat.toFixed(6));
         setNeLng(data.ne_lng.toFixed(6));
+        if (data.corners && data.corners.length >= 3) {
+          setDrawnCorners(data.corners);
+        }
       }
     } catch (e: any) {
       const status = e?.response?.status;
-      // 404 = not configured yet (expected); anything else is a real error worth showing
       if (status !== 404) {
         setError(`Failed to load operating zone (HTTP ${status ?? 'network error'}).`);
       }
@@ -1585,78 +1595,84 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
     }
   }, []);
 
-  // Wait for Amplify to restore the session before fetching — avoids a 422
-  // from OAuth2PasswordBearer when the token isn't available yet on page refresh
   useEffect(() => { if (!authLoading) load(); }, [load, authLoading]);
 
   function cacheZone(z: CompanyZone) {
     try { localStorage.setItem('asheflow.companyZone.v1', JSON.stringify(z)); } catch {}
   }
 
-  async function saveFromStreets() {
-    if (!fromStreet.trim() || !toStreet.trim() || !fromAvenue.trim() || !toAvenue.trim()) {
-      setError('All four street/avenue fields are required.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    setSuccess(false);
+  function onDrawSave(corners: CornerPoint[]) {
+    setDrawnCorners(corners);
+  }
+
+  async function commitDrawn() {
+    if (drawnCorners.length < 3) { setError('Draw at least 3 vertices on the map.'); return; }
+    setSaving(true); setError(null); setSuccess(false);
     try {
-      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone/from-streets', {
-        from_street: fromStreet.trim(),
-        to_street:   toStreet.trim(),
-        from_avenue: fromAvenue.trim(),
-        to_avenue:   toAvenue.trim(),
-        borough,
+      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone/from-corners', {
+        corners: drawnCorners,
       });
-      cacheZone(data);
-      setZone(data);
-      setSwLat(data.sw_lat.toFixed(6));
-      setSwLng(data.sw_lng.toFixed(6));
-      setNeLat(data.ne_lat.toFixed(6));
-      setNeLng(data.ne_lng.toFixed(6));
-      setEditing(false);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      cacheZone(data); setZone(data); setEditing(false);
+      setSuccess(true); setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
-      setError(
-        typeof detail === 'string' ? detail
-        : Array.isArray(detail)   ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
-        : `Failed to save operating zone (HTTP ${e?.response?.status ?? 'unknown'}).`
-      );
-    } finally {
-      setSaving(false);
-    }
+      setError(typeof detail === 'string' ? detail : `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`);
+    } finally { setSaving(false); }
+  }
+
+  async function saveFromIntersections() {
+    const filled = intersections.filter(r => r.street.trim() && r.avenue.trim());
+    if (filled.length < 3) { setError('Enter at least 3 complete intersections.'); return; }
+    setSaving(true); setError(null); setSuccess(false);
+    try {
+      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone/from-intersections', {
+        intersections: filled.map(r => ({ street: r.street.trim(), avenue: r.avenue.trim() })),
+        borough,
+      });
+      cacheZone(data); setZone(data); setEditing(false);
+      setSuccess(true); setTimeout(() => setSuccess(false), 3000);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail
+        : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
+        : `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`);
+    } finally { setSaving(false); }
   }
 
   async function saveFromCoords() {
-    setSaving(true);
-    setError(null);
-    setSuccess(false);
+    setSaving(true); setError(null); setSuccess(false);
     try {
       const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone', {
-        sw_lat: parseFloat(swLat),
-        sw_lng: parseFloat(swLng),
-        ne_lat: parseFloat(neLat),
-        ne_lng: parseFloat(neLng),
+        sw_lat: parseFloat(swLat), sw_lng: parseFloat(swLng),
+        ne_lat: parseFloat(neLat), ne_lng: parseFloat(neLng),
       });
-      cacheZone(data);
-      setZone(data);
-      setEditing(false);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      cacheZone(data); setZone(data); setEditing(false);
+      setSuccess(true); setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
-      setError(
-        typeof detail === 'string' ? detail
-        : Array.isArray(detail)   ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
-        : `Failed to save operating zone (HTTP ${e?.response?.status ?? 'unknown'}).`
-      );
-    } finally {
-      setSaving(false);
-    }
+      setError(typeof detail === 'string' ? detail
+        : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
+        : `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`);
+    } finally { setSaving(false); }
   }
+
+  function updateIntersection(i: number, field: 'street' | 'avenue', value: string) {
+    setIntersections(prev => { const next = [...prev]; next[i] = { ...next[i], [field]: value }; return next; });
+  }
+
+  function addIntersection() {
+    setIntersections(prev => [...prev, { street: '', avenue: '' }]);
+  }
+
+  function removeIntersection(i: number) {
+    setIntersections(prev => prev.filter((_, idx) => idx !== i));
+  }
+
+  const editTabs: { key: EditTab; label: string; icon: React.ElementType }[] = [
+    { key: 'draw',          label: 'Draw on map',    icon: MousePointer2 },
+    { key: 'intersections', label: 'Street entries', icon: Navigation    },
+    { key: 'advanced',      label: 'Coordinates',    icon: MapPin        },
+  ];
 
   return (
     <div className="card space-y-4">
@@ -1667,7 +1683,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
         </div>
         {isAdmin && !editing && (
           <button
-            onClick={() => setEditing(true)}
+            onClick={() => { setEditing(true); setError(null); }}
             className="flex items-center gap-1.5 text-xs text-primary hover:bg-primary/10 px-2.5 py-1.5 rounded-lg transition-colors"
           >
             <Pencil className="w-3.5 h-3.5" /> {zone ? 'Edit' : 'Configure'}
@@ -1676,7 +1692,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        The bounding box that defines your company's delivery area.
+        The polygon that defines your company's delivery area.
         Used by the sort algorithm to detect out-of-area packages.
         {!isAdmin && ' Contact your admin to configure this.'}
       </p>
@@ -1687,20 +1703,23 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
         </div>
       )}
 
+      {/* ── View mode ── */}
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading…
         </div>
       ) : zone && !editing ? (
         <div className="space-y-2">
-          <CompanyZoneMap bounds={zone} className="w-full h-[520px]" />
+          <CompanyZoneMap mode="view" bounds={zone} className="w-full h-[520px]" />
           {zone.corners && zone.corners.length >= 3 ? (
             <div className="space-y-1.5">
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Geocoded corners</p>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+                {zone.corners.length} vertices
+              </p>
               <div className="grid grid-cols-2 gap-2">
                 {zone.corners.map((c, i) => (
                   <div key={i} className="p-2.5 bg-accent/40 rounded-xl space-y-0.5">
-                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Corner {i + 1}</p>
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Vertex {i + 1}</p>
                     <p className="text-xs font-mono text-foreground">{c.lat.toFixed(5)}, {c.lng.toFixed(5)}</p>
                   </div>
                 ))}
@@ -1732,116 +1751,166 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : null}
 
+      {/* ── Edit mode ── */}
       {editing && isAdmin && (
         <div className="space-y-4">
-          {/* Primary: street/avenue range */}
-          <div className="space-y-3">
-            <p className="text-xs font-medium text-foreground">Enter the street and avenue range for your delivery area:</p>
-
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
-              <select className="input w-full text-sm" value={borough} onChange={e => setBorough(e.target.value)}>
-                {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">From street</label>
-                <input
-                  type="text"
-                  className="input w-full text-sm"
-                  placeholder="e.g. W 23 ST"
-                  value={fromStreet}
-                  onChange={e => setFromStreet(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">To street</label>
-                <input
-                  type="text"
-                  className="input w-full text-sm"
-                  placeholder="e.g. W 57 ST"
-                  value={toStreet}
-                  onChange={e => setToStreet(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">From avenue</label>
-                <input
-                  type="text"
-                  className="input w-full text-sm"
-                  placeholder="e.g. 6 AVE"
-                  value={fromAvenue}
-                  onChange={e => setFromAvenue(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">To avenue</label>
-                <input
-                  type="text"
-                  className="input w-full text-sm"
-                  placeholder="e.g. 12 AVE"
-                  value={toAvenue}
-                  onChange={e => setToAvenue(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
-              <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
-              <p className="text-[11px] text-muted-foreground">Streets: <span className="font-mono text-foreground">W 23 ST</span>, <span className="font-mono text-foreground">E 57 ST</span>, <span className="font-mono text-foreground">FULTON ST</span></p>
-              <p className="text-[11px] text-muted-foreground">Avenues: <span className="font-mono text-foreground">6 AVE</span>, <span className="font-mono text-foreground">12 AVE</span>, <span className="font-mono text-foreground">LEXINGTON AVE</span>, <span className="font-mono text-foreground">BROADWAY</span></p>
-              <p className="text-[11px] text-muted-foreground">The system geocodes all four corner intersections to build the bounding box.</p>
-            </div>
+          {/* Tab bar */}
+          <div className="flex items-center gap-1 bg-accent rounded-xl p-1">
+            {editTabs.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => { setEditTab(key); setError(null); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex-1 justify-center ${
+                  editTab === key
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" /> {label}
+              </button>
+            ))}
           </div>
+
+          {/* ── Draw tab ── */}
+          {editTab === 'draw' && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Click anywhere on the map to place vertices. Drag markers to adjust. Minimum 3 points.
+                {drawnCorners.length >= 3 && (
+                  <span className="ml-1 text-success font-medium">
+                    {drawnCorners.length} vertices ready — click "Save zone" to confirm.
+                  </span>
+                )}
+              </p>
+              <CompanyZoneMap
+                mode="draw"
+                initialCorners={drawnCorners.length > 0 ? drawnCorners : zone?.corners}
+                onSave={onDrawSave}
+                onCancel={() => setEditing(false)}
+                className="w-full h-[480px]"
+              />
+            </div>
+          )}
+
+          {/* ── Intersections tab ── */}
+          {editTab === 'intersections' && (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
+                <select className="input w-full text-sm" value={borough} onChange={e => setBorough(e.target.value)}>
+                  {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Enter intersections in order around the perimeter (min 3):
+                </p>
+                {intersections.map((row, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground w-5 shrink-0 text-right">{i + 1}.</span>
+                    <input
+                      type="text"
+                      className="input text-sm flex-1"
+                      placeholder="Street, e.g. W 23 ST"
+                      value={row.street}
+                      onChange={e => updateIntersection(i, 'street', e.target.value)}
+                    />
+                    <span className="text-xs text-muted-foreground shrink-0">&amp;</span>
+                    <input
+                      type="text"
+                      className="input text-sm flex-1"
+                      placeholder="Avenue, e.g. 10 AVE"
+                      value={row.avenue}
+                      onChange={e => updateIntersection(i, 'avenue', e.target.value)}
+                    />
+                    {intersections.length > 3 && (
+                      <button onClick={() => removeIntersection(i)} className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  onClick={addIntersection}
+                  className="text-xs text-primary hover:bg-primary/10 px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> Add intersection
+                </button>
+              </div>
+
+              <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
+                <p className="text-[11px] font-medium text-muted-foreground">Format guide</p>
+                <p className="text-[11px] text-muted-foreground">Streets: <span className="font-mono text-foreground">W 23 ST</span>, <span className="font-mono text-foreground">FULTON ST</span></p>
+                <p className="text-[11px] text-muted-foreground">Avenues: <span className="font-mono text-foreground">6 AVE</span>, <span className="font-mono text-foreground">12 AVE</span>, <span className="font-mono text-foreground">BROADWAY</span></p>
+                <p className="text-[11px] text-muted-foreground">List vertices in order around the perimeter — the polygon closes automatically.</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Advanced tab ── */}
+          {editTab === 'advanced' && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Enter SW and NE bounding-box corners directly. Right-click any point on Google Maps to copy coordinates.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">SW corner — bottom-left</p>
+                  <input type="number" step="any" placeholder="Latitude" value={swLat}
+                    onChange={e => setSwLat(e.target.value)} className="input w-full text-sm font-mono" />
+                  <input type="number" step="any" placeholder="Longitude" value={swLng}
+                    onChange={e => setSwLng(e.target.value)} className="input w-full text-sm font-mono" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">NE corner — top-right</p>
+                  <input type="number" step="any" placeholder="Latitude" value={neLat}
+                    onChange={e => setNeLat(e.target.value)} className="input w-full text-sm font-mono" />
+                  <input type="number" step="any" placeholder="Longitude" value={neLng}
+                    onChange={e => setNeLng(e.target.value)} className="input w-full text-sm font-mono" />
+                </div>
+              </div>
+            </div>
+          )}
 
           {error && <p className="text-xs text-destructive">{error}</p>}
 
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => { setEditing(false); setError(null); }} className="btn-secondary text-sm">Cancel</button>
-            <button onClick={saveFromStreets} disabled={saving} className="btn-primary text-sm flex items-center gap-1.5">
-              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {saving ? 'Geocoding…' : 'Save zone'}
-            </button>
-          </div>
-
-          {/* Advanced: raw coordinates */}
-          <div className="border-t border-border pt-3">
+          <div className="flex gap-2 justify-end border-t border-border pt-3">
             <button
-              onClick={() => setShowAdvanced(v => !v)}
-              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5 transition-colors"
+              onClick={() => { setEditing(false); setError(null); }}
+              className="btn-secondary text-sm"
             >
-              <span>{showAdvanced ? '▾' : '▸'}</span> Advanced — enter coordinates directly
+              Cancel
             </button>
-            {showAdvanced && (
-              <div className="mt-3 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground">SW corner — bottom-left</p>
-                    <input type="number" step="any" placeholder="Latitude" value={swLat}
-                      onChange={e => setSwLat(e.target.value)} className="input w-full text-sm font-mono" />
-                    <input type="number" step="any" placeholder="Longitude" value={swLng}
-                      onChange={e => setSwLng(e.target.value)} className="input w-full text-sm font-mono" />
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground">NE corner — top-right</p>
-                    <input type="number" step="any" placeholder="Latitude" value={neLat}
-                      onChange={e => setNeLat(e.target.value)} className="input w-full text-sm font-mono" />
-                    <input type="number" step="any" placeholder="Longitude" value={neLng}
-                      onChange={e => setNeLng(e.target.value)} className="input w-full text-sm font-mono" />
-                  </div>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Tip: search any intersection on Google Maps, right-click the pin, and copy the coordinates shown.
-                </p>
-                <div className="flex justify-end">
-                  <button onClick={saveFromCoords} disabled={saving} className="btn-secondary text-sm flex items-center gap-1.5">
-                    {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Save from coordinates
-                  </button>
-                </div>
-              </div>
+            {editTab === 'draw' && (
+              <button
+                onClick={commitDrawn}
+                disabled={saving || drawnCorners.length < 3}
+                className="btn-primary text-sm flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {saving ? 'Saving…' : `Save zone${drawnCorners.length >= 3 ? ` (${drawnCorners.length} vertices)` : ''}`}
+              </button>
+            )}
+            {editTab === 'intersections' && (
+              <button
+                onClick={saveFromIntersections}
+                disabled={saving}
+                className="btn-primary text-sm flex items-center gap-1.5"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {saving ? 'Geocoding…' : 'Save zone'}
+              </button>
+            )}
+            {editTab === 'advanced' && (
+              <button
+                onClick={saveFromCoords}
+                disabled={saving}
+                className="btn-primary text-sm flex items-center gap-1.5"
+              >
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {saving ? 'Saving…' : 'Save zone'}
+              </button>
             )}
           </div>
         </div>
