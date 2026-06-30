@@ -66,7 +66,8 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
     if (!mapInstanceRef.current) return;
 
     const map = mapInstanceRef.current;
-    const hasCorners = bounds.corners && bounds.corners.length >= 3;
+    const corners = bounds.corners ?? [];
+    const hasCorners = corners.length >= 3;
 
     const STYLE = {
       strokeColor:   '#6366f1',
@@ -86,7 +87,7 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
     const fitToShape = () => {
       if (hasCorners) {
         const b = new window.google.maps.LatLngBounds();
-        bounds.corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
+        corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
         map.fitBounds(b, 8);
       } else {
         map.fitBounds({
@@ -98,7 +99,7 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
 
     if (hasCorners) {
       shapeRef.current = new window.google.maps.Polygon({
-        paths: bounds.corners.map(p => ({ lat: p.lat, lng: p.lng })),
+        paths: corners.map(p => ({ lat: p.lat, lng: p.lng })),
         map,
         ...STYLE,
       });

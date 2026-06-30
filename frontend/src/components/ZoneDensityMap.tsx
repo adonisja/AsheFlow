@@ -139,7 +139,8 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
     const map = mapInstanceRef.current;
 
     if (companyZone) {
-      const hasCorners = companyZone.corners && companyZone.corners.length >= 3;
+      const corners = companyZone.corners ?? [];
+      const hasCorners = corners.length >= 3;
       const STYLE = {
         strokeColor: '#6366f1', strokeOpacity: 0.85, strokeWeight: 2.5,
         fillColor: '#6366f1',   fillOpacity: 0.06,
@@ -154,7 +155,7 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
 
       if (hasCorners) {
         companyShapeRef.current = new window.google.maps.Polygon({
-          paths: companyZone.corners.map(p => ({ lat: p.lat, lng: p.lng })),
+          paths: corners.map(p => ({ lat: p.lat, lng: p.lng })),
           map, ...STYLE,
         });
       } else {
@@ -168,7 +169,7 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
         const fitZone = () => {
           if (hasCorners) {
             const b = new window.google.maps.LatLngBounds();
-            companyZone.corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
+            corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
             map.fitBounds(b, 32);
           } else {
             map.fitBounds({ south: companyZone.sw_lat, west: companyZone.sw_lng, north: companyZone.ne_lat, east: companyZone.ne_lng }, 32);
