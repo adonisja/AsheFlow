@@ -64,6 +64,7 @@ class SortRunRequest(BaseModel):
 
 class BagPackageDetail(BaseModel):
     tba: str
+    tag_number: Optional[str] = None
     normalised_address: Optional[str] = None
 
 

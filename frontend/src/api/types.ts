@@ -754,6 +754,7 @@ export interface ClusterAssignmentOut {
 
 export interface BagPackageDetail {
   tba: string;
+  tag_number: string | null;
   normalised_address: string | null;
 }
 

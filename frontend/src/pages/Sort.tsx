@@ -1524,6 +1524,7 @@ function ManifestSortPanel({
                                 <thead>
                                   <tr className="bg-accent/60">
                                     <th className="text-left px-2 py-1 font-semibold text-muted-foreground">TBA</th>
+                                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Tag #</th>
                                     <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Address</th>
                                   </tr>
                                 </thead>
@@ -1531,6 +1532,11 @@ function ManifestSortPanel({
                                   {bag.outside_packages_detail.map((pkg: BagPackageDetail, i: number) => (
                                     <tr key={pkg.tba} className={i % 2 === 0 ? 'bg-background' : 'bg-accent/20'}>
                                       <td className="px-2 py-1 font-mono text-foreground">{pkg.tba}</td>
+                                      <td className="px-2 py-1 font-mono">
+                                        {pkg.tag_number
+                                          ? <span className="text-foreground">{pkg.tag_number}</span>
+                                          : <span className="text-muted-foreground/50 italic">no tag</span>}
+                                      </td>
                                       <td className="px-2 py-1 text-muted-foreground">{pkg.normalised_address ?? '—'}</td>
                                     </tr>
                                   ))}
