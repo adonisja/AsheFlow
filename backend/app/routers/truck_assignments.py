@@ -2,7 +2,7 @@ from datetime import date as _date
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -41,7 +41,7 @@ def get_assignments(
     db: Session = Depends(get_db),
     _: dict = Depends(allow_any_auth),
     caller: Employee = Depends(get_caller_employee),
-    date: Optional[_date] = Query(None, description="Filter by assignment date (YYYY-MM-DD)"),
+    date: Optional[_date] = None,
 ):
     """Return truck assignments for the caller's company. Pass ?date=YYYY-MM-DD to filter to a single day."""
     q = (
