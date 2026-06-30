@@ -1694,19 +1694,31 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
       ) : zone && !editing ? (
         <div className="space-y-2">
           <CompanyZoneMap bounds={zone} className="w-full h-[520px]" />
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'NW corner (top-left)',    lat: zone.ne_lat, lng: zone.sw_lng },
-              { label: 'NE corner (top-right)',   lat: zone.ne_lat, lng: zone.ne_lng },
-              { label: 'SW corner (bottom-left)', lat: zone.sw_lat, lng: zone.sw_lng },
-              { label: 'SE corner (bottom-right)', lat: zone.sw_lat, lng: zone.ne_lng },
-            ].map(({ label, lat, lng }) => (
-              <div key={label} className="p-2.5 bg-accent/40 rounded-xl space-y-0.5">
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">{label}</p>
-                <p className="text-xs font-mono text-foreground">{lat.toFixed(5)}, {lng.toFixed(5)}</p>
+          {zone.corners && zone.corners.length >= 3 ? (
+            <div className="space-y-1.5">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Geocoded corners</p>
+              <div className="grid grid-cols-2 gap-2">
+                {zone.corners.map((c, i) => (
+                  <div key={i} className="p-2.5 bg-accent/40 rounded-xl space-y-0.5">
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">Corner {i + 1}</p>
+                    <p className="text-xs font-mono text-foreground">{c.lat.toFixed(5)}, {c.lng.toFixed(5)}</p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: 'SW corner', lat: zone.sw_lat, lng: zone.sw_lng },
+                { label: 'NE corner', lat: zone.ne_lat, lng: zone.ne_lng },
+              ].map(({ label, lat, lng }) => (
+                <div key={label} className="p-2.5 bg-accent/40 rounded-xl space-y-0.5">
+                  <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">{label}</p>
+                  <p className="text-xs font-mono text-foreground">{lat.toFixed(5)}, {lng.toFixed(5)}</p>
+                </div>
+              ))}
+            </div>
+          )}
           {success && (
             <div className="flex items-center gap-2 text-xs text-success bg-success/10 border border-success/20 rounded-xl px-3 py-2">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Operating zone saved.

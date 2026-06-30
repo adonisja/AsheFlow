@@ -1,14 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-
-interface Bounds {
-  sw_lat: number;
-  sw_lng: number;
-  ne_lat: number;
-  ne_lng: number;
-}
+import type { CompanyZone } from '../api/types';
 
 interface Props {
-  bounds: Bounds;
+  bounds: CompanyZone;
   className?: string;
 }
 
@@ -19,13 +13,13 @@ declare global {
 }
 
 export default function OperatingZoneMap({ bounds, className = '' }: Props) {
-  const mapRef = useRef<HTMLDivElement>(null);
+  const mapRef        = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const rectRef = useRef<google.maps.Rectangle | null>(null);
-  const [mapReady, setMapReady] = useState(false);
+  const shapeRef      = useRef<google.maps.Rectangle | google.maps.Polygon | null>(null);
+  const [mapReady, setMapReady]   = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  // Load Google Maps script once (shared gmap-script tag with other map components)
+  // Load Google Maps script once (shared gmap-script tag with ZoneDensityMap)
   useEffect(() => {
     const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
     if (!key) { setLoadError(true); return; }
@@ -39,15 +33,15 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
 
     window.initGoogleMaps = () => setMapReady(true);
     const script = document.createElement('script');
-    script.id = 'gmap-script';
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&callback=initGoogleMaps`;
+    script.id    = 'gmap-script';
+    script.src   = `https://maps.googleapis.com/maps/api/js?key=${key}&callback=initGoogleMaps`;
     script.async = true;
     script.defer = true;
     script.onerror = () => setLoadError(true);
     document.head.appendChild(script);
   }, []);
 
-  // Init map instance once script is ready
+  // Init map instance
   useEffect(() => {
     if (!mapReady || !mapRef.current || mapInstanceRef.current) return;
 
@@ -61,43 +55,63 @@ export default function OperatingZoneMap({ bounds, className = '' }: Props) {
       mapTypeControl: false,
       fullscreenControl: true,
       styles: [
-        { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
+        { featureType: 'poi',     elementType: 'labels', stylers: [{ visibility: 'off' }] },
         { featureType: 'transit', elementType: 'labels', stylers: [{ visibility: 'off' }] },
       ],
     });
   }, [mapReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Draw/update the rectangle and fit bounds whenever the map is ready or bounds change
+  // Draw shape and fit viewport whenever map is ready or bounds change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
     const map = mapInstanceRef.current;
-    const rectBounds = {
-      south: bounds.sw_lat,
-      west:  bounds.sw_lng,
-      north: bounds.ne_lat,
-      east:  bounds.ne_lng,
+    const hasCorners = bounds.corners && bounds.corners.length >= 3;
+
+    const STYLE = {
+      strokeColor:   '#6366f1',
+      strokeOpacity: 0.9,
+      strokeWeight:  2.5,
+      fillColor:     '#6366f1',
+      fillOpacity:   0.10,
+      clickable:     false,
     };
 
-    if (rectRef.current) {
-      rectRef.current.setBounds(rectBounds);
-      map.fitBounds(rectBounds, 8);
-    } else {
-      rectRef.current = new window.google.maps.Rectangle({
-        bounds: rectBounds,
-        strokeColor: '#6366f1',
-        strokeOpacity: 0.9,
-        strokeWeight: 2.5,
-        fillColor: '#6366f1',
-        fillOpacity: 0.10,
+    // Remove previous shape
+    if (shapeRef.current) {
+      shapeRef.current.setMap(null);
+      shapeRef.current = null;
+    }
+
+    const fitToShape = () => {
+      if (hasCorners) {
+        const b = new window.google.maps.LatLngBounds();
+        bounds.corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
+        map.fitBounds(b, 8);
+      } else {
+        map.fitBounds({
+          south: bounds.sw_lat, west: bounds.sw_lng,
+          north: bounds.ne_lat, east: bounds.ne_lng,
+        }, 8);
+      }
+    };
+
+    if (hasCorners) {
+      shapeRef.current = new window.google.maps.Polygon({
+        paths: bounds.corners.map(p => ({ lat: p.lat, lng: p.lng })),
         map,
-        clickable: false,
+        ...STYLE,
       });
-      // fitBounds after first idle so the map has painted and has a real pixel size
-      window.google.maps.event.addListenerOnce(map, 'idle', () => {
-        map.fitBounds(rectBounds, 8);
+    } else {
+      shapeRef.current = new window.google.maps.Rectangle({
+        bounds: { south: bounds.sw_lat, west: bounds.sw_lng, north: bounds.ne_lat, east: bounds.ne_lng },
+        map,
+        ...STYLE,
       });
     }
+
+    // fitBounds after first idle so the map has a real pixel size
+    window.google.maps.event.addListenerOnce(map, 'idle', fitToShape);
   }, [mapReady, bounds]);
 
   if (loadError) {

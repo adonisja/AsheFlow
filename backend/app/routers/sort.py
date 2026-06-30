@@ -971,6 +971,11 @@ class OperatingZoneFromStreetsIn(BaseModel):
     name:        str = Field("Operating Zone", max_length=100)
 
 
+class CornerPoint(BaseModel):
+    lat: float
+    lng: float
+
+
 class OperatingZoneOut(BaseModel):
     id: UUID
     name: str
@@ -978,26 +983,30 @@ class OperatingZoneOut(BaseModel):
     sw_lng: float
     ne_lat: float
     ne_lng: float
+    corners: list[CornerPoint] = []
 
     model_config = ConfigDict(from_attributes=True)
 
 
+def _corners_to_geojson(corners: list[tuple[float, float]]) -> dict:
+    """Convert an ordered list of (lat, lng) corner points to a closed GeoJSON Polygon ring."""
+    ring = [[lng, lat] for lat, lng in corners]
+    ring.append(ring[0])   # close the ring
+    return {"type": "Polygon", "coordinates": [ring]}
+
+
 def _bbox_to_geojson(sw_lat: float, sw_lng: float, ne_lat: float, ne_lng: float) -> dict:
-    """Convert SW/NE corners to a closed GeoJSON Polygon rectangle."""
-    return {
-        "type": "Polygon",
-        "coordinates": [[
-            [sw_lng, sw_lat],
-            [ne_lng, sw_lat],
-            [ne_lng, ne_lat],
-            [sw_lng, ne_lat],
-            [sw_lng, sw_lat],   # closed ring
-        ]],
-    }
+    """Convert SW/NE corners to a closed GeoJSON Polygon rectangle (AABB — 4 axis-aligned corners)."""
+    return _corners_to_geojson([
+        (sw_lat, sw_lng),
+        (sw_lat, ne_lng),
+        (ne_lat, ne_lng),
+        (ne_lat, sw_lng),
+    ])
 
 
 def _geojson_to_bbox(bounds: dict) -> tuple[float, float, float, float] | None:
-    """Extract SW/NE corners from a GeoJSON Polygon rectangle (5-point closed ring)."""
+    """Extract SW/NE AABB corners from a GeoJSON Polygon (used by sort algorithm for fast containment check)."""
     try:
         coords = bounds["coordinates"][0]
         lngs = [c[0] for c in coords]
@@ -1005,6 +1014,16 @@ def _geojson_to_bbox(bounds: dict) -> tuple[float, float, float, float] | None:
         return min(lats), min(lngs), max(lats), max(lngs)
     except (KeyError, IndexError, TypeError):
         return None
+
+
+def _geojson_to_corners(bounds: dict) -> list[CornerPoint]:
+    """Return the actual polygon vertices (excluding the closing duplicate) as CornerPoint list."""
+    try:
+        coords = bounds["coordinates"][0]
+        pts = coords[:-1] if len(coords) > 1 and coords[0] == coords[-1] else coords
+        return [CornerPoint(lat=c[1], lng=c[0]) for c in pts]
+    except (KeyError, IndexError, TypeError):
+        return []
 
 
 @router.get("/geoclient-probe")
@@ -1067,6 +1086,7 @@ def get_company_zone(
         sw_lng=sw_lng,
         ne_lat=ne_lat,
         ne_lng=ne_lng,
+        corners=_geojson_to_corners(zone.bounds),
     )
 
 
@@ -1126,6 +1146,7 @@ def upsert_company_zone(
         sw_lng=body.sw_lng,
         ne_lat=body.ne_lat,
         ne_lng=body.ne_lng,
+        corners=_geojson_to_corners(bounds),
     )
 
 
@@ -1159,7 +1180,8 @@ def upsert_company_zone_from_streets(
         (to_st,   from_av),
         (to_st,   to_av),
     ]
-    lats, lngs = [], []
+    # corner_pairs order: (from_st/from_av=SW, from_st/to_av=SE, to_st/from_av=NW, to_st/to_av=NE)
+    geocoded: list[tuple[float, float]] = []
     for street, avenue in corner_pairs:
         result = _geoclient_intersection(street, avenue, borough=body.borough)
         if result is None:
@@ -1170,10 +1192,16 @@ def upsert_company_zone_from_streets(
                     f"Check the spelling — use formats like 'W 23 ST', '6 AVE', 'BROADWAY'."
                 ),
             )
-        lat, lng = result
-        lats.append(lat)
-        lngs.append(lng)
+        geocoded.append(result)   # (lat, lng)
 
+    # Build a proper quadrilateral from the 4 geocoded intersection points in geographic
+    # order (SW → SE → NE → NW) so the polygon hugs the actual delivery area without
+    # bleeding into water or adjacent territory the way an axis-aligned rectangle would.
+    sw, se, nw, ne_pt = geocoded[0], geocoded[1], geocoded[2], geocoded[3]
+    quad_corners = [sw, se, ne_pt, nw]
+
+    lats = [p[0] for p in geocoded]
+    lngs = [p[1] for p in geocoded]
     sw_lat, sw_lng = min(lats), min(lngs)
     ne_lat, ne_lng = max(lats), max(lngs)
 
@@ -1189,7 +1217,9 @@ def upsert_company_zone_from_streets(
         CompanyZone.is_active.is_(True),
     ).update({"is_active": False}, synchronize_session="fetch")
 
-    bounds = _bbox_to_geojson(sw_lat, sw_lng, ne_lat, ne_lng)
+    # Store the exact quadrilateral — not the axis-aligned rectangle — so the frontend
+    # can draw a polygon that matches the actual street grid boundaries.
+    bounds = _corners_to_geojson(quad_corners)
     zone = CompanyZone(
         id=_uuid.uuid4(),
         company_id=caller.company_id,
@@ -1225,6 +1255,7 @@ def upsert_company_zone_from_streets(
         sw_lng=sw_lng,
         ne_lat=ne_lat,
         ne_lng=ne_lng,
+        corners=_geojson_to_corners(bounds),
     )
 
 

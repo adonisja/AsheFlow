@@ -82,7 +82,7 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const overlayRef = useRef<GoogleMapsOverlay | null>(null);
-  const companyRectRef = useRef<google.maps.Rectangle | null>(null);
+  const companyShapeRef = useRef<google.maps.Rectangle | google.maps.Polygon | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
@@ -132,44 +132,53 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
     overlayRef.current.setMap(mapInstanceRef.current);
   }, [mapReady]);
 
-  // Draw/update the company zone rectangle whenever it changes
+  // Draw/update the company zone shape whenever it changes
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
     const map = mapInstanceRef.current;
 
     if (companyZone) {
-      const rectBounds = {
-        south: companyZone.sw_lat,
-        west:  companyZone.sw_lng,
-        north: companyZone.ne_lat,
-        east:  companyZone.ne_lng,
+      const hasCorners = companyZone.corners && companyZone.corners.length >= 3;
+      const STYLE = {
+        strokeColor: '#6366f1', strokeOpacity: 0.85, strokeWeight: 2.5,
+        fillColor: '#6366f1',   fillOpacity: 0.06,
+        clickable: false,       zIndex: 0,
       };
-      if (companyRectRef.current) {
-        companyRectRef.current.setBounds(rectBounds);
-        // Only fit if no truck zones are overriding the viewport
-        if (zones.length === 0) map.fitBounds(rectBounds, 32);
-      } else {
-        companyRectRef.current = new window.google.maps.Rectangle({
-          bounds: rectBounds,
-          strokeColor: '#6366f1',
-          strokeOpacity: 0.85,
-          strokeWeight: 2.5,
-          fillColor: '#6366f1',
-          fillOpacity: 0.06,
-          map,
-          clickable: false,
-          zIndex: 0,
-        });
-        if (zones.length === 0) {
-          window.google.maps.event.addListenerOnce(map, 'idle', () => {
-            map.fitBounds(rectBounds, 32);
-          });
-        }
+
+      // Always tear down existing shape when zone changes (corners vs rect may differ)
+      if (companyShapeRef.current) {
+        companyShapeRef.current.setMap(null);
+        companyShapeRef.current = null;
       }
-    } else if (companyRectRef.current) {
-      companyRectRef.current.setMap(null);
-      companyRectRef.current = null;
+
+      if (hasCorners) {
+        companyShapeRef.current = new window.google.maps.Polygon({
+          paths: companyZone.corners.map(p => ({ lat: p.lat, lng: p.lng })),
+          map, ...STYLE,
+        });
+      } else {
+        companyShapeRef.current = new window.google.maps.Rectangle({
+          bounds: { south: companyZone.sw_lat, west: companyZone.sw_lng, north: companyZone.ne_lat, east: companyZone.ne_lng },
+          map, ...STYLE,
+        });
+      }
+
+      if (zones.length === 0) {
+        const fitZone = () => {
+          if (hasCorners) {
+            const b = new window.google.maps.LatLngBounds();
+            companyZone.corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
+            map.fitBounds(b, 32);
+          } else {
+            map.fitBounds({ south: companyZone.sw_lat, west: companyZone.sw_lng, north: companyZone.ne_lat, east: companyZone.ne_lng }, 32);
+          }
+        };
+        window.google.maps.event.addListenerOnce(map, 'idle', fitZone);
+      }
+    } else if (companyShapeRef.current) {
+      companyShapeRef.current.setMap(null);
+      companyShapeRef.current = null;
     }
   }, [mapReady, companyZone, zones.length]);
 
@@ -208,18 +217,20 @@ export default function ZoneDensityMap({ zones, centroids, companyZone = null, c
 
     overlayRef.current.setProps({ layers: [polygonLayer, centroidLayer] });
 
-    // Auto-fit: prefer truck zone bounds when available, fall back to company zone
+    // Auto-fit: prefer truck zone bounds when available, fall back to company zone polygon
     if (zones.length > 0) {
-      const bounds = new window.google.maps.LatLngBounds();
-      zones.forEach(z => z.truck_polygon.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng })));
-      mapInstanceRef.current!.fitBounds(bounds, 40);
+      const b = new window.google.maps.LatLngBounds();
+      zones.forEach(z => z.truck_polygon.forEach(p => b.extend({ lat: p.lat, lng: p.lng })));
+      mapInstanceRef.current!.fitBounds(b, 40);
     } else if (companyZone) {
-      mapInstanceRef.current!.fitBounds({
-        south: companyZone.sw_lat,
-        west:  companyZone.sw_lng,
-        north: companyZone.ne_lat,
-        east:  companyZone.ne_lng,
-      }, 40);
+      const b = new window.google.maps.LatLngBounds();
+      if (companyZone.corners && companyZone.corners.length >= 3) {
+        companyZone.corners.forEach(p => b.extend({ lat: p.lat, lng: p.lng }));
+      } else {
+        b.extend({ lat: companyZone.sw_lat, lng: companyZone.sw_lng });
+        b.extend({ lat: companyZone.ne_lat, lng: companyZone.ne_lng });
+      }
+      mapInstanceRef.current!.fitBounds(b, 40);
     }
   }, [zones, centroids, companyZone]);
 

@@ -907,6 +907,11 @@ export interface TrainerLoadRow {
   phases: Record<string, number>;
 }
 
+export interface CornerPoint {
+  lat: number;
+  lng: number;
+}
+
 export interface CompanyZone {
   id: string;
   name: string;
@@ -914,6 +919,7 @@ export interface CompanyZone {
   sw_lng: number;
   ne_lat: number;
   ne_lng: number;
+  corners?: CornerPoint[];
 }
 
 export interface BanOverrideFreqResponse {
