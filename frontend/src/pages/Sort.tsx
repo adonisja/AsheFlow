@@ -1168,6 +1168,9 @@ function ManifestSortPanel({
   const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
   // set of bag_ids whose package detail list is expanded
   const [expandedBags, setExpandedBags] = useState<Set<string>>(new Set());
+  // pagination for tier1_failed bag list
+  const [bagPage, setBagPage]           = useState(0);
+  const BAG_PAGE_SIZE                   = 25;
   const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
@@ -1227,6 +1230,7 @@ function ManifestSortPanel({
       }
       setResult(synth);
       setOverrideMap(suggestions);
+      setBagPage(0);
       setPhase('tier1_failed');
       setExpanded(true);
       setRunning(false);
@@ -1422,8 +1426,59 @@ function ManifestSortPanel({
                 </div>
               </div>
 
+              {/* Pagination controls — top */}
+              {(() => {
+                const total = result.flagged_bags.length;
+                const totalPages = Math.ceil(total / BAG_PAGE_SIZE);
+                const resolvedCount = Object.keys(overrideMap).length;
+                if (totalPages <= 1) return null;
+                return (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      Page <span className="font-medium text-foreground">{bagPage + 1}</span> of {totalPages}
+                      {' · '}{resolvedCount} of {total} bag{total !== 1 ? 's' : ''} with overrides set
+                    </p>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setBagPage(p => Math.max(0, p - 1))}
+                        disabled={bagPage === 0}
+                        className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
+                      >
+                        ← Prev
+                      </button>
+                      {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                        const idx = totalPages <= 7 ? i
+                          : bagPage < 4 ? i
+                          : bagPage > totalPages - 5 ? totalPages - 7 + i
+                          : bagPage - 3 + i;
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => setBagPage(idx)}
+                            className={`w-7 h-7 text-xs rounded-lg border transition-colors ${
+                              idx === bagPage
+                                ? 'bg-primary text-primary-foreground border-primary'
+                                : 'border-border bg-background hover:bg-accent'
+                            }`}
+                          >
+                            {idx + 1}
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={() => setBagPage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={bagPage >= totalPages - 1}
+                        className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="space-y-2">
-                {result.flagged_bags.map(bag => {
+                {result.flagged_bags.slice(bagPage * BAG_PAGE_SIZE, (bagPage + 1) * BAG_PAGE_SIZE).map(bag => {
                   const currentTruck  = bag.inferred_truck_id  ? (truckById[bag.inferred_truck_id]  ?? bag.inferred_truck_id)  : null;
                   const suggestedTruck = bag.suggested_truck_id ? (truckById[bag.suggested_truck_id] ?? bag.suggested_truck_id) : null;
                   const chosenId = overrideMap[bag.bag_id];
@@ -1550,6 +1605,32 @@ function ManifestSortPanel({
                   );
                 })}
               </div>
+
+              {/* Bottom pagination summary */}
+              {result.flagged_bags.length > BAG_PAGE_SIZE && (
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/40">
+                  <p className="text-xs text-muted-foreground">
+                    Showing {bagPage * BAG_PAGE_SIZE + 1}–{Math.min((bagPage + 1) * BAG_PAGE_SIZE, result.flagged_bags.length)} of {result.flagged_bags.length} bags
+                    {' · '}{Object.keys(overrideMap).length} override{Object.keys(overrideMap).length !== 1 ? 's' : ''} set
+                  </p>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setBagPage(p => Math.max(0, p - 1))}
+                      disabled={bagPage === 0}
+                      className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
+                    >
+                      ← Prev
+                    </button>
+                    <button
+                      onClick={() => setBagPage(p => Math.min(Math.ceil(result.flagged_bags.length / BAG_PAGE_SIZE) - 1, p + 1))}
+                      disabled={bagPage >= Math.ceil(result.flagged_bags.length / BAG_PAGE_SIZE) - 1}
+                      className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
+                    >
+                      Next →
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex gap-2 pt-1">
                 <button
