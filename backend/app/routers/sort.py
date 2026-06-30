@@ -856,10 +856,15 @@ def get_sort_run_status(
             )
 
         # "error" or unknown
+        _SENTINEL_MESSAGES = {
+            "internal_error":    "Zone assignment failed due to an unexpected error. Check worker logs and retry.",
+            "worker_unreachable": "Sort task was not received by the worker — Celery may be down. Contact your admin.",
+        }
+        raw_detail = data.get("detail")
         return SortRunStatusResponse(
             task_id     = task_id,
             status      = "error",
-            detail      = data.get("detail"),
+            detail      = _SENTINEL_MESSAGES.get(raw_detail, raw_detail),
             http_status = data.get("http_status"),
         )
 
@@ -876,6 +881,8 @@ def get_sort_run_status(
             detail = "Sort task failed unexpectedly."
         if detail == "worker_unreachable":
             detail = "Sort task was not received by the worker — Celery may be down. Contact your admin."
+        elif detail == "internal_error":
+            detail = "Zone assignment failed due to an unexpected error. Check worker logs and retry."
         return SortRunStatusResponse(task_id=task_id, status="error", detail=detail)
 
     return SortRunStatusResponse(task_id=task_id, status="error", detail="Sort task result not found — it may have expired.")

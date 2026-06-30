@@ -840,7 +840,12 @@ function ManifestSortPanel({
       setExpanded(true);
       setRunning(false);
     } else if (data.status === 'error') {
-      setError(data.detail ?? 'Sort failed.');
+      const SENTINEL: Record<string, string> = {
+        internal_error:    'Zone assignment failed due to an unexpected error. Retry or check worker logs.',
+        worker_unreachable: 'Sort worker did not pick up the task — Celery may be down. Contact your admin.',
+      };
+      const raw = data.detail ?? '';
+      setError(SENTINEL[raw] ?? raw || 'Sort failed.');
       setPhase('idle');
       setRunning(false);
     }
