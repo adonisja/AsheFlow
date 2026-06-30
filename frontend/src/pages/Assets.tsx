@@ -1573,6 +1573,7 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
     setLoading(true);
     try {
       const { data } = await axiosClient.get<OperatingZone | null>('/sort/company-zone');
+      setError(null);
       setZone(data);
       if (data) {
         setSwLat(data.sw_lat.toFixed(6));
@@ -1580,8 +1581,12 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         setNeLat(data.ne_lat.toFixed(6));
         setNeLng(data.ne_lng.toFixed(6));
       }
-    } catch {
-      // zone not configured — not an error
+    } catch (e: any) {
+      const status = e?.response?.status;
+      // 404 = not configured yet (expected); anything else is a real error worth showing
+      if (status !== 404) {
+        setError(`Failed to load operating zone (HTTP ${status ?? 'network error'}).`);
+      }
     } finally {
       setLoading(false);
     }
@@ -1680,6 +1685,12 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
         Used by the sort algorithm to detect out-of-area packages.
         {!isAdmin && ' Contact your admin to configure this.'}
       </p>
+
+      {error && !editing && (
+        <div className="flex items-center gap-2 p-3 bg-destructive/5 border border-destructive/20 rounded-xl text-xs text-destructive">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {error}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
