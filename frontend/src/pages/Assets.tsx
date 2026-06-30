@@ -1548,6 +1548,7 @@ interface OperatingZone {
 }
 
 function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
+  const { isLoading: authLoading } = useAuth();
   const [zone, setZone]           = useState<OperatingZone | null>(null);
   const [loading, setLoading]     = useState(true);
   const [editing, setEditing]     = useState(false);
@@ -1592,7 +1593,9 @@ function OperatingZoneCard({ isAdmin }: { isAdmin: boolean }) {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Wait for Amplify to restore the session before fetching — avoids a 422
+  // from OAuth2PasswordBearer when the token isn't available yet on page refresh
+  useEffect(() => { if (!authLoading) load(); }, [load, authLoading]);
 
   function cacheZone(z: OperatingZone) {
     try { localStorage.setItem('asheflow.companyZone.v1', JSON.stringify(z)); } catch {}
