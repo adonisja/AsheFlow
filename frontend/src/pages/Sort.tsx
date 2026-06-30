@@ -1178,14 +1178,20 @@ function ManifestSortPanel({
   const [bagPage, setBagPage]           = useState(0);
   const BAG_PAGE_SIZE                   = 25;
   const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dropdownRef                     = useRef<HTMLDivElement | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
 
-  // Close any open truck-picker dropdown when clicking outside
+  // Close the open truck-picker dropdown on mousedown outside it.
+  // Must check containment: mousedown fires before click, so without the
+  // containment guard the dropdown unmounts before the option's onClick fires.
   useEffect(() => {
     if (!openDropdown) return;
-    const handler = () => setOpenDropdown(null);
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && dropdownRef.current.contains(e.target as Node)) return;
+      setOpenDropdown(null);
+    };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [openDropdown]);
@@ -1604,7 +1610,7 @@ function ManifestSortPanel({
                           : 'No change — keep on current truck';
 
                         return (
-                          <div className="relative">
+                          <div className="relative" ref={dropdownRef}>
                             <div className="flex items-center gap-2">
                               <label className="text-xs text-muted-foreground shrink-0 w-20">Move bag to:</label>
                               <button
@@ -2436,7 +2442,9 @@ export default function SortPage() {
         <ManifestSortPanel
           today={activeManifestDate}
           manifestReady={manifestReady}
-          trucks={assignments.map(a => ({ truck_id: a.truck_id, truck_name: a.truck_name }))}
+          trucks={Array.from(
+            new Map(assignments.map(a => [a.truck_id, { truck_id: a.truck_id, truck_name: a.truck_name }])).values()
+          )}
           onZonesCreated={() => {
             // Re-fetch zones so zonedTruckIds updates and map refreshes
             Promise.allSettled([
