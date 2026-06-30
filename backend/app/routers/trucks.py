@@ -10,7 +10,7 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, Pagination
 from app.models.employee import Employee
 from app.models.truck import Truck
-from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse, TruckAnchorPatch
+from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse, TruckAnchorPatch, TruckAnchor2Patch
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/trucks", tags=["trucks"])
@@ -217,6 +217,78 @@ def set_truck_anchor(
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
         after={"address": db_truck.initial_anchor_address},
+    )
+    db.commit()
+    db.refresh(db_truck)
+    return db_truck
+
+
+@router.patch("/{truck_id}/anchor2", response_model=TruckResponse)
+def set_truck_anchor2(
+    truck_id: UUID,
+    body: TruckAnchor2Patch,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_write),
+    db: Session = Depends(get_db),
+):
+    """Set or clear a truck's optional secondary anchor point.
+
+    When set, the sort pipeline increments K by 1 for this truck so K-Means can
+    produce two clusters anchored to each point. Pass address=null to clear.
+    """
+    from app.tasks.enrich_manifest import _geoclient_normalise
+    from app.models.company import CompanyConfig
+    from app.core.config import settings
+
+    db_truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
+    if not db_truck:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found.")
+
+    if body.address is None:
+        db_truck.initial_anchor2_address         = None
+        db_truck.initial_anchor2_display_address = None
+        db_truck.initial_anchor2_lat             = None
+        db_truck.initial_anchor2_lng             = None
+        db_truck.initial_anchor2_set_by          = None
+        db_truck.initial_anchor2_set_at          = None
+    else:
+        address = body.address.strip()
+        if not address:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Address cannot be blank.")
+
+        if not settings.geoclient_app_key:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="GeoClient API key is not configured on this server. Contact your admin.",
+            )
+
+        borough = body.borough
+        if not borough:
+            cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+            borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
+
+        geo = _geoclient_normalise(address, borough=borough)
+        if geo is None or geo.lat is None or geo.lng is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Address could not be geocoded. Check the address and borough and try again.",
+            )
+
+        db_truck.initial_anchor2_address         = geo.normalised_address or address
+        db_truck.initial_anchor2_display_address = address
+        db_truck.initial_anchor2_lat             = geo.lat
+        db_truck.initial_anchor2_lng             = geo.lng
+        db_truck.initial_anchor2_set_by          = caller.id
+        db_truck.initial_anchor2_set_at          = datetime.now(timezone.utc)
+
+    write_audit(
+        db,
+        action_type="truck.anchor2_updated",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"address": db_truck.initial_anchor2_address},
     )
     db.commit()
     db.refresh(db_truck)

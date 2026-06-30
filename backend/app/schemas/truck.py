@@ -19,6 +19,12 @@ class TruckAnchorPatch(BaseModel):
     borough: Optional[str] = Field(None, max_length=30)
 
 
+class TruckAnchor2Patch(BaseModel):
+    """Set or clear anchor point 2. Pass address=None to remove it."""
+    address: Optional[str] = Field(None, max_length=300)
+    borough: Optional[str] = Field(None, max_length=30)
+
+
 class TruckResponse(BaseModel):
     id: UUID
     name: str
@@ -29,6 +35,11 @@ class TruckResponse(BaseModel):
     initial_anchor_lat: Optional[float] = None
     initial_anchor_lng: Optional[float] = None
     initial_anchor_set_at: Optional[datetime] = None
+    initial_anchor2_address: Optional[str] = None
+    initial_anchor2_display_address: Optional[str] = None
+    initial_anchor2_lat: Optional[float] = None
+    initial_anchor2_lng: Optional[float] = None
+    initial_anchor2_set_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

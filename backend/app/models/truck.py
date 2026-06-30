@@ -27,17 +27,26 @@ class Truck(Base):
     is_active          = Column(Boolean,            nullable=False, default=True, index=True)
     discord_channel_id = Column(BigInteger,         nullable=True)
 
-    # Initial anchor point — dispatch-configured home territory seed for this truck.
-    # Entered as a street address; backend geocodes to lat/lng via GeoClient.
-    # initial_anchor_address: GeoClient-normalised canonical form (stored, used by sort).
-    # initial_anchor_display_address: raw user input, preserved for display only.
-    # Feeds assign_clusters cold-start centroid synthesis when no TruckZone history exists.
+    # Anchor point 1 — primary dispatch-configured territory seed.
+    # GeoClient-normalised address stored; display_address preserves raw user input.
+    # Feeds K-Means cold-start when no TruckZone history exists.
     initial_anchor_address          = Column(String(300), nullable=True)
     initial_anchor_display_address  = Column(String(300), nullable=True)
     initial_anchor_lat              = Column(Float,       nullable=True)
     initial_anchor_lng              = Column(Float,       nullable=True)
     initial_anchor_set_by           = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     initial_anchor_set_at           = Column(DateTime(timezone=True), nullable=True)
+
+    # Anchor point 2 — optional secondary territory seed for trucks that split
+    # across two geographically distinct sub-zones. When set, K-Means receives
+    # two seeds for this truck (K increments by 1), so both sub-zones can be
+    # assigned to this truck if the package distribution supports it.
+    initial_anchor2_address         = Column(String(300), nullable=True)
+    initial_anchor2_display_address = Column(String(300), nullable=True)
+    initial_anchor2_lat             = Column(Float,       nullable=True)
+    initial_anchor2_lng             = Column(Float,       nullable=True)
+    initial_anchor2_set_by          = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    initial_anchor2_set_at          = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("company_id", "name", name="uq_trucks_company_name"),
