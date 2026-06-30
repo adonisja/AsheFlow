@@ -39,7 +39,7 @@ def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_a
     """Return all truck assignments for the caller's company, including resolved truck name."""
     rows = (
         db.query(TruckAssignment, Truck.name.label("truck_name"))
-        .join(Truck, Truck.id == TruckAssignment.truck_id)
+        .join(Truck, (Truck.id == TruckAssignment.truck_id) & (Truck.company_id == caller.company_id))
         .filter(TruckAssignment.company_id == caller.company_id)
         .all()
     )

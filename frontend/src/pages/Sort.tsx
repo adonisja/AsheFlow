@@ -32,7 +32,7 @@ interface TruckAssignment {
   truck_id: string;
   truck_name: string;
   status: string;
-  route_date: string;
+  date: string;
 }
 
 interface Employee {

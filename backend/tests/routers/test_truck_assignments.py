@@ -134,31 +134,40 @@ class TestCreateAssignmentCompanyIdLeak:
         )
 
     def test_get_assignments_filters_by_caller_company(self):
-        """GET / returns only the caller's company assignments."""
+        """GET / returns only the caller's company assignments, joining Truck for truck_name."""
         from app.routers.truck_assignments import get_assignments
 
         ta_a = _make_assignment(company_id=_CID_A)
-        ta_b = _make_assignment(company_id=_CID_B)
 
         caller = _make_caller(company_id=_CID_A)
 
-        # db returns only company A's assignment (simulates correct filter)
+        # db mock supports db.query(*models).join(...).filter(...).all()
+        # The router builds TruckAssignmentResponse explicitly from (ta, name) tuples.
         db = MagicMock()
         captured_filters = []
 
-        def _query(model):
+        def _query(*models):
             q = MagicMock()
+            def _join(*args, **kwargs):
+                return q
             def _filter(*args):
                 captured_filters.extend(args)
                 f = MagicMock()
-                f.all.return_value = [ta_a]
+                # Router expects rows as (TruckAssignment, truck_name) tuples
+                f.all.return_value = [(ta_a, "Atlas")]
                 return f
+            q.join = _join
             q.filter = _filter
             return q
 
         db.query = _query
         result = get_assignments(db=db, _={}, caller=caller)
-        assert result == [ta_a]
+
+        # Result should be a list of TruckAssignmentResponse objects
+        assert len(result) == 1
+        assert result[0].truck_id == ta_a.truck_id
+        assert result[0].truck_name == "Atlas"
+
         # Verify company_id appears in one of the filter conditions
         filter_strs = [str(f) for f in captured_filters]
         assert any("company_id" in s for s in filter_strs)
