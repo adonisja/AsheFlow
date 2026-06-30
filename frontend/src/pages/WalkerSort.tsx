@@ -229,38 +229,56 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, onClose, onR
 }
 
 // ---------------------------------------------------------------------------
-// Route row — operational view (post-commit): status, reassign, misroute resolve
-// NOTE: deferred merge with RouteCard (dispatch-time assignment dropdown from
-// Sort.tsx) — see memory/project_apsort_migration.md for full context.
+// RouteCard — unified route card for all phases:
+//   committed   → shows walker assignment dropdown (dispatch-time)
+//   distributed → shows status badge, reassign trigger, misroute resolve
+//   arrived     → same as distributed
 // ---------------------------------------------------------------------------
 
-interface RouteRowProps {
+interface RouteCardProps {
   route: RouteResponse;
-  allRoutes: RouteResponse[];
+  phase: SortPhase;
   walkers: Employee[];
-  canReassign: boolean;
-  onReassign: (route: RouteResponse) => void;
-  onResolveMisroute: (routeId: string, flagId: string, tba: string) => void;
+  // committed phase
+  waveAssignedName?: string | null;
+  onAssign?: (routeNumber: number, employeeId: string) => void;
+  // distributed/arrived phase
+  canReassign?: boolean;
+  onReassign?: (route: RouteResponse) => void;
+  onResolveMisroute?: (routeId: string, flagId: string, tba: string) => void;
 }
 
-function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolveMisroute }: RouteRowProps) {
+function RouteCard({
+  route,
+  phase,
+  walkers,
+  waveAssignedName,
+  onAssign,
+  canReassign,
+  onReassign,
+  onResolveMisroute,
+}: RouteCardProps) {
   const [open, setOpen] = useState(false);
   const slotPct  = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
   const barColor = slotPct >= 90 ? 'bg-danger' : slotPct >= 70 ? 'bg-warning' : 'bg-success';
-
   const assignee     = walkers.find(w => w.id === route.assigned_to);
   const injuryStatus = assignee?.injury_status ?? null;
+  const isOperational = phase === 'distributed' || phase === 'arrived';
 
   return (
     <div className="border border-border rounded-xl overflow-hidden">
+      {/* Header row — shared by all phases */}
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/40 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/40 transition-colors text-left"
       >
         <span className="text-sm font-semibold text-foreground w-8 shrink-0">#{route.route_number}</span>
         <EffortBadge effort={route.effort_class} />
-        <StatusBadge status={route.status} />
-        <span className="text-xs text-muted-foreground ml-1">{route.package_count} pkgs</span>
+        {isOperational && <StatusBadge status={route.status} />}
+        <span className="text-xs text-muted-foreground">{route.package_count} pkgs</span>
+        {!isOperational && (
+          <span className="text-xs text-muted-foreground">{route.tote_ids.length} totes</span>
+        )}
         <div className="flex-1 min-w-0 mx-2">
           <div className="h-1.5 bg-accent rounded-full overflow-hidden">
             <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${slotPct}%` }} />
@@ -269,7 +287,7 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
         <span className="text-xs text-muted-foreground shrink-0 w-12 text-right">
           {route.slot_cost}/{route.capacity_limit}
         </span>
-        {route.assigned_to_name && (
+        {isOperational && route.assigned_to_name && (
           <span className="text-xs text-foreground font-medium shrink-0 max-w-[120px] truncate hidden sm:block">
             {route.assigned_to_name}
           </span>
@@ -283,8 +301,29 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
         {open ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
       </button>
 
+      {/* Committed phase: inline assignment dropdown */}
+      {phase === 'committed' && onAssign && (
+        <div className="px-3 pb-2.5 flex items-center gap-2">
+          <UserCheck className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+          <select
+            value={route.assigned_to ?? ''}
+            onChange={e => { if (e.target.value) onAssign(route.route_number, e.target.value); }}
+            className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">Assign walker…</option>
+            {walkers.map(w => (
+              <option key={w.id} value={w.id}>{w.name}</option>
+            ))}
+          </select>
+          {waveAssignedName && (
+            <span className="text-xs font-medium text-foreground shrink-0 max-w-[100px] truncate">{waveAssignedName}</span>
+          )}
+        </div>
+      )}
+
+      {/* Expanded panel */}
       {open && (
-        <div className="border-t border-border px-4 py-3 space-y-3 bg-surface/40">
+        <div className="border-t border-border px-3 py-3 space-y-3 bg-surface/40">
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-1.5">Blocks</p>
             <div className="flex flex-wrap gap-1">
@@ -295,7 +334,9 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
               ))}
             </div>
           </div>
-          {route.assigned_to_name && (
+
+          {/* Operational-phase extras: assignee detail, trainee pairing, injury warning */}
+          {isOperational && route.assigned_to_name && (
             <div className="flex items-start gap-3 text-xs text-muted-foreground flex-wrap">
               <span>Assigned: <span className="text-foreground font-medium">{route.assigned_to_name}</span></span>
               {route.paired_trainee_id && (
@@ -308,6 +349,7 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
               )}
             </div>
           )}
+
           {route.misrouted_packages.length > 0 && (
             <div>
               <p className="text-[10px] uppercase tracking-widest text-warning font-semibold mb-1.5 flex items-center gap-1">
@@ -322,7 +364,7 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
                         <span className="text-warning">→ {m.destination_block_key}</span>
                       )}
                     </div>
-                    {canReassign && (
+                    {isOperational && canReassign && onResolveMisroute && (
                       <button
                         onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number)}
                         className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
@@ -335,97 +377,14 @@ function RouteRow({ route, allRoutes, walkers, canReassign, onReassign, onResolv
               </div>
             </div>
           )}
-          {canReassign && (
+
+          {isOperational && canReassign && onReassign && (
             <button
               onClick={() => onReassign(route)}
               className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
             >
               <UserCheck className="w-3.5 h-3.5" /> Reassign route
             </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// RouteCard — dispatch-time view (commit phase): walker assignment dropdown
-// Kept separate from RouteRow intentionally — see project_apsort_migration.md
-// ---------------------------------------------------------------------------
-
-function RouteCard({
-  route,
-  assignedName,
-  onAssign,
-  walkers,
-}: {
-  route: RouteResponse;
-  assignedName: string | null;
-  onAssign: (routeNumber: number, employeeId: string) => void;
-  walkers: Employee[];
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const slotPct  = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
-  const barColor = slotPct >= 90 ? 'bg-danger' : slotPct >= 70 ? 'bg-warning' : 'bg-success';
-
-  return (
-    <div className="border border-border rounded-xl overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2.5">
-        <span className="text-sm font-semibold text-foreground w-7 shrink-0">#{route.route_number}</span>
-        <EffortBadge effort={route.effort_class} />
-        <span className="text-xs text-muted-foreground">{route.package_count} pkgs</span>
-        <span className="text-xs text-muted-foreground">{route.tote_ids.length} totes</span>
-        <div className="flex-1 min-w-0 mx-1">
-          <div className="h-1.5 bg-accent rounded-full overflow-hidden">
-            <div className={`h-full rounded-full ${barColor}`} style={{ width: `${slotPct}%` }} />
-          </div>
-        </div>
-        <span className="text-xs text-muted-foreground w-10 text-right shrink-0">{route.slot_cost}/{route.capacity_limit}</span>
-        {route.misrouted_packages.length > 0 && (
-          <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
-        )}
-        <button onClick={() => setExpanded(o => !o)} className="text-muted-foreground hover:text-foreground ml-1 shrink-0">
-          {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
-      </div>
-      <div className="px-3 pb-2.5 flex items-center gap-2">
-        <UserCheck className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-        <select
-          value={route.assigned_to ?? ''}
-          onChange={e => { if (e.target.value) onAssign(route.route_number, e.target.value); }}
-          className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-        >
-          <option value="">Assign walker…</option>
-          {walkers.map(w => (
-            <option key={w.id} value={w.id}>{w.name}</option>
-          ))}
-        </select>
-        {assignedName && (
-          <span className="text-xs font-medium text-foreground shrink-0 max-w-[100px] truncate">{assignedName}</span>
-        )}
-      </div>
-      {expanded && (
-        <div className="border-t border-border px-3 py-2.5 space-y-2 bg-surface/40">
-          <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-1">Blocks</p>
-            <div className="flex flex-wrap gap-1">
-              {route.block_keys.map(k => (
-                <span key={k} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-accent rounded text-[11px] text-foreground font-mono">
-                  <MapPin className="w-2.5 h-2.5 text-muted-foreground" />{k}
-                </span>
-              ))}
-            </div>
-          </div>
-          {route.misrouted_packages.length > 0 && (
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-warning font-semibold mb-1">Misroutes</p>
-              {route.misrouted_packages.map(m => (
-                <div key={m.tba_number} className="text-xs text-muted-foreground font-mono">
-                  {m.tba_number} → {m.destination_block_key ?? 'unknown'}
-                </div>
-              ))}
-            </div>
           )}
         </div>
       )}
@@ -884,8 +843,8 @@ function TruckSortPanel({
                   {state.phase !== 'committed' && <CheckCircle2 className="w-4 h-4 text-success" />}
                 </div>
 
-                {/* Phase: committed — dispatch-time assignment dropdowns */}
-                {state.phase === 'committed' && (
+                {/* Route cards — committed shows assignment dropdown; distributed/arrived shows operational controls */}
+                {state.phase !== 'idle' && (
                   <div className="space-y-2">
                     {state.routes
                       .slice()
@@ -894,26 +853,10 @@ function TruckSortPanel({
                         <RouteCard
                           key={r.id}
                           route={r}
-                          assignedName={waveMap[r.route_number] ? (walkers.find(w => w.id === waveMap[r.route_number])?.name ?? null) : null}
+                          phase={state.phase}
+                          walkers={walkers}
+                          waveAssignedName={waveMap[r.route_number] ? (walkers.find(w => w.id === waveMap[r.route_number])?.name ?? null) : null}
                           onAssign={(rn, eid) => setWaveMap(prev => ({ ...prev, [rn]: eid }))}
-                          walkers={walkers}
-                        />
-                      ))}
-                  </div>
-                )}
-
-                {/* Phase: distributed/arrived — operational route rows */}
-                {(state.phase === 'distributed' || state.phase === 'arrived') && (
-                  <div className="space-y-2">
-                    {state.routes
-                      .slice()
-                      .sort((a, b) => a.route_number - b.route_number)
-                      .map(r => (
-                        <RouteRow
-                          key={r.id}
-                          route={r}
-                          allRoutes={state.routes}
-                          walkers={walkers}
                           canReassign={true}
                           onReassign={setReassignTarget}
                           onResolveMisroute={(routeId, flagId, tba) => setMisrouteTarget({ routeId, flagId, tba })}
