@@ -1,6 +1,8 @@
+from datetime import date as _date
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -35,14 +37,21 @@ def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(g
 
 
 @router.get("/", response_model=list[TruckAssignmentResponse])
-def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth), caller: Employee = Depends(get_caller_employee)):
-    """Return all truck assignments for the caller's company, including resolved truck name."""
-    rows = (
+def get_assignments(
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_any_auth),
+    caller: Employee = Depends(get_caller_employee),
+    date: Optional[_date] = Query(None, description="Filter by assignment date (YYYY-MM-DD)"),
+):
+    """Return truck assignments for the caller's company. Pass ?date=YYYY-MM-DD to filter to a single day."""
+    q = (
         db.query(TruckAssignment, Truck.name.label("truck_name"))
         .join(Truck, (Truck.id == TruckAssignment.truck_id) & (Truck.company_id == caller.company_id))
         .filter(TruckAssignment.company_id == caller.company_id)
-        .all()
     )
+    if date is not None:
+        q = q.filter(TruckAssignment.date == date)
+    rows = q.all()
     return [
         TruckAssignmentResponse(
             id         = ta.id,

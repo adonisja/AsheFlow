@@ -1495,7 +1495,7 @@ export default function SortPage() {
 
       {/* Zone density map */}
       {(companyZone || assignments.length > 0) && (
-        <ZoneDensityMap zones={zones} centroids={centroids} companyZone={companyZone} className="h-80" />
+        <ZoneDensityMap zones={zones} centroids={centroids} companyZone={companyZone} className="h-[520px]" />
       )}
 
       {/* AP Sort handoff callout — shown once zones exist */}
