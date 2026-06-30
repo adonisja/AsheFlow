@@ -1145,7 +1145,7 @@ export default function WalkerSortMonitor() {
       if (taRes.status === 'rejected') throw taRes.reason;
       if (empRes.status === 'rejected') throw empRes.reason;
 
-      const tas  = taRes.value.data;
+      const tas  = Array.from(new Map(taRes.value.data.map(a => [a.truck_id, a])).values());
       const emps = empRes.value.data;
       setAssignments(tas);
       setWalkers(emps.filter(e => ['walker', 'trainee', 'trainer'].includes(e.role)));
