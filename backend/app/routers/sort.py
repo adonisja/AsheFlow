@@ -1314,7 +1314,7 @@ def geoclient_probe(
     return results
 
 
-@router.get("/company-zone", response_model=Optional[OperatingZoneOut])
+@router.get("/company-zone")
 def get_company_zone(
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_sort),
@@ -1332,19 +1332,28 @@ def get_company_zone(
         .first()
     )
     if zone is None or not zone.bounds:
+        logger.info("company_zone.get: no active zone for company %s", caller.company_id)
         return None
     bbox = _geojson_to_bbox(zone.bounds)
     if bbox is None:
+        logger.warning("company_zone.get: _geojson_to_bbox returned None for zone %s bounds=%s", zone.id, zone.bounds)
         return None
     sw_lat, sw_lng, ne_lat, ne_lng = bbox
-    return OperatingZoneOut(
-        id=zone.id,
-        name=zone.name,
-        sw_lat=sw_lat,
-        sw_lng=sw_lng,
-        ne_lat=ne_lat,
-        ne_lng=ne_lng,
-    )
+    logger.info("company_zone.get: returning zone %s sw=(%s,%s) ne=(%s,%s)", zone.id, sw_lat, sw_lng, ne_lat, ne_lng)
+    try:
+        result = OperatingZoneOut(
+            id=zone.id,
+            name=zone.name,
+            sw_lat=sw_lat,
+            sw_lng=sw_lng,
+            ne_lat=ne_lat,
+            ne_lng=ne_lng,
+        )
+        logger.info("company_zone.get: OperatingZoneOut constructed ok: %s", result.model_dump())
+        return result
+    except Exception as exc:
+        logger.error("company_zone.get: OperatingZoneOut construction failed: %s", exc)
+        raise
 
 
 @router.post("/company-zone", response_model=OperatingZoneOut, status_code=status.HTTP_200_OK)
