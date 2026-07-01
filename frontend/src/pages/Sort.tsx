@@ -727,6 +727,28 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
 }
 
 // ---------------------------------------------------------------------------
+// Animated step row — shown while the sort task is running
+// ---------------------------------------------------------------------------
+
+const STEP_DELAY_MS = 1_800;
+
+function StepRow({ label, index }: { label: string; index: number }) {
+  const [visible, setVisible] = useState(index === 0);
+  useEffect(() => {
+    if (index === 0) return;
+    const t = setTimeout(() => setVisible(true), index * STEP_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [index]);
+  if (!visible) return null;
+  return (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
+      {label}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Manifest sort panel — POST /sort/run, tier-1 review, override, resubmit
 // ---------------------------------------------------------------------------
 
@@ -764,6 +786,7 @@ function ManifestSortPanel({
   const [bagPage, setBagPage]           = useState(0);
   const BAG_PAGE_SIZE                   = 25;
   const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bagListRef                      = useRef<HTMLDivElement | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
@@ -833,8 +856,22 @@ function ManifestSortPanel({
         volume_alert:     false,
         volume_alert_msg: '',
       };
+      // Auto-select suggested truck for misaligned bags where ≥50% of packages
+      // belong on a different truck — the algorithm is confident, dispatch just
+      // needs to confirm rather than manually choose each time.
+      const autoOverrides: Record<string, string> = {};
+      for (const bag of data.flagged_bags) {
+        if (
+          bag.classification === 'misaligned' &&
+          bag.suggested_truck_id &&
+          bag.total_packages > 0 &&
+          bag.outside_packages / bag.total_packages >= 0.5
+        ) {
+          autoOverrides[bag.bag_id] = bag.suggested_truck_id;
+        }
+      }
       setResult(synth);
-      setOverrideMap({});
+      setOverrideMap(autoOverrides);
       setBagPage(0);
       setPhase('tier1_failed');
       setExpanded(true);
@@ -1029,11 +1066,18 @@ function ManifestSortPanel({
             </div>
           )}
 
-          {/* Running */}
+          {/* Running — animated step progression */}
           {phase === 'running' && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin text-primary" />
-              Clustering and assigning zones…
+            <div className="space-y-2">
+              {[
+                'Loading manifest from Redis…',
+                'Pre-filtering out-of-zone packages…',
+                'Running K-Means clustering…',
+                'Assigning clusters to trucks…',
+                'Running tier-1 bag verification…',
+              ].map((label, i) => (
+                <StepRow key={i} label={label} index={i} />
+              ))}
             </div>
           )}
 
@@ -1097,7 +1141,7 @@ function ManifestSortPanel({
                     </p>
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => setBagPage(p => Math.max(0, p - 1))}
+                        onClick={() => { setBagPage(p => Math.max(0, p - 1)); bagListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
                         disabled={bagPage === 0}
                         className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
                       >
@@ -1111,7 +1155,7 @@ function ManifestSortPanel({
                         return (
                           <button
                             key={idx}
-                            onClick={() => setBagPage(idx)}
+                            onClick={() => { setBagPage(idx); bagListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
                             className={`w-7 h-7 text-xs rounded-lg border transition-colors ${
                               idx === bagPage
                                 ? 'bg-primary text-primary-foreground border-primary'
@@ -1123,7 +1167,7 @@ function ManifestSortPanel({
                         );
                       })}
                       <button
-                        onClick={() => setBagPage(p => Math.min(totalPages - 1, p + 1))}
+                        onClick={() => { setBagPage(p => Math.min(totalPages - 1, p + 1)); bagListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
                         disabled={bagPage >= totalPages - 1}
                         className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
                       >
@@ -1134,7 +1178,7 @@ function ManifestSortPanel({
                 );
               })()}
 
-              <div className="space-y-2">
+              <div className="space-y-2" ref={bagListRef}>
                 {result.flagged_bags.slice(bagPage * BAG_PAGE_SIZE, (bagPage + 1) * BAG_PAGE_SIZE).map(bag => {
                   const currentTruck  = bag.inferred_truck_id  ? (truckById[bag.inferred_truck_id]  ?? bag.inferred_truck_id)  : null;
                   const suggestedTruck = bag.suggested_truck_id ? (truckById[bag.suggested_truck_id] ?? bag.suggested_truck_id) : null;
