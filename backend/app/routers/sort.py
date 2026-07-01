@@ -8,6 +8,8 @@ GET  /sort/{date}/centroids  — fetch route cluster centroids for the Deck.gl d
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
@@ -19,6 +21,7 @@ from typing import Optional
 
 import redis as redis_lib
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -595,6 +598,48 @@ def get_manifest_preview(
         page_size=_PREVIEW_PAGE_SIZE,
         total_pages=total_pages,
         preview_rows=preview_rows,
+    )
+
+
+@router.get("/manifest/{sort_date}/download")
+def download_enriched_manifest(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_sort),
+    db: Session = Depends(get_db),
+):
+    """Download the full enriched manifest for a sort date as CSV.
+
+    Includes every field stored in Redis: tba, bag_id, raw_address,
+    normalised_address, block_key, lat, lng, geocode_reason.
+    Dispatch/management/admin only — same gate as the preview endpoint.
+    """
+    cid_str  = str(caller.company_id)
+    date_str = sort_date.isoformat()
+    r = _redis()
+    raw = r.get(_manifest_key(cid_str, date_str))
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No enriched manifest found for this date.",
+        )
+    packages = json.loads(raw)
+
+    fields = ["tba", "bag_id", "raw_address", "normalised_address",
+              "block_key", "lat", "lng", "geocode_reason"]
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for p in packages:
+        writer.writerow({f: p.get(f, "") for f in fields})
+
+    buf.seek(0)
+    filename = f"enriched_manifest_{date_str}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

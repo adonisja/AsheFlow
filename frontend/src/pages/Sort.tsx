@@ -10,7 +10,7 @@ import {
   Package, Truck, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, MapPin, Layers, Loader2,
   Upload, X, FileText, ArrowRight, AlertTriangle,
-  Route, Zap, Send,
+  Route, Zap, Send, Download,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import type {
@@ -228,6 +228,13 @@ function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
             {failedOnly ? 'Show all' : 'Failed only'}
           </button>
         )}
+        <a
+          href={`/api/v1/sort/manifest/${sortDate}/download`}
+          download
+          className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+        >
+          <Download className="w-3 h-3" /> Download CSV
+        </a>
         {loading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
       </div>
 
