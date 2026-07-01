@@ -228,13 +228,24 @@ function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
             {failedOnly ? 'Show all' : 'Failed only'}
           </button>
         )}
-        <a
-          href={`/api/v1/sort/manifest/${sortDate}/download`}
-          download
+        <button
+          onClick={async () => {
+            try {
+              const res = await axiosClient.get(`/sort/manifest/${sortDate}/download`, { responseType: 'blob' });
+              const url = URL.createObjectURL(res.data);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `enriched_manifest_${sortDate}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch {
+              // silent — backend will 404 if no manifest exists yet
+            }
+          }}
           className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
         >
           <Download className="w-3 h-3" /> Download CSV
-        </a>
+        </button>
         {loading && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
       </div>
 
