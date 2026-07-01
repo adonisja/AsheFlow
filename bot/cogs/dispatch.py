@@ -187,29 +187,33 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
 def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
     """Embed posted to #drivers-chat after finalization.
 
-    One row per truck: truck name | driver | AP count.
-    AP is 0 (or omitted) when the sort hasn't run yet.
+    Columns: Truck | Driver | Crew | Anchor Point
+    Anchor Point is the truck's stored initial_anchor_display_address.
     """
     embed = discord.Embed(
         title=f"✅ Dispatch Finalized — {dispatch_date}",
         color=0x57F287,  # green
     )
 
-    TRUCK_COL = 10
-    NAME_COL  = 18
+    TRUCK_COL = 8
+    NAME_COL  = 16
+    CREW_COL  = 4
 
-    header = f"{'Truck':<{TRUCK_COL}}  {'Driver':<{NAME_COL}}  AP"
-    SEP    = "─" * (TRUCK_COL + 2 + NAME_COL + 2 + 6)
+    header = f"{'Truck':<{TRUCK_COL}}  {'Driver':<{NAME_COL}}  {'Crew':>{CREW_COL}}  Anchor Point"
+    SEP    = "─" * 60
     rows   = [header, SEP]
 
     for entry in trucks_data:
-        truck_name = entry["truck_name"]
-        crew       = entry["crew"]
-        ap         = entry.get("ap") or 0
-        driver     = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
+        truck_name   = entry["truck_name"][:TRUCK_COL]
+        crew         = entry["crew"]
+        anchor_point = entry.get("anchor_point") or "—"
+        driver       = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
+        driver       = driver[:NAME_COL]
+        crew_count   = len(crew)
 
-        ap_str = str(ap) if ap else "—"
-        rows.append(f"{truck_name:<{TRUCK_COL}}  {driver:<{NAME_COL}}  {ap_str}")
+        rows.append(
+            f"{truck_name:<{TRUCK_COL}}  {driver:<{NAME_COL}}  {crew_count:>{CREW_COL}}  {anchor_point}"
+        )
 
     rows.append(SEP)
     rows.append("Full crew details in each truck's channel.")
@@ -494,6 +498,7 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         assigned_crews: dict[str, list] = dispatch.get("assigned_crews", {})
         confirmations: dict[str, str] = confs.get("confirmations", {})
         ap_by_truck: dict[str, int] = dispatch.get("ap_by_truck", {})
+        zones_by_truck: dict[str, list[str]] = dispatch.get("zones_by_truck", {})
 
         if not assigned_crews:
             await drivers_channel.send(f"No dispatch found for `{dispatch_date}` — nothing to finalize.")
@@ -516,6 +521,8 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 "truck_name": truck_name,
                 "crew": confirmed_crew,
                 "ap": ap_by_truck.get(truck_id, 0),
+                "zones": zones_by_truck.get(truck_id, []),
+                "anchor_point": truck_info.get("initial_anchor_display_address"),
             })
 
             if not channel_id:
