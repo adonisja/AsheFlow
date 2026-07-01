@@ -717,7 +717,7 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
           {preview.outlier_count > 0 && (
             <p className="text-[10px] text-warning px-2 py-1.5 border-t border-border/50 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3 shrink-0" />
-              {preview.outlier_count} package{preview.outlier_count !== 1 ? 's' : ''} could not be matched to any zone by K-Means and will stay on their current truck.
+              {preview.outlier_count} package{preview.outlier_count !== 1 ? 's' : ''} outside the company zone and require manual placement by dispatch.
             </p>
           )}
         </div>
