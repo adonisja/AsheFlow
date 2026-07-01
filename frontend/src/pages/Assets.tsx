@@ -57,11 +57,16 @@ type TruckRecord = {
   name: string;
   is_active: boolean;
   discord_channel_id: string | null;
-  initial_anchor_address: string | null;         // GeoClient-normalised canonical form
-  initial_anchor_display_address: string | null; // raw user input — shown in UI
+  initial_anchor_address: string | null;
+  initial_anchor_display_address: string | null;
   initial_anchor_lat: number | null;
   initial_anchor_lng: number | null;
   initial_anchor_set_at: string | null;
+  initial_anchor2_address: string | null;
+  initial_anchor2_display_address: string | null;
+  initial_anchor2_lat: number | null;
+  initial_anchor2_lng: number | null;
+  initial_anchor2_set_at: string | null;
 };
 
 type Tab = 'people' | 'fleet' | 'system';
@@ -1245,16 +1250,161 @@ function TruckAnchorModal({
   );
 }
 
+function TruckAnchor2Modal({
+  truck,
+  onClose,
+  onUpdated,
+}: {
+  truck: TruckRecord;
+  onClose: () => void;
+  onUpdated: (t: TruckRecord) => void;
+}) {
+  const [address, setAddress] = useState(truck.initial_anchor2_display_address ?? truck.initial_anchor2_address ?? '');
+  const [borough, setBorough] = useState('manhattan');
+  const [saving, setSaving]   = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [error, setError]     = useState<string | null>(null);
+
+  const hasAnchor2 = truck.initial_anchor2_lat != null;
+
+  async function save() {
+    const trimmed = address.trim();
+    if (!trimmed) { setError('Enter a street address or intersection.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const { data } = await axiosClient.patch<TruckRecord>(`/trucks/${truck.id}/anchor2`, {
+        address: trimmed,
+        borough,
+      });
+      onUpdated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Geocoding failed. Check the address and try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    setClearing(true);
+    setError(null);
+    try {
+      const { data } = await axiosClient.patch<TruckRecord>(`/trucks/${truck.id}/anchor2`, { address: null });
+      onUpdated(data);
+      onClose();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to clear anchor.');
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-info" />
+            <h3 className="font-semibold text-foreground">{hasAnchor2 ? 'Update' : 'Set'} anchor 2 — {truck.name}</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-accent text-muted-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Optional second territory anchor for trucks that split across two distinct sub-zones.
+          When set, K-Means receives an extra seed for this truck so it can win two clusters.
+        </p>
+        <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
+          <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
+          <p className="text-[11px] text-muted-foreground">Use: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">100 9 AVE</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
+          <p className="text-[11px] text-muted-foreground">Requires a house number — intersections are not supported here.</p>
+        </div>
+
+        {hasAnchor2 && (
+          <div className="flex items-start gap-2 p-2.5 bg-info/5 border border-info/20 rounded-xl">
+            <MapPin className="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />
+            <div className="text-xs space-y-0.5">
+              <p className="text-foreground font-medium">
+                {truck.initial_anchor2_display_address ?? truck.initial_anchor2_address}
+              </p>
+              {truck.initial_anchor2_display_address && truck.initial_anchor2_address &&
+                truck.initial_anchor2_display_address !== truck.initial_anchor2_address && (
+                <p className="text-muted-foreground text-[10px]">
+                  Normalised: {truck.initial_anchor2_address}
+                </p>
+              )}
+              <p className="text-muted-foreground font-mono">
+                {truck.initial_anchor2_lat?.toFixed(5)}, {truck.initial_anchor2_lng?.toFixed(5)}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Street address</label>
+            <input
+              type="text"
+              className="input w-full"
+              placeholder="e.g. 800 W 50 ST"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && save()}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Borough</label>
+            <select className="input w-full" value={borough} onChange={e => setBorough(e.target.value)}>
+              {BOROUGH_OPTIONS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+
+        <div className="flex gap-2 justify-between">
+          {hasAnchor2 && (
+            <button
+              onClick={clear}
+              disabled={clearing || saving}
+              className="btn-secondary text-sm text-destructive flex items-center gap-1.5"
+            >
+              {clearing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Clear
+            </button>
+          )}
+          <div className="flex gap-2 ml-auto">
+            <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+            <button
+              onClick={save}
+              disabled={saving || clearing}
+              className="btn-primary text-sm flex items-center gap-1.5"
+            >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {saving ? 'Geocoding…' : 'Save anchor 2'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TruckCard({
   truck,
   onEdit,
   onAnchor,
+  onAnchor2,
   onDeactivate,
   onReactivate,
 }: {
   truck: TruckRecord;
   onEdit: () => void;
   onAnchor: () => void;
+  onAnchor2: () => void;
   onDeactivate: () => void;
   onReactivate: () => void;
 }) {
@@ -1299,13 +1449,13 @@ function TruckCard({
         )}
       </div>
 
-      {/* Anchor row */}
+      {/* Anchor 1 row */}
       <div className="min-w-0">
         {truck.initial_anchor_lat != null ? (
           <button
             onClick={onAnchor}
             className="group/ap flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
-            title="Edit anchor point"
+            title="Edit anchor point 1"
           >
             <MapPin className="w-3 h-3 text-success shrink-0" />
             <span className="truncate">{truck.initial_anchor_display_address ?? truck.initial_anchor_address}</span>
@@ -1318,6 +1468,30 @@ function TruckCard({
           >
             <MapPin className="w-3 h-3 shrink-0 opacity-50" />
             <span>Set anchor point</span>
+          </button>
+        )}
+      </div>
+
+      {/* Anchor 2 row — optional secondary zone seed */}
+      <div className="min-w-0">
+        {truck.initial_anchor2_lat != null ? (
+          <button
+            onClick={onAnchor2}
+            className="group/ap2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+            title="Edit anchor point 2"
+          >
+            <MapPin className="w-3 h-3 text-info shrink-0" />
+            <span className="truncate">{truck.initial_anchor2_display_address ?? truck.initial_anchor2_address}</span>
+            <Pencil className="w-3 h-3 shrink-0 opacity-0 group-hover/ap2:opacity-60 transition-opacity ml-auto" />
+          </button>
+        ) : (
+          <button
+            onClick={onAnchor2}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-info transition-colors"
+            title="Add a second territory anchor to split this truck across two zones"
+          >
+            <MapPin className="w-3 h-3 shrink-0 opacity-30" />
+            <span className="opacity-60">Add anchor 2</span>
           </button>
         )}
       </div>
@@ -1351,8 +1525,9 @@ function FleetTab() {
   const [loadError, setLoadError]       = useState<string | null>(null);
   const [showModal, setShowModal]       = useState(false);
   const [editTarget, setEditTarget]     = useState<TruckRecord | null>(null);
-  const [anchorTarget, setAnchorTarget] = useState<TruckRecord | null>(null);
-  const [search, setSearch]             = useState('');
+  const [anchorTarget, setAnchorTarget]   = useState<TruckRecord | null>(null);
+  const [anchor2Target, setAnchor2Target] = useState<TruckRecord | null>(null);
+  const [search, setSearch]               = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   const load = () => {
@@ -1492,6 +1667,7 @@ function FleetTab() {
               truck={truck}
               onEdit={() => setEditTarget(truck)}
               onAnchor={() => setAnchorTarget(truck)}
+              onAnchor2={() => setAnchor2Target(truck)}
               onDeactivate={() => handleDeactivate(truck)}
               onReactivate={() => handleReactivate(truck)}
             />
@@ -1521,6 +1697,16 @@ function FleetTab() {
           onUpdated={updated => {
             setTrucks(prev => prev.map(t => t.id === updated.id ? updated : t));
             setAnchorTarget(null);
+          }}
+        />
+      )}
+      {anchor2Target && (
+        <TruckAnchor2Modal
+          truck={anchor2Target}
+          onClose={() => setAnchor2Target(null)}
+          onUpdated={updated => {
+            setTrucks(prev => prev.map(t => t.id === updated.id ? updated : t));
+            setAnchor2Target(null);
           }}
         />
       )}
