@@ -940,6 +940,11 @@ function ManifestSortPanel({
     setRunning(true);
     setError(null);
     stopPoll();
+    // Evict any stale task ID and SSE callback left by a previous run or
+    // page-reload mid-task. Without this, the mount-effect poller targeting the
+    // old task ID races with the new SSE callback and the new result is lost.
+    sessionStorage.removeItem(_SORT_TASK_KEY(today));
+    setOnNotification(null);
     try {
       const { data: accepted } = await axiosClient.post<SortRunAccepted>('/sort/run', {
         sort_date: today,
