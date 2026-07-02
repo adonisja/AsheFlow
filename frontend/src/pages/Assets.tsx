@@ -1171,8 +1171,8 @@ function TruckAnchorModal({
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Enter a street address (with house number) for this truck's home territory.
-          The system geocodes it to coordinates automatically.
+          Enter a street intersection (preferred) or a street address for this
+          truck's home territory. The system geocodes it to coordinates automatically.
         </p>
         <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
           <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
@@ -1203,7 +1203,7 @@ function TruckAnchorModal({
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Street address</label>
+            <label className="text-xs text-muted-foreground mb-1 block">Intersection or address</label>
             <input
               type="text"
               className="input w-full"
@@ -1348,7 +1348,7 @@ function TruckAnchor2Modal({
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Street address</label>
+            <label className="text-xs text-muted-foreground mb-1 block">Intersection or address</label>
             <input
               type="text"
               className="input w-full"
