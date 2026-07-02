@@ -114,6 +114,7 @@ SERVICES=(
   tier1_verify.py
   run_sort.py
   persist_zones.py
+  assign_totes.py
 )
 
 echo ""
