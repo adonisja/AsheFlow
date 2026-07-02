@@ -23,5 +23,6 @@ python-multipart
 
 # Geographic clustering — tier 1 tote verification + tier 2 walker routing
 scikit-learn
+scipy
 alphashape
 shapely

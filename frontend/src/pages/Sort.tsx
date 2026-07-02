@@ -1101,9 +1101,9 @@ function ManifestSortPanel({
             <div className="space-y-2">
               {[
                 'Loading manifest from Redis…',
-                'Pre-filtering out-of-zone packages…',
-                'Running K-Means clustering…',
-                'Assigning clusters to trucks…',
+                'Building totes from bag IDs…',
+                'Assigning totes to truck anchors…',
+                'Balancing tote counts across trucks…',
                 'Running tier-1 bag verification…',
               ].map((label, i) => (
                 <StepRow key={i} label={label} index={i} />
@@ -1138,8 +1138,9 @@ function ManifestSortPanel({
               <div className="p-3 bg-accent/40 rounded-xl space-y-2">
                 <p className="text-xs font-semibold text-foreground">What needs review</p>
                 <p className="text-xs text-muted-foreground">
-                  K-Means assigned packages in these bags across multiple truck zones.
-                  Each bag must stay on one truck — confirm or change the destination below.
+                  These bags contain packages the sort could not place in any truck zone
+                  (outside the company zone or missing a geocode). Confirm to keep them on
+                  their current truck, or change the destination below.
                 </p>
                 <div className="grid grid-cols-3 gap-2 pt-1">
                   <div className="space-y-0.5">

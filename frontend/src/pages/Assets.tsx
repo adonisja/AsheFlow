@@ -1315,7 +1315,8 @@ function TruckAnchor2Modal({
 
         <p className="text-xs text-muted-foreground">
           Optional second territory anchor for trucks that split across two distinct sub-zones.
-          When set, K-Means receives an extra seed for this truck so it can win two clusters.
+          When set, the truck can receive a second zone around this point when tote geography
+          supports the split.
         </p>
         <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
           <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>

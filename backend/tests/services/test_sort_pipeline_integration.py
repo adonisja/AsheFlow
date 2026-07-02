@@ -742,6 +742,49 @@ class TestAssignTotes:
         a_bags = {p["bag_id"] for z in a_zones for p in z.cluster.packages}
         assert a_bags == {"Bag-N1", "Bag-S1"}
 
+    def test_clustered_anchors_produce_disjoint_territories(self):
+        """Regression for the enveloped-zones bug: with all anchors packed into
+        a small central cluster and totes spread over the whole territory, the
+        balanced assignment must still tile the area into contiguous cells —
+        pairwise convex-hull overlap stays near zero (the old greedy balance
+        pass interleaved memberships and every hull covered everything)."""
+        import itertools
+        from shapely.geometry import MultiPoint
+
+        truck_c = uuid.UUID("cccccccc-0000-0000-0000-000000000003")
+        truck_d = uuid.UUID("cccccccc-0000-0000-0000-000000000004")
+        anchors = [
+            AnchorPoint(truck_id=_TRUCK_A_ID, truck_name="Atlas",  lat=40.7480, lng=-73.9955, source="truck_anchor"),
+            AnchorPoint(truck_id=_TRUCK_B_ID, truck_name="Eagle",  lat=40.7530, lng=-73.9925, source="truck_anchor"),
+            AnchorPoint(truck_id=truck_c,     truck_name="Falcon", lat=40.7500, lng=-73.9970, source="truck_anchor"),
+            AnchorPoint(truck_id=truck_d,     truck_name="Titan",  lat=40.7560, lng=-73.9930, source="truck_anchor"),
+        ]
+
+        pkgs = []
+        tote = 0
+        for i in range(20):
+            for j in range(10):
+                lat = 40.744 + i * (40.770 - 40.744) / 19
+                lng = -74.005 + j * 0.0015
+                tote += 1
+                pkgs += _tote(f"BAG{tote:04}", 3, lat, lng, spread=0.0001)
+
+        proposal = assign_totes(packages=pkgs, anchors=anchors)
+
+        counts: dict = {}
+        points: dict = {}
+        for a in proposal.assignments:
+            counts[a.truck_id] = counts.get(a.truck_id, 0) + len({p["bag_id"] for p in a.cluster.packages})
+            points.setdefault(a.truck_id, []).extend((p["lng"], p["lat"]) for p in a.cluster.packages)
+
+        vals = list(counts.values())
+        assert max(vals) - min(vals) <= 1, f"unbalanced: {vals}"
+
+        hulls = {tid: MultiPoint(pts).convex_hull for tid, pts in points.items()}
+        for (t1, h1), (t2, h2) in itertools.combinations(hulls.items(), 2):
+            ratio = h1.intersection(h2).area / min(h1.area, h2.area)
+            assert ratio < 0.10, f"territories overlap {ratio:.2f} — partition interleaved"
+
     def test_match_type_is_anchor(self):
         pkgs = _tote("Bag-A1", 5, 40.744, -73.996)
         proposal = assign_totes(packages=pkgs, anchors=_anchors())
