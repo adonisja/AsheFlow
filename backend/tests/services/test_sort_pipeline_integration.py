@@ -772,18 +772,18 @@ class TestAssignTotes:
         proposal = assign_totes(packages=pkgs, anchors=anchors)
 
         counts: dict = {}
-        points: dict = {}
+        polys: dict = {}
         for a in proposal.assignments:
             counts[a.truck_id] = counts.get(a.truck_id, 0) + len({p["bag_id"] for p in a.cluster.packages})
-            points.setdefault(a.truck_id, []).extend((p["lng"], p["lat"]) for p in a.cluster.packages)
+            # the rendered zone polygon is what dispatch sees — assert on it
+            polys[a.truck_id] = MultiPoint([(v["lng"], v["lat"]) for v in a.cluster.polygon]).convex_hull
 
         vals = list(counts.values())
         assert max(vals) - min(vals) <= 1, f"unbalanced: {vals}"
 
-        hulls = {tid: MultiPoint(pts).convex_hull for tid, pts in points.items()}
-        for (t1, h1), (t2, h2) in itertools.combinations(hulls.items(), 2):
+        for (t1, h1), (t2, h2) in itertools.combinations(polys.items(), 2):
             ratio = h1.intersection(h2).area / min(h1.area, h2.area)
-            assert ratio < 0.10, f"territories overlap {ratio:.2f} — partition interleaved"
+            assert ratio < 0.05, f"territories overlap {ratio:.2f} — partition interleaved"
 
     def test_match_type_is_anchor(self):
         pkgs = _tote("Bag-A1", 5, 40.744, -73.996)

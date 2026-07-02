@@ -254,7 +254,7 @@ jobs:
               "if docker ps -a --format {{.Names}} | grep -qx asheflow_postgres; then docker inspect asheflow_postgres | grep -q asheflow_postgres_data || { echo ABORT - existing asheflow_postgres does not mount volume asheflow_postgres_data so recreating it would attach an empty database. Migrate the volume manually before redeploying.; exit 1; }; fi",
               "for c in asheflow_postgres asheflow_redis asheflow_backend asheflow_celery_worker asheflow_celery_beat asheflow_caddy asheflow_bot; do docker rm -f $c >/dev/null 2>&1 || true; done",
               "docker network rm asheflow_default >/dev/null 2>&1 || true",
-              "cd /home/ubuntu/AsheFlow && docker compose --progress plain build --no-cache backend bot",
+              "cd /home/ubuntu/AsheFlow && docker compose --progress plain build --no-cache backend celery_worker bot",
               "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy bot"
             ]' \
             --query "Command.CommandId" --output text)
@@ -431,7 +431,7 @@ jobs:
               "if docker ps -a --format {{.Names}} | grep -qx asheflow_postgres; then docker inspect asheflow_postgres | grep -q asheflow_postgres_data || { echo ABORT - existing asheflow_postgres does not mount volume asheflow_postgres_data so recreating it would attach an empty database. Migrate the volume manually before redeploying.; exit 1; }; fi",
               "for c in asheflow_postgres asheflow_redis asheflow_backend asheflow_celery_worker asheflow_celery_beat asheflow_caddy asheflow_bot; do docker rm -f $c >/dev/null 2>&1 || true; done",
               "docker network rm asheflow_default >/dev/null 2>&1 || true",
-              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend celery_worker",
               "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy"
             ]' \
             --query "Command.CommandId" --output text)
