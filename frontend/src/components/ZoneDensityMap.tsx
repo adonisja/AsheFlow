@@ -84,11 +84,6 @@ function polygonToCoords(pts: { lat: number; lng: number }[]): [number, number][
   return pts.map(p => [p.lng, p.lat]);
 }
 
-function centroidRadius(count: number): number {
-  // Scale dot radius from 50m (1 pkg) to 300m (100+ pkgs)
-  return Math.min(300, 50 + count * 2.5);
-}
-
 /** Stable truck → palette index. Sorted truck ids give the same colour for the
  * same fleet regardless of today's zone ordering; colours only shift when the
  * fleet itself changes (rare) rather than every sort run. */
@@ -126,6 +121,23 @@ export default function ZoneDensityMap({
   const colorIndex = useMemo(() => buildTruckColorIndex(zones, anchors), [zones, anchors]);
   const zoneColor = (truckId: string) => ZONE_COLORS[colorIndex.get(truckId) ?? 0];
   const zoneStroke = (truckId: string) => ZONE_STROKE_COLORS[colorIndex.get(truckId) ?? 0];
+
+  // Centroids carry the truck name in truck_zone_label; multi-zone trucks have
+  // zone labels like "Titan (1/2)", so fall back to a prefix match.
+  const truckIdByZoneLabel = useMemo(() => {
+    const m = new Map<string, string>();
+    zones.forEach(z => m.set(z.zone_label, z.truck_id));
+    return m;
+  }, [zones]);
+  const centroidTruckId = (label: string | null): string | null => {
+    if (!label) return null;
+    const exact = truckIdByZoneLabel.get(label);
+    if (exact) return exact;
+    for (const [zl, tid] of truckIdByZoneLabel) {
+      if (zl.startsWith(label)) return tid;
+    }
+    return null;
+  };
 
   const mappableOutliers = useMemo(
     () => outlierTotes.filter(t => t.centroid_lat != null && t.centroid_lng != null),
@@ -284,17 +296,26 @@ export default function ZoneDensityMap({
       filled: true,
     });
 
+    // Zone centers of mass. Small fixed-pixel dots color-matched to the zone:
+    // the old size-by-package-count white discs saturated at 300m radius and
+    // stacked over the anchor cluster, hiding the densest part of the map
+    // while encoding nothing. Exact counts live in the tooltip and legend.
     const centroidLayer = new ScatterplotLayer({
       id: 'centroids',
       data: centroids,
       getPosition: (d: Centroid) => [d.centroid_lng, d.centroid_lat],
-      getRadius: (d: Centroid) => centroidRadius(d.package_count),
-      getFillColor: [255, 255, 255, 180],
-      getLineColor: [255, 255, 255, 220],
+      getRadius: 5,
+      radiusUnits: 'pixels',
+      getFillColor: (d: Centroid) => {
+        const tid = centroidTruckId(d.truck_zone_label);
+        if (!tid) return [55, 65, 81, 220] as [number, number, number, number];
+        const [r, g, b] = zoneStroke(tid);
+        return [r, g, b, 220] as [number, number, number, number];
+      },
+      getLineColor: [255, 255, 255, 255],
       stroked: true,
       lineWidthUnits: 'pixels',
       getLineWidth: 1.5,
-      radiusUnits: 'meters',
       pickable: true,
     });
 
@@ -317,6 +338,23 @@ export default function ZoneDensityMap({
       pickable: true,
     });
 
+    // One-letter labels on the anchor pins so dispatch can tell whose post is
+    // whose at a glance — six anchors cluster within a few blocks.
+    const anchorLabelLayer = new TextLayer({
+      id: 'anchor-labels',
+      data: anchors,
+      getPosition: (d: AnchorPin) => [d.lng, d.lat],
+      getText: (d: AnchorPin) => (d.truck_name?.[0] ?? '').toUpperCase(),
+      getColor: [255, 255, 255, 255],
+      getSize: (d: AnchorPin) => (d.which === 1 ? 11 : 9),
+      sizeUnits: 'pixels',
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: 700,
+      getTextAnchor: 'middle',
+      getAlignmentBaseline: 'center',
+      pickable: false,
+    });
+
     // Unplaced (outlier) totes: red diamonds — the things dispatch must act on.
     const outlierLayer = new TextLayer({
       id: 'outlier-totes',
@@ -336,7 +374,7 @@ export default function ZoneDensityMap({
     });
 
     overlayRef.current.setProps({
-      layers: [polygonLayer, centroidLayer, anchorLayer, outlierLayer],
+      layers: [polygonLayer, centroidLayer, anchorLayer, anchorLabelLayer, outlierLayer],
     });
 
     // Auto-fit: prefer truck zone bounds when available, fall back to company zone polygon
@@ -399,8 +437,16 @@ export default function ZoneDensityMap({
           )}
           {anchors.length > 0 && (
             <div className="flex items-center gap-1.5 pt-0.5 border-t border-border/60">
-              <div className="w-3 h-3 rounded-full shrink-0 bg-foreground/80 border-2 border-white shadow" />
-              <span className="text-[10px] text-muted-foreground">Truck anchors</span>
+              <div className="w-3.5 h-3.5 rounded-full shrink-0 bg-foreground/80 border-2 border-white shadow flex items-center justify-center">
+                <span className="text-[7px] font-bold text-white leading-none">A</span>
+              </div>
+              <span className="text-[10px] text-muted-foreground">Truck anchor (lettered)</span>
+            </div>
+          )}
+          {centroids.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-full shrink-0 bg-muted-foreground border border-white" />
+              <span className="text-[10px] text-muted-foreground">Zone center of mass</span>
             </div>
           )}
           {mappableOutliers.length > 0 && (
