@@ -40,8 +40,6 @@ interface CompanyConfig {
   dispatch_weight_cap: number | null;
   flag_threshold: number | null;
   driver_checkin_count: number | null;
-  tier1_dbscan_eps: number | null;
-  tier1_dbscan_min_samples: number | null;
   tier1_small_tote_cutoff: number | null;
   tier1_small_stray_max: number | null;
   tier1_small_uncertain_max: number | null;
@@ -123,8 +121,6 @@ const DRIVER_CHECKINS: FieldMeta[] = [
 ];
 
 const TIER1_VERIFY: FieldMeta[] = [
-  { key: 'tier1_dbscan_eps', label: 'DBSCAN Epsilon (degrees)', type: 'float', description: 'Geographic radius for package clustering (~0.015° ≈ 1 mile).', placeholder: '0.015', min: 0.001, max: 1, step: 0.001 },
-  { key: 'tier1_dbscan_min_samples', label: 'DBSCAN Min Samples', type: 'int', description: 'Packages needed within epsilon to form a cluster core.', placeholder: '30', min: 1, max: 200 },
   { key: 'tier1_small_tote_cutoff', label: 'Small Tote Cutoff', type: 'int', description: 'Max packages in a cluster for it to be "small."', placeholder: '10', min: 1, max: 100 },
   { key: 'tier1_small_stray_max', label: 'Small Tote Max Strays', type: 'int', description: 'Max stray packages allowed in a small tote.', placeholder: '1', min: 0, max: 20 },
   { key: 'tier1_small_uncertain_max', label: 'Small Tote Max Uncertain', type: 'int', description: 'Max uncertain packages in a small tote.', placeholder: '3', min: 0, max: 20 },
@@ -179,7 +175,7 @@ const CONFIG_KEYS: string[] = [
   'dispatch_weight_driver', 'dispatch_weight_trainer', 'dispatch_weight_walker',
   'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus', 'dispatch_consecutive_penalty',
   'dispatch_weight_cap', 'flag_threshold', 'driver_checkin_count',
-  'tier1_dbscan_eps', 'tier1_dbscan_min_samples', 'tier1_small_tote_cutoff',
+  'tier1_small_tote_cutoff',
   'tier1_small_stray_max', 'tier1_small_uncertain_max', 'tier1_stray_pct', 'tier1_uncertain_pct',
   'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
 ];
@@ -196,14 +192,14 @@ const TIME_FIELDS = new Set(['shift_start', 'shift_end', 'checkin_open', 'checki
 const INT_FIELDS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'underperforming_trainer_threshold', 'max_training_phase', 'driver_checkin_count',
-  'tier1_dbscan_min_samples', 'tier1_small_tote_cutoff', 'tier1_small_stray_max',
+  'tier1_small_tote_cutoff', 'tier1_small_stray_max',
   'tier1_small_uncertain_max',
 ]);
 const FLOAT_FIELDS = new Set([
   'phase4_pass_score', 'dispatch_weight_driver', 'dispatch_weight_trainer',
   'dispatch_weight_walker', 'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus',
   'dispatch_consecutive_penalty', 'dispatch_weight_cap', 'flag_threshold',
-  'tier1_dbscan_eps', 'tier1_stray_pct', 'tier1_uncertain_pct',
+  'tier1_stray_pct', 'tier1_uncertain_pct',
   'effort_time_factor', 'effort_physical_factor',
 ]);
 const STRING_FIELDS = new Set(['ingestion_mode']);
@@ -365,8 +361,6 @@ const SETUP_DEFAULTS: Record<string, string> = {
   dispatch_weight_cap: '0.85',
   flag_threshold: '1.0',
   driver_checkin_count: '4',
-  tier1_dbscan_eps: '0.015',
-  tier1_dbscan_min_samples: '30',
   tier1_small_tote_cutoff: '10',
   tier1_small_stray_max: '1',
   tier1_small_uncertain_max: '3',

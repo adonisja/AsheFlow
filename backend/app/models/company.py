@@ -75,9 +75,7 @@ class CompanyConfig(Base):
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
 
-    # ── Tier 1 tote verification (DBSCAN + classification thresholds) ─────────
-    tier1_dbscan_eps           = Column(Float,   nullable=True, default=0.005)   # 0.005° ≈ 5 city blocks — truck zone radius
-    tier1_dbscan_min_samples   = Column(Integer, nullable=True, default=30)
+    # ── Tier 1 tote verification (classification thresholds) ─────────────────
     tier1_small_tote_cutoff    = Column(Integer, nullable=True, default=10)
     tier1_small_stray_max      = Column(Integer, nullable=True, default=1)
     tier1_small_uncertain_max  = Column(Integer, nullable=True, default=3)

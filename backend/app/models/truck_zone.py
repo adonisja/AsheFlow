@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, Date, DateTime, Float, ForeignKey
+from sqlalchemy import Column, String, Boolean, Date, DateTime, Float, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from app.models.base import Base
@@ -13,6 +13,7 @@ class TruckZone(Base):
     truck_id        = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False, index=True)
     truck_polygon   = Column(JSONB, nullable=False)
     package_tbas    = Column(JSONB, nullable=True)   # list[str] of TBA numbers in this cluster
+    tote_count      = Column(Integer, nullable=True)  # distinct totes (bag_ids) in this zone; loose packages count as 1 each
     zone_label      = Column(String(50), nullable=False)
     zone_date       = Column(Date, nullable=False, index=True)
     is_active       = Column(Boolean, nullable=False, default=True)

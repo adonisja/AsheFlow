@@ -74,7 +74,7 @@ class Route(Base):
 class RouteClusterCentroid(Base):
     """Cluster centroids computed at sort time for the dispatch density map.
 
-    DBSCAN produces centroids during truck-zone sort. Previously discarded —
+    The truck-zone sort produces per-zone centroids. Previously discarded —
     persisted here so the Deck.gl heatmap layer works without hitting Redis.
     No addresses stored — only lat/lng and package count.
     """

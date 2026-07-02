@@ -2,7 +2,7 @@
 
 Flow:
   1. POST /sort/run → dispatcher validates overrides, dispatches this task, returns task_id
-  2. This task calls run_sort() — DBSCAN cluster → tier-1 verify → persist zones
+  2. This task calls run_sort() — anchored tote assignment → tier-1 verify → persist zones
   3. Result written to Redis: sort_result:{company_id}:{date}:{task_id} (TTL 24h)
   4. Frontend polls GET /sort/run/status/{task_id} until status != "running"
 
@@ -247,6 +247,7 @@ def run_zone_sort(
                 "truck_id":       str(a.truck_id),
                 "truck_name":     a.truck_name,
                 "match_type":     a.match_type,
+                "anchor_source":  a.anchor_source,
                 "workload_score": a.workload_score,
                 "is_overflow":    a.is_overflow,
                 "package_count":  len(a.cluster.packages),

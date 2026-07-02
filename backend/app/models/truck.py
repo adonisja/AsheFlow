@@ -16,7 +16,7 @@ class Truck(Base):
             bot to post finalized crew assignments and manage per-day channel access.
         initial_anchor_address: Human-readable address dispatch entered (e.g. "34 St & 9 Ave").
         initial_anchor_lat/lng: GeoClient-resolved coordinates from initial_anchor_address.
-            Feeds run_sort._get_anchor_hints() on cold start (no historical zones).
+            Feeds run_sort._resolve_anchors() — authoritative territory seed (ADR-169).
         initial_anchor_set_by/at: Audit trail for who last set the anchor.
     """
     __tablename__ = "trucks"

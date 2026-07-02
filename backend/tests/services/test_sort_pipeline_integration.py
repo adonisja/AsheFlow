@@ -1,10 +1,9 @@
 """
 Integration tests — manifest injection through TruckZone creation to route creation.
 
-Covers the full sort pipeline in one connected flow:
+Covers the full sort pipeline in one connected flow (ADR-169):
 
-  cluster_packages()
-      → assign_clusters()
+  assign_totes()               ← tote-level anchored balanced assignment
       → tier1_verify()
       → persist_zones()          ← TruckZone rows written
       → (_persist_routes stub)   ← Route rows built from TruckZone.package_tbas
@@ -39,8 +38,9 @@ import pytest
 try:
     from app.services.tier1_verify import BagOverride, BagResult, tier1_verify, VerificationResult
     from app.services.persist_zones import persist_zones
-    from app.services.assign_clusters import assign_clusters, AssignmentProposal, ClusterAssignment
-    from app.services.cluster_packages import cluster_packages, Cluster, ClusterResult, BoundingBox
+    from app.services.assign_clusters import AssignmentProposal, ClusterAssignment
+    from app.services.assign_totes import assign_totes, AnchorPoint
+    from app.services.cluster_packages import Cluster, ClusterResult, BoundingBox
 except ImportError:
     pytest.skip("proprietary sort services not available (CI skip)", allow_module_level=True)
 
@@ -567,90 +567,264 @@ class TestZoneToCommitSortHandoff:
 
 
 # ---------------------------------------------------------------------------
-# 6. cluster_packages → assign_clusters plumbing
+# 6. assign_totes — tote-level anchored balanced assignment (ADR-169)
 # ---------------------------------------------------------------------------
 
-class TestClusterToAssignPlumbing:
-    """Verify cluster_packages output flows correctly into assign_clusters."""
+_ANCHOR_A = None  # populated lazily — AnchorPoint may be absent in public CI
+_ANCHOR_B = None
 
-    def test_packages_with_coordinates_get_clustered(self):
-        """Packages with lat/lng produce clusters, not just outliers."""
-        # Two tight geographic groups — with low enough eps to form clusters
+
+def _anchors():
+    """Truck A anchored in Chelsea, Truck B anchored in Hell's Kitchen."""
+    return [
+        AnchorPoint(truck_id=_TRUCK_A_ID, truck_name="Truck A",
+                    lat=40.745, lng=-73.995, source="truck_anchor"),
+        AnchorPoint(truck_id=_TRUCK_B_ID, truck_name="Truck B",
+                    lat=40.762, lng=-73.985, source="truck_anchor"),
+    ]
+
+
+def _tote(bag_id: str, n: int, lat: float, lng: float, spread: float = 0.0005) -> list[dict]:
+    """n packages tightly grouped around (lat, lng), all in one tote."""
+    return [
+        _make_package(f"{bag_id}-TBA{i}", bag_id, lat + (i % 3) * spread, lng + (i % 2) * spread)
+        for i in range(n)
+    ]
+
+
+class TestAssignTotes:
+    def test_totes_are_never_split_across_trucks(self):
+        """Every package of a tote lands on the same truck — tote atomicity."""
         pkgs = []
-        # Group 1: midtown
-        for i in range(35):
-            pkgs.append({"tba": f"TBA-MT{i}", "bag_id": "Bag-A",
-                         "lat": 40.754 + (i % 7) * 0.0001, "lng": -73.990 + (i % 5) * 0.0001})
-        # Group 2: downtown
-        for i in range(35):
-            pkgs.append({"tba": f"TBA-DT{i}", "bag_id": "Bag-B",
-                         "lat": 40.710 + (i % 7) * 0.0001, "lng": -74.010 + (i % 5) * 0.0001})
+        # Tote straddling the midpoint: 3 packages nearer A, 2 nearer B
+        pkgs += [_make_package(f"MIX-{i}", "Bag-Mix", 40.747, -73.993) for i in range(3)]
+        pkgs += [_make_package(f"MIX-B{i}", "Bag-Mix", 40.760, -73.986) for i in range(2)]
+        pkgs += _tote("Bag-A1", 5, 40.744, -73.996)
+        pkgs += _tote("Bag-B1", 5, 40.763, -73.984)
 
-        result = cluster_packages(pkgs, eps=0.015, min_samples=5)
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
 
-        assert len(result.clusters) >= 1
-        # All packages should land somewhere (cluster or outlier)
-        all_result_tbas = (
-            {p["tba"] for c in result.clusters for p in c.packages}
-            | {p["tba"] for p in result.outliers}
-        )
-        assert all_result_tbas == {p["tba"] for p in pkgs}
+        tba_truck = {
+            p["tba"]: a.truck_id
+            for a in proposal.assignments
+            for p in a.cluster.packages
+        }
+        mix_trucks = {tba_truck[p["tba"]] for p in pkgs if p["bag_id"] == "Bag-Mix"}
+        assert len(mix_trucks) == 1, "tote must be assigned wholly to one truck"
+        # Majority (3 vs 2) was nearer Truck A
+        assert mix_trucks == {_TRUCK_A_ID}
 
-    def test_assign_clusters_maps_clusters_to_trucks(self):
-        """assign_clusters produces one assignment per cluster per truck (sequential)."""
-        # Build two fake clusters directly (avoid DBSCAN non-determinism in tests)
-        pkgs_a = [{"tba": f"TBA-A{i}", "bag_id": "Bag-A",
-                   "lat": 40.754, "lng": -73.990} for i in range(5)]
-        pkgs_b = [{"tba": f"TBA-B{i}", "bag_id": "Bag-B",
-                   "lat": 40.710, "lng": -74.010} for i in range(5)]
+    def test_equity_tote_counts_within_tolerance(self):
+        """Tote counts per truck differ by at most 1 after the balance pass."""
+        pkgs = []
+        # 10 totes near Truck A's anchor, only 2 near Truck B's
+        for i in range(10):
+            pkgs += _tote(f"Bag-A{i}", 4, 40.744 + i * 0.0008, -73.996)
+        for i in range(2):
+            pkgs += _tote(f"Bag-B{i}", 4, 40.762 + i * 0.0008, -73.985)
 
-        cluster_a = Cluster(
-            cluster_id=0, packages=pkgs_a,
-            centroid={"lat": 40.754, "lng": -73.990},
-            bounding_box=BoundingBox(40.750, 40.758, -73.995, -73.985),
-            polygon=[{"lat": 40.754, "lng": -73.990}],
-        )
-        cluster_b = Cluster(
-            cluster_id=1, packages=pkgs_b,
-            centroid={"lat": 40.710, "lng": -74.010},
-            bounding_box=BoundingBox(40.706, 40.714, -74.015, -74.005),
-            polygon=[{"lat": 40.710, "lng": -74.010}],
-        )
-        cluster_result = ClusterResult(clusters=[cluster_a, cluster_b], outliers=[])
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
 
-        trucks = [
-            {"id": _TRUCK_A_ID, "name": "Truck A"},
-            {"id": _TRUCK_B_ID, "name": "Truck B"},
+        totes_per_truck: dict = defaultdict(set)
+        for a in proposal.assignments:
+            for p in a.cluster.packages:
+                totes_per_truck[a.truck_id].add(p["bag_id"])
+        counts = [len(v) for v in totes_per_truck.values()]
+        assert max(counts) - min(counts) <= 1, f"unbalanced tote counts: {counts}"
+        assert sum(counts) == 12
+
+    def test_balance_moves_totes_nearest_to_receiver(self):
+        """The totes traded to the underloaded truck are the northernmost
+        (closest to Truck B's anchor), keeping zones contiguous."""
+        pkgs = []
+        for i in range(6):
+            # Totes laid south→north; higher i = closer to Truck B
+            pkgs += _tote(f"Bag-{i}", 3, 40.744 + i * 0.002, -73.994)
+
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
+
+        truck_b_bags = {
+            p["bag_id"]
+            for a in proposal.assignments if a.truck_id == _TRUCK_B_ID
+            for p in a.cluster.packages
+        }
+        truck_a_bags = {
+            p["bag_id"]
+            for a in proposal.assignments if a.truck_id == _TRUCK_A_ID
+            for p in a.cluster.packages
+        }
+        assert len(truck_a_bags) == 3 and len(truck_b_bags) == 3
+        # Truck B must hold the northern half, Truck A the southern half
+        assert truck_b_bags == {"Bag-3", "Bag-4", "Bag-5"}
+        assert truck_a_bags == {"Bag-0", "Bag-1", "Bag-2"}
+
+    def test_coordinate_less_package_rides_with_its_tote(self):
+        """A package with no lat/lng still lands on its tote's truck."""
+        pkgs = _tote("Bag-A1", 4, 40.744, -73.996)
+        rider = {"tba": "TBA-NOCOORD", "bag_id": "Bag-A1", "lat": None, "lng": None,
+                 "block_key": None, "normalised_address": None}
+        pkgs.append(rider)
+        pkgs += _tote("Bag-B1", 5, 40.763, -73.984)
+
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
+
+        all_outlier_tbas = {p["tba"] for p in proposal.outliers}
+        assert "TBA-NOCOORD" not in all_outlier_tbas
+        tba_truck = {
+            p["tba"]: a.truck_id
+            for a in proposal.assignments
+            for p in a.cluster.packages
+        }
+        assert tba_truck["TBA-NOCOORD"] == tba_truck["Bag-A1-TBA0"]
+
+    def test_out_of_boundary_tote_becomes_outliers(self):
+        """A tote whose centroid is outside the company boundary is not assigned."""
+        boundary = [
+            {"lat": 40.735, "lng": -74.010},
+            {"lat": 40.775, "lng": -74.010},
+            {"lat": 40.775, "lng": -73.975},
+            {"lat": 40.735, "lng": -73.975},
+            {"lat": 40.735, "lng": -74.010},
         ]
+        pkgs = _tote("Bag-IN", 5, 40.744, -73.996)
+        pkgs += _tote("Bag-OUT", 4, 40.700, -74.015)  # East Village-ish, outside
 
-        proposal = assign_clusters(
-            result=cluster_result,
-            trucks=trucks,
-            recent_zones=[],        # no history → sequential assignment
-            company_boundary=[],    # no boundary restriction
-            address_profiles=[],    # no workload data
-        )
+        proposal = assign_totes(packages=pkgs, anchors=_anchors(), boundary=boundary)
 
-        assert len(proposal.assignments) == 2
-        assigned_trucks = {a.truck_id for a in proposal.assignments}
-        assert _TRUCK_A_ID in assigned_trucks
-        assert _TRUCK_B_ID in assigned_trucks
+        outlier_tbas = {p["tba"] for p in proposal.outliers}
+        assert outlier_tbas == {f"Bag-OUT-TBA{i}" for i in range(4)}
+        assigned_tbas = {
+            p["tba"] for a in proposal.assignments for p in a.cluster.packages
+        }
+        assert assigned_tbas == {f"Bag-IN-TBA{i}" for i in range(5)}
+
+    def test_loose_uncoordinated_package_is_outlier(self):
+        """No bag_id + no coordinates → nothing to anchor on → outlier."""
+        pkgs = _tote("Bag-A1", 5, 40.744, -73.996)
+        pkgs.append({"tba": "TBA-LOST", "bag_id": None, "lat": None, "lng": None})
+
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
+
+        assert {p["tba"] for p in proposal.outliers} == {"TBA-LOST"}
 
     def test_all_packages_covered_by_cluster_or_outlier(self):
-        """No package is silently dropped by cluster_packages."""
-        pkgs = [
-            {"tba": "TBA-X", "bag_id": "Bag-X", "lat": 40.754, "lng": -73.990},
-            {"tba": "TBA-Y", "bag_id": "Bag-Y", "lat": 40.755, "lng": -73.991},
-            {"tba": "TBA-Z", "bag_id": "Bag-Z", "lat": 99.999, "lng": 99.999},  # isolated
-        ]
+        """No package is silently dropped — clusters + outliers == input."""
+        pkgs = _tote("Bag-A1", 5, 40.744, -73.996)
+        pkgs += _tote("Bag-B1", 5, 40.763, -73.984)
+        pkgs.append({"tba": "TBA-LOST", "bag_id": None, "lat": None, "lng": None})
 
-        result = cluster_packages(pkgs, eps=0.001, min_samples=1)
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
 
-        all_out = (
-            {p["tba"] for c in result.clusters for p in c.packages}
-            | {p["tba"] for p in result.outliers}
+        covered = (
+            {p["tba"] for a in proposal.assignments for p in a.cluster.packages}
+            | {p["tba"] for p in proposal.outliers}
         )
-        assert all_out == {"TBA-X", "TBA-Y", "TBA-Z"}
+        assert covered == {p["tba"] for p in pkgs}
+        assert proposal.unassigned_clusters == []
+
+    def test_two_anchor_truck_can_receive_two_zones(self):
+        """A truck with two anchors gets one cluster per anchor with totes,
+        but counts as a single truck for equity."""
+        anchors = _anchors() + [
+            AnchorPoint(truck_id=_TRUCK_A_ID, truck_name="Truck A",
+                        lat=40.738, lng=-74.005, source="truck_anchor"),
+        ]
+        pkgs = []
+        pkgs += _tote("Bag-N1", 3, 40.7445, -73.9955)   # near A primary
+        pkgs += _tote("Bag-S1", 3, 40.7385, -74.0045)   # near A secondary
+        pkgs += _tote("Bag-B1", 3, 40.762, -73.985)
+        pkgs += _tote("Bag-B2", 3, 40.763, -73.984)
+
+        proposal = assign_totes(packages=pkgs, anchors=anchors)
+
+        a_zones = [a for a in proposal.assignments if a.truck_id == _TRUCK_A_ID]
+        assert len(a_zones) == 2, "two-anchor truck should produce two zones"
+        a_bags = {p["bag_id"] for z in a_zones for p in z.cluster.packages}
+        assert a_bags == {"Bag-N1", "Bag-S1"}
+
+    def test_match_type_is_anchor(self):
+        pkgs = _tote("Bag-A1", 5, 40.744, -73.996)
+        proposal = assign_totes(packages=pkgs, anchors=_anchors())
+        assert all(a.match_type == "anchor" for a in proposal.assignments)
+        assert all(a.is_overflow is False for a in proposal.assignments)
+
+
+# ---------------------------------------------------------------------------
+# 6b. persist_zones — per-zone TBA lists and tote counts (ADR-169)
+# ---------------------------------------------------------------------------
+
+class TestPerZoneTbasAndToteCounts:
+    def test_two_zones_same_truck_have_disjoint_tbas(self):
+        """A two-anchor truck gets one zone per anchor; sibling zone rows must
+        not duplicate each other's packages (regression: TBA lists were built
+        per truck, not per zone)."""
+        pkgs_n = [_make_package(f"TBA-N{i}", "Bag-N", 40.750, -73.990) for i in range(4)]
+        pkgs_s = [_make_package(f"TBA-S{i}", "Bag-S", 40.738, -74.004) for i in range(3)]
+
+        proposal = _make_proposal([
+            _make_cluster(0, pkgs_n, _TRUCK_A_ID),
+            _make_cluster(1, pkgs_s, _TRUCK_A_ID),  # same truck, second anchor zone
+        ])
+        db = _make_db()
+
+        zones = persist_zones(
+            proposal=proposal,
+            zone_date=_SORT_DATE,
+            company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID,
+            created_by_name="Dispatch",
+            db=db,
+        )
+
+        assert len(zones) == 2
+        tbas_0 = set(zones[0].package_tbas)
+        tbas_1 = set(zones[1].package_tbas)
+        assert tbas_0.isdisjoint(tbas_1)
+        assert tbas_0 | tbas_1 == {f"TBA-N{i}" for i in range(4)} | {f"TBA-S{i}" for i in range(3)}
+
+    def test_tote_count_persisted_per_zone(self):
+        """tote_count = distinct bag_ids in the zone; bagless TBAs count as 1 each."""
+        pkgs = [_make_package(f"TBA-A{i}", "Bag-A", 40.750, -73.990) for i in range(3)]
+        pkgs += [_make_package(f"TBA-B{i}", "Bag-B", 40.751, -73.991) for i in range(2)]
+        loose = _make_package("TBA-LOOSE", "", 40.752, -73.992)
+        loose["bag_id"] = None
+        pkgs.append(loose)
+
+        proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
+        db = _make_db()
+
+        zones = persist_zones(
+            proposal=proposal,
+            zone_date=_SORT_DATE,
+            company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID,
+            created_by_name="Dispatch",
+            db=db,
+        )
+
+        assert zones[0].tote_count == 3  # Bag-A + Bag-B + 1 loose
+
+    def test_coordinate_less_rider_does_not_break_centroid(self):
+        """Zone centroid must average only coordinated packages."""
+        pkgs = [_make_package(f"TBA-A{i}", "Bag-A", 40.750, -73.990) for i in range(3)]
+        rider = {"tba": "TBA-RIDER", "bag_id": "Bag-A", "lat": None, "lng": None}
+        pkgs.append(rider)
+
+        proposal = _make_proposal([_make_cluster(0, pkgs[:3], _TRUCK_A_ID)])
+        proposal.assignments[0].cluster.packages = pkgs  # rider included in membership
+
+        db = _make_db()
+        zones = persist_zones(
+            proposal=proposal,
+            zone_date=_SORT_DATE,
+            company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID,
+            created_by_name="Dispatch",
+            db=db,
+        )
+
+        assert zones[0].centroid_lat == pytest.approx(40.750)
+        assert "TBA-RIDER" in zones[0].package_tbas
 
 
 # ---------------------------------------------------------------------------

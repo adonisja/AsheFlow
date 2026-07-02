@@ -158,21 +158,6 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: '"4" — driver is expected to submit 4 check-in photos across the shift.',
     note: 'Set to 0 to disable mid-shift check-ins entirely.',
   },
-  tier1_dbscan_eps: {
-    title: 'Tier 1 DBSCAN Epsilon',
-    summary: 'Geographic radius (in degrees) used to cluster delivery packages into tote groups.',
-    detail:
-      'The Tier 1 Manifest Verify system uses DBSCAN (a density-based clustering algorithm) to group packages by geographic proximity. Epsilon is the maximum distance between two packages for them to be considered part of the same cluster. 0.015 degrees ≈ ~1 mile at typical latitudes.',
-    example: '"0.015" — packages within ~1 mile of each other can form a cluster.',
-    note: 'Smaller values produce tighter, more precise clusters. Larger values merge neighborhoods together. Change with caution — affects tote classification results directly.',
-  },
-  tier1_dbscan_min_samples: {
-    title: 'Tier 1 DBSCAN Min Samples',
-    summary: 'Minimum number of packages needed to form a core cluster point.',
-    detail:
-      'In DBSCAN, a point is a "core" point if at least this many other points fall within epsilon distance. Core points seed the cluster; non-core points are either border points or outliers ("strays"). Higher values require denser areas to form clusters.',
-    example: '"30" — at least 30 packages must be within 1 mile for that area to form a cluster core.',
-  },
   tier1_small_tote_cutoff: {
     title: 'Small Tote Package Cutoff',
     summary: 'Maximum packages in a cluster for it to be classified as a "small tote."',
@@ -184,7 +169,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     title: 'Small Tote Max Strays',
     summary: 'Maximum stray packages allowed in a small tote before it is flagged.',
     detail:
-      'Stray packages are outlier points that DBSCAN could not assign to any cluster. In a small tote, even 1–2 strays can be a meaningful percentage of the load. This threshold controls how many are acceptable before raising a verification flag.',
+      'Stray packages are ones the sort could not place on the tote\u2019s truck (out-of-territory or missing coordinates). In a small tote, even 1\u20132 strays can be a meaningful percentage of the load. This threshold controls how many are acceptable before raising a verification flag.',
     example: '"1" — more than 1 stray package in a small tote triggers a flag.',
   },
   tier1_small_uncertain_max: {

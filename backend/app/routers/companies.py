@@ -130,8 +130,6 @@ class CompanyConfigResponse(BaseModel):
     dispatch_weight_cap:              Optional[float]
     flag_threshold:                   Optional[float]
     driver_checkin_count:             Optional[int]
-    tier1_dbscan_eps:                 Optional[float]
-    tier1_dbscan_min_samples:         Optional[int]
     tier1_small_tote_cutoff:          Optional[int]
     tier1_small_stray_max:            Optional[int]
     tier1_small_uncertain_max:        Optional[int]
@@ -174,8 +172,6 @@ class CompanyConfigResponse(BaseModel):
             dispatch_weight_cap=obj.dispatch_weight_cap,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
-            tier1_dbscan_eps=obj.tier1_dbscan_eps,
-            tier1_dbscan_min_samples=obj.tier1_dbscan_min_samples,
             tier1_small_tote_cutoff=obj.tier1_small_tote_cutoff,
             tier1_small_stray_max=obj.tier1_small_stray_max,
             tier1_small_uncertain_max=obj.tier1_small_uncertain_max,
@@ -601,9 +597,7 @@ class CompanyConfigUpdate(BaseModel):
     # Driver check-ins
     driver_checkin_count:            Optional[int]   = Field(None, ge=0, le=10)
 
-    # Tier 1 manifest verify (DBSCAN tote classification)
-    tier1_dbscan_eps:                Optional[float] = Field(None, ge=0.001, le=1.0)
-    tier1_dbscan_min_samples:        Optional[int]   = Field(None, ge=1, le=200)
+    # Tier 1 manifest verify (tote classification thresholds)
     tier1_small_tote_cutoff:         Optional[int]   = Field(None, ge=1, le=100)
     tier1_small_stray_max:           Optional[int]   = Field(None, ge=0, le=20)
     tier1_small_uncertain_max:       Optional[int]   = Field(None, ge=0, le=20)

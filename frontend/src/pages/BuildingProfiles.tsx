@@ -355,7 +355,8 @@ function AnchorModal({ profile, onClose, onUpdated }: AnchorModalProps) {
         <p className="text-xs text-muted-foreground truncate">{profile.normalised_address}</p>
         <p className="text-xs text-muted-foreground">
           This anchor feeds the Field Ops driver AP workflow as a starting location suggestion,
-          and seeds the DBSCAN sort pipeline when no historical zone exists.
+          and provides an anchor hint to the sort pipeline for trucks with no
+          configured anchor and no zone history.
         </p>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-2">

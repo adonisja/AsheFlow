@@ -104,6 +104,9 @@ CLAUDE.md
 # Personal records and scratch files
 .claude/
 discussion.md
+# Operational data exports — never commit manifest CSVs
+enriched_manifest_*.csv
+*.manifest.csv
 dispatch.md
 Soul.md
 fix_walkers.py
@@ -143,6 +146,7 @@ backend/app/routers/building_profiles.py
 backend/app/routers/building_profile_library.py
 backend/app/services/derive_block_key.py
 backend/app/services/seed_manifest.py
+backend/app/services/assign_totes.py
 
 # Auth tokens and credentials (never commit these)
 .claude/token.json

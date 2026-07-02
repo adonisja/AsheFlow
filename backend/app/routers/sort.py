@@ -89,6 +89,7 @@ class ClusterAssignmentOut(BaseModel):
     truck_id: UUID
     truck_name: str
     match_type: str
+    anchor_source: Optional[str] = None   # "truck_anchor" | "zone_history" | "building_profile" | "quantile"
     workload_score: Optional[float] = None
     is_overflow: bool
     package_count: int
@@ -178,6 +179,7 @@ class SortPreviewAssignment(BaseModel):
     truck_id: str
     truck_name: str
     match_type: str
+    anchor_source: Optional[str] = None
     workload_score: Optional[float] = None
     is_overflow: bool
     package_count: int
@@ -205,6 +207,8 @@ class ZoneOut(BaseModel):
     truck_polygon: list[dict]
     zone_date: date
     is_active: bool
+    tote_count: Optional[int] = None      # distinct totes in this zone (null on pre-ADR-169 rows)
+    package_count: int = 0                # len(package_tbas) — computed at read time
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -985,6 +989,7 @@ def get_sort_run_preview(
                 truck_id       = a["truck_id"],
                 truck_name     = a["truck_name"],
                 match_type     = a["match_type"],
+                anchor_source  = a.get("anchor_source"),
                 workload_score = a.get("workload_score"),
                 is_overflow    = a["is_overflow"],
                 package_count  = a["package_count"],
@@ -1480,6 +1485,84 @@ def upsert_company_zone_from_corners(
 # Per-date sort status routes — /{sort_date} must come after all literal paths
 # ---------------------------------------------------------------------------
 
+class OutlierToteOut(BaseModel):
+    """A tote whose packages the sort could not place in any zone."""
+    tote_id: str                       # bag_id, or "(loose)" for bagless packages
+    centroid_lat: Optional[float] = None   # None when no package in the tote geocoded
+    centroid_lng: Optional[float] = None
+    package_count: int
+    tba_numbers: list[str]
+
+
+class OutlierTotesResponse(BaseModel):
+    sort_date: date
+    totes: list[OutlierToteOut]
+    manifest_available: bool           # False once the Redis manifest has expired
+
+
+@router.get("/{sort_date}/outlier-totes", response_model=OutlierTotesResponse)
+def get_outlier_totes(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Totes left out of every zone for this date (ADR-169 outlier totes).
+
+    Derived on the fly: all manifest TBAs minus the TBAs present in the
+    active TruckZones, grouped back into totes by bag_id. These are the red
+    markers on the dispatch map — out-of-territory or un-geocodable totes
+    that need a manual decision (reassign-tbas or ignore).
+
+    Only meaningful while the enriched manifest is still in Redis (24h TTL);
+    afterwards returns manifest_available=False with an empty list.
+    """
+    zones = (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.company_id == caller.company_id,
+            TruckZone.zone_date == sort_date,
+            TruckZone.is_active.is_(True),
+        )
+        .all()
+    )
+    assigned: set[str] = {tba for z in zones for tba in (z.package_tbas or [])}
+
+    raw = _redis().get(_manifest_key(str(caller.company_id), sort_date.isoformat()))
+    if raw is None:
+        return OutlierTotesResponse(sort_date=sort_date, totes=[], manifest_available=False)
+    try:
+        packages = json.loads(raw)
+    except json.JSONDecodeError:
+        return OutlierTotesResponse(sort_date=sort_date, totes=[], manifest_available=False)
+
+    # No zones yet → nothing is an "outlier", everything is just unsorted.
+    if not zones:
+        return OutlierTotesResponse(sort_date=sort_date, totes=[], manifest_available=True)
+
+    grouped: dict[str, list[dict]] = {}
+    for pkg in packages:
+        tba = pkg.get("tba")
+        if not tba or tba in assigned:
+            continue
+        key = pkg.get("bag_id") or "(loose)"
+        grouped.setdefault(key, []).append(pkg)
+
+    totes: list[OutlierToteOut] = []
+    for tote_id, pkgs in grouped.items():
+        coord = [p for p in pkgs if p.get("lat") is not None and p.get("lng") is not None]
+        totes.append(OutlierToteOut(
+            tote_id       = tote_id,
+            centroid_lat  = sum(p["lat"] for p in coord) / len(coord) if coord else None,
+            centroid_lng  = sum(p["lng"] for p in coord) / len(coord) if coord else None,
+            package_count = len(pkgs),
+            tba_numbers   = [p["tba"] for p in pkgs],
+        ))
+    totes.sort(key=lambda t: -t.package_count)
+
+    return OutlierTotesResponse(sort_date=sort_date, totes=totes, manifest_available=True)
+
+
 @router.get("/{sort_date}/centroids", response_model=CentroidsResponse)
 def get_sort_centroids(
     sort_date: date,
@@ -1519,7 +1602,19 @@ def get_sort_status(
     )
     return SortStatusResponse(
         sort_date  = sort_date,
-        zones      = zones,
+        zones      = [
+            ZoneOut(
+                id            = z.id,
+                truck_id      = z.truck_id,
+                zone_label    = z.zone_label,
+                truck_polygon = z.truck_polygon,
+                zone_date     = z.zone_date,
+                is_active     = z.is_active,
+                tote_count    = z.tote_count,
+                package_count = len(z.package_tbas or []),
+            )
+            for z in zones
+        ],
         zone_count = len(zones),
     )
 
@@ -1618,6 +1713,32 @@ def reassign_tbas(
 
     source.package_tbas      = updated_source_tbas
     destination.package_tbas = updated_dest_tbas
+
+    # Keep tote_count consistent with the new membership (ADR-169 equity display).
+    # Bag grouping comes from the Redis manifest; if it has expired we cannot
+    # know which bags the moved TBAs belong to — set None (unknown) rather than
+    # leave a stale number.
+    def _recount_totes(tbas: list[str]) -> Optional[int]:
+        raw = _redis().get(_manifest_key(str(caller.company_id), source.zone_date.isoformat()))
+        if raw is None:
+            return None
+        try:
+            manifest = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        tba_bag = {p.get("tba"): p.get("bag_id") for p in manifest if p.get("tba")}
+        bags: set[str] = set()
+        loose = 0
+        for t in tbas:
+            b = tba_bag.get(t)
+            if b:
+                bags.add(b)
+            else:
+                loose += 1
+        return len(bags) + loose
+
+    source.tote_count      = _recount_totes(updated_source_tbas)
+    destination.tote_count = _recount_totes(updated_dest_tbas)
 
     db.add(AuditLog(
         company_id    = caller.company_id,

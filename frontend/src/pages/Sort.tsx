@@ -4,8 +4,8 @@ import { useNotificationContext } from '../contexts/NotificationContext';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import ZoneDensityMap from '../components/ZoneDensityMap';
-import type { ZonePolygon, Centroid } from '../components/ZoneDensityMap';
-import type { CompanyZone } from '../api/types';
+import type { ZonePolygon, Centroid, AnchorPin, OutlierToteMarker } from '../components/ZoneDensityMap';
+import type { CompanyZone, Truck as ApiTruck, OutlierTotesResponse } from '../api/types';
 import {
   Package, Truck, CheckCircle2, RefreshCw,
   ChevronDown, ChevronUp, MapPin, Layers, Loader2,
@@ -13,6 +13,14 @@ import {
   Route, Zap, Send, Download,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
+
+// How each truck's territory seed was resolved (ADR-169 fallback chain)
+const ANCHOR_SOURCE_LABELS: Record<string, string> = {
+  truck_anchor: 'Truck anchor',
+  zone_history: 'Zone history',
+  building_profile: 'Profile hint',
+  quantile: 'Auto (quantile)',
+};
 import type {
   SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride, BagPackageDetail,
   ManifestPreviewResponse, ManifestPreviewRow, ManifestPackagePatchResponse,
@@ -702,7 +710,7 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
               <tr className="border-b border-border bg-accent/40">
                 <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Truck</th>
                 <th className="text-right px-2 py-1.5 text-muted-foreground font-semibold">Packages</th>
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Match</th>
+                <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Anchor</th>
                 <th className="text-right px-2 py-1.5 text-muted-foreground font-semibold">Workload</th>
                 <th className="text-left px-2 py-1.5 text-muted-foreground font-semibold">Flags</th>
               </tr>
@@ -712,12 +720,11 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
                 <tr key={a.truck_id} className="border-b border-border/50 last:border-0">
                   <td className="px-2 py-1 font-semibold text-foreground">
                     {a.truck_name}
-                    {a.is_overflow && (
-                      <span className="ml-1 text-[9px] text-warning font-semibold uppercase">overflow</span>
-                    )}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums text-foreground">{a.package_count.toLocaleString()}</td>
-                  <td className="px-2 py-1 text-muted-foreground capitalize">{a.match_type}</td>
+                  <td className="px-2 py-1 text-muted-foreground">
+                    {ANCHOR_SOURCE_LABELS[a.anchor_source ?? ''] ?? a.match_type}
+                  </td>
                   <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
                     {a.workload_score != null ? a.workload_score.toFixed(2) : '—'}
                   </td>
@@ -1444,11 +1451,27 @@ function ManifestSortPanel({
   );
 }
 
+/** Flatten truck anchor columns into map pins (primary + optional secondary). */
+function toAnchorPins(trucks: ApiTruck[]): AnchorPin[] {
+  return trucks.flatMap(t => {
+    const pins: AnchorPin[] = [];
+    if (t.initial_anchor_lat != null && t.initial_anchor_lng != null) {
+      pins.push({ truck_id: t.id, truck_name: t.name, lat: t.initial_anchor_lat, lng: t.initial_anchor_lng, which: 1 });
+    }
+    if (t.initial_anchor2_lat != null && t.initial_anchor2_lng != null) {
+      pins.push({ truck_id: t.id, truck_name: t.name, lat: t.initial_anchor2_lat, lng: t.initial_anchor2_lng, which: 2 });
+    }
+    return pins;
+  });
+}
+
 export default function SortPage() {
   const today = getLocalYMD();
   const [assignments, setAssignments] = useState<TruckAssignment[]>([]);
   const [zones, setZones] = useState<ZonePolygon[]>([]);
   const [centroids, setCentroids] = useState<Centroid[]>([]);
+  const [anchors, setAnchors] = useState<AnchorPin[]>([]);
+  const [outlierTotes, setOutlierTotes] = useState<OutlierToteMarker[]>([]);
   const [companyZone, setCompanyZone] = useState<CompanyZone | null>(() => {
     try {
       const raw = localStorage.getItem('asheflow.companyZone.v1');
@@ -1465,12 +1488,16 @@ export default function SortPage() {
     setLoading(true);
     setError(null);
     try {
-      const [taRes, zoneRes, centroidRes, czRes] = await Promise.allSettled([
+      const [taRes, zoneRes, centroidRes, czRes, trucksRes, outlierRes] = await Promise.allSettled([
         axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
         axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
         axiosClient.get<CompanyZone | null>('/sort/company-zone'),
+        axiosClient.get<ApiTruck[]>('/trucks/'),
+        axiosClient.get<OutlierTotesResponse>(`/sort/${today}/outlier-totes`),
       ]);
+      if (trucksRes.status === 'fulfilled') setAnchors(toAnchorPins(trucksRes.value.data ?? []));
+      if (outlierRes.status === 'fulfilled') setOutlierTotes(outlierRes.value.data.totes ?? []);
       if (zoneRes.status === 'fulfilled') {
         const fetchedZones = zoneRes.value.data.zones ?? [];
         setZones(fetchedZones);
@@ -1546,7 +1573,8 @@ export default function SortPage() {
             Promise.allSettled([
               axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${activeManifestDate}`),
               axiosClient.get<{ centroids: Centroid[] }>(`/sort/${activeManifestDate}/centroids`),
-            ]).then(([zoneRes, centroidRes]) => {
+              axiosClient.get<OutlierTotesResponse>(`/sort/${activeManifestDate}/outlier-totes`),
+            ]).then(([zoneRes, centroidRes, outlierRes]) => {
               if (zoneRes.status === 'fulfilled') {
                 const fetchedZones = zoneRes.value.data.zones ?? [];
                 setZones(fetchedZones);
@@ -1555,6 +1583,9 @@ export default function SortPage() {
               if (centroidRes.status === 'fulfilled') {
                 setCentroids(centroidRes.value.data.centroids ?? []);
               }
+              if (outlierRes.status === 'fulfilled') {
+                setOutlierTotes(outlierRes.value.data.totes ?? []);
+              }
             });
           }}
         />
@@ -1562,7 +1593,14 @@ export default function SortPage() {
 
       {/* Zone density map */}
       {(companyZone || assignments.length > 0) && (
-        <ZoneDensityMap zones={zones} centroids={centroids} companyZone={companyZone} className="h-[520px]" />
+        <ZoneDensityMap
+          zones={zones}
+          centroids={centroids}
+          companyZone={companyZone}
+          anchors={anchors}
+          outlierTotes={outlierTotes}
+          className="h-[520px]"
+        />
       )}
 
       {/* AP Sort handoff callout — shown once zones exist */}

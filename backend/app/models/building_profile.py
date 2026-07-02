@@ -94,7 +94,7 @@ class BuildingProfile(Base):
 
     # Initial anchor point — the default starting location for deliveries in this building's zone.
     # Null until dispatch explicitly sets it. Feeds Field Ops AP workflow (fallback suggestion)
-    # and the DBSCAN sort pipeline (centroid hint when no historical TruckZone exists).
+    # and the sort pipeline (anchor hint for trucks with no anchor or zone history).
     initial_anchor_lat  = Column(Float, nullable=True)
     initial_anchor_lng  = Column(Float, nullable=True)
     initial_anchor_note = Column(String(200), nullable=True)   # brief label e.g. "Corner of 9th Ave"

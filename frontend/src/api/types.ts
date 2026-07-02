@@ -22,6 +22,26 @@ export interface Truck {
   name: string;
   is_active: boolean;
   discord_channel_id?: string | null;
+  initial_anchor_lat?: number | null;
+  initial_anchor_lng?: number | null;
+  initial_anchor_address?: string | null;
+  initial_anchor2_lat?: number | null;
+  initial_anchor2_lng?: number | null;
+  initial_anchor2_address?: string | null;
+}
+
+export interface OutlierTote {
+  tote_id: string;
+  centroid_lat: number | null;
+  centroid_lng: number | null;
+  package_count: number;
+  tba_numbers: string[];
+}
+
+export interface OutlierTotesResponse {
+  sort_date: string;
+  totes: OutlierTote[];
+  manifest_available: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +405,6 @@ export interface AssignmentChangeRequest {
 export interface MisroutedPackageOut {
   id?: string;
   tba_number: string;
-  tag_number: string | null;
   current_bag_id: string;
   destination_block_key: string | null;
   suggested_route_number: number | null;
@@ -396,12 +415,14 @@ export interface RouteOut {
   block_keys: string[];
   tote_ids: string[];
   tba_numbers: string[];
-  tag_numbers: string[];
+  normalised_addresses: string[];
   slot_cost: number;
   capacity_limit: number;
-  effort_class: 'easy' | 'standard' | 'heavy';
-  workload_source: 'profile' | 'flag' | 'default';
+  effort_class: 'easy' | 'standard' | 'heavy' | 'very_heavy';
+  effort_score: number;
+  workload_source: 'address_profile' | 'block_profile' | 'flag' | 'default';
   package_count: number;
+  coverage_pct: number;
   misrouted_packages: MisroutedPackageOut[];
 }
 
@@ -417,17 +438,19 @@ export interface RouteResponse {
   truck_assignment_id: string;
   route_date: string;
   route_number: number;
+  wave_number: number;
   block_keys: string[];
   tote_ids: string[];
   tba_numbers: string[];
   normalised_addresses: string[];
-  tag_numbers: string[];
   slot_cost: number;
   capacity_limit: number;
   package_count: number;
   capacity_limit_paired: number | null;
-  effort_class: 'easy' | 'standard' | 'heavy';
-  workload_source: 'profile' | 'flag' | 'default';
+  effort_class: 'easy' | 'standard' | 'heavy' | 'very_heavy';
+  effort_score: number | null;
+  workload_source: 'address_profile' | 'block_profile' | 'flag' | 'default';
+  coverage_pct: number | null;
   assigned_to: string | null;
   assigned_to_name: string | null;
   paired_trainee_id: string | null;
@@ -743,10 +766,13 @@ export interface SortRunRequest {
   overrides: BagOverride[];
 }
 
+export type AnchorSource = 'truck_anchor' | 'zone_history' | 'building_profile' | 'quantile';
+
 export interface ClusterAssignmentOut {
   truck_id: string;
   truck_name: string;
-  match_type: 'historical' | 'sequential' | 'overflow';
+  match_type: 'anchor' | 'historical' | 'sequential' | 'overflow';
+  anchor_source?: AnchorSource | null;
   workload_score: number | null;
   is_overflow: boolean;
   package_count: number;
@@ -852,6 +878,7 @@ export interface SortPreviewAssignment {
   truck_id: string;
   truck_name: string;
   match_type: string;
+  anchor_source?: AnchorSource | null;
   workload_score: number | null;
   is_overflow: boolean;
   package_count: number;
