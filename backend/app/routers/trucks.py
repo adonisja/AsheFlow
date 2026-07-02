@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -12,6 +13,98 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.schemas.truck import TruckCreate, TruckUpdate, TruckResponse, TruckAnchorPatch, TruckAnchor2Patch
 from app.services.audit import write_audit
+
+# ── Anchor input parsing (ADR-173) ────────────────────────────────────────────
+# Anchors accept two forms in the same field:
+#   address:      "365 W 28 ST"            → GeoClient /address.json (building point)
+#   intersection: "W 28 ST & 9 AVE"        → GeoClient /intersection.json (corner node)
+#                 "28th St and 9th Ave"
+# Intersections are the preferred territorial form: no house-number typos, no
+# building-side offset, and the bisector between two grid anchors falls exactly
+# between their streets ("Atlas south of 28½ St").
+
+_INTERSECTION_SEP = re.compile(r"\s*&\s*|\s+and\s+", re.IGNORECASE)
+
+
+def _parse_intersection_input(address: str) -> tuple[str, str] | None:
+    """Return (cross_street_one, cross_street_two) for intersection-form input,
+    or None when the input is a plain street address."""
+    parts = _INTERSECTION_SEP.split(address, maxsplit=1)
+    if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+        return parts[0].strip(), parts[1].strip()
+    return None
+
+
+def _resolve_anchor_location(address: str, borough: str) -> tuple[str, float, float]:
+    """Geocode anchor input (address or intersection) → (canonical, lat, lng).
+
+    Raises HTTPException(422) with a form-specific message when GeoClient
+    cannot resolve the input.
+    """
+    from app.tasks.enrich_manifest import _geoclient_normalise, _geoclient_intersection
+
+    crossing = _parse_intersection_input(address)
+    if crossing is not None:
+        one, two = crossing
+        result = _geoclient_intersection(one, two, borough=borough)
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Intersection '{one} & {two}' could not be geocoded in {borough}. "
+                    "Check both street names (they must actually cross) and the borough."
+                ),
+            )
+        lat, lng = result
+        return f"{one.upper()} & {two.upper()}", lat, lng
+
+    geo = _geoclient_normalise(address, borough=borough)
+    if geo is None or geo.lat is None or geo.lng is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Address could not be geocoded. Check the address and borough and try again.",
+        )
+    return geo.normalised_address or address, geo.lat, geo.lng
+
+
+def _assert_anchor_not_duplicate(
+    db: Session, company_id, truck_id, lat: float, lng: float, own_other_anchor: tuple | None = None,
+) -> None:
+    """Reject an anchor that lands on another anchor's exact spot.
+
+    Two trucks on the same anchor make the territory split degenerate — the
+    solver still balances tote counts but divides the shared area arbitrarily.
+    Checked within ~10m so identical intersections collide regardless of
+    floating-point noise. own_other_anchor guards a truck's own second anchor
+    against its first (and vice versa).
+    """
+    _EPS = 1e-4  # ≈ 10m
+    if own_other_anchor is not None:
+        o_lat, o_lng = own_other_anchor
+        if o_lat is not None and abs(o_lat - lat) < _EPS and abs(o_lng - lng) < _EPS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="This truck's other anchor is already at that location — the two anchors must differ.",
+            )
+    others = (
+        db.query(Truck)
+        .filter(Truck.company_id == company_id, Truck.id != truck_id, Truck.is_active.is_(True))
+        .all()
+    )
+    for t in others:
+        for a_lat, a_lng, label in (
+            (t.initial_anchor_lat, t.initial_anchor_lng, t.initial_anchor_address),
+            (t.initial_anchor2_lat, t.initial_anchor2_lng, t.initial_anchor2_address),
+        ):
+            if a_lat is not None and abs(a_lat - lat) < _EPS and abs(a_lng - lng) < _EPS:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Truck '{t.name}' already has an anchor at that location ({label}). "
+                        "Two trucks on the same anchor split their shared territory arbitrarily — "
+                        "offset one of them by at least a block."
+                    ),
+                )
 
 router = APIRouter(prefix="/trucks", tags=["trucks"])
 
@@ -156,11 +249,11 @@ def set_truck_anchor(
 ):
     """Set or clear a truck's initial anchor point.
 
-    Pass address + borough to geocode and store coordinates.
+    Accepts a street address ("365 W 28 ST") or an intersection
+    ("W 28 ST & 9 AVE" / "28th St and 9th Ave") plus borough; GeoClient
+    resolves either form to lat/lng — users never enter raw coordinates.
     Pass address=null to clear the anchor entirely.
-    GeoClient resolves the address to lat/lng — users never enter raw coordinates.
     """
-    from app.tasks.enrich_manifest import _geoclient_normalise
     from app.models.company import CompanyConfig
     from app.core.config import settings
 
@@ -193,19 +286,19 @@ def set_truck_anchor(
             cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
             borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
 
-        geo = _geoclient_normalise(address, borough=borough)
-        if geo is None or geo.lat is None or geo.lng is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Address could not be geocoded. Check the address and borough and try again.",
-            )
+        # Address or intersection form — see _resolve_anchor_location.
+        canonical, lat, lng = _resolve_anchor_location(address, borough)
+        _assert_anchor_not_duplicate(
+            db, caller.company_id, db_truck.id, lat, lng,
+            own_other_anchor=(db_truck.initial_anchor2_lat, db_truck.initial_anchor2_lng),
+        )
 
-        # Store GeoClient normalised form as the canonical address (reliable for re-geocoding,
-        # API round-tripping, and sort seeds). Keep raw user input as display-only field.
-        db_truck.initial_anchor_address         = geo.normalised_address or address
+        # Store the canonical form (normalised address or "STREET & AVENUE") —
+        # reliable for re-geocoding and audit. Keep raw user input for display.
+        db_truck.initial_anchor_address         = canonical
         db_truck.initial_anchor_display_address = address
-        db_truck.initial_anchor_lat             = geo.lat
-        db_truck.initial_anchor_lng             = geo.lng
+        db_truck.initial_anchor_lat             = lat
+        db_truck.initial_anchor_lng             = lng
         db_truck.initial_anchor_set_by          = caller.id
         db_truck.initial_anchor_set_at          = datetime.now(timezone.utc)
 
@@ -233,10 +326,9 @@ def set_truck_anchor2(
 ):
     """Set or clear a truck's optional secondary anchor point.
 
-    When set, the sort pipeline increments K by 1 for this truck so K-Means can
-    produce two clusters anchored to each point. Pass address=null to clear.
+    When set, the truck can receive a second territory zone around this point
+    when tote geography supports the split (ADR-169). Pass address=null to clear.
     """
-    from app.tasks.enrich_manifest import _geoclient_normalise
     from app.models.company import CompanyConfig
     from app.core.config import settings
 
@@ -267,17 +359,17 @@ def set_truck_anchor2(
             cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
             borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
 
-        geo = _geoclient_normalise(address, borough=borough)
-        if geo is None or geo.lat is None or geo.lng is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Address could not be geocoded. Check the address and borough and try again.",
-            )
+        # Address or intersection form — see _resolve_anchor_location.
+        canonical, lat, lng = _resolve_anchor_location(address, borough)
+        _assert_anchor_not_duplicate(
+            db, caller.company_id, db_truck.id, lat, lng,
+            own_other_anchor=(db_truck.initial_anchor_lat, db_truck.initial_anchor_lng),
+        )
 
-        db_truck.initial_anchor2_address         = geo.normalised_address or address
+        db_truck.initial_anchor2_address         = canonical
         db_truck.initial_anchor2_display_address = address
-        db_truck.initial_anchor2_lat             = geo.lat
-        db_truck.initial_anchor2_lng             = geo.lng
+        db_truck.initial_anchor2_lat             = lat
+        db_truck.initial_anchor2_lng             = lng
         db_truck.initial_anchor2_set_by          = caller.id
         db_truck.initial_anchor2_set_at          = datetime.now(timezone.utc)
 

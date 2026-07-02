@@ -1176,8 +1176,9 @@ function TruckAnchorModal({
         </p>
         <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
           <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
-          <p className="text-[11px] text-muted-foreground">Use: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">100 9 AVE</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
-          <p className="text-[11px] text-muted-foreground">Requires a house number — intersections are not supported here.</p>
+          <p className="text-[11px] text-muted-foreground">Address: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
+          <p className="text-[11px] text-muted-foreground">Intersection (preferred): <span className="font-mono text-foreground">W 28 ST &amp; 9 AVE</span> · <span className="font-mono text-foreground">28th St and 9th Ave</span></p>
+          <p className="text-[11px] text-muted-foreground">Intersections pin the corner itself — territory boundaries then fall midway between anchors.</p>
         </div>
 
         {hasAnchor && (
@@ -1320,8 +1321,9 @@ function TruckAnchor2Modal({
         </p>
         <div className="p-2.5 bg-accent/40 rounded-xl space-y-1">
           <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
-          <p className="text-[11px] text-muted-foreground">Use: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">100 9 AVE</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
-          <p className="text-[11px] text-muted-foreground">Requires a house number — intersections are not supported here.</p>
+          <p className="text-[11px] text-muted-foreground">Address: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
+          <p className="text-[11px] text-muted-foreground">Intersection (preferred): <span className="font-mono text-foreground">W 28 ST &amp; 9 AVE</span> · <span className="font-mono text-foreground">28th St and 9th Ave</span></p>
+          <p className="text-[11px] text-muted-foreground">Intersections pin the corner itself — territory boundaries then fall midway between anchors.</p>
         </div>
 
         {hasAnchor2 && (
