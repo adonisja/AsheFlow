@@ -871,6 +871,125 @@ class TestPerZoneTbasAndToteCounts:
 
 
 # ---------------------------------------------------------------------------
+# 6c. Station load finalization — roster + re-run diff transfers (ADR-174)
+# ---------------------------------------------------------------------------
+
+from app.models.truck_zone import TruckZone as _TZModel
+from app.models.tote_ops import ToteTransfer as _TTModel
+
+
+def _make_db_with_prev(prev_zones, decided_transfers=None):
+    """MagicMock session whose TruckZone query returns prev_zones and whose
+    ToteTransfer query returns decided_transfers (for the re-run diff path)."""
+    db = _make_db()
+    tz_chain = MagicMock()
+    tz_chain.filter.return_value = tz_chain
+    tz_chain.all.return_value = prev_zones
+    tt_chain = MagicMock()
+    tt_chain.filter.return_value = tt_chain
+    tt_chain.all.return_value = decided_transfers or []
+    tt_chain.delete.return_value = 0
+    db.query.side_effect = lambda model: tz_chain if model is _TZModel else tt_chain
+    return db
+
+
+class TestLoadFinalization:
+    def _pkg(self, tba, bag, ptype=None, tag=None):
+        p = _make_package(tba, bag, 40.750, -73.990)
+        p["package_type"] = ptype
+        p["tag_number"] = tag
+        return p
+
+    def test_roster_persisted_with_ov_and_dock_data(self):
+        pkgs = [
+            self._pkg("TBA-1", "Bag-A", None, "A-12"),
+            self._pkg("TBA-2", "Bag-A", None, "A-12"),
+            self._pkg("TBA-3", "Bag-A", "OV_M", "Z-03"),
+            self._pkg("TBA-4", "Bag-B", None, "B-07"),
+        ]
+        proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
+        db = _make_db()
+
+        zones = persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+        )
+
+        roster = {e["bag_id"]: e for e in zones[0].tote_roster}
+        assert set(roster) == {"Bag-A", "Bag-B"}
+        a = roster["Bag-A"]
+        assert a["package_count"] == 3
+        assert a["ov_count"] == 1
+        assert a["ov_sizes"] == ["OV_M"]
+        assert a["dock_tags"] == ["A-12"]
+        assert a["ov_dock_tags"] == ["Z-03"]
+        assert set(a["tba_numbers"]) == {"TBA-1", "TBA-2", "TBA-3"}
+        # dock-tag ordering: A-12 before B-07
+        assert [e["bag_id"] for e in zones[0].tote_roster] == ["Bag-A", "Bag-B"]
+
+    def test_rerun_diff_creates_suggested_transfer(self):
+        """A bag that moved trucks between runs becomes a suggested transfer
+        from its previous (physical) truck to the new one."""
+        pkgs_a = [self._pkg(f"TBA-A{i}", "Bag-A") for i in range(3)]
+        pkgs_b = [self._pkg(f"TBA-B{i}", "Bag-B") for i in range(3)]
+
+        # Previous run: Bag-A was on Truck B
+        prev_zone = MagicMock()
+        prev_zone.truck_id = _TRUCK_B_ID
+        prev_zone.package_tbas = [f"TBA-A{i}" for i in range(3)]
+        db = _make_db_with_prev([prev_zone])
+
+        # New run: Bag-A on Truck A, Bag-B on Truck B
+        proposal = _make_proposal([
+            _make_cluster(0, pkgs_a, _TRUCK_A_ID),
+            _make_cluster(1, pkgs_b, _TRUCK_B_ID),
+        ])
+        persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+        )
+
+        transfers = [o for o in db._added if isinstance(o, _TTModel)]
+        assert len(transfers) == 1
+        t = transfers[0]
+        assert t.bag_id == "Bag-A"
+        assert t.from_truck_id == _TRUCK_B_ID
+        assert t.to_truck_id == _TRUCK_A_ID
+        assert t.status == "suggested"
+        assert t.reason == "rerun_diff"
+        assert t.package_count == 3
+
+    def test_rerun_diff_skips_decided_bags(self):
+        """Bags dispatch already decided on (kept/confirmed) are not re-suggested."""
+        pkgs_a = [self._pkg(f"TBA-A{i}", "Bag-A") for i in range(3)]
+        prev_zone = MagicMock()
+        prev_zone.truck_id = _TRUCK_B_ID
+        prev_zone.package_tbas = [f"TBA-A{i}" for i in range(3)]
+        decided = MagicMock()
+        decided.bag_id = "Bag-A"
+        db = _make_db_with_prev([prev_zone], decided_transfers=[decided])
+
+        proposal = _make_proposal([_make_cluster(0, pkgs_a, _TRUCK_A_ID)])
+        persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+        )
+
+        assert [o for o in db._added if isinstance(o, _TTModel)] == []
+
+    def test_first_run_creates_no_transfers(self):
+        pkgs = [self._pkg("TBA-1", "Bag-A")]
+        proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
+        db = _make_db()   # default MagicMock: prev zones iterate empty
+
+        persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+        )
+        assert [o for o in db._added if isinstance(o, _TTModel)] == []
+
+
+# ---------------------------------------------------------------------------
 # 7. Empty manifest — edge case
 # ---------------------------------------------------------------------------
 

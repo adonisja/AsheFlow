@@ -4,6 +4,7 @@ import { useNotificationContext } from '../contexts/NotificationContext';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import ZoneDensityMap from '../components/ZoneDensityMap';
+import ToteRosterPanel from '../components/ToteRosterPanel';
 import type { ZonePolygon, Centroid, AnchorPin, OutlierToteMarker } from '../components/ZoneDensityMap';
 import type { CompanyZone, Truck as ApiTruck, OutlierTotesResponse } from '../api/types';
 import {
@@ -1602,6 +1603,18 @@ export default function SortPage() {
           outlierTotes={outlierTotes}
           className="h-[520px]"
         />
+      )}
+
+      {/* Station loading: per-truck tote check-off + transfer resolution (ADR-174) */}
+      {zones.length > 0 && (
+        <div className="space-y-2">
+          <SectionHeader
+            eyebrow="Station Loading"
+            title="Tote check-off"
+            description="Check totes onto their truck as they are staged. Pending transfers need a decision before loading is finalized."
+          />
+          <ToteRosterPanel date={activeManifestDate} mode="dispatch" />
+        </div>
       )}
 
       {/* AP Sort handoff callout — shown once zones exist */}

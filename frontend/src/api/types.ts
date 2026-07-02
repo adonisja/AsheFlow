@@ -44,6 +44,55 @@ export interface OutlierTotesResponse {
   manifest_available: boolean;
 }
 
+// ── Station load finalization (ADR-174) ─────────────────────────────────────
+
+export interface ToteTransferOut {
+  id: string;
+  bag_id: string;
+  from_truck_id: string;
+  from_truck_name: string;
+  from_driver_name?: string | null;
+  to_truck_id: string;
+  to_truck_name: string;
+  to_driver_name?: string | null;
+  package_count?: number | null;
+  status: 'suggested' | 'confirmed' | 'completed' | 'kept';
+  reason: 'rerun_diff' | 'dispatch';
+}
+
+export interface RosterTote {
+  bag_id: string;
+  package_count: number;
+  ov_count: number;
+  ov_sizes: string[];
+  dock_tags: string[];
+  ov_dock_tags: string[];
+  checked: boolean;
+  checked_by_name?: string | null;
+  transfer?: ToteTransferOut | null;
+}
+
+export interface TruckRoster {
+  zone_id: string;
+  truck_id: string;
+  zone_label: string;
+  driver_name?: string | null;
+  totes: RosterTote[];
+  tote_count: number;
+  checked_count: number;
+  incoming: ToteTransferOut[];
+  outgoing: ToteTransferOut[];
+}
+
+export interface RostersResponse {
+  sort_date: string;
+  rosters: TruckRoster[];
+  pending_transfer_count: number;
+  unchecked_count: number;
+  loading_finalized: boolean;
+  roster_available: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------

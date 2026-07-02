@@ -31,6 +31,7 @@ import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
 import AuditLog from './pages/AuditLog';
 import SortPage from './pages/Sort';
+import PrintLoadSheets from './pages/PrintLoadSheets';
 import WalkerSortMonitor from './pages/WalkerSort';
 import NotificationsHistory from './pages/NotificationsHistory';
 import MyRoute from './pages/MyRoute';
@@ -432,6 +433,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
                   <SortPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sort/print"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
+                  <PrintLoadSheets />
                 </ProtectedRoute>
               }
             />

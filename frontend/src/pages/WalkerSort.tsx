@@ -10,6 +10,7 @@ import {
   ArrowRightLeft, Shuffle,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
+import ToteRosterPanel from '../components/ToteRosterPanel';
 import { useAuth } from '../contexts/AuthContext';
 import type {
   RouteResponse, MisroutedPackageOut,
@@ -1254,6 +1255,14 @@ export default function WalkerSortMonitor() {
         <StatCard label="Packages Sorted" value={loading ? '—' : totalPkgs}                           icon={Package}       tone="info"     delay={0.05} />
         <StatCard label="Assigned"        value={loading ? '—' : `${assignedRoutes}/${totalRoutes}`}  icon={Users}         tone="success"  delay={0.1} />
         <StatCard label="Misroutes"       value={loading ? '—' : misrouteCount}                       icon={AlertTriangle} tone={misrouteCount > 0 ? 'warning' : 'success'} delay={0.15} />
+      </div>
+
+      {/* Station loading payload — what each driver loads / receives / hands
+          off before departure. Soft gate: warns when loading is not finalized
+          at the station (ADR-174); nothing here is blocked. */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Station loading</p>
+        <ToteRosterPanel date={today} mode="driver" />
       </div>
 
       {/* Completion progress */}

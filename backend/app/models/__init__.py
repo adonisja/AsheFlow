@@ -30,6 +30,7 @@ from app.models.invite_token import InviteToken
 from app.models.shift_session import ShiftSession
 from app.models.walker_route import Route, RouteClusterCentroid, LocationDifficultyFlag, MisroutedPackageFlag
 from app.models.truck_zone import TruckZone
+from app.models.tote_ops import ToteTransfer, ToteLoadCheck
 from app.models.building_profile import BuildingProfile
 from app.models.building_profile_library import BuildingProfileLibrary
 from app.models.gear_request import GearOrder, GearOrderItem

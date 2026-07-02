@@ -1740,6 +1740,47 @@ def reassign_tbas(
     source.tote_count      = _recount_totes(updated_source_tbas)
     destination.tote_count = _recount_totes(updated_dest_tbas)
 
+    # Keep tote_roster consistent with the moved TBAs (ADR-174): remove them
+    # from source entries (dropping emptied entries) and merge them into the
+    # destination's entry for the same bag (creating a partial entry if the
+    # bag isn't there yet). Entry-level OV/dock fields describe the whole bag
+    # and are left as-is — they remain the physical bag's locator data.
+    def _roster_remove(roster, tbas: set):
+        out = []
+        for e in (roster or []):
+            kept = [t for t in e.get("tba_numbers", []) if t not in tbas]
+            if not kept:
+                continue
+            if len(kept) != len(e.get("tba_numbers", [])):
+                e = {**e, "tba_numbers": kept, "package_count": len(kept)}
+            out.append(e)
+        return out
+
+    def _roster_add(roster, source_roster, tbas: list):
+        by_bag: dict = {}
+        for t in tbas:
+            src_entry = next((e for e in (source_roster or []) if t in e.get("tba_numbers", [])), None)
+            bag = src_entry["bag_id"] if src_entry else f"(loose) {t}"
+            by_bag.setdefault(bag, {"entry": src_entry, "tbas": []})["tbas"].append(t)
+        out = list(roster or [])
+        for bag, info in by_bag.items():
+            existing = next((e for e in out if e["bag_id"] == bag), None)
+            if existing is not None:
+                merged = existing.get("tba_numbers", []) + info["tbas"]
+                out = [
+                    {**e, "tba_numbers": merged, "package_count": len(merged)} if e["bag_id"] == bag else e
+                    for e in out
+                ]
+            else:
+                base = info["entry"] or {"bag_id": bag, "ov_count": 0, "ov_sizes": [], "dock_tags": [], "ov_dock_tags": []}
+                out.append({**base, "bag_id": bag, "tba_numbers": info["tbas"], "package_count": len(info["tbas"])})
+        out.sort(key=lambda r: (r["dock_tags"][0] if r.get("dock_tags") else "~", r["bag_id"]))
+        return out
+
+    original_source_roster = source.tote_roster
+    destination.tote_roster = _roster_add(destination.tote_roster, original_source_roster, tbas_to_move)
+    source.tote_roster      = _roster_remove(original_source_roster, tbas_to_move_set)
+
     db.add(AuditLog(
         company_id    = caller.company_id,
         actor_id      = caller.id,
@@ -1875,3 +1916,472 @@ def seed_manifest(
 
 
 # ── Company operating zone ────────────────────────────────────────────────────
+
+
+# ── Station load finalization: rosters, check-off, transfers (ADR-174) ────────
+
+class ToteTransferOut(BaseModel):
+    id: UUID
+    bag_id: str
+    from_truck_id: UUID
+    from_truck_name: str
+    from_driver_name: Optional[str] = None
+    to_truck_id: UUID
+    to_truck_name: str
+    to_driver_name: Optional[str] = None
+    package_count: Optional[int] = None
+    status: str          # suggested | confirmed | completed | kept
+    reason: str          # rerun_diff | dispatch
+
+
+class RosterToteOut(BaseModel):
+    bag_id: str
+    package_count: int
+    ov_count: int
+    ov_sizes: list[str]
+    dock_tags: list[str]
+    ov_dock_tags: list[str]
+    checked: bool
+    checked_by_name: Optional[str] = None
+    transfer: Optional[ToteTransferOut] = None   # active transfer touching this bag
+
+
+class TruckRosterOut(BaseModel):
+    zone_id: UUID
+    truck_id: UUID
+    zone_label: str
+    driver_name: Optional[str] = None
+    totes: list[RosterToteOut]
+    tote_count: int
+    checked_count: int
+    incoming: list[ToteTransferOut]
+    outgoing: list[ToteTransferOut]
+
+
+class RostersResponse(BaseModel):
+    sort_date: date
+    rosters: list[TruckRosterOut]
+    pending_transfer_count: int
+    unchecked_count: int
+    loading_finalized: bool       # soft gate — informational only (ADR-174 decision b)
+    roster_available: bool        # False when zones predate roster persistence
+
+
+def _driver_names_by_truck(db: Session, company_id, sort_date: date) -> dict:
+    """truck_id → driver display name for the date's crews."""
+    from app.models.assignment_member import AssignmentMember
+    rows = (
+        db.query(TruckAssignment.truck_id, Employee.name)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .join(Employee, Employee.id == AssignmentMember.employee_id)
+        .filter(
+            TruckAssignment.company_id == company_id,
+            TruckAssignment.date == sort_date,
+            AssignmentMember.role == "driver",
+        )
+        .all()
+    )
+    return {truck_id: name for truck_id, name in rows}
+
+
+def _caller_truck_id(db: Session, caller: Employee, sort_date: date):
+    """The truck the caller crews on for the date, or None."""
+    from app.models.assignment_member import AssignmentMember
+    row = (
+        db.query(TruckAssignment.truck_id)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == sort_date,
+            AssignmentMember.employee_id == caller.id,
+        )
+        .first()
+    )
+    return row[0] if row else None
+
+
+def _active_zones(db: Session, company_id, sort_date: date) -> list:
+    return (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.company_id == company_id,
+            TruckZone.zone_date == sort_date,
+            TruckZone.is_active.is_(True),
+        )
+        .order_by(TruckZone.zone_label)
+        .all()
+    )
+
+
+def _transfer_out(t, truck_names: dict, drivers: dict) -> "ToteTransferOut":
+    return ToteTransferOut(
+        id=t.id,
+        bag_id=t.bag_id,
+        from_truck_id=t.from_truck_id,
+        from_truck_name=truck_names.get(t.from_truck_id, "?"),
+        from_driver_name=drivers.get(t.from_truck_id),
+        to_truck_id=t.to_truck_id,
+        to_truck_name=truck_names.get(t.to_truck_id, "?"),
+        to_driver_name=drivers.get(t.to_truck_id),
+        package_count=t.package_count,
+        status=t.status,
+        reason=t.reason,
+    )
+
+
+@router.get("/{sort_date}/rosters", response_model=RostersResponse)
+def get_load_rosters(
+    sort_date: date,
+    mine: bool = False,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Per-truck tote rosters with check-off state and station transfers.
+
+    Dispatch/management/admin see every truck; drivers and trainers are always
+    scoped to their own crewed truck (the `mine` flag is implied for them).
+    This is the payload AP Sort consumes: once loading_finalized is true, the
+    physical truck contents match TruckZone exactly. Soft gate — the flag warns,
+    nothing is blocked (ADR-174).
+    """
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck
+
+    zones = _active_zones(db, caller.company_id, sort_date)
+    truck_names = {
+        t.id: t.name
+        for t in db.query(Truck).filter(Truck.company_id == caller.company_id).all()
+    }
+    drivers = _driver_names_by_truck(db, caller.company_id, sort_date)
+
+    scope_truck = None
+    if mine or caller.role in ("driver", "trainer"):
+        scope_truck = _caller_truck_id(db, caller, sort_date)
+        if scope_truck is None and caller.role in ("driver", "trainer"):
+            return RostersResponse(
+                sort_date=sort_date, rosters=[], pending_transfer_count=0,
+                unchecked_count=0, loading_finalized=False, roster_available=False,
+            )
+
+    checks = {
+        c.bag_id: c
+        for c in db.query(ToteLoadCheck).filter(
+            ToteLoadCheck.company_id == caller.company_id,
+            ToteLoadCheck.load_date == sort_date,
+        ).all()
+    }
+    transfers = (
+        db.query(ToteTransfer)
+        .filter(
+            ToteTransfer.company_id == caller.company_id,
+            ToteTransfer.transfer_date == sort_date,
+        )
+        .all()
+    )
+    active_transfer_by_bag = {
+        t.bag_id: t for t in transfers if t.status in ("suggested", "confirmed")
+    }
+
+    rosters: list[TruckRosterOut] = []
+    total_unchecked = 0
+    roster_available = False
+    for z in zones:
+        roster = z.tote_roster or []
+        if roster:
+            roster_available = True
+        totes: list[RosterToteOut] = []
+        checked_count = 0
+        for entry in roster:
+            chk = checks.get(entry["bag_id"])
+            if chk:
+                checked_count += 1
+            xfer = active_transfer_by_bag.get(entry["bag_id"])
+            totes.append(RosterToteOut(
+                bag_id=entry["bag_id"],
+                package_count=entry.get("package_count", len(entry.get("tba_numbers", []))),
+                ov_count=entry.get("ov_count", 0),
+                ov_sizes=entry.get("ov_sizes", []),
+                dock_tags=entry.get("dock_tags", []),
+                ov_dock_tags=entry.get("ov_dock_tags", []),
+                checked=chk is not None,
+                checked_by_name=chk.checked_by_name if chk else None,
+                transfer=_transfer_out(xfer, truck_names, drivers) if xfer else None,
+            ))
+        total_unchecked += len(roster) - checked_count
+        rosters.append(TruckRosterOut(
+            zone_id=z.id,
+            truck_id=z.truck_id,
+            zone_label=z.zone_label,
+            driver_name=drivers.get(z.truck_id),
+            totes=totes,
+            tote_count=z.tote_count if z.tote_count is not None else len(roster),
+            checked_count=checked_count,
+            incoming=[
+                _transfer_out(t, truck_names, drivers)
+                for t in transfers
+                if t.to_truck_id == z.truck_id and t.status in ("suggested", "confirmed")
+            ],
+            outgoing=[
+                _transfer_out(t, truck_names, drivers)
+                for t in transfers
+                if t.from_truck_id == z.truck_id and t.status in ("suggested", "confirmed")
+            ],
+        ))
+
+    if scope_truck is not None:
+        rosters = [r for r in rosters if r.truck_id == scope_truck]
+
+    pending = sum(1 for t in transfers if t.status in ("suggested", "confirmed"))
+    return RostersResponse(
+        sort_date=sort_date,
+        rosters=rosters,
+        pending_transfer_count=pending,
+        unchecked_count=total_unchecked,
+        loading_finalized=roster_available and pending == 0 and total_unchecked == 0,
+        roster_available=roster_available,
+    )
+
+
+class ToteCheckRequest(BaseModel):
+    checked: bool     # true = check off, false = un-check
+
+
+@router.post("/{sort_date}/totes/{bag_id}/check", response_model=RostersResponse)
+def check_tote(
+    sort_date: date,
+    bag_id: str,
+    body: ToteCheckRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Check a tote onto (or off) its assigned truck during station loading.
+
+    Drivers/trainers may only check totes on their own crewed truck. Checking
+    the destination tote of a confirmed transfer completes the transfer.
+    Returns the refreshed rosters payload so the UI stays consistent.
+    """
+    from datetime import datetime, timezone
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck
+
+    zones = _active_zones(db, caller.company_id, sort_date)
+    home_zone = next((z for z in zones if any(e["bag_id"] == bag_id for e in (z.tote_roster or []))), None)
+    if home_zone is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tote not found in any active zone for this date.")
+
+    if caller.role in ("driver", "trainer"):
+        own = _caller_truck_id(db, caller, sort_date)
+        if own != home_zone.truck_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only check totes on your own truck.")
+
+    existing = (
+        db.query(ToteLoadCheck)
+        .filter(
+            ToteLoadCheck.company_id == caller.company_id,
+            ToteLoadCheck.load_date == sort_date,
+            ToteLoadCheck.bag_id == bag_id,
+        )
+        .first()
+    )
+
+    if body.checked:
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tote is already checked off.")
+        db.add(ToteLoadCheck(
+            id=_uuid_mod.uuid4(),
+            company_id=caller.company_id,
+            load_date=sort_date,
+            truck_id=home_zone.truck_id,
+            bag_id=bag_id,
+            checked_by=caller.id,
+            checked_by_name=caller.name,
+        ))
+        # A confirmed transfer completes when the tote lands on its destination.
+        xfer = (
+            db.query(ToteTransfer)
+            .filter(
+                ToteTransfer.company_id == caller.company_id,
+                ToteTransfer.transfer_date == sort_date,
+                ToteTransfer.bag_id == bag_id,
+                ToteTransfer.status == "confirmed",
+                ToteTransfer.to_truck_id == home_zone.truck_id,
+            )
+            .first()
+        )
+        if xfer is not None:
+            xfer.status = "completed"
+            xfer.completed_at = datetime.now(timezone.utc)
+        action = "sort.tote_checked"
+    else:
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tote is not checked off.")
+        db.delete(existing)
+        action = "sort.tote_unchecked"
+
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type=action,
+        target_table="tote_load_checks",
+        target_id=home_zone.id,
+        after_snapshot={"bag_id": bag_id, "truck_id": str(home_zone.truck_id), "date": sort_date.isoformat()},
+    ))
+    db.commit()
+    return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+
+
+def _move_bag_between_zones(db: Session, company_id, sort_date: date, bag_id: str, dest_truck_id) -> tuple:
+    """Move a whole bag's roster entry + TBAs from its current zone to the
+    destination truck's primary zone. Returns (src_zone, dest_zone)."""
+    zones = _active_zones(db, company_id, sort_date)
+    src = next((z for z in zones if any(e["bag_id"] == bag_id for e in (z.tote_roster or []))), None)
+    if src is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tote not found in any active zone for this date.")
+    dest = next((z for z in zones if z.truck_id == dest_truck_id), None)
+    if dest is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Destination truck has no active zone for this date.")
+    if src.id == dest.id:
+        return src, dest
+
+    entry = next(e for e in src.tote_roster if e["bag_id"] == bag_id)
+    moved_tbas = set(entry.get("tba_numbers", []))
+
+    src.tote_roster  = [e for e in src.tote_roster if e["bag_id"] != bag_id]
+    src.package_tbas = [t for t in (src.package_tbas or []) if t not in moved_tbas]
+    src.tote_count   = len(src.tote_roster)
+
+    dest_roster = list(dest.tote_roster or [])
+    dest_roster.append(entry)
+    dest_roster.sort(key=lambda r: (r["dock_tags"][0] if r.get("dock_tags") else "~", r["bag_id"]))
+    dest.tote_roster  = dest_roster
+    dest.package_tbas = list(dest.package_tbas or []) + sorted(moved_tbas)
+    dest.tote_count   = len(dest_roster)
+    return src, dest
+
+
+class TransferResolveRequest(BaseModel):
+    action: str   # "confirm" | "keep"
+
+
+@router.post("/transfers/{transfer_id}/resolve", response_model=RostersResponse)
+def resolve_transfer(
+    transfer_id: UUID,
+    body: TransferResolveRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Resolve a suggested station transfer.
+
+    confirm — the tote will physically move; zone data already points at the
+              destination (re-run diff), so nothing moves in the DB. Completion
+              happens when the tote is checked off on the destination truck.
+    keep    — the tote stays where it physically is; zone data is moved back to
+              the from_truck so TruckZone matches reality again.
+    """
+    from datetime import datetime, timezone
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import ToteTransfer
+
+    if body.action not in ("confirm", "keep"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="action must be 'confirm' or 'keep'.")
+
+    xfer = (
+        db.query(ToteTransfer)
+        .filter(ToteTransfer.id == transfer_id, ToteTransfer.company_id == caller.company_id)
+        .first()
+    )
+    if xfer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer not found.")
+    if xfer.status != "suggested":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Transfer is already {xfer.status}.")
+
+    if body.action == "confirm":
+        xfer.status = "confirmed"
+    else:
+        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
+        xfer.status = "kept"
+    xfer.resolved_by = caller.id
+    xfer.resolved_by_name = caller.name
+    xfer.resolved_at = datetime.now(timezone.utc)
+
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type=f"sort.transfer_{body.action}",
+        target_table="tote_transfers",
+        target_id=xfer.id,
+        after_snapshot={"bag_id": xfer.bag_id, "from": str(xfer.from_truck_id), "to": str(xfer.to_truck_id)},
+    ))
+    db.commit()
+    return get_load_rosters(sort_date=xfer.transfer_date, mine=False, caller=caller, _={}, db=db)
+
+
+class ManualTransferRequest(BaseModel):
+    to_truck_id: UUID
+
+
+@router.post("/{sort_date}/totes/{bag_id}/transfer", response_model=RostersResponse)
+def create_manual_transfer(
+    sort_date: date,
+    bag_id: str,
+    body: ManualTransferRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Dispatch-initiated station transfer of a whole tote to another truck.
+
+    Created directly as `confirmed` (dispatch initiating IS the confirmation);
+    zone data moves immediately, and the transfer completes when the tote is
+    checked off on the destination truck.
+    """
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import ToteTransfer
+
+    pending = (
+        db.query(ToteTransfer)
+        .filter(
+            ToteTransfer.company_id == caller.company_id,
+            ToteTransfer.transfer_date == sort_date,
+            ToteTransfer.bag_id == bag_id,
+            ToteTransfer.status.in_(["suggested", "confirmed"]),
+        )
+        .first()
+    )
+    if pending is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This tote already has a pending transfer — resolve it first.")
+
+    src, dest = _move_bag_between_zones(db, caller.company_id, sort_date, bag_id, body.to_truck_id)
+    if src.id == dest.id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Tote is already on that truck.")
+
+    entry_count = next((e["package_count"] for e in dest.tote_roster if e["bag_id"] == bag_id), None)
+    xfer = ToteTransfer(
+        id=_uuid_mod.uuid4(),
+        company_id=caller.company_id,
+        transfer_date=sort_date,
+        bag_id=bag_id,
+        from_truck_id=src.truck_id,
+        to_truck_id=dest.truck_id,
+        package_count=entry_count,
+        status="confirmed",
+        reason="dispatch",
+        resolved_by=caller.id,
+        resolved_by_name=caller.name,
+    )
+    db.add(xfer)
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="sort.tote_transfer",
+        target_table="tote_transfers",
+        target_id=xfer.id,
+        after_snapshot={"bag_id": bag_id, "from": str(src.truck_id), "to": str(dest.truck_id)},
+    ))
+    db.commit()
+    return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
