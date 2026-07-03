@@ -2723,3 +2723,57 @@ def confirm_removal(
     ))
     db.commit()
     return _removals_response(db, caller.company_id, removal.removal_date)
+
+
+@router.post("/{sort_date}/transfers/confirm-all", response_model=RostersResponse)
+def confirm_all_transfers(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Confirm every suggested transfer for the date in one action.
+
+    Re-run diffs after an anchor change routinely slide a whole band of totes
+    to the neighbouring truck — dispatch's answer is usually "the new sort is
+    right, move them all". Per-card Keep remains available for exceptions
+    BEFORE using this. Polarity is honoured per suggestion origin:
+    rerun_diff confirms are physical-move-only; tier1_misaligned confirms
+    also move zone data. Completion still happens at destination check-off.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import ToteTransfer
+
+    suggested = (
+        db.query(ToteTransfer)
+        .filter(
+            ToteTransfer.company_id == caller.company_id,
+            ToteTransfer.transfer_date == sort_date,
+            ToteTransfer.status == "suggested",
+        )
+        .all()
+    )
+    if not suggested:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No suggested transfers to confirm.")
+
+    now = _dt.now(_tz.utc)
+    for xfer in suggested:
+        if xfer.reason == "tier1_misaligned":
+            _move_bag_between_zones(db, caller.company_id, sort_date, xfer.bag_id, xfer.to_truck_id)
+        xfer.status = "confirmed"
+        xfer.resolved_by = caller.id
+        xfer.resolved_by_name = caller.name
+        xfer.resolved_at = now
+
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="sort.transfer_confirm_all",
+        target_table="tote_transfers",
+        target_id=suggested[0].id,
+        after_snapshot={"count": len(suggested), "date": sort_date.isoformat()},
+    ))
+    db.commit()
+    return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)

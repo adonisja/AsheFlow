@@ -373,6 +373,8 @@ export default function ToteRosterPanel({ date, mode }: Props) {
     mutate(() => axiosClient.post<RostersResponse>(`/sort/${date}/trucks/${truckId}/check-all`));
   const onResolve = (id: string, action: 'confirm' | 'keep') =>
     mutate(() => axiosClient.post<RostersResponse>(`/sort/transfers/${id}/resolve`, { action }));
+  const onConfirmAll = () =>
+    mutate(() => axiosClient.post<RostersResponse>(`/sort/${date}/transfers/confirm-all`));
   const onUndo = (id: string) =>
     mutate(() => axiosClient.post<RostersResponse>(`/sort/transfers/${id}/undo`));
   const onTransfer = (bag: string, toTruckId: string) =>
@@ -434,9 +436,22 @@ export default function ToteRosterPanel({ date, mode }: Props) {
 
       {mode === 'dispatch' && pending.size > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Pending transfers — confirm the move or keep in place
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              Pending transfers — confirm the move or keep in place
+            </p>
+            <div className="flex-1" />
+            {pending.size > 1 && (
+              <button
+                disabled={busy}
+                onClick={onConfirmAll}
+                title="Keep any exceptions first — this confirms every remaining suggestion"
+                className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50"
+              >
+                Confirm all {pending.size} moves
+              </button>
+            )}
+          </div>
           {[...pending.values()].map(t => (
             <PendingTransferCard key={t.id} t={t} busy={busy} onResolve={onResolve} />
           ))}
