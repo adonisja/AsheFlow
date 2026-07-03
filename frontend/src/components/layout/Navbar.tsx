@@ -3,6 +3,9 @@ import { useNotificationContext } from '../../contexts/NotificationContext';
 import { NavLink, useNavigate, Link } from 'react-router-dom';
 import { signOut } from 'aws-amplify/auth';
 import { useAuth } from '../../contexts/AuthContext';
+import {
+  navItemsForGroups, homeRouteForGroups, HOME_ICON, type NavItem,
+} from '../../config/navConfig';
 import axiosClient from '../../api/axiosClient';
 import { LogOut, Menu, X, Home, Calendar, Settings, Truck,
  ClipboardCheck, Users, MapPin, AlertTriangle, Shield, RefreshCw,
@@ -239,20 +242,10 @@ const Navbar = () => {
   const [trainerPhase, setTrainerPhase] = useState<number | null>(null);
   const [hasActiveQuiz, setHasActiveQuiz] = useState(false);
 
-  const isFieldStaff  = groups.some(role => ['driver', 'walker', 'trainer', 'trainee'].includes(role));
-  const isTrainer     = groups.includes('trainer');
-  const isTrainee     = groups.includes('trainee');
-  const isWalker      = groups.includes('walker');
-  const isDriver      = groups.includes('driver');
-  const isMgmt        = groups.includes('management');
-  const isDispatch    = groups.includes('dispatch');
-  const isAdmin       = groups.includes('admin');
-
-  const canAccessFieldOps        = isFieldStaff || isMgmt || isDispatch || isAdmin;
-  const canAccessScheduleChanges = isFieldStaff || isDispatch || isAdmin;
-  const canAccessSchedule        = isFieldStaff || isMgmt || isAdmin;
-  // All _allow_field roles + dispatch + management + admin can submit building profiles
-  const canAccessBuildings       = isFieldStaff || isDispatch || isMgmt || isAdmin;
+  // Only the two roles whose nav is fetched conditionally need a boolean here;
+  // all tab visibility is now derived in navConfig (navItemsForGroups).
+  const isTrainer = groups.includes('trainer');
+  const isTrainee = groups.includes('trainee');
 
   useEffect(() => {
     if (!isAuthenticated || !isTrainer) return;
@@ -268,14 +261,11 @@ const Navbar = () => {
       .catch(() => setHasActiveQuiz(false));
   }, [isAuthenticated, isTrainee]);
 
-  const homeRoute = (() => {
-    if (isAdmin)    return '/admin';
-    if (isDispatch) return '/dispatch-home';
-    if (isMgmt)     return '/management';
-    if (isTrainer)  return '/trainer-dashboard';
-    if (isTrainee)  return '/my-training';
-    return '/';
-  })();
+  const homeRoute = homeRouteForGroups(groups);
+
+  // Config-driven nav: one source of truth for both desktop and mobile, and
+  // the App.tsx route gates read the same role sets (see navConfig.ts).
+  const navItems = navItemsForGroups(groups, { trainerPhase, hasActiveQuiz });
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all duration-200 press ${
@@ -286,136 +276,12 @@ const Navbar = () => {
 
   const links = (
     <>
-      {/* Home — always first, points to role-specific dashboard */}
-      <NavLink to={homeRoute} end className={linkClass}><Home className="w-3.5 h-3.5" /> Dashboard</NavLink>
-
-      {/* ── Admin ──────────────────────────────────────────────────────────── */}
-      {isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard */}
-          <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
-          <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
-          <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
-          <NavLink to="/audit" className={linkClass}><ScrollText className="w-3.5 h-3.5" /> Audit Log</NavLink>
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
-          <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
-          <NavLink to="/feedback" className={linkClass}><MessageSquare className="w-3.5 h-3.5" /> Feedback</NavLink>
-          <NavLink to="/field-ops" className={linkClass}><Shield className="w-3.5 h-3.5" /> Field Ops</NavLink>
-          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Station Sort</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          <NavLink to="/settings" className={linkClass}><Settings className="w-3.5 h-3.5" /> Settings</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
-        </>
-      )}
-
-      {/* ── Dispatch ───────────────────────────────────────────────────────── */}
-      {isDispatch && !isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard */}
-          <NavLink to="/dispatch" end className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Assignments</NavLink>
-          <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
-          <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/dispatch-home" className={linkClass}><Navigation className="w-3.5 h-3.5" /> Dispatch Home</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Station Sort</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
-        </>
-      )}
-
-      {/* ── Management ─────────────────────────────────────────────────────── */}
-      {isMgmt && !isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard — no Assignments (dispatch is not management's tool per ADR-016) */}
-          <NavLink to="/operations-analytics" className={linkClass}><BarChart2 className="w-3.5 h-3.5" /> Analytics</NavLink>
-          <NavLink to="/assets" className={linkClass}><Users className="w-3.5 h-3.5" /> Assets</NavLink>
-          <NavLink to="/audit" className={linkClass}><ScrollText className="w-3.5 h-3.5" /> Audit Log</NavLink>
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/vehicle-compliance" className={linkClass}><ShieldAlert className="w-3.5 h-3.5" /> Compliance</NavLink>
-          <NavLink to="/driver-surveys" className={linkClass}><ClipboardList className="w-3.5 h-3.5" /> Driver Surveys</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
-          <NavLink to="/trainee-management" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainees</NavLink>
-          <NavLink to="/walker-performance" className={linkClass}><Star className="w-3.5 h-3.5" /> Walkers</NavLink>
-        </>
-      )}
-
-      {/* ── Trainer ────────────────────────────────────────────────────────── */}
-      {isTrainer && !isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard */}
-          <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/field-ops" className={linkClass}><Shield className="w-3.5 h-3.5" /> Field Ops</NavLink>
-          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
-          <NavLink to="/sort" className={linkClass}><Route className="w-3.5 h-3.5" /> Station Sort</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          <NavLink to="/trainer-dashboard" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Trainer Dash</NavLink>
-          {trainerPhase === 4 && (
-            <NavLink to="/phase4-observation" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Phase 4</NavLink>
-          )}
-        </>
-      )}
-
-      {/* ── Trainee ────────────────────────────────────────────────────────── */}
-      {isTrainee && !isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard */}
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/field-ops" className={linkClass}><Shield className="w-3.5 h-3.5" /> Field Ops</NavLink>
-          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/my-route" className={linkClass}><Route className="w-3.5 h-3.5" /> My Route</NavLink>
-          <NavLink to="/my-training" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> My Training</NavLink>
-          <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          {hasActiveQuiz && (
-            <NavLink to="/my-quiz" className={linkClass}><ClipboardCheck className="w-3.5 h-3.5" /> Quiz</NavLink>
-          )}
-        </>
-      )}
-
-      {/* ── Driver ─────────────────────────────────────────────────────────── */}
-      {isDriver && !isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard */}
-          <NavLink to="/anchor-points" className={linkClass}><MapPin className="w-3.5 h-3.5" /> Anchor Points</NavLink>
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/field-ops" className={linkClass}><Shield className="w-3.5 h-3.5" /> Field Ops</NavLink>
-          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-          <NavLink to="/walker-sort" className={linkClass}><Activity className="w-3.5 h-3.5" /> AP Sort</NavLink>
-        </>
-      )}
-
-      {/* ── Walker ─────────────────────────────────────────────────────────── */}
-      {isWalker && !isAdmin && (
-        <>
-          {/* Alphabetical after Dashboard */}
-          <NavLink to="/building-profiles" className={linkClass}><Building2 className="w-3.5 h-3.5" /> Buildings</NavLink>
-          <NavLink to="/field-ops" className={linkClass}><Shield className="w-3.5 h-3.5" /> Field Ops</NavLink>
-          <NavLink to="/gear" className={linkClass}><ShoppingBag className="w-3.5 h-3.5" /> Gear</NavLink>
-          <NavLink to="/incidents" className={linkClass}><AlertTriangle className="w-3.5 h-3.5" /> Incidents</NavLink>
-          <NavLink to="/my-route" className={linkClass}><Route className="w-3.5 h-3.5" /> My Route</NavLink>
-          <NavLink to="/preferences" className={linkClass}><Settings className="w-3.5 h-3.5" /> Preferences</NavLink>
-          <NavLink to="/schedule" className={linkClass}><Calendar className="w-3.5 h-3.5" /> Schedule</NavLink>
-          <NavLink to="/schedule-changes" className={linkClass}><RefreshCw className="w-3.5 h-3.5" /> Schedule Changes</NavLink>
-        </>
-      )}
+      <NavLink to={homeRoute} end className={linkClass}><HOME_ICON className="w-3.5 h-3.5" /> Dashboard</NavLink>
+      {navItems.map(item => (
+        <NavLink key={item.path} to={item.path} end={item.path === '/dispatch'} className={linkClass}>
+          <item.icon className="w-3.5 h-3.5" /> {item.label}
+        </NavLink>
+      ))}
     </>
   );
 
@@ -452,16 +318,8 @@ const Navbar = () => {
             <div className="px-3 py-3 flex flex-col gap-0.5">
               <MobileLinks
                 groups={groups}
-                isTrainer={isTrainer}
-                isTrainee={isTrainee}
-                isWalker={isWalker}
-                isDriver={isDriver}
-                trainerPhase={trainerPhase}
-                hasActiveQuiz={hasActiveQuiz}
+                navItems={navItems}
                 homeRoute={homeRoute}
-                isMgmt={isMgmt}
-                isDispatch={isDispatch}
-                isAdmin={isAdmin}
                 onNav={() => setMobileOpen(false)}
               />
             </div>
@@ -473,24 +331,14 @@ const Navbar = () => {
 };
 
 function MobileLinks({
-  groups, isTrainer, isTrainee, isWalker, isDriver,
-  trainerPhase, hasActiveQuiz, homeRoute,
-  isMgmt, isDispatch, isAdmin,
-  onNav,
+  groups, navItems, homeRoute, onNav,
 }: {
   groups: string[];
-  isTrainer: boolean;
-  isTrainee: boolean;
-  isWalker: boolean;
-  isDriver: boolean;
-  trainerPhase: number | null;
-  hasActiveQuiz: boolean;
+  navItems: NavItem[];
   homeRoute: string;
-  isMgmt: boolean;
-  isDispatch: boolean;
-  isAdmin: boolean;
   onNav: () => void;
 }) {
+  void groups;
   const cls = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
       isActive
@@ -500,112 +348,15 @@ function MobileLinks({
 
   return (
     <>
-      <NavLink to={homeRoute} end onClick={onNav} className={cls}><Home className="w-4 h-4" /> Dashboard</NavLink>
-
-      {/* ── Admin ──────────────────────────────────────────────────────────── */}
-      {isAdmin && <>
-        <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>
-        <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
-        <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
-        <NavLink to="/audit" onClick={onNav} className={cls}><ScrollText className="w-4 h-4" /> Audit Log</NavLink>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
-        <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
-        <NavLink to="/feedback" onClick={onNav} className={cls}><MessageSquare className="w-4 h-4" /> Feedback</NavLink>
-        <NavLink to="/field-ops" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Field Ops</NavLink>
-        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Station Sort</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        <NavLink to="/settings" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Settings</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
-      </>}
-
-      {/* ── Dispatch ───────────────────────────────────────────────────────── */}
-      {isDispatch && !isAdmin && <>
-        <NavLink to="/dispatch" end onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Assignments</NavLink>
-        <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
-        <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/dispatch-home" onClick={onNav} className={cls}><Navigation className="w-4 h-4" /> Dispatch Home</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Station Sort</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
-      </>}
-
-      {/* ── Management ─────────────────────────────────────────────────────── */}
-      {isMgmt && !isAdmin && <>
-        <NavLink to="/operations-analytics" onClick={onNav} className={cls}><BarChart2 className="w-4 h-4" /> Analytics</NavLink>
-        <NavLink to="/assets" onClick={onNav} className={cls}><Users className="w-4 h-4" /> Assets</NavLink>
-        <NavLink to="/audit" onClick={onNav} className={cls}><ScrollText className="w-4 h-4" /> Audit Log</NavLink>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/vehicle-compliance" onClick={onNav} className={cls}><ShieldAlert className="w-4 h-4" /> Compliance</NavLink>
-        <NavLink to="/driver-surveys" onClick={onNav} className={cls}><ClipboardList className="w-4 h-4" /> Driver Surveys</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
-        <NavLink to="/trainee-management" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainees</NavLink>
-        <NavLink to="/walker-performance" onClick={onNav} className={cls}><Star className="w-4 h-4" /> Walkers</NavLink>
-      </>}
-
-      {/* ── Trainer ────────────────────────────────────────────────────────── */}
-      {isTrainer && !isAdmin && <>
-        <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/field-ops" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Field Ops</NavLink>
-        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>
-        <NavLink to="/sort" onClick={onNav} className={cls}><Route className="w-4 h-4" /> Station Sort</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        <NavLink to="/trainer-dashboard" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Trainer Dash</NavLink>
-        {trainerPhase === 4 && <NavLink to="/phase4-observation" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Phase 4</NavLink>}
-      </>}
-
-      {/* ── Trainee ────────────────────────────────────────────────────────── */}
-      {isTrainee && !isAdmin && <>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/field-ops" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Field Ops</NavLink>
-        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/my-route" onClick={onNav} className={cls}><Route className="w-4 h-4" /> My Route</NavLink>
-        <NavLink to="/my-training" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> My Training</NavLink>
-        <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        {hasActiveQuiz && <NavLink to="/my-quiz" onClick={onNav} className={cls}><ClipboardCheck className="w-4 h-4" /> Quiz</NavLink>}
-      </>}
-
-      {/* ── Driver ─────────────────────────────────────────────────────────── */}
-      {isDriver && !isAdmin && <>
-        <NavLink to="/anchor-points" onClick={onNav} className={cls}><MapPin className="w-4 h-4" /> Anchor Points</NavLink>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/field-ops" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Field Ops</NavLink>
-        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-        <NavLink to="/walker-sort" onClick={onNav} className={cls}><Activity className="w-4 h-4" /> AP Sort</NavLink>
-      </>}
-
-      {/* ── Walker ─────────────────────────────────────────────────────────── */}
-      {isWalker && !isAdmin && <>
-        <NavLink to="/building-profiles" onClick={onNav} className={cls}><Building2 className="w-4 h-4" /> Buildings</NavLink>
-        <NavLink to="/field-ops" onClick={onNav} className={cls}><Shield className="w-4 h-4" /> Field Ops</NavLink>
-        <NavLink to="/gear" onClick={onNav} className={cls}><ShoppingBag className="w-4 h-4" /> Gear</NavLink>
-        <NavLink to="/incidents" onClick={onNav} className={cls}><AlertTriangle className="w-4 h-4" /> Incidents</NavLink>
-        <NavLink to="/my-route" onClick={onNav} className={cls}><Route className="w-4 h-4" /> My Route</NavLink>
-        <NavLink to="/preferences" onClick={onNav} className={cls}><Settings className="w-4 h-4" /> Preferences</NavLink>
-        <NavLink to="/schedule" onClick={onNav} className={cls}><Calendar className="w-4 h-4" /> Schedule</NavLink>
-        <NavLink to="/schedule-changes" onClick={onNav} className={cls}><RefreshCw className="w-4 h-4" /> Schedule Changes</NavLink>
-      </>}
+      <NavLink to={homeRoute} end onClick={onNav} className={cls}><HOME_ICON className="w-4 h-4" /> Dashboard</NavLink>
+      {navItems.map(item => (
+        <NavLink key={item.path} to={item.path} end={item.path === '/dispatch'} onClick={onNav} className={cls}>
+          <item.icon className="w-4 h-4" /> {item.label}
+        </NavLink>
+      ))}
     </>
   );
 }
+
 
 export default Navbar;

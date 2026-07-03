@@ -416,7 +416,7 @@ function App() {
             <Route
               path="/anchor-points"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
                   <AnchorPoints />
                 </ProtectedRoute>
               }
@@ -432,7 +432,7 @@ function App() {
             <Route
               path="/sort"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
                   <SortPage />
                 </ProtectedRoute>
               }
