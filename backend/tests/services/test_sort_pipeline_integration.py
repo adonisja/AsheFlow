@@ -999,6 +999,9 @@ class TestLoadFinalization:
         prev_zone.package_tbas = [f"TBA-A{i}" for i in range(3)]
         decided = MagicMock()
         decided.bag_id = "Bag-A"
+        decided.status = "confirmed"
+        decided.to_truck_id = _TRUCK_A_ID     # decision matches the new assignment
+        decided.from_truck_id = _TRUCK_B_ID
         db = _make_db_with_prev([prev_zone], decided_transfers=[decided])
 
         proposal = _make_proposal([_make_cluster(0, pkgs_a, _TRUCK_A_ID)])
@@ -1007,6 +1010,40 @@ class TestLoadFinalization:
             created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
         )
 
+        assert [o for o in db._added if isinstance(o, _TTModel)] == []
+
+    def test_rerun_reapplies_kept_decision(self):
+        """A re-run must not swallow dispatch's 'keep' decision: the bag's
+        zone data follows the kept truck even though the algorithm re-assigns
+        it elsewhere, and no new suggestion is raised."""
+        pkgs_a = [self._pkg(f"TBA-A{i}", "Bag-A") for i in range(3)]
+        pkgs_b = [self._pkg(f"TBA-B{i}", "Bag-B") for i in range(3)]
+
+        prev_zone = MagicMock()
+        prev_zone.truck_id = _TRUCK_B_ID
+        prev_zone.package_tbas = [f"TBA-A{i}" for i in range(3)]
+
+        kept = MagicMock()
+        kept.bag_id = "Bag-A"
+        kept.status = "kept"
+        kept.from_truck_id = _TRUCK_B_ID   # dispatch said: stays on Truck B
+        kept.to_truck_id = _TRUCK_A_ID
+        db = _make_db_with_prev([prev_zone], decided_transfers=[kept])
+
+        # Algorithm still wants Bag-A on Truck A
+        proposal = _make_proposal([
+            _make_cluster(0, pkgs_a, _TRUCK_A_ID),
+            _make_cluster(1, pkgs_b, _TRUCK_B_ID),
+        ])
+        zones = persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+        )
+
+        zone_b = next(z for z in zones if z.truck_id == _TRUCK_B_ID)
+        zone_a = next(z for z in zones if z.truck_id == _TRUCK_A_ID)
+        assert {f"TBA-A{i}" for i in range(3)}.issubset(set(zone_b.package_tbas))
+        assert set(zone_a.package_tbas).isdisjoint({f"TBA-A{i}" for i in range(3)})
         assert [o for o in db._added if isinstance(o, _TTModel)] == []
 
     def test_first_run_creates_no_transfers(self):
