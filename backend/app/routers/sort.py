@@ -2521,6 +2521,14 @@ class RemovalOut(BaseModel):
     pull_point: str = "station"          # station (dock, dispatch) | anchor_point (walker/driver)
     removed_by_name: Optional[str] = None
     removed_at: Optional[datetime] = None
+    # AP-pull walker→driver handoff (ADR-178) — anchor_point rows only.
+    # owner_* are DERIVED from the route currently owning the bag, so they
+    # auto-update on rebalance; None until routes are assigned.
+    owner_walker_name: Optional[str] = None
+    owner_route_number: Optional[int] = None
+    handoff_status: str = "pending"      # pending | handed_over | received
+    handed_over_by_name: Optional[str] = None
+    received_by_name: Optional[str] = None
 
 
 class RemovalsResponse(BaseModel):
@@ -2528,6 +2536,47 @@ class RemovalsResponse(BaseModel):
     removals: list[RemovalOut]
     flagged_count: int
     removed_count: int
+
+
+def _bag_owner_map(db: Session, company_id, sort_date: date) -> dict:
+    """bag_id → (walker_name, route_number) from today's routes (ADR-178).
+
+    Derived on read: a package's owning walker is whoever's route currently
+    holds its tote. This auto-updates through every rebalance — no snapshot.
+    """
+    from app.models.walker_route import Route
+    routes = (
+        db.query(Route)
+        .filter(Route.company_id == company_id, Route.route_date == sort_date)
+        .all()
+    )
+    owner: dict = {}
+    for r in routes:
+        for bag in (r.tote_ids or []):
+            owner[bag] = (r.assigned_to_name, r.route_number)
+    return owner
+
+
+def _complete_ap_removal(db: Session, company_id, removal) -> None:
+    """Pull an AP-stage package out of its zone's package_tbas + roster. Shared
+    by the driver receive path."""
+    if removal.whole_tote or not removal.tba:
+        return
+    zones = _active_zones(db, company_id, removal.removal_date)
+    for z in zones:
+        if removal.tba in (z.package_tbas or []):
+            z.package_tbas = [t for t in z.package_tbas if t != removal.tba]
+            roster = []
+            for e in (z.tote_roster or []):
+                if removal.tba in e.get("tba_numbers", []):
+                    kept = [t for t in e["tba_numbers"] if t != removal.tba]
+                    if kept:
+                        roster.append({**e, "tba_numbers": kept, "package_count": len(kept)})
+                else:
+                    roster.append(e)
+            z.tote_roster = roster
+            z.tote_count = len(roster)
+            break
 
 
 def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsResponse":
@@ -2541,15 +2590,20 @@ def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsRes
         .order_by(PackageRemoval.status, PackageRemoval.bag_id)
         .all()
     )
-    outs = [
-        RemovalOut(
+    owner = _bag_owner_map(db, company_id, sort_date) if any(r.pull_point == "anchor_point" for r in rows) else {}
+    outs = []
+    for r in rows:
+        w_name, w_route = (owner.get(r.bag_id) or (None, None)) if r.pull_point == "anchor_point" else (None, None)
+        outs.append(RemovalOut(
             id=r.id, bag_id=r.bag_id, tba=r.tba, tba_numbers=r.tba_numbers,
             package_count=r.package_count, whole_tote=r.whole_tote, reason=r.reason,
             locator=r.locator, status=r.status, pull_point=r.pull_point,
             removed_by_name=r.removed_by_name, removed_at=r.removed_at,
-        )
-        for r in rows
-    ]
+            owner_walker_name=w_name, owner_route_number=w_route,
+            handoff_status=r.handoff_status,
+            handed_over_by_name=r.handed_over_by_name,
+            received_by_name=r.received_by_name,
+        ))
     return RemovalsResponse(
         sort_date=sort_date,
         removals=outs,
@@ -2578,16 +2632,14 @@ def get_removals(
 def confirm_removal(
     removal_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
     db: Session = Depends(get_db),
 ):
-    """Confirm a flagged unit was physically pulled.
+    """Confirm a STATION (whole-tote) removal was pulled at the dock.
 
-    Station-stage (whole tote, at the dock): dispatch roles only.
-    AP-stage (single package, at the anchor point): the truck's own
-    driver/trainer may confirm — they are the ones physically pulling it
-    (ADR-177 decision c). Single-package removals also come out of the zone's
-    package_tbas and roster entry. 409 on double-confirm.
+    Dispatch roles only. AP-stage single-package rows are handled by the
+    two-party walker→driver handoff (POST .../handover then .../receive),
+    not this endpoint. 409 on double-confirm.
     """
     from datetime import datetime as _dt, timezone as _tz
     from app.models.audit_log import AuditLog
@@ -2603,44 +2655,14 @@ def confirm_removal(
     if removal.status == "removed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already confirmed removed.")
 
-    if caller.role in ("driver", "trainer"):
-        if removal.pull_point != "anchor_point":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Station removals are confirmed by dispatch at the dock.",
-            )
-        own = _caller_truck_id(db, caller, removal.removal_date)
-        zones = _active_zones(db, caller.company_id, removal.removal_date)
-        bag_truck = next(
-            (z.truck_id for z in zones
-             if any(e["bag_id"] == removal.bag_id for e in (z.tote_roster or []))),
-            None,
+    # AP-stage rows go through the two-party walker→driver handoff, not here.
+    if removal.pull_point == "anchor_point":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This is an anchor-point pull — the walker hands it to the driver, who confirms receipt.",
         )
-        if own is None or bag_truck != own:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only confirm AP pulls for totes on your own truck.",
-            )
 
-    if not removal.whole_tote and removal.tba:
-        zones = _active_zones(db, caller.company_id, removal.removal_date)
-        for z in zones:
-            if removal.tba in (z.package_tbas or []):
-                z.package_tbas = [t for t in z.package_tbas if t != removal.tba]
-                roster = []
-                for e in (z.tote_roster or []):
-                    if removal.tba in e.get("tba_numbers", []):
-                        kept = [t for t in e["tba_numbers"] if t != removal.tba]
-                        if kept:
-                            e = {**e, "tba_numbers": kept, "package_count": len(kept)}
-                            roster.append(e)
-                        # a tote emptied by removals drops off the roster
-                    else:
-                        roster.append(e)
-                z.tote_roster = roster
-                z.tote_count = len(roster)
-                break
-
+    _complete_ap_removal(db, caller.company_id, removal)
     removal.status = "removed"
     removal.removed_by = caller.id
     removal.removed_by_name = caller.name
@@ -2657,6 +2679,144 @@ def confirm_removal(
             "bag_id": removal.bag_id, "tba": removal.tba,
             "whole_tote": removal.whole_tote, "package_count": removal.package_count,
         },
+    ))
+    db.commit()
+    return _removals_response(db, caller.company_id, removal.removal_date)
+
+
+def _resolve_ap_removal(db, company_id, removal_id):
+    from app.models.tote_ops import PackageRemoval
+    removal = (
+        db.query(PackageRemoval)
+        .filter(PackageRemoval.id == removal_id, PackageRemoval.company_id == company_id)
+        .first()
+    )
+    if removal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Removal not found.")
+    if removal.pull_point != "anchor_point":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This is a station removal — dispatch confirms it at the dock.",
+        )
+    return removal
+
+
+def _removal_owner_walker(db, company_id, removal):
+    """The walker whose route currently owns the removal's bag (ADR-178)."""
+    from app.models.walker_route import Route
+    route = (
+        db.query(Route)
+        .filter(
+            Route.company_id == company_id,
+            Route.route_date == removal.removal_date,
+            Route.tote_ids.any(removal.bag_id),
+        )
+        .first()
+    )
+    return route
+
+
+@router.post("/removals/{removal_id}/handover", response_model=RemovalsResponse)
+def handover_ap_removal(
+    removal_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["walker", "trainee", "trainer", "driver", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Walker declares an out-of-zone package is being handed to the driver (ADR-178).
+
+    The owning walker (route.assigned_to or its paired trainee) declares the
+    handover; captain/dispatch may also declare on their behalf. Two-party:
+    the driver then confirms receipt via .../receive, which completes the pull.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from app.models.audit_log import AuditLog
+
+    removal = _resolve_ap_removal(db, caller.company_id, removal_id)
+    if removal.status == "removed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already returned.")
+    if removal.handoff_status in ("handed_over", "received"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Handover already declared.")
+
+    # Ownership: walkers/trainees may only hand over packages on their own route.
+    if caller.role in ("walker", "trainee"):
+        route = _removal_owner_walker(db, caller.company_id, removal)
+        if route is None or (route.assigned_to != caller.id and route.paired_trainee_id != caller.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only hand over packages from your own route.",
+            )
+
+    removal.handoff_status = "handed_over"
+    removal.handed_over_by = caller.id
+    removal.handed_over_by_name = caller.name
+    removal.handed_over_at = _dt.now(_tz.utc)
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id, actor_id=caller.id,
+        action_type="sort.ap_removal_handover",
+        target_table="package_removals", target_id=removal.id,
+        after_snapshot={"bag_id": removal.bag_id, "tba": removal.tba},
+    ))
+    db.commit()
+    return _removals_response(db, caller.company_id, removal.removal_date)
+
+
+@router.post("/removals/{removal_id}/receive", response_model=RemovalsResponse)
+def receive_ap_removal(
+    removal_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Driver confirms receipt of a handed-over out-of-zone package (ADR-178).
+
+    Terminal step: marks the package received AND completes the removal
+    (status=removed, TBA out of the zone + roster) so it flows into returns
+    tracking. Drivers are scoped to their own truck.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from app.models.audit_log import AuditLog
+
+    removal = _resolve_ap_removal(db, caller.company_id, removal_id)
+    if removal.status == "removed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already returned.")
+    if removal.handoff_status != "handed_over":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The walker has not handed this package over yet.",
+        )
+
+    if caller.role in ("driver", "trainer"):
+        own = _caller_truck_id(db, caller, removal.removal_date)
+        zones = _active_zones(db, caller.company_id, removal.removal_date)
+        bag_truck = next(
+            (z.truck_id for z in zones
+             if any(e["bag_id"] == removal.bag_id for e in (z.tote_roster or []))),
+            None,
+        )
+        if own is None or bag_truck != own:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only receive packages for totes on your own truck.",
+            )
+
+    now = _dt.now(_tz.utc)
+    removal.handoff_status = "received"
+    removal.received_by = caller.id
+    removal.received_by_name = caller.name
+    removal.received_at = now
+    _complete_ap_removal(db, caller.company_id, removal)
+    removal.status = "removed"
+    removal.removed_by = caller.id
+    removal.removed_by_name = caller.name
+    removal.removed_at = now
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id, actor_id=caller.id,
+        action_type="sort.ap_removal_received",
+        target_table="package_removals", target_id=removal.id,
+        after_snapshot={"bag_id": removal.bag_id, "tba": removal.tba},
     ))
     db.commit()
     return _removals_response(db, caller.company_id, removal.removal_date)

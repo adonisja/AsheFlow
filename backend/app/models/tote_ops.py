@@ -80,3 +80,13 @@ class PackageRemoval(Base):
     removed_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     removed_by_name = Column(String(100), nullable=True)
     removed_at      = Column(DateTime(timezone=True), nullable=True)
+    # ── AP-pull walker→driver handoff (ADR-178) — anchor_point rows only ──────
+    # pending → handed_over (walker declares) → received (driver confirms, which
+    # also completes the removal). Whole-tote station rows never use these.
+    handoff_status  = Column(String(20), nullable=False, default="pending")  # pending|handed_over|received
+    handed_over_by  = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    handed_over_by_name = Column(String(100), nullable=True)
+    handed_over_at  = Column(DateTime(timezone=True), nullable=True)
+    received_by     = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    received_by_name = Column(String(100), nullable=True)
+    received_at     = Column(DateTime(timezone=True), nullable=True)

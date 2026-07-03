@@ -34,8 +34,8 @@ function RemovalRow({ r, busy, onConfirm }: {
             removed{r.removed_by_name ? ` · ${r.removed_by_name}` : ''}
           </span>
         ) : apStage ? (
-          <span className="text-[11px] text-warning font-semibold" title="Pulled and recorded by the crew at the anchor point — not a dock task">
-            pull at AP (crew)
+          <span className="text-[11px] text-warning font-semibold" title="Walker hands this to the driver at the anchor point; the driver confirms receipt on AP Sort">
+            {r.handoff_status === 'handed_over' ? 'handed over — awaiting driver' : 'walker→driver at AP'}
           </span>
         ) : (
           <button

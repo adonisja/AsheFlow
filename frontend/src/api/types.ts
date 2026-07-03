@@ -117,6 +117,12 @@ export interface RemovalOut {
   pull_point: 'station' | 'anchor_point';
   removed_by_name?: string | null;
   removed_at?: string | null;
+  // AP-pull walker->driver handoff (ADR-178) — anchor_point rows only
+  owner_walker_name?: string | null;
+  owner_route_number?: number | null;
+  handoff_status?: 'pending' | 'handed_over' | 'received';
+  handed_over_by_name?: string | null;
+  received_by_name?: string | null;
 }
 
 export interface RemovalsResponse {

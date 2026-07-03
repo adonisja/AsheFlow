@@ -5,6 +5,7 @@ import {
   ArrowRight, Clock, Loader2, Info,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import WalkerApReturnsPanel from '../components/WalkerApReturnsPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type {
@@ -582,6 +583,12 @@ export default function MyRoute() {
         <h1 className="page-title">My Route</h1>
         <p className="text-subtle mt-1">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
       </div>
+
+      {/* Out-of-zone packages to hand back to the driver (ADR-178) */}
+      <WalkerApReturnsPanel
+        date={TODAY}
+        bagIds={Array.from(new Set(displayRoutes.flatMap(r => r.tote_ids ?? [])))}
+      />
 
       {/* Trainee arrival confirm banner */}
       {isTrainee && pairedRoute && !arrivalResult && (

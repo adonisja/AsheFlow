@@ -866,6 +866,9 @@ class TestSortAnalysis:
         assert by_point["anchor_point"].whole_tote is False
         assert by_point["anchor_point"].tba == "TBA-RIDER"
         assert all(r.status == "flagged" for r in removals)
+        # handoff_status defaults to 'pending' at the DB level (ADR-178) — the
+        # column default fires on insert, so it is None on unflushed objects.
+        assert by_point["anchor_point"].handoff_status in (None, "pending")
 
 # ---------------------------------------------------------------------------
 # 7. Empty manifest — edge case
