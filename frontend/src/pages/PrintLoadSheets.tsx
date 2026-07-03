@@ -11,8 +11,10 @@ import { getLocalYMD } from '../utils/date';
  *   1. STATION TRANSFERS up top — the exceptions, impossible to miss.
  *   2. OV PICKUP BY ZONE — one table row per OV staging zone so the driver
  *      visits each zone exactly once and can verify counts on the spot.
- *   3. BAG CHECKLIST grouped by dock aisle in walk order — dock tag is the
- *      big lookup key, one check box per bag.
+ *   3. BAG CHECKLIST grouped by the FULL dock tag (e.g. "A-12 · 6 totes") in
+ *      walk order — drivers know "A-12", never derived labels like "Aisle A".
+ *      The tag also stays on every row so a page break can't strand rows
+ *      without their location.
  *   4. Signature line for load/verify accountability.
  *
  * Color rules: truck accent bar ties the sheet to the map color; OV zones get
@@ -90,14 +92,14 @@ function Sheet({ roster, date, accent, finalized }: {
   const totalOvs = roster.totes.reduce((n, t) => n + t.ov_count, 0);
   const ovZones = ovByZone(roster.totes);
 
-  // Group bags by dock aisle (tag prefix before the dash), preserving the
-  // dock-walk order the roster already has.
-  const aisles: { aisle: string; totes: RosterTote[] }[] = [];
+  // Group consecutive bags sharing the same dock tag (several bags sit at one
+  // dock slot). The header carries the FULL tag — drivers know "A-12".
+  const dockGroups: { tag: string; totes: RosterTote[] }[] = [];
   roster.totes.forEach(t => {
-    const aisle = t.dock_tags[0]?.split('-')[0] ?? '—';
-    const last = aisles[aisles.length - 1];
-    if (last && last.aisle === aisle) last.totes.push(t);
-    else aisles.push({ aisle, totes: [t] });
+    const tag = t.dock_tags[0] ?? '—';
+    const last = dockGroups[dockGroups.length - 1];
+    if (last && last.tag === tag) last.totes.push(t);
+    else dockGroups.push({ tag, totes: [t] });
   });
 
   const niceDate = new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
@@ -204,7 +206,7 @@ function Sheet({ roster, date, accent, finalized }: {
 
       {/* 3. Bag checklist, aisle by aisle in dock-walk order */}
       <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.05em', marginBottom: 4 }}>
-        BAG CHECKLIST <span style={{ fontWeight: 400, color: '#666' }}>— walk the dock in order</span>
+        BAG CHECKLIST <span style={{ fontWeight: 400, color: '#666' }}>— in dock-tag order</span>
       </div>
       <table>
         <thead>
@@ -217,11 +219,11 @@ function Sheet({ roster, date, accent, finalized }: {
             <th style={{ border: '1px solid #bbb', padding: '3px 6px', background: '#f3f4f6', width: 150 }}>Transfer</th>
           </tr>
         </thead>
-        {aisles.map(group => (
-          <tbody key={group.aisle + group.totes[0]?.bag_id}>
+        {dockGroups.map(group => (
+          <tbody key={group.tag + group.totes[0]?.bag_id}>
             <tr>
-              <td colSpan={6} style={{ background: '#e5e7eb', borderLeft: `6px solid ${accent}`, padding: '3px 8px', fontSize: 11, fontWeight: 800, letterSpacing: '0.06em' }}>
-                AISLE {group.aisle} · {group.totes.length} tote{group.totes.length === 1 ? '' : 's'}
+              <td colSpan={6} style={{ background: '#e5e7eb', borderLeft: `6px solid ${accent}`, padding: '3px 8px', fontSize: 12, fontWeight: 800, letterSpacing: '0.04em' }}>
+                <span className="mono">{group.tag}</span> · {group.totes.length} tote{group.totes.length === 1 ? '' : 's'}
               </td>
             </tr>
             {group.totes.map((t, i) => {
