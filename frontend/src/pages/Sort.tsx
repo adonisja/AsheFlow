@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
+import { useAuth } from '../contexts/AuthContext';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import ZoneDensityMap from '../components/ZoneDensityMap';
@@ -1069,7 +1070,71 @@ function toAnchorPins(trucks: ApiTruck[]): AnchorPin[] {
   });
 }
 
+/**
+ * Crew-scoped Station Sort (ADR-177 follow-up).
+ *
+ * Drivers get ONLY their own truck's tote check-off — dispatch reads the
+ * registered checks (each check records checked_by). The module unlocks
+ * once zone assignment is complete for the day (zones exist); before that
+ * there is nothing to load. All roster fetches/mutations are scoped server
+ * side to the caller's truck via mode="driver".
+ */
+function CrewStationView({ today }: { today: string }) {
+  // 'loading' | 'ready' (my truck has a roster) | 'no_truck' (crewed nowhere
+  // today) | 'not_zoned' (dispatch hasn't run zone assignment yet)
+  const [state, setState] = useState<'loading' | 'ready' | 'no_truck' | 'not_zoned'>('loading');
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      axiosClient.get<{ rosters: unknown[]; roster_available: boolean }>(`/sort/${today}/rosters`, { params: { mine: true } }),
+      axiosClient.get<{ zones: unknown[] }>(`/sort/${today}`),
+    ])
+      .then(([mine, all]) => {
+        if (cancelled) return;
+        if (mine.data.roster_available && mine.data.rosters.length > 0) setState('ready');
+        else if ((all.data.zones ?? []).length > 0) setState('no_truck');
+        else setState('not_zoned');
+      })
+      .catch(() => { if (!cancelled) setState('not_zoned'); });
+    return () => { cancelled = true; };
+  }, [today]);
+
+  return (
+    <div className="space-y-8 animate-slide-up">
+      <SectionHeader
+        eyebrow="Station Loading"
+        title="Tote check-off"
+        description={`Check your truck's totes onto the truck as they are staged — ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+      />
+      {state === 'loading' ? (
+        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin" /> Checking today's zone assignment…
+        </div>
+      ) : state === 'ready' ? (
+        <ToteRosterPanel date={today} mode="driver" />
+      ) : (
+        <div className="flex items-center gap-3 p-4 rounded-xl bg-accent/40 border border-border text-sm text-muted-foreground">
+          <Layers className="w-4 h-4 shrink-0" />
+          {state === 'no_truck'
+            ? 'You are not on a truck crew today, so there is nothing to check off.'
+            : 'Tote check-off unlocks once dispatch completes the zone assignment.'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SortPage() {
+  const { groups } = useAuth();
+  // Driver-only → scoped check-off view. Drivers check off their own truck's
+  // totes; trainers are not involved in station loading. Dispatch/management/
+  // admin see the full page.
+  const isDriverOnly =
+    groups.includes('driver') &&
+    !groups.some(g => ['dispatch', 'management', 'admin'].includes(g));
+  if (isDriverOnly) return <CrewStationView today={getLocalYMD()} />;
+
   const today = getLocalYMD();
   const [assignments, setAssignments] = useState<TruckAssignment[]>([]);
   const [zones, setZones] = useState<ZonePolygon[]>([]);

@@ -432,7 +432,7 @@ function App() {
             <Route
               path="/sort"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
                   <SortPage />
                 </ProtectedRoute>
               }
