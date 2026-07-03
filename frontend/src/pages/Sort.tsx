@@ -5,6 +5,7 @@ import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import ZoneDensityMap from '../components/ZoneDensityMap';
 import ToteRosterPanel from '../components/ToteRosterPanel';
+import RemovalsPanel from '../components/RemovalsPanel';
 import type { ZonePolygon, Centroid, AnchorPin, OutlierToteMarker } from '../components/ZoneDensityMap';
 import type { CompanyZone, Truck as ApiTruck, OutlierTotesResponse } from '../api/types';
 import {
@@ -1139,14 +1140,18 @@ function ManifestSortPanel({
               <div className="p-3 bg-accent/40 rounded-xl space-y-2">
                 <p className="text-xs font-semibold text-foreground">What needs review</p>
                 <p className="text-xs text-muted-foreground">
-                  These bags contain packages the sort could not place in any truck zone
-                  (outside the company zone or missing a geocode). Confirm to keep them on
-                  their current truck, or change the destination below.
+                  In-zone flags mean packages are on a truck they shouldn't be on — confirm the
+                  suggested truck or keep. Out-of-zone bags are not our freight: they are flagged
+                  for removal and tracked in the Removals panel after zones persist.
                 </p>
-                <div className="grid grid-cols-3 gap-2 pt-1">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-semibold uppercase text-danger">Out of zone</span>
+                    <p className="text-[10px] text-muted-foreground">Outside the company delivery area — remove from the truck and return to Amazon.</p>
+                  </div>
                   <div className="space-y-0.5">
                     <span className="text-[10px] font-semibold uppercase text-danger">Misaligned</span>
-                    <p className="text-[10px] text-muted-foreground">Majority of packages belong on a different truck than the bag is on now.</p>
+                    <p className="text-[10px] text-muted-foreground">Majority of packages belong on a different truck — station tote swap suggested.</p>
                   </div>
                   <div className="space-y-0.5">
                     <span className="text-[10px] font-semibold uppercase text-warning">Uncertain</span>
@@ -1154,7 +1159,7 @@ function ManifestSortPanel({
                   </div>
                   <div className="space-y-0.5">
                     <span className="text-[10px] font-semibold uppercase text-warning/70">Stray</span>
-                    <p className="text-[10px] text-muted-foreground">Small minority of packages are outliers with no clear zone match.</p>
+                    <p className="text-[10px] text-muted-foreground">A few packages belong to another truck's territory — hand over at the AP.</p>
                   </div>
                 </div>
               </div>
@@ -1227,27 +1232,35 @@ function ManifestSortPanel({
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-xs font-semibold font-mono text-foreground">{bag.bag_id}</span>
                           <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md ${
-                            bag.classification === 'misaligned' ? 'bg-danger/10 text-danger'
+                            bag.classification === 'out_of_zone' ? 'bg-danger text-white'
+                            : bag.classification === 'misaligned' ? 'bg-danger/10 text-danger'
                             : bag.classification === 'uncertain' ? 'bg-warning/10 text-warning'
                             : 'bg-accent text-muted-foreground'
                           }`}>
-                            {bag.classification}
+                            {bag.classification === 'out_of_zone' ? 'out of zone' : bag.classification}
                           </span>
                         </div>
                         {bag.unresolvable && (
                           <span className="text-[10px] text-danger font-semibold shrink-0 bg-danger/10 px-1.5 py-0.5 rounded-md">
-                            Cannot auto-resolve
+                            {bag.classification === 'out_of_zone' ? 'Remove & return' : 'Cannot auto-resolve'}
                           </span>
                         )}
                       </div>
 
                       {/* Row 2: human-readable summary */}
                       <div className="text-xs text-muted-foreground space-y-0.5">
-                        <p>
-                          <span className="font-medium text-foreground">{bag.outside_packages}</span> of{' '}
-                          <span className="font-medium text-foreground">{bag.total_packages}</span> packages
-                          {' '}sorted to a different zone than the bag's current truck.
-                        </p>
+                        {bag.classification === 'out_of_zone' ? (
+                          <p>
+                            All <span className="font-medium text-foreground">{bag.total_packages}</span> packages
+                            {' '}are outside the company delivery area — this tote is not our freight.
+                          </p>
+                        ) : (
+                          <p>
+                            <span className="font-medium text-foreground">{bag.outside_packages}</span> of{' '}
+                            <span className="font-medium text-foreground">{bag.total_packages}</span> packages
+                            {' '}belong on a different truck than the bag is on now.
+                          </p>
+                        )}
                         {currentTruck && (
                           <p>Currently on: <span className="font-medium text-foreground">{currentTruck}</span></p>
                         )}
@@ -1347,7 +1360,9 @@ function ManifestSortPanel({
 
                       {bag.outlier_tbas.length > 0 && (
                         <p className="text-[10px] text-muted-foreground">
-                          {bag.outlier_tbas.length} package{bag.outlier_tbas.length !== 1 ? 's' : ''} could not be matched to any zone — they will stay on the current truck.
+                          {bag.classification === 'out_of_zone'
+                            ? 'Flagged for removal — it will appear in the Removals panel once zones persist.'
+                            : `${bag.outlier_tbas.length} package${bag.outlier_tbas.length !== 1 ? 's' : ''} could not be placed — they will stay on the current truck.`}
                         </p>
                       )}
 
@@ -1614,6 +1629,7 @@ export default function SortPage() {
             description="Check totes onto their truck as they are staged. Pending transfers need a decision before loading is finalized."
           />
           <ToteRosterPanel date={activeManifestDate} mode="dispatch" />
+          <RemovalsPanel date={activeManifestDate} />
         </div>
       )}
 

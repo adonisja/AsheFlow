@@ -1059,6 +1059,134 @@ class TestLoadFinalization:
 
 
 # ---------------------------------------------------------------------------
+# 6d. Out-of-zone removals + tier-1 taxonomy (ADR-176)
+# ---------------------------------------------------------------------------
+
+_BOUNDARY = [
+    {"lat": 40.740, "lng": -74.010},
+    {"lat": 40.770, "lng": -74.010},
+    {"lat": 40.770, "lng": -73.980},
+    {"lat": 40.740, "lng": -73.980},
+    {"lat": 40.740, "lng": -74.010},
+]
+_ANCHORS = [
+    {"truck_id": _TRUCK_A_ID, "lat": 40.745, "lng": -73.995},
+    {"truck_id": _TRUCK_B_ID, "lat": 40.762, "lng": -73.985},
+]
+
+
+class TestOutOfZoneRemovals:
+    def test_ooz_tote_classified_and_flagged_for_removal(self):
+        """A whole tote outside the company zone is out_of_zone — a removal
+        candidate, never a transfer."""
+        ooz = [_make_package(f"TBA-Q{i}", "Bag-OOZ", 40.700, -74.020) for i in range(3)]
+        for p in ooz:
+            p["tag_number"] = "A-14"
+        good = [_make_package(f"TBA-G{i}", "Bag-Good", 40.745, -73.995) for i in range(3)]
+
+        proposal = _make_proposal([_make_cluster(0, good, _TRUCK_A_ID)], outliers=ooz)
+        result = tier1_verify(
+            proposal=proposal, packages=good + ooz, cfg=_make_cfg(),
+            boundary=_BOUNDARY, anchors=_ANCHORS,
+        )
+
+        bag = next(r for r in result.bag_results if r.bag_id == "Bag-OOZ")
+        assert bag.classification == "out_of_zone"
+        assert len(result.removal_candidates) == 1
+        cand = result.removal_candidates[0]
+        assert cand["whole_tote"] is True
+        assert cand["package_count"] == 3
+        assert cand["locator"] == "A-14"
+        assert result.misaligned_suggestions == []
+
+    def test_ooz_rider_inside_good_tote_flagged_individually(self):
+        """A single out-of-zone rider in an otherwise good tote becomes a
+        single-package removal candidate; the tote itself stays clean."""
+        pkgs = [_make_package(f"TBA-{i}", "Bag-A", 40.745, -73.995) for i in range(9)]
+        rider = _make_package("TBA-RIDER", "Bag-A", 40.700, -74.020, block_key="OTHER_BLOCK")
+        rider["tag_number"] = "F-02"
+        packages = pkgs + [rider]
+
+        proposal = _make_proposal([_make_cluster(0, packages, _TRUCK_A_ID)])
+        result = tier1_verify(
+            proposal=proposal, packages=packages, cfg=_make_cfg(),
+            boundary=_BOUNDARY, anchors=_ANCHORS,
+        )
+
+        assert len(result.removal_candidates) == 1
+        cand = result.removal_candidates[0]
+        assert cand["tba"] == "TBA-RIDER" and cand["whole_tote"] is False
+        bag = next(r for r in result.bag_results if r.bag_id == "Bag-A")
+        assert bag.classification == "clean"   # OOZ rider is a removal, not a misalignment
+
+    def test_inzone_riders_drive_classification_and_misaligned_suggestion(self):
+        """In-zone riders whose territory is another truck feed the thresholds;
+        a majority-rider tote is misaligned with a suggested station swap."""
+        # 2 packages coherent with truck A territory, 8 riders deep in truck B territory
+        core = [_make_package(f"TBA-C{i}", "Bag-M", 40.745, -73.995) for i in range(2)]
+        riders = [
+            _make_package(f"TBA-R{i}", "Bag-M", 40.762, -73.985, block_key=f"B_SIDE_{i}")
+            for i in range(8)
+        ]
+        packages = core + riders
+
+        proposal = _make_proposal([_make_cluster(0, packages, _TRUCK_A_ID)])
+        cfg = _make_cfg(small_tote_cutoff=3, stray_pct=0.10, uncertain_pct=0.40)
+        result = tier1_verify(
+            proposal=proposal, packages=packages, cfg=cfg,
+            boundary=_BOUNDARY, anchors=_ANCHORS,
+        )
+
+        bag = next(r for r in result.bag_results if r.bag_id == "Bag-M")
+        assert bag.classification == "misaligned"
+        assert bag.suggested_truck_id == _TRUCK_B_ID
+        assert result.misaligned_suggestions == [
+            {"bag_id": "Bag-M", "to_truck_id": _TRUCK_B_ID, "package_count": 10}
+        ]
+        assert result.removal_candidates == []
+
+    def test_boundary_tote_coherent_packages_do_not_flag(self):
+        """Packages coherent with their tote inherit its legitimacy even when
+        another anchor is marginally closer — no boundary false-positives."""
+        # Tote assigned to truck A but sitting nearer truck B's anchor; all
+        # packages share the tote's block → clean.
+        packages = [_make_package(f"TBA-{i}", "Bag-Edge", 40.758, -73.987) for i in range(6)]
+        proposal = _make_proposal([_make_cluster(0, packages, _TRUCK_A_ID)])
+        result = tier1_verify(
+            proposal=proposal, packages=packages, cfg=_make_cfg(),
+            boundary=_BOUNDARY, anchors=_ANCHORS,
+        )
+        assert result.all_clean is True
+
+    def test_persist_writes_removals_and_misaligned_suggestion(self):
+        from app.models.tote_ops import PackageRemoval as _PRModel
+        pkgs = [self_pkgs := [_make_package(f"TBA-{i}", "Bag-A", 40.745, -73.995) for i in range(3)]][0]
+        proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
+        db = _make_db()
+
+        persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+            removal_candidates=[{
+                "bag_id": "Bag-OOZ", "tba": None,
+                "tba_numbers": ["TBA-Q0", "TBA-Q1"], "package_count": 2,
+                "whole_tote": True, "locator": "A-14",
+            }],
+            misaligned_suggestions=[{"bag_id": "Bag-A", "to_truck_id": _TRUCK_B_ID, "package_count": 3}],
+        )
+
+        removals = [o for o in db._added if isinstance(o, _PRModel)]
+        assert len(removals) == 1
+        assert removals[0].whole_tote is True and removals[0].status == "flagged"
+
+        transfers = [o for o in db._added if isinstance(o, _TTModel)]
+        assert len(transfers) == 1
+        assert transfers[0].reason == "tier1_misaligned"
+        assert transfers[0].from_truck_id == _TRUCK_A_ID
+        assert transfers[0].to_truck_id == _TRUCK_B_ID
+
+
+# ---------------------------------------------------------------------------
 # 7. Empty manifest — edge case
 # ---------------------------------------------------------------------------
 

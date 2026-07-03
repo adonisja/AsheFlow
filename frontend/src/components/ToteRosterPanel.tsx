@@ -24,9 +24,10 @@ interface Props {
 }
 
 const CLASS_STYLES: Record<string, string> = {
-  stray:      'bg-warning/10 text-warning',
-  uncertain:  'bg-orange-500/10 text-orange-500',
-  misaligned: 'bg-danger/10 text-danger',
+  stray:       'bg-warning/10 text-warning',
+  uncertain:   'bg-orange-500/10 text-orange-500',
+  misaligned:  'bg-danger/10 text-danger',
+  out_of_zone: 'bg-danger/20 text-danger',
 };
 
 function OvPills({ tote }: { tote: RosterTote }) {
@@ -154,7 +155,15 @@ function ToteRow({
         </span>
         {flagged && (
           <span className={`ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase ${CLASS_STYLES[cls]}`}>
-            {cls}
+            {cls.replace('_', ' ')}
+          </span>
+        )}
+        {(tote.pull_tbas?.length ?? 0) > 0 && (
+          <span
+            className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase bg-danger text-white"
+            title={`Out-of-zone packages to pull before loading: ${tote.pull_tbas!.join(', ')}`}
+          >
+            PULL {tote.pull_tbas!.length}
           </span>
         )}
       </td>
@@ -410,7 +419,10 @@ export default function ToteRosterPanel({ date, mode }: Props) {
           <span className="text-foreground font-medium">Loading not finalized</span>
           <span className="text-muted-foreground">
             — {data.pending_transfer_count} pending transfer{data.pending_transfer_count === 1 ? '' : 's'},{' '}
-            {data.unchecked_count} tote{data.unchecked_count === 1 ? '' : 's'} unchecked.
+            {data.unchecked_count} tote{data.unchecked_count === 1 ? '' : 's'} unchecked
+            {(data.flagged_removal_count ?? 0) > 0 && (
+              <>, {data.flagged_removal_count} out-of-zone removal{data.flagged_removal_count === 1 ? '' : 's'} pending</>
+            )}.
             {mode === 'dispatch' ? ' AP Sort will proceed on unconfirmed contents.' : ''}
           </span>
         </div>

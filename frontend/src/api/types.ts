@@ -57,7 +57,7 @@ export interface ToteTransferOut {
   to_driver_name?: string | null;
   package_count?: number | null;
   status: 'suggested' | 'confirmed' | 'completed' | 'kept' | 'undone';
-  reason: 'rerun_diff' | 'dispatch';
+  reason: 'rerun_diff' | 'dispatch' | 'tier1_misaligned';
 }
 
 export interface OvDetail {
@@ -65,7 +65,7 @@ export interface OvDetail {
   zone?: string | null;    // OV sort zone on the dock
 }
 
-export type ToteClassification = 'clean' | 'stray' | 'uncertain' | 'misaligned';
+export type ToteClassification = 'clean' | 'stray' | 'uncertain' | 'misaligned' | 'out_of_zone';
 
 export interface RosterTote {
   bag_id: string;
@@ -77,6 +77,7 @@ export interface RosterTote {
   ov_dock_tags: string[];
   classification?: ToteClassification;
   rider_count?: number;
+  pull_tbas?: string[];
   checked: boolean;
   checked_by_name?: string | null;
   transfer?: ToteTransferOut | null;
@@ -99,8 +100,32 @@ export interface RostersResponse {
   rosters: TruckRoster[];
   pending_transfer_count: number;
   unchecked_count: number;
+  flagged_removal_count?: number;
   loading_finalized: boolean;
   roster_available: boolean;
+}
+
+// ── Out-of-zone removals (ADR-176) ──────────────────────────────────────────
+
+export interface RemovalOut {
+  id: string;
+  bag_id: string;
+  tba?: string | null;              // null = whole tote
+  tba_numbers?: string[] | null;
+  package_count: number;
+  whole_tote: boolean;
+  reason: string;
+  locator?: string | null;
+  status: 'flagged' | 'removed';
+  removed_by_name?: string | null;
+  removed_at?: string | null;
+}
+
+export interface RemovalsResponse {
+  sort_date: string;
+  removals: RemovalOut[];
+  flagged_count: number;
+  removed_count: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +871,7 @@ export interface BagPackageDetail {
 export interface BagResultOut {
   bag_id: string;
   inferred_truck_id: string | null;
-  classification: 'clean' | 'stray' | 'uncertain' | 'misaligned';
+  classification: 'clean' | 'stray' | 'uncertain' | 'misaligned' | 'out_of_zone';
   total_packages: number;
   outside_packages: number;
   outside_pct: number;

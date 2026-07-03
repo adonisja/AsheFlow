@@ -32,6 +32,7 @@ import Account from './pages/Account';
 import AuditLog from './pages/AuditLog';
 import SortPage from './pages/Sort';
 import PrintLoadSheets from './pages/PrintLoadSheets';
+import ReturnsManifestPrint from './pages/ReturnsManifestPrint';
 import WalkerSortMonitor from './pages/WalkerSort';
 import NotificationsHistory from './pages/NotificationsHistory';
 import MyRoute from './pages/MyRoute';
@@ -441,6 +442,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
                   <PrintLoadSheets />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sort/returns-print"
+              element={
+                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
+                  <ReturnsManifestPrint />
                 </ProtectedRoute>
               }
             />

@@ -15,7 +15,7 @@ import logging
 import os
 import tempfile
 import uuid as _uuid_mod
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 from typing import Optional
 
@@ -1947,8 +1947,9 @@ class RosterToteOut(BaseModel):
     ov_details: list[OvDetailOut] = []
     dock_tags: list[str]
     ov_dock_tags: list[str]
-    classification: str = "clean"  # clean | stray | uncertain | misaligned (tier-1)
+    classification: str = "clean"  # clean | stray | uncertain | misaligned | out_of_zone (tier-1)
     rider_count: int = 0           # packages off their tote's dominant block — future cross-walker transfers
+    pull_tbas: list[str] = []      # flagged out-of-zone packages inside this tote — PULL, do not deliver
     checked: bool
     checked_by_name: Optional[str] = None
     transfer: Optional[ToteTransferOut] = None   # transfer touching this bag (incl. kept, for undo)
@@ -1971,6 +1972,7 @@ class RostersResponse(BaseModel):
     rosters: list[TruckRosterOut]
     pending_transfer_count: int
     unchecked_count: int
+    flagged_removal_count: int = 0   # ADR-176: out-of-zone units not yet pulled
     loading_finalized: bool       # soft gate — informational only (ADR-174 decision b)
     roster_available: bool        # False when zones predate roster persistence
 
@@ -2053,7 +2055,7 @@ def get_load_rosters(
     physical truck contents match TruckZone exactly. Soft gate — the flag warns,
     nothing is blocked (ADR-174).
     """
-    from app.models.tote_ops import ToteTransfer, ToteLoadCheck
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
 
     zones = _active_zones(db, caller.company_id, sort_date)
     truck_names = {
@@ -2092,6 +2094,22 @@ def get_load_rosters(
         t.bag_id: t for t in transfers if t.status in ("suggested", "confirmed", "kept")
     }
 
+    # ADR-176: flagged single-package removals surface as PULL items on their
+    # tote's roster row until dispatch confirms the physical pull.
+    removals = (
+        db.query(PackageRemoval)
+        .filter(
+            PackageRemoval.company_id == caller.company_id,
+            PackageRemoval.removal_date == sort_date,
+        )
+        .all()
+    )
+    pull_by_bag: dict[str, list[str]] = {}
+    for r in removals:
+        if r.status == "flagged" and not r.whole_tote and r.tba:
+            pull_by_bag.setdefault(r.bag_id, []).append(r.tba)
+    flagged_removal_count = sum(1 for r in removals if r.status == "flagged")
+
     rosters: list[TruckRosterOut] = []
     total_unchecked = 0
     roster_available = False
@@ -2116,6 +2134,7 @@ def get_load_rosters(
                 ov_dock_tags=entry.get("ov_dock_tags", []),
                 classification=entry.get("classification", "clean"),
                 rider_count=entry.get("rider_count", 0),
+                pull_tbas=pull_by_bag.get(entry["bag_id"], []),
                 checked=chk is not None,
                 checked_by_name=chk.checked_by_name if chk else None,
                 transfer=_transfer_out(xfer, truck_names, drivers) if xfer else None,
@@ -2150,7 +2169,11 @@ def get_load_rosters(
         rosters=rosters,
         pending_transfer_count=pending,
         unchecked_count=total_unchecked,
-        loading_finalized=roster_available and pending == 0 and total_unchecked == 0,
+        flagged_removal_count=flagged_removal_count,
+        loading_finalized=(
+            roster_available and pending == 0 and total_unchecked == 0
+            and flagged_removal_count == 0
+        ),
         roster_available=roster_available,
     )
 
@@ -2288,11 +2311,13 @@ def resolve_transfer(
 ):
     """Resolve a suggested station transfer.
 
-    confirm — the tote will physically move; zone data already points at the
-              destination (re-run diff), so nothing moves in the DB. Completion
-              happens when the tote is checked off on the destination truck.
-    keep    — the tote stays where it physically is; zone data is moved back to
-              the from_truck so TruckZone matches reality again.
+    Polarity depends on the suggestion's origin:
+    rerun_diff       — zone data already points at the destination: confirm is
+                       a physical move only; keep moves zone data back.
+    tier1_misaligned — zone data still points at the current (from) truck:
+                       confirm moves zone data to the destination; keep is a
+                       no-op (ADR-176 decision c — station tote swap, soft).
+    Completion happens when the tote is checked off on the destination truck.
     """
     from datetime import datetime, timezone
     from app.models.audit_log import AuditLog
@@ -2312,9 +2337,12 @@ def resolve_transfer(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Transfer is already {xfer.status}.")
 
     if body.action == "confirm":
+        if xfer.reason == "tier1_misaligned":
+            _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
         xfer.status = "confirmed"
     else:
-        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
+        if xfer.reason != "tier1_misaligned":
+            _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
         xfer.status = "kept"
     xfer.resolved_by = caller.id
     xfer.resolved_by_name = caller.name
@@ -2530,13 +2558,21 @@ def undo_transfer(
     if xfer.status == "confirmed" and xfer.reason == "dispatch":
         _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
         xfer.status = "undone"
+    elif xfer.status == "confirmed" and xfer.reason == "tier1_misaligned":
+        # confirm moved zone data — move it back and reopen the suggestion
+        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
+        xfer.status = "suggested"
+        xfer.resolved_by = None
+        xfer.resolved_by_name = None
+        xfer.resolved_at = None
     elif xfer.status == "confirmed":   # rerun_diff — zone data untouched by confirm
         xfer.status = "suggested"
         xfer.resolved_by = None
         xfer.resolved_by_name = None
         xfer.resolved_at = None
     else:                              # kept — re-apply the sort's intent
-        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
+        if xfer.reason != "tier1_misaligned":   # tier1 keep never moved zone data
+            _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
         xfer.status = "suggested"
         xfer.resolved_by = None
         xfer.resolved_by_name = None
@@ -2553,3 +2589,137 @@ def undo_transfer(
     ))
     db.commit()
     return get_load_rosters(sort_date=xfer.transfer_date, mine=False, caller=caller, _={}, db=db)
+
+
+# ── Out-of-zone removals (ADR-176) ────────────────────────────────────────────
+
+class RemovalOut(BaseModel):
+    id: UUID
+    bag_id: str
+    tba: Optional[str] = None            # None = whole tote
+    tba_numbers: Optional[list[str]] = None
+    package_count: int
+    whole_tote: bool
+    reason: str
+    locator: Optional[str] = None        # dock tag / OV zone — where to find it
+    status: str                          # flagged | removed
+    removed_by_name: Optional[str] = None
+    removed_at: Optional[datetime] = None
+
+
+class RemovalsResponse(BaseModel):
+    sort_date: date
+    removals: list[RemovalOut]
+    flagged_count: int
+    removed_count: int
+
+
+def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsResponse":
+    from app.models.tote_ops import PackageRemoval
+    rows = (
+        db.query(PackageRemoval)
+        .filter(
+            PackageRemoval.company_id == company_id,
+            PackageRemoval.removal_date == sort_date,
+        )
+        .order_by(PackageRemoval.status, PackageRemoval.bag_id)
+        .all()
+    )
+    outs = [
+        RemovalOut(
+            id=r.id, bag_id=r.bag_id, tba=r.tba, tba_numbers=r.tba_numbers,
+            package_count=r.package_count, whole_tote=r.whole_tote, reason=r.reason,
+            locator=r.locator, status=r.status,
+            removed_by_name=r.removed_by_name, removed_at=r.removed_at,
+        )
+        for r in rows
+    ]
+    return RemovalsResponse(
+        sort_date=sort_date,
+        removals=outs,
+        flagged_count=sum(1 for r in rows if r.status == "flagged"),
+        removed_count=sum(1 for r in rows if r.status == "removed"),
+    )
+
+
+@router.get("/{sort_date}/removals", response_model=RemovalsResponse)
+def get_removals(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Out-of-zone freight flagged for removal (and the record of what was pulled).
+
+    These units are NOT the company's deliveries — they are pulled off the
+    truck at the station and returned to Amazon, never transferred between
+    trucks (ADR-176).
+    """
+    return _removals_response(db, caller.company_id, sort_date)
+
+
+@router.post("/removals/{removal_id}/confirm", response_model=RemovalsResponse)
+def confirm_removal(
+    removal_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Confirm a flagged unit was physically pulled off the truck.
+
+    Single-package removals also come out of the zone's package_tbas and
+    roster entry so downstream (AP Sort, walker routes) never sees them.
+    Whole-tote removals never entered a zone. 409 on double-confirm.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import PackageRemoval
+
+    removal = (
+        db.query(PackageRemoval)
+        .filter(PackageRemoval.id == removal_id, PackageRemoval.company_id == caller.company_id)
+        .first()
+    )
+    if removal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Removal not found.")
+    if removal.status == "removed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already confirmed removed.")
+
+    if not removal.whole_tote and removal.tba:
+        zones = _active_zones(db, caller.company_id, removal.removal_date)
+        for z in zones:
+            if removal.tba in (z.package_tbas or []):
+                z.package_tbas = [t for t in z.package_tbas if t != removal.tba]
+                roster = []
+                for e in (z.tote_roster or []):
+                    if removal.tba in e.get("tba_numbers", []):
+                        kept = [t for t in e["tba_numbers"] if t != removal.tba]
+                        if kept:
+                            e = {**e, "tba_numbers": kept, "package_count": len(kept)}
+                            roster.append(e)
+                        # a tote emptied by removals drops off the roster
+                    else:
+                        roster.append(e)
+                z.tote_roster = roster
+                z.tote_count = len(roster)
+                break
+
+    removal.status = "removed"
+    removal.removed_by = caller.id
+    removal.removed_by_name = caller.name
+    removal.removed_at = _dt.now(_tz.utc)
+
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="sort.removal_confirmed",
+        target_table="package_removals",
+        target_id=removal.id,
+        after_snapshot={
+            "bag_id": removal.bag_id, "tba": removal.tba,
+            "whole_tote": removal.whole_tote, "package_count": removal.package_count,
+        },
+    ))
+    db.commit()
+    return _removals_response(db, caller.company_id, removal.removal_date)
