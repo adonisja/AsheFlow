@@ -195,31 +195,20 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
         color=0x57F287,  # green
     )
 
-    TRUCK_COL = 8
-    NAME_COL  = 16
-    CREW_COL  = 4
-
-    header = f"{'Truck':<{TRUCK_COL}}  {'Driver':<{NAME_COL}}  {'Crew':>{CREW_COL}}  Anchor Point"
-    SEP    = "─" * 60
-    rows   = [header, SEP]
-
+    # One inline field per truck: three short lines that never wrap, at any
+    # screen width. (The previous 60-char code-block table could not reflow —
+    # phones wrap code blocks at ~40 monospace chars and the layout shredded.)
     for entry in trucks_data:
-        truck_name   = entry["truck_name"][:TRUCK_COL]
         crew         = entry["crew"]
         anchor_point = entry.get("anchor_point") or "—"
         driver       = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
-        driver       = driver[:NAME_COL]
-        crew_count   = len(crew)
-
-        rows.append(
-            f"{truck_name:<{TRUCK_COL}}  {driver:<{NAME_COL}}  {crew_count:>{CREW_COL}}  {anchor_point}"
+        embed.add_field(
+            name=f"🚛 {entry['truck_name']}",
+            value=f"**{driver}**\n👥 {len(crew)} crew\n⚓ {anchor_point}",
+            inline=True,
         )
 
-    rows.append(SEP)
-    rows.append("Full crew details in each truck's channel.")
-
-    embed.description = "```\n" + "\n".join(rows) + "\n```"
-    embed.set_footer(text="Crew details have been posted to each truck's channel.")
+    embed.set_footer(text="Full crew details in each truck's channel.")
     return embed
 
 
@@ -248,54 +237,41 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
         for t, r in zip(all_trainees, phase_results)
     }
 
-    has_any_pairing = False
+    # One line per pairing: "**Truck** · Trainer → Trainee (Day N)".
+    # A single compact roster reads professionally and reflows cleanly on
+    # mobile; the previous tree-glyph fields (🎓/└/📋 per line) did not.
+    lines: list[str] = []
+    warnings: list[str] = []
     for entry in trucks_data:
         truck_name = entry["truck_name"]
         crew = entry["crew"]
         trainers = [m for m in crew if m["role"] == "trainer"]
         trainees = [m for m in crew if m["role"] == "trainee"]
-
-        if not trainers and not trainees:
+        if not trainees:
             continue
 
-        lines: list[str] = []
+        def _phase_label(trainee: dict) -> str:
+            phase = phase_map.get(trainee["employee_id"])
+            return f"Day {phase}" if phase is not None else "Day ?"
 
-        if trainers and trainees:
-            # Only show trainers that have an actual paired trainee today.
-            claimed_trainee_ids: set[str] = set()
-            for trainer in trainers:
-                paired = [
-                    t for t in trainees
-                    if t.get("paired_trainer_id") == trainer["employee_id"]
-                ]
-                if not paired:
-                    continue  # skip unpaired trainers — keeps the list clean
-                lines.append(f"🎓 **{trainer['name']}**")
-                for trainee in paired:
-                    phase = phase_map.get(trainee["employee_id"])
-                    phase_label = f"Day {phase}" if phase is not None else "Day ?"
-                    lines.append(f"  └ 📋 **{trainee['name']}** — {phase_label}")
+        claimed_trainee_ids: set[str] = set()
+        for trainer in trainers:
+            for trainee in trainees:
+                if trainee.get("paired_trainer_id") == trainer["employee_id"]:
+                    lines.append(
+                        f"**{truck_name}** · {trainer['name']} → {trainee['name']} ({_phase_label(trainee)})"
+                    )
                     claimed_trainee_ids.add(trainee["employee_id"])
-            # Orphaned trainees — no trainer set
-            for trainee in trainees:
-                if trainee["employee_id"] not in claimed_trainee_ids:
-                    phase = phase_map.get(trainee["employee_id"])
-                    phase_label = f"Day {phase}" if phase is not None else "Day ?"
-                    lines.append(f"📋 **{trainee['name']}** ({phase_label}) — *(trainer not set)*")
-        else:
-            # Truck has trainees but no trainers at all
-            for trainee in trainees:
-                phase = phase_map.get(trainee["employee_id"])
-                phase_label = f"Day {phase}" if phase is not None else "Day ?"
-                lines.append(f"📋 **{trainee['name']}** ({phase_label}) — *(no trainer assigned)*")
 
-        if not lines:
-            continue  # entire truck has trainers but none paired — skip it
+        for trainee in trainees:
+            if trainee["employee_id"] not in claimed_trainee_ids:
+                warnings.append(
+                    f"⚠ **{truck_name}** · {trainee['name']} ({_phase_label(trainee)}) — no trainer assigned"
+                )
 
-        has_any_pairing = True
-        embed.add_field(name=f"🚛 {truck_name}", value="\n".join(lines), inline=False)
-
-    if not has_any_pairing:
+    if lines or warnings:
+        embed.description = "\n".join(lines + warnings)
+    else:
         embed.description = "No trainer–trainee pairings on today's dispatch."
 
     return embed
