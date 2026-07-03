@@ -184,6 +184,21 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
 # Helper: build the #drivers-chat finalization embed
 # ---------------------------------------------------------------------------
 
+def _fit_name(name: str, width: int) -> str:
+    """Fit a person's name into a fixed table column.
+
+    Prefers "First L." over a mid-word cut; falls back to a hard truncate.
+    """
+    if len(name) <= width:
+        return name
+    parts = name.split()
+    if len(parts) >= 2:
+        short = f"{parts[0]} {parts[-1][0]}."
+        if len(short) <= width:
+            return short
+    return name[: width - 1] + "…"
+
+
 def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
     """Embed posted to #drivers-chat after finalization.
 
@@ -191,23 +206,30 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
     Anchor Point is the truck's stored initial_anchor_display_address.
     """
     embed = discord.Embed(
-        title=f"✅ Dispatch Finalized — {dispatch_date}",
+        title=f"Dispatch Finalized — {dispatch_date}",
         color=0x57F287,  # green
     )
 
-    # One inline field per truck: three short lines that never wrap, at any
-    # screen width. (The previous 60-char code-block table could not reflow —
-    # phones wrap code blocks at ~40 monospace chars and the layout shredded.)
+    # Table sized to ~40 monospace chars — the width phones wrap Discord code
+    # blocks at. Fixed columns first; the anchor column is LAST and untruncated
+    # so on a narrow screen only its tail wraps, leaving the grid intact.
+    TRUCK_COL, NAME_COL, CREW_COL = 7, 15, 4
+
+    header = f"{'Truck':<{TRUCK_COL}} {'Driver':<{NAME_COL}} {'Crew':>{CREW_COL}}  Anchor"
+    sep    = "─" * 40
+    rows   = [header, sep]
+
     for entry in trucks_data:
         crew         = entry["crew"]
         anchor_point = entry.get("anchor_point") or "—"
         driver       = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
-        embed.add_field(
-            name=f"🚛 {entry['truck_name']}",
-            value=f"**{driver}**\n👥 {len(crew)} crew\n⚓ {anchor_point}",
-            inline=True,
+        rows.append(
+            f"{entry['truck_name'][:TRUCK_COL]:<{TRUCK_COL}} "
+            f"{_fit_name(driver, NAME_COL):<{NAME_COL}} "
+            f"{len(crew):>{CREW_COL}}  {anchor_point}"
         )
 
+    embed.description = "```\n" + "\n".join(rows) + "\n```"
     embed.set_footer(text="Full crew details in each truck's channel.")
     return embed
 
@@ -219,7 +241,7 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
 async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
     """One embed listing every truck with trainers and/or trainees for the day."""
     embed = discord.Embed(
-        title=f"📋 Trainer Pairings — {dispatch_date}",
+        title=f"Trainer Pairings — {dispatch_date}",
         color=0x57F287,  # green
     )
 
@@ -237,40 +259,54 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
         for t, r in zip(all_trainees, phase_results)
     }
 
-    # One line per pairing: "**Truck** · Trainer → Trainee (Day N)".
-    # A single compact roster reads professionally and reflows cleanly on
-    # mobile; the previous tree-glyph fields (🎓/└/📋 per line) did not.
-    lines: list[str] = []
-    warnings: list[str] = []
+    # Table sized to ~40 monospace chars (mobile code-block wrap width).
+    # Unpaired trainees keep the same row shape with "—" in the Trainer column.
+    TRUCK_COL, TRAINER_COL, TRAINEE_COL = 7, 13, 13
+
+    header = f"{'Truck':<{TRUCK_COL}} {'Trainer':<{TRAINER_COL}} {'Trainee':<{TRAINEE_COL}} Day"
+    sep    = "─" * 40
+    rows   = [header, sep]
+    unpaired_count = 0
+
     for entry in trucks_data:
-        truck_name = entry["truck_name"]
+        truck_name = entry["truck_name"][:TRUCK_COL]
         crew = entry["crew"]
         trainers = [m for m in crew if m["role"] == "trainer"]
         trainees = [m for m in crew if m["role"] == "trainee"]
         if not trainees:
             continue
 
-        def _phase_label(trainee: dict) -> str:
+        def _day(trainee: dict) -> str:
             phase = phase_map.get(trainee["employee_id"])
-            return f"Day {phase}" if phase is not None else "Day ?"
+            return str(phase) if phase is not None else "?"
 
         claimed_trainee_ids: set[str] = set()
         for trainer in trainers:
             for trainee in trainees:
                 if trainee.get("paired_trainer_id") == trainer["employee_id"]:
-                    lines.append(
-                        f"**{truck_name}** · {trainer['name']} → {trainee['name']} ({_phase_label(trainee)})"
+                    rows.append(
+                        f"{truck_name:<{TRUCK_COL}} "
+                        f"{_fit_name(trainer['name'], TRAINER_COL):<{TRAINER_COL}} "
+                        f"{_fit_name(trainee['name'], TRAINEE_COL):<{TRAINEE_COL}} "
+                        f"{_day(trainee):>3}"
                     )
                     claimed_trainee_ids.add(trainee["employee_id"])
 
         for trainee in trainees:
             if trainee["employee_id"] not in claimed_trainee_ids:
-                warnings.append(
-                    f"⚠ **{truck_name}** · {trainee['name']} ({_phase_label(trainee)}) — no trainer assigned"
+                unpaired_count += 1
+                rows.append(
+                    f"{truck_name:<{TRUCK_COL}} "
+                    f"{'—':<{TRAINER_COL}} "
+                    f"{_fit_name(trainee['name'], TRAINEE_COL):<{TRAINEE_COL}} "
+                    f"{_day(trainee):>3}"
                 )
 
-    if lines or warnings:
-        embed.description = "\n".join(lines + warnings)
+    if len(rows) > 2:
+        rows.append(sep)
+        embed.description = "```\n" + "\n".join(rows) + "\n```"
+        if unpaired_count:
+            embed.set_footer(text=f"{unpaired_count} trainee(s) without a trainer — fix in Dispatch.")
     else:
         embed.description = "No trainer–trainee pairings on today's dispatch."
 
