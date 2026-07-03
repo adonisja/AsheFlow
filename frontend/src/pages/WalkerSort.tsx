@@ -1323,7 +1323,7 @@ export default function WalkerSortMonitor() {
         title="AP Sort"
         description={`Package sort, route assignment, and walker dispatch for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
-          <button onClick={fetchAll} className="btn-ghost flex items-center gap-1.5 text-sm">
+          <button onClick={() => fetchAll()} className="btn-ghost flex items-center gap-1.5 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
           </button>
         }
