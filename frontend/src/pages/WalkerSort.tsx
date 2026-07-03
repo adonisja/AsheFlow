@@ -11,6 +11,16 @@ import {
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import ToteRosterPanel from '../components/ToteRosterPanel';
+import type { RostersResponse } from '../api/types';
+
+/** Station-loading facts per truck, derived from /sort/{date}/rosters:
+ * feeds the commit soft-gate warning, the rider pre-warning, driver names,
+ * and the per-truck load sheet link. */
+interface StationTruckInfo {
+  driverName: string | null;
+  pendingTransfers: number;
+  riderCount: number;
+}
 import { useAuth } from '../contexts/AuthContext';
 import type {
   RouteResponse, MisroutedPackageOut,
@@ -28,6 +38,7 @@ interface TruckAssignment {
   truck_name: string;
   status: string;
   date: string;
+  paired_arrival_confirmed?: boolean;
 }
 
 interface Employee {
@@ -169,12 +180,16 @@ interface MisrouteResolveModalProps {
   flagId: string;
   tbaNumber: string;
   routes: RouteResponse[];
+  suggestedRouteNumber?: number | null;
   onClose: () => void;
   onResolved: () => void;
 }
 
-function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, onClose, onResolved }: MisrouteResolveModalProps) {
-  const [destRouteId, setDestRouteId] = useState('');
+function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRouteNumber, onClose, onResolved }: MisrouteResolveModalProps) {
+  // The sort already knows which route covers this package's block - default
+  // to it (dispatch can still pick another route or hand back to the truck).
+  const suggested = routes.find(r => r.route_number === suggestedRouteNumber);
+  const [destRouteId, setDestRouteId] = useState(suggested?.id ?? '');
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState<string | null>(null);
 
@@ -212,7 +227,9 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, onClose, onR
           >
             <option value="">Select destination route…</option>
             {routes.map(r => (
-              <option key={r.id} value={r.id}>#{r.route_number} — {r.assigned_to_name ?? 'unassigned'} ({r.effort_class})</option>
+              <option key={r.id} value={r.id}>
+                #{r.route_number} — {r.assigned_to_name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested: covers this block' : ''}
+              </option>
             ))}
           </select>
         </div>
@@ -246,7 +263,7 @@ interface RouteCardProps {
   // distributed/arrived phase
   canReassign?: boolean;
   onReassign?: (route: RouteResponse) => void;
-  onResolveMisroute?: (routeId: string, flagId: string, tba: string) => void;
+  onResolveMisroute?: (routeId: string, flagId: string, tba: string, suggestedRouteNumber?: number | null) => void;
 }
 
 function RouteCard({
@@ -367,7 +384,7 @@ function RouteCard({
                     </div>
                     {isOperational && canReassign && onResolveMisroute && (
                       <button
-                        onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number)}
+                        onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number, m.suggested_route_number)}
                         className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
                       >
                         Resolve
@@ -660,6 +677,7 @@ function TruckSortPanel({
   onDistribute,
   onArrivalConfirm,
   onRefresh,
+  station,
 }: {
   state: TruckSortState;
   walkers: Employee[];
@@ -670,6 +688,7 @@ function TruckSortPanel({
   onDistribute: (taId: string, assignments: WaveAssignmentEntry[], trainerId: string, traineeId?: string, traineePhase?: number) => Promise<void>;
   onArrivalConfirm: (taId: string, trainerId: string, traineeId: string) => Promise<void>;
   onRefresh: (taId: string) => Promise<void>;
+  station?: StationTruckInfo;
 }) {
   const [open, setOpen]                         = useState(false);
   const [commitLoading, setCommitLoading]       = useState(false);
@@ -686,7 +705,7 @@ function TruckSortPanel({
   const [arrivalTrainerId, setArrivalTrainerId] = useState('');
   const [arrivalTraineeId, setArrivalTraineeId] = useState('');
   const [reassignTarget, setReassignTarget]     = useState<RouteResponse | null>(null);
-  const [misrouteTarget, setMisrouteTarget]     = useState<{ routeId: string; flagId: string; tba: string } | null>(null);
+  const [misrouteTarget, setMisrouteTarget]     = useState<{ routeId: string; flagId: string; tba: string; suggestedRouteNumber?: number | null } | null>(null);
 
   useEffect(() => {
     setWaveMap(prev => {
@@ -775,7 +794,12 @@ function TruckSortPanel({
             <Layers className="w-4.5 h-4.5 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-foreground">{state.ta.truck_name}</p>
+            <p className="text-sm font-semibold text-foreground">
+              {state.ta.truck_name}
+              {station?.driverName && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">{station.driverName}</span>
+              )}
+            </p>
             <p className="text-xs text-muted-foreground">
               {state.phase === 'idle'        && 'Not committed'}
               {state.phase === 'committed'   && `${state.routes.length} routes · ${pkgCount} pkgs — awaiting distribution`}
@@ -795,6 +819,16 @@ function TruckSortPanel({
 
         {open && (
           <div className="border-t border-border px-4 pb-4 pt-3 space-y-5">
+            <div className="flex justify-end -mb-3">
+              <a
+                href={`/sort/print?date=${routeDate}&truck=${state.ta.truck_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                Print load sheet ↗
+              </a>
+            </div>
             {error && (
               <div className="p-3 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
             )}
@@ -807,6 +841,21 @@ function TruckSortPanel({
               </div>
               {state.phase === 'idle' ? (
                 zoneExists ? (
+                  <div className="space-y-2">
+                  {(station?.pendingTransfers ?? 0) > 0 && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-warning/5 border border-warning/20 text-xs text-warning">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      {station!.pendingTransfers} pending station transfer{station!.pendingTransfers === 1 ? '' : 's'} touch this
+                      truck - committing now builds routes on data that may still change. Not blocked (soft gate).
+                    </div>
+                  )}
+                  {(station?.riderCount ?? 0) > 0 && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-accent/40 border border-border text-xs text-muted-foreground">
+                      <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
+                      Carries {station!.riderCount} package{station!.riderCount === 1 ? '' : 's'} off their tote's home block -
+                      expect that many cross-walker transfers after commit.
+                    </div>
+                  )}
                   <button
                     onClick={handleCommit}
                     disabled={commitLoading}
@@ -815,6 +864,7 @@ function TruckSortPanel({
                     {commitLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                     {commitLoading ? 'Committing sort…' : 'Commit Sort'}
                   </button>
+                  </div>
                 ) : (
                   <div className="flex items-center gap-2 p-3 rounded-xl bg-accent/40 border border-border text-xs text-muted-foreground">
                     <Layers className="w-3.5 h-3.5 shrink-0" />
@@ -859,7 +909,7 @@ function TruckSortPanel({
                           onAssign={(rn, eid) => setWaveMap(prev => ({ ...prev, [rn]: eid }))}
                           canReassign={true}
                           onReassign={setReassignTarget}
-                          onResolveMisroute={(routeId, flagId, tba) => setMisrouteTarget({ routeId, flagId, tba })}
+                          onResolveMisroute={(routeId, flagId, tba, suggestedRouteNumber) => setMisrouteTarget({ routeId, flagId, tba, suggestedRouteNumber })}
                         />
                       ))}
                 </div>
@@ -1084,6 +1134,7 @@ function TruckSortPanel({
           routeId={misrouteTarget.routeId}
           flagId={misrouteTarget.flagId}
           tbaNumber={misrouteTarget.tba}
+          suggestedRouteNumber={misrouteTarget.suggestedRouteNumber}
           routes={state.routes}
           onClose={() => setMisrouteTarget(null)}
           onResolved={() => onRefresh(state.ta.id)}
@@ -1106,6 +1157,7 @@ export default function WalkerSortMonitor() {
   const [walkers, setWalkers]           = useState<Employee[]>([]);
   const [trainers, setTrainers]         = useState<Employee[]>([]);
   const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
+  const [stationInfo, setStationInfo]   = useState<Map<string, StationTruckInfo>>(new Map());
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState<string | null>(null);
 
@@ -1114,6 +1166,9 @@ export default function WalkerSortMonitor() {
   const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
     const phase: SortPhase =
       routes.length === 0                                  ? 'idle'
+      // arrival-confirm is persisted on the assignment — reconstruct the
+      // 'arrived' phase after a page refresh instead of losing it
+      : ta.paired_arrival_confirmed && routes.some(r => r.status !== 'unassigned') ? 'arrived'
       : routes.some(r => r.status !== 'unassigned')       ? 'distributed'
       : 'committed';
     return {
@@ -1128,15 +1183,30 @@ export default function WalkerSortMonitor() {
     };
   };
 
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
+  const fetchAll = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
-      const [taRes, empRes, zoneRes] = await Promise.allSettled([
+      const [taRes, empRes, zoneRes, rosterRes] = await Promise.allSettled([
         axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<{ id: string; role: string; name: string; injury_status?: string | null }[]>('/employees/', { params: { is_active: true } }),
         axiosClient.get<{ zones: { truck_id: string }[] }>(`/sort/${today}`),
+        axiosClient.get<RostersResponse>(`/sort/${today}/rosters`),
       ]);
+      if (rosterRes.status === 'fulfilled') {
+        const info = new Map<string, StationTruckInfo>();
+        rosterRes.value.data.rosters.forEach(r => {
+          const prev = info.get(r.truck_id);
+          const pending = [...r.incoming, ...r.outgoing].filter(t => t.status === 'suggested' || t.status === 'confirmed').length;
+          const riders = r.totes.reduce((n, t) => n + (t.rider_count ?? 0), 0);
+          info.set(r.truck_id, {
+            driverName: r.driver_name ?? prev?.driverName ?? null,
+            pendingTransfers: (prev?.pendingTransfers ?? 0) + pending,
+            riderCount: (prev?.riderCount ?? 0) + riders,
+          });
+        });
+        setStationInfo(info);
+      }
 
       if (zoneRes.status === 'fulfilled') {
         setZonedTruckIds(new Set((zoneRes.value.data.zones ?? []).map(z => z.truck_id)));
@@ -1168,6 +1238,16 @@ export default function WalkerSortMonitor() {
   }, [today]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Live-ish updates without SSE: silent refetch every 60s while the tab is
+  // visible, plus on window focus. Full push updates arrive with the
+  // notification rework's SSE phase.
+  useEffect(() => {
+    const tick = () => { if (document.visibilityState === 'visible') fetchAll(true); };
+    const interval = setInterval(tick, 60_000);
+    window.addEventListener('focus', tick);
+    return () => { clearInterval(interval); window.removeEventListener('focus', tick); };
+  }, [fetchAll]);
 
   const updateState = (taId: string, patch: Partial<TruckSortState>) => {
     setTruckStates(prev => prev.map(s => s.ta.id === taId ? { ...s, ...patch } : s));
@@ -1304,6 +1384,7 @@ export default function WalkerSortMonitor() {
               trainers={trainers}
               routeDate={today}
               zoneExists={zonedTruckIds.has(state.ta.truck_id)}
+              station={stationInfo.get(state.ta.truck_id)}
               onCommit={handleCommit}
               onDistribute={handleDistribute}
               onArrivalConfirm={handleArrivalConfirm}

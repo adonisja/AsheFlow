@@ -76,6 +76,7 @@ export interface RosterTote {
   dock_tags: string[];
   ov_dock_tags: string[];
   classification?: ToteClassification;
+  rider_count?: number;
   checked: boolean;
   checked_by_name?: string | null;
   transfer?: ToteTransferOut | null;

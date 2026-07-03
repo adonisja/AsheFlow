@@ -59,6 +59,7 @@ def get_assignments(
             truck_name = name or "",
             date       = ta.date,
             status     = ta.status,
+            paired_arrival_confirmed = ta.paired_arrival_confirmed,
         )
         for ta, name in rows
     ]

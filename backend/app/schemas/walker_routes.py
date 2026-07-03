@@ -35,6 +35,9 @@ OV_HALF_SLOTS: dict[str, int] = {
     "XL": 4,
 }
 
+# A tote costs 2 HALF-slots — i.e. exactly ONE full cart slot. All capacity
+# arithmetic is in half-slots (×2) to keep OV fractions integral; don't read
+# this as "a tote takes two slots". OVs add half-slots per OV_HALF_SLOTS.
 TOTE_HALF_SLOTS = 2
 
 

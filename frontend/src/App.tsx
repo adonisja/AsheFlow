@@ -447,7 +447,7 @@ function App() {
             <Route
               path="/walker-sort"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
                   <WalkerSortMonitor />
                 </ProtectedRoute>
               }

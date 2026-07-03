@@ -1948,6 +1948,7 @@ class RosterToteOut(BaseModel):
     dock_tags: list[str]
     ov_dock_tags: list[str]
     classification: str = "clean"  # clean | stray | uncertain | misaligned (tier-1)
+    rider_count: int = 0           # packages off their tote's dominant block — future cross-walker transfers
     checked: bool
     checked_by_name: Optional[str] = None
     transfer: Optional[ToteTransferOut] = None   # transfer touching this bag (incl. kept, for undo)
@@ -2114,6 +2115,7 @@ def get_load_rosters(
                 dock_tags=entry.get("dock_tags", []),
                 ov_dock_tags=entry.get("ov_dock_tags", []),
                 classification=entry.get("classification", "clean"),
+                rider_count=entry.get("rider_count", 0),
                 checked=chk is not None,
                 checked_by_name=chk.checked_by_name if chk else None,
                 transfer=_transfer_out(xfer, truck_names, drivers) if xfer else None,

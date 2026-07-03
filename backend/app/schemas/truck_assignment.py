@@ -19,5 +19,6 @@ class TruckAssignmentResponse(BaseModel):
     truck_name: str = ""
     date: date
     status: str
+    paired_arrival_confirmed: bool = False
 
     model_config = {"from_attributes": True}

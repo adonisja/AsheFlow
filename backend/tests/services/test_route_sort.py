@@ -624,12 +624,15 @@ class TestBFSClustering:
         assert len(result.routes) == 1
 
     def test_capacity_cap_still_splits_even_with_adjacency(self):
-        # W_36_St_300 (6 totes = 12 half-slots, exactly at capacity) and W_36_St_400
-        # (1 tote = 2 half-slots) are cost-2 adjacent. Adding W_36_St_400 would push
-        # the route to 14 > 12 — BFS must reject it, producing 2 separate routes.
-        pkgs_a = [_pkg(f"TBA{i:03}", "300 W 36th St", f"BagA{i}") for i in range(6)]
+        # Fill W_36_St_300 with exactly a full standard route's worth of totes,
+        # then add one cost-2-adjacent tote on W_36_St_400. Absorbing it would
+        # exceed capacity — BFS must reject it, producing 2 separate routes.
+        # Written relative to the constants so it tracks the true tote weight.
+        from app.schemas.walker_routes import EFFORT_CAPACITY
+        n_full = EFFORT_CAPACITY["standard"] // TOTE_HALF_SLOTS
+        pkgs_a = [_pkg(f"TBA{i:03}", "300 W 36th St", f"BagA{i}") for i in range(n_full)]
         pkgs_b = [_pkg("TBA099", "400 W 36th St", "BagB0")]
         result = run_sort(_request(pkgs_a + pkgs_b), {}, {}, {})
         assert len(result.routes) >= 2
         total = sum(len(r.tote_ids) for r in result.routes)
-        assert total == 7
+        assert total == n_full + 1

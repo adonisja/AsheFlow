@@ -264,6 +264,7 @@ function Sheet({ roster, date, accent, finalized }: {
 export default function PrintLoadSheets() {
   const [params] = useSearchParams();
   const date = params.get('date') ?? getLocalYMD();
+  const truckFilter = params.get('truck');
   const [data, setData] = useState<RostersResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -297,7 +298,7 @@ export default function PrintLoadSheets() {
           {!data.loading_finalized && ' · ⚠ loading not finalized — sheets are marked PRELIMINARY'}
         </span>
       </div>
-      {data.rosters.map(r => (
+      {data.rosters.filter(r => !truckFilter || r.truck_id === truckFilter).map(r => (
         <Sheet
           key={r.zone_id}
           roster={r}
