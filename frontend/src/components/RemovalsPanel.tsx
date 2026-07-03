@@ -16,6 +16,7 @@ function RemovalRow({ r, busy, onConfirm }: {
   r: RemovalOut; busy: boolean; onConfirm: (id: string) => void;
 }) {
   const removed = r.status === 'removed';
+  const apStage = r.pull_point === 'anchor_point';
   return (
     <tr className={`border-b border-border/40 last:border-0 ${removed ? 'opacity-60' : ''}`}>
       <td className="px-2 py-1.5 font-mono text-xs font-semibold text-foreground">{r.bag_id}</td>
@@ -31,6 +32,10 @@ function RemovalRow({ r, busy, onConfirm }: {
           <span className="inline-flex items-center gap-1 text-[11px] text-success">
             <CheckCircle2 className="w-3.5 h-3.5" />
             removed{r.removed_by_name ? ` · ${r.removed_by_name}` : ''}
+          </span>
+        ) : apStage ? (
+          <span className="text-[11px] text-warning font-semibold" title="Pulled and recorded by the crew at the anchor point — not a dock task">
+            pull at AP (crew)
           </span>
         ) : (
           <button
@@ -104,7 +109,8 @@ export default function RemovalsPanel({ date }: { date: string }) {
           : 'bg-success/5 border-success/20 text-success'
       }`}>
         {data.flagged_count > 0
-          ? <>{data.flagged_count} unit{data.flagged_count === 1 ? '' : 's'} still on trucks — not our delivery area. These are removals, not transfers.</>
+          ? <>{data.flagged_count} out-of-zone unit{data.flagged_count === 1 ? '' : 's'} flagged — not our delivery area.
+              Whole totes are pulled at the dock; single packages are pulled by the crew at the anchor point.</>
           : <>All {data.removed_count} out-of-zone unit{data.removed_count === 1 ? '' : 's'} pulled ({totalPkgs} packages) — ready for Amazon handback.</>}
       </div>
 

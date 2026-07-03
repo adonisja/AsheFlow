@@ -24,7 +24,7 @@ const ANCHOR_SOURCE_LABELS: Record<string, string> = {
   quantile: 'Auto (quantile)',
 };
 import type {
-  SortRunResponse, SortRunAccepted, SortRunStatusResponse, BagResultOut, BagOverride, BagPackageDetail,
+  SortRunResponse, SortRunAccepted, SortRunStatusResponse,
   ManifestPreviewResponse, ManifestPreviewRow, ManifestPackagePatchResponse,
   SortPreviewResponse,
 } from '../api/types';
@@ -725,17 +725,13 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums text-foreground">{a.package_count.toLocaleString()}</td>
                   <td className="px-2 py-1 text-muted-foreground">
-                    {ANCHOR_SOURCE_LABELS[a.anchor_source ?? ''] ?? a.match_type}
+                    {ANCHOR_SOURCE_LABELS[a.anchor_source ?? ''] ?? '—'}
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
                     {a.workload_score != null ? a.workload_score.toFixed(2) : '—'}
                   </td>
                   <td className="px-2 py-1">
-                    {!preview.tier1_passed && !preview.was_forced
-                      ? <span className="text-warning">⚠</span>
-                      : preview.was_forced
-                      ? <span className="text-warning text-[9px] uppercase font-semibold">forced</span>
-                      : <span className="text-success">✓</span>}
+                    <span className="text-success">✓</span>
                   </td>
                 </tr>
               ))}
@@ -779,7 +775,7 @@ function StepRow({ label, index }: { label: string; index: number }) {
 // Manifest sort panel — POST /sort/run, tier-1 review, override, resubmit
 // ---------------------------------------------------------------------------
 
-type SortRunPhase = 'idle' | 'running' | 'tier1_failed' | 'done';
+type SortRunPhase = 'idle' | 'running' | 'done';
 
 const _SORT_POLL_INTERVAL = 3_000;   // 3 s between status checks
 
@@ -803,49 +799,10 @@ function ManifestSortPanel({
   const [expanded, setExpanded]         = useState(false);
   const [running, setRunning]           = useState(false);
   const [doneTaskId, setDoneTaskId]     = useState<string | null>(null);
-  // override map: bag_id → truck_id (dispatch confirmed or manually chosen)
-  const [overrideMap, setOverrideMap]   = useState<Record<string, string>>({});
-  // set of bag_ids whose package detail list is expanded
-  const [expandedBags, setExpandedBags] = useState<Set<string>>(new Set());
-  // bag_id of the currently open truck-picker dropdown (null = all closed)
-  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  // pagination for tier1_failed bag list
-  const [bagPage, setBagPage]           = useState(0);
-  const BAG_PAGE_SIZE                   = 25;
   const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
-  const bagListRef                      = useRef<HTMLDivElement | null>(null);
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
-
-  // Close the open truck-picker dropdown on mousedown outside it.
-  // Uses a data attribute on the container so a single handler works across
-  // all bags without needing a ref inside a .map(). mousedown fires before
-  // click, so we must check containment — otherwise the dropdown unmounts
-  // before the option's onClick fires and the selection is swallowed.
-  useEffect(() => {
-    if (!openDropdown) return;
-    const handler = (e: MouseEvent) => {
-      const inside = (e.target as Element).closest('[data-truck-picker]');
-      if (inside) return;
-      setOpenDropdown(null);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [openDropdown]);
-
-  const truckById = Object.fromEntries(trucks.map(t => [t.truck_id, t.truck_name]));
-
-  const classificationColor = (c: string) =>
-    c === 'misaligned' ? 'text-danger'
-    : c === 'uncertain' ? 'text-warning'
-    : c === 'stray'     ? 'text-warning/70'
-    : 'text-success';
-
-  const classificationBg = (c: string) =>
-    c === 'misaligned' ? 'bg-danger/5 border-danger/20'
-    : c === 'uncertain' ? 'bg-warning/5 border-warning/20'
-    : 'bg-accent/40 border-border';
 
   function handleStatusPayload(data: SortRunStatusResponse) {
     setOnNotification(null); // clear SSE callback on any terminal status
@@ -855,11 +812,11 @@ function ManifestSortPanel({
         package_count:    data.package_count!,
         outlier_count:    data.outlier_count!,
         cluster_count:    data.cluster_count!,
-        tier1_passed:     data.tier1_passed!,
-        was_forced:       data.was_forced!,
         zones_created:    data.zones_created!,
+        station_removals: data.station_removals ?? 0,
+        ap_flags:         data.ap_flags ?? 0,
+        unplaced_totes:   data.unplaced_totes ?? 0,
         assignments:      data.assignments,
-        flagged_bags:     [],
         volume_alert:     data.volume_alert    ?? false,
         volume_alert_msg: data.volume_alert_msg ?? '',
       };
@@ -869,40 +826,6 @@ function ManifestSortPanel({
       setExpanded(false);
       setRunning(false);
       onZonesCreated();
-    } else if (data.status === 'tier1_failed') {
-      const synth: SortRunResponse = {
-        sort_date:        today,
-        package_count:    0,
-        outlier_count:    0,
-        cluster_count:    0,
-        tier1_passed:     false,
-        was_forced:       false,
-        zones_created:    0,
-        assignments:      [],
-        flagged_bags:     data.flagged_bags,
-        volume_alert:     false,
-        volume_alert_msg: '',
-      };
-      // Auto-select suggested truck for misaligned bags where ≥50% of packages
-      // belong on a different truck — the algorithm is confident, dispatch just
-      // needs to confirm rather than manually choose each time.
-      const autoOverrides: Record<string, string> = {};
-      for (const bag of data.flagged_bags) {
-        if (
-          bag.classification === 'misaligned' &&
-          bag.suggested_truck_id &&
-          bag.total_packages > 0 &&
-          bag.outside_packages / bag.total_packages >= 0.5
-        ) {
-          autoOverrides[bag.bag_id] = bag.suggested_truck_id;
-        }
-      }
-      setResult(synth);
-      setOverrideMap(autoOverrides);
-      setBagPage(0);
-      setPhase('tier1_failed');
-      setExpanded(true);
-      setRunning(false);
     } else if (data.status === 'error') {
       const SENTINEL: Record<string, string> = {
         internal_error:    'Zone assignment failed due to an unexpected error. Retry or check worker logs.',
@@ -952,7 +875,7 @@ function ManifestSortPanel({
     // Register SSE callback — fires immediately if the task already finished
     // while we were away, or as soon as the worker pushes the notification.
     setOnNotification((type: string) => {
-      if (type === 'zone_sort_complete' || type === 'zone_sort_review') {
+      if (type === 'zone_sort_complete') {
         stopPoll();
         fetchStatus(taskId);
         setOnNotification(null);
@@ -963,7 +886,7 @@ function ManifestSortPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function runSort(force: boolean, overrides: BagOverride[]) {
+  async function runSort() {
     setRunning(true);
     setError(null);
     stopPoll();
@@ -975,8 +898,6 @@ function ManifestSortPanel({
     try {
       const { data: accepted } = await axiosClient.post<SortRunAccepted>('/sort/run', {
         sort_date: today,
-        force,
-        overrides,
       });
       const taskId = accepted.task_id;
 
@@ -985,7 +906,7 @@ function ManifestSortPanel({
 
       // Primary: wait for SSE notification (task complete/review) then fetch once
       setOnNotification((type: string) => {
-        if (type === 'zone_sort_complete' || type === 'zone_sort_review') {
+        if (type === 'zone_sort_complete') {
           stopPoll();
           fetchStatus(taskId);
           setOnNotification(null);
@@ -1006,28 +927,27 @@ function ManifestSortPanel({
   function handleInitialRun() {
     setPhase('running');
     setExpanded(true);
-    runSort(false, []);
-  }
-
-  function handleConfirmOverrides() {
-    const overrides: BagOverride[] = Object.entries(overrideMap)
-      .filter(([, truck_id]) => truck_id)
-      .map(([bag_id, truck_id]) => ({ bag_id, truck_id }));
-    runSort(true, overrides);
+    runSort();
   }
 
   const borderClass =
     phase === 'done'         ? 'border-success/40 bg-success/5'
-    : phase === 'tier1_failed' ? 'border-warning/40 bg-warning/5'
     : phase === 'running'    ? 'border-primary/40 bg-primary/5'
     : error                  ? 'border-danger/40 bg-danger/5'
     : 'border-border bg-surface-muted/30';
 
+  const doneExtras = result
+    ? [
+        result.station_removals ? `${result.station_removals} station removal${result.station_removals === 1 ? '' : 's'}` : null,
+        result.ap_flags ? `${result.ap_flags} AP pull${result.ap_flags === 1 ? '' : 's'}` : null,
+        result.unplaced_totes ? `${result.unplaced_totes} unplaced` : null,
+      ].filter(Boolean).join(' · ')
+    : '';
+
   const headerSubtext =
     phase === 'idle'         ? (manifestReady ? 'Manifest ready — assign packages to truck zones.' : 'Upload a manifest first to enable zone sort.')
-    : phase === 'running'    ? 'Clustering packages and assigning truck zones…'
-    : phase === 'tier1_failed' ? `${result?.flagged_bags.length ?? 0} bag(s) flagged — review and confirm below.`
-    : phase === 'done'       ? `Zones created: ${result?.zones_created ?? 0} · ${result?.package_count.toLocaleString()} packages sorted.`
+    : phase === 'running'    ? 'Assigning totes to truck zones…'
+    : phase === 'done'       ? `Zones created: ${result?.zones_created ?? 0} · ${result?.package_count.toLocaleString()} packages sorted.${doneExtras ? ` · ${doneExtras}` : ''}`
     : (error ?? 'Sort failed.');
 
   return (
@@ -1038,8 +958,6 @@ function ManifestSortPanel({
       >
         {phase === 'running'
           ? <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
-          : phase === 'tier1_failed'
-          ? <AlertTriangle className="w-5 h-5 text-warning shrink-0" />
           : phase === 'done'
           ? <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
           : error
@@ -1048,8 +966,7 @@ function ManifestSortPanel({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-foreground">Zone Assignment</p>
           <p className={`text-xs truncate ${
-            phase === 'tier1_failed' ? 'text-warning'
-            : phase === 'done' ? 'text-success'
+            phase === 'done' ? 'text-success'
             : error ? 'text-danger'
             : 'text-muted-foreground'
           }`}>
@@ -1106,7 +1023,7 @@ function ManifestSortPanel({
                 'Building totes from bag IDs…',
                 'Assigning totes to truck anchors…',
                 'Balancing tote counts across trucks…',
-                'Running tier-1 bag verification…',
+                'Flagging out-of-zone freight…',
               ].map((label, i) => (
                 <StepRow key={i} label={label} index={i} />
               ))}
@@ -1124,7 +1041,7 @@ function ManifestSortPanel({
               )}
               {doneTaskId && <SortPreviewPanel today={today} taskId={doneTaskId} />}
               <button
-                onClick={() => { setPhase('idle'); setResult(null); setError(null); setOverrideMap({}); setDoneTaskId(null); }}
+                onClick={() => { setPhase('idle'); setResult(null); setError(null); setDoneTaskId(null); }}
                 className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
               >
                 Re-run sort
@@ -1132,336 +1049,6 @@ function ManifestSortPanel({
             </div>
           )}
 
-          {/* Tier-1 failed — per-bag review */}
-          {phase === 'tier1_failed' && result && (
-            <div className="space-y-4">
-
-              {/* Legend */}
-              <div className="p-3 bg-accent/40 rounded-xl space-y-2">
-                <p className="text-xs font-semibold text-foreground">What needs review</p>
-                <p className="text-xs text-muted-foreground">
-                  In-zone flags mean packages are on a truck they shouldn't be on — confirm the
-                  suggested truck or keep. Out-of-zone bags are not our freight: they are flagged
-                  for removal and tracked in the Removals panel after zones persist.
-                </p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-semibold uppercase text-danger">Out of zone</span>
-                    <p className="text-[10px] text-muted-foreground">Outside the company delivery area — remove from the truck and return to Amazon.</p>
-                  </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-semibold uppercase text-danger">Misaligned</span>
-                    <p className="text-[10px] text-muted-foreground">Majority of packages belong on a different truck — station tote swap suggested.</p>
-                  </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-semibold uppercase text-warning">Uncertain</span>
-                    <p className="text-[10px] text-muted-foreground">Split is close — no clear majority. Manual decision needed.</p>
-                  </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-semibold uppercase text-warning/70">Stray</span>
-                    <p className="text-[10px] text-muted-foreground">A few packages belong to another truck's territory — hand over at the AP.</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Pagination controls — top */}
-              {(() => {
-                const total = result.flagged_bags.length;
-                const totalPages = Math.ceil(total / BAG_PAGE_SIZE);
-                const resolvedCount = Object.keys(overrideMap).length;
-                if (totalPages <= 1) return null;
-                return (
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      Page <span className="font-medium text-foreground">{bagPage + 1}</span> of {totalPages}
-                      {' · '}{resolvedCount} of {total} bag{total !== 1 ? 's' : ''} with overrides set
-                    </p>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => { setBagPage(p => Math.max(0, p - 1)); bagListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-                        disabled={bagPage === 0}
-                        className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
-                      >
-                        ← Prev
-                      </button>
-                      {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                        const idx = totalPages <= 7 ? i
-                          : bagPage < 4 ? i
-                          : bagPage > totalPages - 5 ? totalPages - 7 + i
-                          : bagPage - 3 + i;
-                        return (
-                          <button
-                            key={idx}
-                            onClick={() => { setBagPage(idx); bagListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-                            className={`w-7 h-7 text-xs rounded-lg border transition-colors ${
-                              idx === bagPage
-                                ? 'bg-primary text-primary-foreground border-primary'
-                                : 'border-border bg-background hover:bg-accent'
-                            }`}
-                          >
-                            {idx + 1}
-                          </button>
-                        );
-                      })}
-                      <button
-                        onClick={() => { setBagPage(p => Math.min(totalPages - 1, p + 1)); bagListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-                        disabled={bagPage >= totalPages - 1}
-                        className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
-                      >
-                        Next →
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              <div className="space-y-2" ref={bagListRef}>
-                {result.flagged_bags.slice(bagPage * BAG_PAGE_SIZE, (bagPage + 1) * BAG_PAGE_SIZE).map(bag => {
-                  const currentTruck  = bag.inferred_truck_id  ? (truckById[bag.inferred_truck_id]  ?? bag.inferred_truck_id)  : null;
-                  const suggestedTruck = bag.suggested_truck_id ? (truckById[bag.suggested_truck_id] ?? bag.suggested_truck_id) : null;
-                  const chosenId = overrideMap[bag.bag_id];
-                  const chosenTruck = chosenId ? (truckById[chosenId] ?? chosenId) : null;
-
-                  return (
-                    <div
-                      key={bag.bag_id}
-                      className={`p-3 rounded-xl border space-y-2.5 ${classificationBg(bag.classification)}`}
-                    >
-                      {/* Row 1: bag ID + classification badge */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs font-semibold font-mono text-foreground">{bag.bag_id}</span>
-                          <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-md ${
-                            bag.classification === 'out_of_zone' ? 'bg-danger text-white'
-                            : bag.classification === 'misaligned' ? 'bg-danger/10 text-danger'
-                            : bag.classification === 'uncertain' ? 'bg-warning/10 text-warning'
-                            : 'bg-accent text-muted-foreground'
-                          }`}>
-                            {bag.classification === 'out_of_zone' ? 'out of zone' : bag.classification}
-                          </span>
-                        </div>
-                        {bag.unresolvable && (
-                          <span className="text-[10px] text-danger font-semibold shrink-0 bg-danger/10 px-1.5 py-0.5 rounded-md">
-                            {bag.classification === 'out_of_zone' ? 'Remove & return' : 'Cannot auto-resolve'}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Row 2: human-readable summary */}
-                      <div className="text-xs text-muted-foreground space-y-0.5">
-                        {bag.classification === 'out_of_zone' ? (
-                          <p>
-                            All <span className="font-medium text-foreground">{bag.total_packages}</span> packages
-                            {' '}are outside the company delivery area — this tote is not our freight.
-                          </p>
-                        ) : (
-                          <p>
-                            <span className="font-medium text-foreground">{bag.outside_packages}</span> of{' '}
-                            <span className="font-medium text-foreground">{bag.total_packages}</span> packages
-                            {' '}belong on a different truck than the bag is on now.
-                          </p>
-                        )}
-                        {currentTruck && (
-                          <p>Currently on: <span className="font-medium text-foreground">{currentTruck}</span></p>
-                        )}
-                        {suggestedTruck && !bag.unresolvable && (
-                          <p>Suggested: <span className="font-medium text-foreground">{suggestedTruck}</span></p>
-                        )}
-                      </div>
-
-                      {/* Row 3: custom truck picker */}
-                      {!bag.unresolvable && (() => {
-                        const isOpen = openDropdown === bag.bag_id;
-
-                        // Build ordered option list: suggested → current → rest
-                        const suggested = trucks.find(t => t.truck_id === bag.suggested_truck_id);
-                        const current   = trucks.find(t => t.truck_id === bag.inferred_truck_id);
-                        const rest      = trucks.filter(t =>
-                          t.truck_id !== bag.suggested_truck_id &&
-                          t.truck_id !== bag.inferred_truck_id
-                        );
-                        type TruckOption = { truck_id: string; truck_name: string; annotation?: 'suggested' | 'current' };
-                        const ordered: TruckOption[] = [
-                          ...(suggested ? [{ ...suggested, annotation: 'suggested' as const }] : []),
-                          ...(current   ? [{ ...current,   annotation: 'current'   as const }] : []),
-                          ...rest,
-                        ];
-
-                        const displayLabel = chosenId
-                          ? (truckById[chosenId] ?? chosenId)
-                          : 'No change — keep on current truck';
-
-                        return (
-                          <div className="relative" data-truck-picker>
-                            <div className="flex items-center gap-2">
-                              <label className="text-xs text-muted-foreground shrink-0 w-20">Move bag to:</label>
-                              <button
-                                onClick={() => setOpenDropdown(isOpen ? null : bag.bag_id)}
-                                className={`flex-1 flex items-center justify-between gap-2 text-xs border rounded-lg px-2.5 py-1.5 bg-background transition-colors text-left ${
-                                  isOpen ? 'border-primary/60 ring-1 ring-primary/30' : 'border-border hover:border-primary/40'
-                                } ${chosenId ? 'text-foreground' : 'text-muted-foreground'}`}
-                              >
-                                <span>{displayLabel}</span>
-                                <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                              </button>
-                            </div>
-
-                            {isOpen && (
-                              <div className="absolute left-[5.5rem] right-0 top-full mt-1 z-50 bg-card border border-border rounded-lg shadow-lg overflow-hidden">
-                                {/* Keep as-is option */}
-                                <button
-                                  onClick={() => {
-                                    setOverrideMap(prev => {
-                                      const next = { ...prev };
-                                      delete next[bag.bag_id];
-                                      return next;
-                                    });
-                                    setOpenDropdown(null);
-                                  }}
-                                  className={`w-full text-left px-3 py-2 text-xs hover:bg-accent transition-colors flex items-center justify-between ${!chosenId ? 'bg-accent/60 font-medium text-foreground' : 'text-muted-foreground'}`}
-                                >
-                                  No change — keep on current truck
-                                  {!chosenId && <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />}
-                                </button>
-                                <div className="border-t border-border/60" />
-                                {ordered.map(t => (
-                                  <button
-                                    key={t.truck_id}
-                                    onClick={() => {
-                                      setOverrideMap(prev => ({ ...prev, [bag.bag_id]: t.truck_id }));
-                                      setOpenDropdown(null);
-                                    }}
-                                    className={`w-full text-left px-3 py-2 text-xs hover:bg-accent transition-colors flex items-center justify-between gap-2 ${chosenId === t.truck_id ? 'bg-accent/60 text-foreground' : 'text-foreground'}`}
-                                  >
-                                    <span className="flex items-baseline gap-1.5">
-                                      <span className={chosenId === t.truck_id ? 'font-medium' : ''}>{t.truck_name}</span>
-                                      {t.annotation === 'suggested' && (
-                                        <span className="font-bold text-primary text-[10px]">suggested</span>
-                                      )}
-                                      {t.annotation === 'current' && (
-                                        <span className="italic text-muted-foreground text-[10px]">current</span>
-                                      )}
-                                    </span>
-                                    {chosenId === t.truck_id && <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      {/* Row 4: explicit selection confirmation only */}
-                      {chosenId && chosenTruck && (
-                        <p className="text-[10px] text-success font-medium flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" /> Will move to {chosenTruck}
-                        </p>
-                      )}
-
-                      {bag.outlier_tbas.length > 0 && (
-                        <p className="text-[10px] text-muted-foreground">
-                          {bag.classification === 'out_of_zone'
-                            ? 'Flagged for removal — it will appear in the Removals panel once zones persist.'
-                            : `${bag.outlier_tbas.length} package${bag.outlier_tbas.length !== 1 ? 's' : ''} could not be placed — they will stay on the current truck.`}
-                        </p>
-                      )}
-
-                      {/* Expandable package list */}
-                      {bag.outside_packages_detail.length > 0 && (
-                        <div className="border-t border-border/40 pt-2 mt-1">
-                          <button
-                            onClick={() => setExpandedBags(prev => {
-                              const next = new Set(prev);
-                              next.has(bag.bag_id) ? next.delete(bag.bag_id) : next.add(bag.bag_id);
-                              return next;
-                            })}
-                            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                          >
-                            {expandedBags.has(bag.bag_id)
-                              ? <ChevronUp className="w-3 h-3" />
-                              : <ChevronDown className="w-3 h-3" />
-                            }
-                            {expandedBags.has(bag.bag_id) ? 'Hide' : 'Show'} {bag.outside_packages_detail.length} misplaced package{bag.outside_packages_detail.length !== 1 ? 's' : ''}
-                          </button>
-
-                          {expandedBags.has(bag.bag_id) && (
-                            <div className="mt-1.5 rounded-lg overflow-hidden border border-border/40">
-                              <table className="w-full text-[10px]">
-                                <thead>
-                                  <tr className="bg-accent/60">
-                                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">TBA</th>
-                                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Tag #</th>
-                                    <th className="text-left px-2 py-1 font-semibold text-muted-foreground">Address</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {bag.outside_packages_detail.map((pkg: BagPackageDetail, i: number) => (
-                                    <tr key={pkg.tba} className={i % 2 === 0 ? 'bg-background' : 'bg-accent/20'}>
-                                      <td className="px-2 py-1 font-mono text-foreground">{pkg.tba}</td>
-                                      <td className="px-2 py-1 font-mono">
-                                        {pkg.tag_number
-                                          ? <span className="text-foreground">{pkg.tag_number}</span>
-                                          : <span className="text-muted-foreground/50 italic">no tag</span>}
-                                      </td>
-                                      <td className="px-2 py-1 text-muted-foreground">{pkg.normalised_address ?? '—'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Bottom pagination summary */}
-              {result.flagged_bags.length > BAG_PAGE_SIZE && (
-                <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/40">
-                  <p className="text-xs text-muted-foreground">
-                    Showing {bagPage * BAG_PAGE_SIZE + 1}–{Math.min((bagPage + 1) * BAG_PAGE_SIZE, result.flagged_bags.length)} of {result.flagged_bags.length} bags
-                    {' · '}{Object.keys(overrideMap).length} override{Object.keys(overrideMap).length !== 1 ? 's' : ''} set
-                  </p>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => setBagPage(p => Math.max(0, p - 1))}
-                      disabled={bagPage === 0}
-                      className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
-                    >
-                      ← Prev
-                    </button>
-                    <button
-                      onClick={() => setBagPage(p => Math.min(Math.ceil(result.flagged_bags.length / BAG_PAGE_SIZE) - 1, p + 1))}
-                      disabled={bagPage >= Math.ceil(result.flagged_bags.length / BAG_PAGE_SIZE) - 1}
-                      className="px-2 py-1 text-xs rounded-lg border border-border bg-background disabled:opacity-40 hover:bg-accent transition-colors"
-                    >
-                      Next →
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2 pt-1">
-                <button
-                  onClick={handleConfirmOverrides}
-                  disabled={running}
-                  className="btn-primary flex items-center gap-2 text-sm flex-1 justify-center"
-                >
-                  {running
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Applying overrides…</>
-                    : <><Send className="w-4 h-4" /> Confirm &amp; Finalize Sort</>}
-                </button>
-                <button
-                  onClick={() => { setPhase('idle'); setResult(null); setOverrideMap({}); }}
-                  className="btn-ghost text-sm px-3"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

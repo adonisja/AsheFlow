@@ -40,11 +40,6 @@ interface CompanyConfig {
   dispatch_weight_cap: number | null;
   flag_threshold: number | null;
   driver_checkin_count: number | null;
-  tier1_small_tote_cutoff: number | null;
-  tier1_small_stray_max: number | null;
-  tier1_small_uncertain_max: number | null;
-  tier1_stray_pct: number | null;
-  tier1_uncertain_pct: number | null;
   effort_time_factor: number | null;
   effort_physical_factor: number | null;
   ingestion_mode: string | null;
@@ -120,14 +115,6 @@ const DRIVER_CHECKINS: FieldMeta[] = [
   { key: 'driver_checkin_count', label: 'Mid-Shift Check-ins', type: 'int', description: 'Structured check-in photos expected per shift.', placeholder: '4', min: 0, max: 10 },
 ];
 
-const TIER1_VERIFY: FieldMeta[] = [
-  { key: 'tier1_small_tote_cutoff', label: 'Small Tote Cutoff', type: 'int', description: 'Max packages in a cluster for it to be "small."', placeholder: '10', min: 1, max: 100 },
-  { key: 'tier1_small_stray_max', label: 'Small Tote Max Strays', type: 'int', description: 'Max stray packages allowed in a small tote.', placeholder: '1', min: 0, max: 20 },
-  { key: 'tier1_small_uncertain_max', label: 'Small Tote Max Uncertain', type: 'int', description: 'Max uncertain packages in a small tote.', placeholder: '3', min: 0, max: 20 },
-  { key: 'tier1_stray_pct', label: 'Stray % Threshold', type: 'float', description: 'Max strays as fraction of tote size (large totes).', placeholder: '0.10', min: 0, max: 1, step: 0.01 },
-  { key: 'tier1_uncertain_pct', label: 'Uncertain % Threshold', type: 'float', description: 'Max uncertain packages as fraction of tote (large totes).', placeholder: '0.40', min: 0, max: 1, step: 0.01 },
-];
-
 const EFFORT_SCORING: FieldMeta[] = [
   { key: 'effort_time_factor', label: 'Effort Time Factor', type: 'float', description: 'Weight for time-based effort in route scoring (0–1).', placeholder: '0.5', min: 0, max: 1, step: 0.05 },
   { key: 'effort_physical_factor', label: 'Effort Physical Factor', type: 'float', description: 'Weight for physical-based effort in route scoring (0–1).', placeholder: '0.5', min: 0, max: 1, step: 0.05 },
@@ -175,8 +162,6 @@ const CONFIG_KEYS: string[] = [
   'dispatch_weight_driver', 'dispatch_weight_trainer', 'dispatch_weight_walker',
   'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus', 'dispatch_consecutive_penalty',
   'dispatch_weight_cap', 'flag_threshold', 'driver_checkin_count',
-  'tier1_small_tote_cutoff',
-  'tier1_small_stray_max', 'tier1_small_uncertain_max', 'tier1_stray_pct', 'tier1_uncertain_pct',
   'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
 ];
 
@@ -192,14 +177,11 @@ const TIME_FIELDS = new Set(['shift_start', 'shift_end', 'checkin_open', 'checki
 const INT_FIELDS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'underperforming_trainer_threshold', 'max_training_phase', 'driver_checkin_count',
-  'tier1_small_tote_cutoff', 'tier1_small_stray_max',
-  'tier1_small_uncertain_max',
 ]);
 const FLOAT_FIELDS = new Set([
   'phase4_pass_score', 'dispatch_weight_driver', 'dispatch_weight_trainer',
   'dispatch_weight_walker', 'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus',
   'dispatch_consecutive_penalty', 'dispatch_weight_cap', 'flag_threshold',
-  'tier1_stray_pct', 'tier1_uncertain_pct',
   'effort_time_factor', 'effort_physical_factor',
 ]);
 const STRING_FIELDS = new Set(['ingestion_mode']);
@@ -361,11 +343,6 @@ const SETUP_DEFAULTS: Record<string, string> = {
   dispatch_weight_cap: '0.85',
   flag_threshold: '1.0',
   driver_checkin_count: '4',
-  tier1_small_tote_cutoff: '10',
-  tier1_small_stray_max: '1',
-  tier1_small_uncertain_max: '3',
-  tier1_stray_pct: '0.10',
-  tier1_uncertain_pct: '0.40',
   effort_time_factor: '0.5',
   effort_physical_factor: '0.5',
   ingestion_mode: 'file',
@@ -491,7 +468,6 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     { title: 'Dispatch Weights', icon: Truck, fields: DISPATCH_WEIGHTS },
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
     { title: 'Driver Check-ins', icon: CheckSquare, fields: DRIVER_CHECKINS },
-    { title: 'Tier 1 Manifest Verify', icon: Package, fields: TIER1_VERIFY },
     { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },
     { title: 'Manifest Ingestion', icon: Settings, fields: INGESTION },
   ];

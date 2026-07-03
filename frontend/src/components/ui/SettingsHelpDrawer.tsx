@@ -158,41 +158,6 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: '"4" — driver is expected to submit 4 check-in photos across the shift.',
     note: 'Set to 0 to disable mid-shift check-ins entirely.',
   },
-  tier1_small_tote_cutoff: {
-    title: 'Small Tote Package Cutoff',
-    summary: 'Maximum packages in a cluster for it to be classified as a "small tote."',
-    detail:
-      'After clustering, totes are classified by size. A cluster with fewer packages than this threshold is a small tote. Small totes receive different stray/uncertain tolerance rules because they are inherently lower-density.',
-    example: '"10" — clusters of 10 or fewer packages are small totes.',
-  },
-  tier1_small_stray_max: {
-    title: 'Small Tote Max Strays',
-    summary: 'Maximum stray packages allowed in a small tote before it is flagged.',
-    detail:
-      'Stray packages are ones the sort could not place on the tote\u2019s truck (out-of-territory or missing coordinates). In a small tote, even 1\u20132 strays can be a meaningful percentage of the load. This threshold controls how many are acceptable before raising a verification flag.',
-    example: '"1" — more than 1 stray package in a small tote triggers a flag.',
-  },
-  tier1_small_uncertain_max: {
-    title: 'Small Tote Max Uncertain',
-    summary: 'Maximum uncertain packages allowed in a small tote.',
-    detail:
-      'Uncertain packages are border points — they fall within range of a cluster but do not have enough nearby neighbors to be core points. In small totes, too many uncertain packages suggest poor geographic coherence.',
-    example: '"3"',
-  },
-  tier1_stray_pct: {
-    title: 'Stray Package % Threshold',
-    summary: 'Maximum stray packages as a fraction of tote size for large totes.',
-    detail:
-      'For totes larger than the small tote cutoff, the stray threshold is expressed as a percentage of the total package count. This scales naturally with tote size — a large route can tolerate more strays in absolute terms.',
-    example: '"0.10" — at most 10% of packages in a large tote can be strays.',
-  },
-  tier1_uncertain_pct: {
-    title: 'Uncertain Package % Threshold',
-    summary: 'Maximum uncertain packages as a fraction of tote size for large totes.',
-    detail:
-      'Same concept as the stray percentage, but for uncertain (border-point) packages. Higher values allow more geographic looseness in cluster assignment.',
-    example: '"0.40" — up to 40% of packages can be uncertain in a large tote.',
-  },
   effort_time_factor: {
     title: 'Effort Time Factor',
     summary: 'Weight applied to time-based components when computing route effort scores.',

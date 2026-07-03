@@ -130,11 +130,6 @@ class CompanyConfigResponse(BaseModel):
     dispatch_weight_cap:              Optional[float]
     flag_threshold:                   Optional[float]
     driver_checkin_count:             Optional[int]
-    tier1_small_tote_cutoff:          Optional[int]
-    tier1_small_stray_max:            Optional[int]
-    tier1_small_uncertain_max:        Optional[int]
-    tier1_stray_pct:                  Optional[float]
-    tier1_uncertain_pct:              Optional[float]
     effort_time_factor:               Optional[float]
     effort_physical_factor:           Optional[float]
     ingestion_mode:                   Optional[str]
@@ -172,11 +167,6 @@ class CompanyConfigResponse(BaseModel):
             dispatch_weight_cap=obj.dispatch_weight_cap,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
-            tier1_small_tote_cutoff=obj.tier1_small_tote_cutoff,
-            tier1_small_stray_max=obj.tier1_small_stray_max,
-            tier1_small_uncertain_max=obj.tier1_small_uncertain_max,
-            tier1_stray_pct=obj.tier1_stray_pct,
-            tier1_uncertain_pct=obj.tier1_uncertain_pct,
             effort_time_factor=obj.effort_time_factor,
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
@@ -596,13 +586,6 @@ class CompanyConfigUpdate(BaseModel):
 
     # Driver check-ins
     driver_checkin_count:            Optional[int]   = Field(None, ge=0, le=10)
-
-    # Tier 1 manifest verify (tote classification thresholds)
-    tier1_small_tote_cutoff:         Optional[int]   = Field(None, ge=1, le=100)
-    tier1_small_stray_max:           Optional[int]   = Field(None, ge=0, le=20)
-    tier1_small_uncertain_max:       Optional[int]   = Field(None, ge=0, le=20)
-    tier1_stray_pct:                 Optional[float] = Field(None, ge=0.0, le=1.0)
-    tier1_uncertain_pct:             Optional[float] = Field(None, ge=0.0, le=1.0)
 
     # Effort scoring
     effort_time_factor:              Optional[float] = Field(None, ge=0.0, le=1.0)

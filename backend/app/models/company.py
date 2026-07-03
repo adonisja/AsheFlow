@@ -75,13 +75,6 @@ class CompanyConfig(Base):
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
 
-    # ── Tier 1 tote verification (classification thresholds) ─────────────────
-    tier1_small_tote_cutoff    = Column(Integer, nullable=True, default=10)
-    tier1_small_stray_max      = Column(Integer, nullable=True, default=1)
-    tier1_small_uncertain_max  = Column(Integer, nullable=True, default=3)
-    tier1_stray_pct            = Column(Float,   nullable=True, default=0.10)
-    tier1_uncertain_pct        = Column(Float,   nullable=True, default=0.25)
-
     # ── Route effort scoring tuning ───────────────────────────────────────────
     # Weights applied to time_weight and physical_weight per workload_class.
     # Default 0.5 each (equal contribution). Tuned per-company from field data.

@@ -53,60 +53,16 @@ _MAX_UPLOAD_BYTES  = 10 * 1024 * 1024   # 10 MB — daily manifest should be wel
 
 # ── request / response schemas ────────────────────────────────────────────────
 
-class BagOverrideIn(BaseModel):
-    """Dispatch-confirmed truck assignment for a bag that failed tier-1."""
-    bag_id: str
-    truck_id: UUID
-
-
 class SortRunRequest(BaseModel):
     sort_date: date
-    force: bool = False
-    overrides: list[BagOverrideIn] = []     # empty on first run; populated on resubmit
-
-
-class BagPackageDetail(BaseModel):
-    tba: str
-    tag_number: Optional[str] = None
-    normalised_address: Optional[str] = None
-
-
-class BagResultOut(BaseModel):
-    bag_id: str
-    inferred_truck_id: Optional[UUID] = None
-    classification: str                     # "clean" | "stray" | "uncertain" | "misaligned"
-    total_packages: int
-    outside_packages: int
-    outside_pct: float
-    outside_tbas: list[str]
-    outlier_tbas: list[str]
-    suggested_truck_id: Optional[UUID] = None
-    unresolvable: bool
-    outside_packages_detail: list[BagPackageDetail] = []
 
 
 class ClusterAssignmentOut(BaseModel):
     truck_id: UUID
     truck_name: str
-    match_type: str
     anchor_source: Optional[str] = None   # "truck_anchor" | "zone_history" | "building_profile" | "quantile"
     workload_score: Optional[float] = None
-    is_overflow: bool
     package_count: int
-
-
-class SortRunResponse(BaseModel):
-    sort_date: date
-    package_count: int
-    outlier_count: int
-    cluster_count: int
-    tier1_passed: bool
-    was_forced: bool
-    zones_created: int
-    volume_alert: bool = False
-    volume_alert_msg: str = ""
-    assignments: list[ClusterAssignmentOut]
-    flagged_bags: list[BagResultOut]        # empty when tier1_passed=True or was_forced=True
 
 
 class SortRunAccepted(BaseModel):
@@ -118,21 +74,20 @@ class SortRunAccepted(BaseModel):
 class SortRunStatusResponse(BaseModel):
     """Response from GET /sort/run/status/{task_id}."""
     task_id: str
-    status: str   # "running" | "done" | "tier1_failed" | "error"
+    status: str   # "running" | "done" | "error"
     # Populated when status == "done":
     sort_date: Optional[date] = None
     package_count: Optional[int] = None
     outlier_count: Optional[int] = None
     cluster_count: Optional[int] = None
-    tier1_passed: Optional[bool] = None
-    was_forced: Optional[bool] = None
     zones_created: Optional[int] = None
+    station_removals: Optional[int] = None   # whole OOZ totes flagged (ADR-177)
+    ap_flags: Optional[int] = None           # OOZ packages to pull at the AP
+    unplaced_totes: Optional[int] = None     # zero-geocode totes needing a manual call
     volume_alert: Optional[bool] = None
     volume_alert_msg: Optional[str] = None
     assignments: list[ClusterAssignmentOut] = []
-    # Populated when status == "tier1_failed":
-    flagged_bags: list[BagResultOut] = []
-    # Populated when status == "error" or "tier1_failed":
+    # Populated when status == "error":
     detail: Optional[str] = None
     http_status: Optional[int] = None
 
@@ -178,10 +133,8 @@ class ManifestPackagePatchResponse(BaseModel):
 class SortPreviewAssignment(BaseModel):
     truck_id: str
     truck_name: str
-    match_type: str
     anchor_source: Optional[str] = None
     workload_score: Optional[float] = None
-    is_overflow: bool
     package_count: int
     outlier_count: int
 
@@ -192,9 +145,10 @@ class SortPreviewResponse(BaseModel):
     package_count: int
     outlier_count: int
     cluster_count: int
-    tier1_passed: bool
-    was_forced: bool
     zones_created: int
+    station_removals: int = 0
+    ap_flags: int = 0
+    unplaced_totes: int = 0
     volume_alert: bool = False
     volume_alert_msg: str = ""
     assignments: list[SortPreviewAssignment]
@@ -356,6 +310,29 @@ def upload_manifest(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="No packages could be parsed from the file. Check column headers.",
         )
+
+    # ── ADR-177 decision (b): a new manifest invalidates the day's station
+    # state. Bag IDs collide across manifests, so every same-day row derived
+    # from the previous manifest (zones, transfers, check-offs, removals,
+    # centroids) is stale and would corrupt the next sort if re-applied.
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
+    from app.models.walker_route import RouteClusterCentroid as _RCC
+    db.query(TruckZone).filter(
+        TruckZone.company_id == caller.company_id,
+        TruckZone.zone_date == sort_date,
+        TruckZone.is_active.is_(True),
+    ).update({"is_active": False}, synchronize_session="fetch")
+    for model, date_col in (
+        (ToteTransfer, ToteTransfer.transfer_date),
+        (ToteLoadCheck, ToteLoadCheck.load_date),
+        (PackageRemoval, PackageRemoval.removal_date),
+        (_RCC, _RCC.route_date),
+    ):
+        db.query(model).filter(
+            model.company_id == caller.company_id,
+            date_col == sort_date,
+        ).delete(synchronize_session="fetch")
+    db.commit()
 
     # Resolve borough for GeoClient enrichment.
     # Priority: 1) admin-configured value on CompanyConfig
@@ -774,28 +751,9 @@ def run_sort_endpoint(
     """Queue the manifest sort pipeline for the given date.
 
     Returns immediately with a task_id. The caller polls
-    GET /sort/run/status/{task_id} to retrieve the result.
-
-    Override validation runs synchronously before queuing so the caller
-    gets an immediate 400 rather than a delayed task failure.
+    GET /sort/run/status/{task_id} to retrieve the result. The sort persists
+    directly — there is no review gate (ADR-177).
     """
-    if body.overrides:
-        company_truck_ids = {
-            t.id for t in db.query(Truck).filter(
-                Truck.company_id == caller.company_id,
-                Truck.is_active.is_(True),
-            ).all()
-        }
-        invalid_trucks = [
-            str(ov.truck_id) for ov in body.overrides
-            if ov.truck_id not in company_truck_ids
-        ]
-        if invalid_trucks:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Override references unknown or inactive truck IDs: {', '.join(invalid_trucks)}",
-            )
-
     task_id = str(_uuid_mod.uuid4())
     cid_str = str(caller.company_id)
     date_str = body.sort_date.isoformat()
@@ -822,16 +780,12 @@ def run_sort_endpoint(
         except (json.JSONDecodeError, AttributeError):
             pass  # manifest already gone or malformed — sort will surface the error
 
-    overrides_raw = [{"bag_id": ov.bag_id, "truck_id": str(ov.truck_id)} for ov in body.overrides]
-
     run_zone_sort.delay(
         company_id      = cid_str,
         sort_date       = date_str,
         task_id         = task_id,
-        overrides       = overrides_raw,
         created_by      = str(caller.id),
         created_by_name = caller.name,
-        force           = body.force,
     )
 
     logger.info(
@@ -840,8 +794,6 @@ def run_sort_endpoint(
             "company_id": cid_str,
             "sort_date":  date_str,
             "task_id":    task_id,
-            "force":      body.force,
-            "overrides":  len(body.overrides),
         },
     )
 
@@ -860,7 +812,6 @@ def get_sort_run_status(
     Returns:
       status="running"      — task picked up but not yet complete
       status="done"         — zones persisted; full result included
-      status="tier1_failed" — bags flagged; flagged_bags included for override UI
       status="error"        — unrecoverable error; detail included
     """
     from app.tasks.run_sort_task import _running_key, _result_key, _failed_key
@@ -886,22 +837,13 @@ def get_sort_run_status(
                 package_count    = data["package_count"],
                 outlier_count    = data["outlier_count"],
                 cluster_count    = data["cluster_count"],
-                tier1_passed     = data["tier1_passed"],
-                was_forced       = data["was_forced"],
                 zones_created    = data["zones_created"],
+                station_removals = data.get("station_removals", 0),
+                ap_flags         = data.get("ap_flags", 0),
+                unplaced_totes   = data.get("unplaced_totes", 0),
                 volume_alert     = data.get("volume_alert", False),
                 volume_alert_msg = data.get("volume_alert_msg", ""),
                 assignments      = [ClusterAssignmentOut(**a) for a in data.get("assignments", [])],
-                flagged_bags     = [],
-            )
-
-        if s == "tier1_failed":
-            return SortRunStatusResponse(
-                task_id      = task_id,
-                status       = "tier1_failed",
-                detail       = data.get("detail"),
-                http_status  = data.get("http_status"),
-                flagged_bags = [BagResultOut(**b) for b in data.get("flagged_bags", [])],
             )
 
         # "error" or unknown
@@ -979,19 +921,18 @@ def get_sort_run_preview(
         package_count    = data["package_count"],
         outlier_count    = data["outlier_count"],
         cluster_count    = data["cluster_count"],
-        tier1_passed     = data["tier1_passed"],
-        was_forced       = data["was_forced"],
         zones_created    = data["zones_created"],
+        station_removals = data.get("station_removals", 0),
+        ap_flags         = data.get("ap_flags", 0),
+        unplaced_totes   = data.get("unplaced_totes", 0),
         volume_alert     = data.get("volume_alert", False),
         volume_alert_msg = data.get("volume_alert_msg", ""),
         assignments      = [
             SortPreviewAssignment(
                 truck_id       = a["truck_id"],
                 truck_name     = a["truck_name"],
-                match_type     = a["match_type"],
                 anchor_source  = a.get("anchor_source"),
                 workload_score = a.get("workload_score"),
-                is_overflow    = a["is_overflow"],
                 package_count  = a["package_count"],
                 outlier_count  = data["outlier_count"],
             )
@@ -1947,9 +1888,8 @@ class RosterToteOut(BaseModel):
     ov_details: list[OvDetailOut] = []
     dock_tags: list[str]
     ov_dock_tags: list[str]
-    classification: str = "clean"  # clean | stray | uncertain | misaligned | out_of_zone (tier-1)
-    rider_count: int = 0           # packages off their tote's dominant block — future cross-walker transfers
-    pull_tbas: list[str] = []      # flagged out-of-zone packages inside this tote — PULL, do not deliver
+    rider_count: int = 0           # packages off their tote's dominant block — expected AP handoffs
+    pull_tbas: list[str] = []      # out-of-zone packages in this tote — pulled & returned at the AP (ADR-177 c)
     checked: bool
     checked_by_name: Optional[str] = None
     transfer: Optional[ToteTransferOut] = None   # transfer touching this bag (incl. kept, for undo)
@@ -2094,8 +2034,8 @@ def get_load_rosters(
         t.bag_id: t for t in transfers if t.status in ("suggested", "confirmed", "kept")
     }
 
-    # ADR-176: flagged single-package removals surface as PULL items on their
-    # tote's roster row until dispatch confirms the physical pull.
+    # ADR-177: AP-stage flags (single OOZ packages) surface on their tote's
+    # roster row — pulled and recorded at the anchor point, not the dock.
     removals = (
         db.query(PackageRemoval)
         .filter(
@@ -2108,7 +2048,12 @@ def get_load_rosters(
     for r in removals:
         if r.status == "flagged" and not r.whole_tote and r.tba:
             pull_by_bag.setdefault(r.bag_id, []).append(r.tba)
-    flagged_removal_count = sum(1 for r in removals if r.status == "flagged")
+    # Only STATION-stage flags gate loading; AP-stage flags are anchor-point
+    # work and must not hold the dock hostage (ADR-177).
+    flagged_removal_count = sum(
+        1 for r in removals
+        if r.status == "flagged" and getattr(r, "pull_point", "station") == "station"
+    )
 
     rosters: list[TruckRosterOut] = []
     total_unchecked = 0
@@ -2132,7 +2077,6 @@ def get_load_rosters(
                 ov_details=[OvDetailOut(**d) for d in entry.get("ov_details", [])],
                 dock_tags=entry.get("dock_tags", []),
                 ov_dock_tags=entry.get("ov_dock_tags", []),
-                classification=entry.get("classification", "clean"),
                 rider_count=entry.get("rider_count", 0),
                 pull_tbas=pull_by_bag.get(entry["bag_id"], []),
                 checked=chk is not None,
@@ -2311,13 +2255,10 @@ def resolve_transfer(
 ):
     """Resolve a suggested station transfer.
 
-    Polarity depends on the suggestion's origin:
-    rerun_diff       — zone data already points at the destination: confirm is
-                       a physical move only; keep moves zone data back.
-    tier1_misaligned — zone data still points at the current (from) truck:
-                       confirm moves zone data to the destination; keep is a
-                       no-op (ADR-176 decision c — station tote swap, soft).
-    Completion happens when the tote is checked off on the destination truck.
+    rerun_diff suggestions: zone data already points at the destination, so
+    confirm is a physical move only; keep moves zone data back to the truck
+    the tote physically sits on. Completion happens when the tote is checked
+    off on the destination truck.
     """
     from datetime import datetime, timezone
     from app.models.audit_log import AuditLog
@@ -2337,12 +2278,9 @@ def resolve_transfer(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Transfer is already {xfer.status}.")
 
     if body.action == "confirm":
-        if xfer.reason == "tier1_misaligned":
-            _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
         xfer.status = "confirmed"
     else:
-        if xfer.reason != "tier1_misaligned":
-            _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
+        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
         xfer.status = "kept"
     xfer.resolved_by = caller.id
     xfer.resolved_by_name = caller.name
@@ -2396,24 +2334,9 @@ def create_manual_transfer(
     if pending is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This tote already has a pending transfer — resolve it first.")
 
-    # Manual moves are restricted to totes tier-1 flagged (stray/uncertain/
-    # misaligned). Clean totes sit exactly where the balanced sort wants them —
-    # moving one silently degrades equity and geography; if the assignment is
-    # wrong the fix is an anchor change + re-run, which produces reviewable
-    # suggested transfers instead of ad-hoc moves.
-    zones_for_class = _active_zones(db, caller.company_id, sort_date)
-    entry_class = None
-    for z in zones_for_class:
-        for e in (z.tote_roster or []):
-            if e["bag_id"] == bag_id:
-                entry_class = e.get("classification", "clean")
-                break
-    if entry_class not in ("stray", "uncertain", "misaligned"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Only totes flagged by tier-1 verification (stray, uncertain or misaligned) can be manually transferred. Re-run the sort to change clean assignments.",
-        )
-
+    # No class restriction (ADR-177): the solver's assignment is the truth and
+    # a manual move is dispatch explicitly trading equity for judgment — it is
+    # audited, re-applied across re-runs, and undoable.
     src, dest = _move_bag_between_zones(db, caller.company_id, sort_date, bag_id, body.to_truck_id)
     if src.id == dest.id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Tote is already on that truck.")
@@ -2558,21 +2481,13 @@ def undo_transfer(
     if xfer.status == "confirmed" and xfer.reason == "dispatch":
         _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
         xfer.status = "undone"
-    elif xfer.status == "confirmed" and xfer.reason == "tier1_misaligned":
-        # confirm moved zone data — move it back and reopen the suggestion
-        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
-        xfer.status = "suggested"
-        xfer.resolved_by = None
-        xfer.resolved_by_name = None
-        xfer.resolved_at = None
     elif xfer.status == "confirmed":   # rerun_diff — zone data untouched by confirm
         xfer.status = "suggested"
         xfer.resolved_by = None
         xfer.resolved_by_name = None
         xfer.resolved_at = None
     else:                              # kept — re-apply the sort's intent
-        if xfer.reason != "tier1_misaligned":   # tier1 keep never moved zone data
-            _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
+        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
         xfer.status = "suggested"
         xfer.resolved_by = None
         xfer.resolved_by_name = None
@@ -2603,6 +2518,7 @@ class RemovalOut(BaseModel):
     reason: str
     locator: Optional[str] = None        # dock tag / OV zone — where to find it
     status: str                          # flagged | removed
+    pull_point: str = "station"          # station (dock, dispatch) | anchor_point (walker/driver)
     removed_by_name: Optional[str] = None
     removed_at: Optional[datetime] = None
 
@@ -2629,7 +2545,7 @@ def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsRes
         RemovalOut(
             id=r.id, bag_id=r.bag_id, tba=r.tba, tba_numbers=r.tba_numbers,
             package_count=r.package_count, whole_tote=r.whole_tote, reason=r.reason,
-            locator=r.locator, status=r.status,
+            locator=r.locator, status=r.status, pull_point=r.pull_point,
             removed_by_name=r.removed_by_name, removed_at=r.removed_at,
         )
         for r in rows
@@ -2646,7 +2562,7 @@ def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsRes
 def get_removals(
     sort_date: date,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
     db: Session = Depends(get_db),
 ):
     """Out-of-zone freight flagged for removal (and the record of what was pulled).
@@ -2662,14 +2578,16 @@ def get_removals(
 def confirm_removal(
     removal_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
     db: Session = Depends(get_db),
 ):
-    """Confirm a flagged unit was physically pulled off the truck.
+    """Confirm a flagged unit was physically pulled.
 
-    Single-package removals also come out of the zone's package_tbas and
-    roster entry so downstream (AP Sort, walker routes) never sees them.
-    Whole-tote removals never entered a zone. 409 on double-confirm.
+    Station-stage (whole tote, at the dock): dispatch roles only.
+    AP-stage (single package, at the anchor point): the truck's own
+    driver/trainer may confirm — they are the ones physically pulling it
+    (ADR-177 decision c). Single-package removals also come out of the zone's
+    package_tbas and roster entry. 409 on double-confirm.
     """
     from datetime import datetime as _dt, timezone as _tz
     from app.models.audit_log import AuditLog
@@ -2684,6 +2602,25 @@ def confirm_removal(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Removal not found.")
     if removal.status == "removed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already confirmed removed.")
+
+    if caller.role in ("driver", "trainer"):
+        if removal.pull_point != "anchor_point":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Station removals are confirmed by dispatch at the dock.",
+            )
+        own = _caller_truck_id(db, caller, removal.removal_date)
+        zones = _active_zones(db, caller.company_id, removal.removal_date)
+        bag_truck = next(
+            (z.truck_id for z in zones
+             if any(e["bag_id"] == removal.bag_id for e in (z.tote_roster or []))),
+            None,
+        )
+        if own is None or bag_truck != own:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only confirm AP pulls for totes on your own truck.",
+            )
 
     if not removal.whole_tote and removal.tba:
         zones = _active_zones(db, caller.company_id, removal.removal_date)
@@ -2737,9 +2674,8 @@ def confirm_all_transfers(
     Re-run diffs after an anchor change routinely slide a whole band of totes
     to the neighbouring truck — dispatch's answer is usually "the new sort is
     right, move them all". Per-card Keep remains available for exceptions
-    BEFORE using this. Polarity is honoured per suggestion origin:
-    rerun_diff confirms are physical-move-only; tier1_misaligned confirms
-    also move zone data. Completion still happens at destination check-off.
+    BEFORE using this. Confirms are physical-move-only (rerun_diff polarity);
+    completion still happens at destination check-off.
     """
     from datetime import datetime as _dt, timezone as _tz
     from app.models.audit_log import AuditLog
@@ -2759,8 +2695,6 @@ def confirm_all_transfers(
 
     now = _dt.now(_tz.utc)
     for xfer in suggested:
-        if xfer.reason == "tier1_misaligned":
-            _move_bag_between_zones(db, caller.company_id, sort_date, xfer.bag_id, xfer.to_truck_id)
         xfer.status = "confirmed"
         xfer.resolved_by = caller.id
         xfer.resolved_by_name = caller.name

@@ -73,6 +73,9 @@ class PackageRemoval(Base):
     reason          = Column(String(30), nullable=False, default="out_of_zone")
     locator         = Column(String(50), nullable=True)     # dock tag / OV zone
     status          = Column(String(20), nullable=False, default="flagged")  # flagged | removed
+    # station = whole tote pulled at the dock (dispatch); anchor_point = single
+    # package pulled by walker/driver at the AP (ADR-177 decision c)
+    pull_point      = Column(String(20), nullable=False, default="station")
     flagged_at      = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     removed_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     removed_by_name = Column(String(100), nullable=True)

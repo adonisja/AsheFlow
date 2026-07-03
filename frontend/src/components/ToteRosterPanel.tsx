@@ -13,22 +13,14 @@ import {
  * mode="driver"   — the caller's own truck: load checklist plus incoming /
  *                   outgoing station transfers with counterpart truck+driver.
  *
- * Rows are click-to-check (dock gloves + tablets); manual transfers are only
- * offered on totes tier-1 flagged as stray/uncertain/misaligned — clean totes
- * sit where the balanced sort wants them, and the backend enforces the same.
+ * Rows are click-to-check (dock gloves + tablets). Manual transfers are
+ * dispatch judgment — audited, undoable, re-applied across re-runs (ADR-177).
  */
 
 interface Props {
   date: string;
   mode: 'dispatch' | 'driver';
 }
-
-const CLASS_STYLES: Record<string, string> = {
-  stray:       'bg-warning/10 text-warning',
-  uncertain:   'bg-orange-500/10 text-orange-500',
-  misaligned:  'bg-danger/10 text-danger',
-  out_of_zone: 'bg-danger/20 text-danger',
-};
 
 function OvPills({ tote }: { tote: RosterTote }) {
   if (tote.ov_count === 0) return <span className="text-muted-foreground">—</span>;
@@ -128,9 +120,7 @@ function ToteRow({
   onUndo: (id: string) => void;
 }) {
   const [moveOpen, setMoveOpen] = useState(false);
-  const cls = tote.classification ?? 'clean';
-  const flagged = cls !== 'clean';
-  const movable = mode === 'dispatch' && flagged && !tote.transfer;
+  const movable = mode === 'dispatch' && !tote.transfer;
   const primaryDock = tote.dock_tags[0];
   const extraDocks = tote.dock_tags.slice(1);
 
@@ -153,17 +143,20 @@ function ToteRow({
         <span className={`font-mono text-xs font-semibold text-foreground ${tote.checked ? 'line-through' : ''}`}>
           {tote.bag_id}
         </span>
-        {flagged && (
-          <span className={`ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase ${CLASS_STYLES[cls]}`}>
-            {cls.replace('_', ' ')}
-          </span>
-        )}
         {(tote.pull_tbas?.length ?? 0) > 0 && (
           <span
             className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase bg-danger text-white"
-            title={`Out-of-zone packages to pull before loading: ${tote.pull_tbas!.join(', ')}`}
+            title={`Out-of-zone packages in this tote — pulled & returned at the AP: ${tote.pull_tbas!.join(', ')}`}
           >
-            PULL {tote.pull_tbas!.length}
+            AP RETURN {tote.pull_tbas!.length}
+          </span>
+        )}
+        {(tote.rider_count ?? 0) > 0 && (
+          <span
+            className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase bg-accent text-muted-foreground"
+            title="Packages off this tote's home block — expected cross-walker handoffs at the AP"
+          >
+            {tote.rider_count} AP handoff{tote.rider_count === 1 ? '' : 's'}
           </span>
         )}
       </td>
@@ -423,7 +416,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
             — {data.pending_transfer_count} pending transfer{data.pending_transfer_count === 1 ? '' : 's'},{' '}
             {data.unchecked_count} tote{data.unchecked_count === 1 ? '' : 's'} unchecked
             {(data.flagged_removal_count ?? 0) > 0 && (
-              <>, {data.flagged_removal_count} out-of-zone removal{data.flagged_removal_count === 1 ? '' : 's'} pending</>
+              <>, {data.flagged_removal_count} station removal{data.flagged_removal_count === 1 ? '' : 's'} pending</>
             )}.
             {mode === 'dispatch' ? ' AP Sort will proceed on unconfirmed contents.' : ''}
           </span>

@@ -1,7 +1,7 @@
 """Celery task: async zone-sort pipeline.
 
 Flow:
-  1. POST /sort/run → dispatcher validates overrides, dispatches this task, returns task_id
+  1. POST /sort/run → dispatcher dispatches this task, returns task_id
   2. This task calls run_sort() — anchored tote assignment → tier-1 verify → persist zones
   3. Result written to Redis: sort_result:{company_id}:{date}:{task_id} (TTL 24h)
   4. Frontend polls GET /sort/run/status/{task_id} until status != "running"
@@ -23,7 +23,6 @@ import redis as redis_lib
 from app.celery_app import celery_app
 from app.core.config import settings
 from app.database import SessionLocal
-from app.models.audit_log import AuditLog
 from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import RouteClusterCentroid
@@ -60,16 +59,14 @@ def run_zone_sort(
     company_id: str,
     sort_date: str,
     task_id: str,
-    overrides: list[dict],       # [{bag_id, truck_id}]
     created_by: str,
     created_by_name: str,
-    force: bool,
 ) -> dict:
     """Run the full zone-sort pipeline asynchronously.
 
-    Writes result JSON to Redis instead of returning an HTTP response.
-    Tier-1 failures are surfaced as status="tier1_failed" (not an exception)
-    so the frontend can render the override UI.
+    Writes result JSON to Redis instead of returning an HTTP response. The
+    sort persists directly (ADR-177 — no review gate); out-of-zone freight
+    and unplaced totes surface through the station panels, not here.
     """
     r = _redis()
     rk = _running_key(company_id, sort_date, task_id)
@@ -82,12 +79,7 @@ def run_zone_sort(
 
     try:
         from app.services.run_sort import run_sort, SortError
-        from app.services.tier1_verify import BagOverride
 
-        bag_overrides = [
-            BagOverride(bag_id=ov["bag_id"], truck_id=UUID(ov["truck_id"]))
-            for ov in overrides
-        ]
         sort_date_obj = _date.fromisoformat(sort_date)
         company_uuid = UUID(company_id)
         created_by_uuid = UUID(created_by)
@@ -97,73 +89,24 @@ def run_zone_sort(
             result = run_sort(
                 company_id=company_uuid,
                 sort_date=sort_date_obj,
-                overrides=bag_overrides,
                 created_by=created_by_uuid,
                 created_by_name=created_by_name,
                 db=db,
-                force=force,
             )
         except SortError as exc:
             _SORT_ERROR_CODES = {
                 "no_manifest":    422,
                 "no_trucks":      422,
                 "no_packages":    422,
-                "tier1_failed":   409,
                 "config_missing": 503,
             }
-            http_status = _SORT_ERROR_CODES.get(exc.code, 400)
-
-            if exc.code == "tier1_failed" and exc.verification is not None:
-                # Tier-1 failure: surface flagged bags so frontend can render override UI
-                flagged = [
-                    {
-                        "bag_id":             b.bag_id,
-                        "inferred_truck_id":  str(b.inferred_truck_id) if b.inferred_truck_id else None,
-                        "classification":     b.classification,
-                        "total_packages":     b.total_packages,
-                        "outside_packages":   b.outside_packages,
-                        "outside_pct":        b.outside_pct,
-                        "outside_tbas":       b.outside_tbas,
-                        "outlier_tbas":       b.outlier_tbas,
-                        "outside_packages_detail": b.outside_packages_detail,
-                        "suggested_truck_id": str(b.suggested_truck_id) if b.suggested_truck_id else None,
-                        "unresolvable":       b.unresolvable,
-                    }
-                    for b in exc.verification.flagged
-                ]
-                payload = {
-                    "status":       "tier1_failed",
-                    "http_status":  http_status,
-                    "detail":       exc.detail,
-                    "flagged_bags": flagged,
-                }
-            else:
-                payload = {
-                    "status":      "error",
-                    "http_status": http_status,
-                    "detail":      exc.detail,
-                }
-
+            payload = {
+                "status":      "error",
+                "http_status": _SORT_ERROR_CODES.get(exc.code, 400),
+                "detail":      exc.detail,
+            }
             r.setex(resk, _RESULT_TTL, json.dumps(payload))
             r.delete(rk)
-
-            # Notify dispatcher: sort needs manual review
-            if exc.code == "tier1_failed":
-                try:
-                    flagged_count = len(exc.verification.flagged) if exc.verification else 0
-                    db.add(Notification(
-                        company_id  = company_uuid,
-                        employee_id = created_by_uuid,
-                        type        = "zone_sort_review",
-                        message     = (
-                            f"Zone assignment for {sort_date} needs review — "
-                            f"{flagged_count} bag(s) flagged. Return to Sort to confirm."
-                        ),
-                    ))
-                    db.commit()
-                except Exception:
-                    pass
-
             db.close()
             return payload
 
@@ -207,21 +150,6 @@ def run_zone_sort(
                     truck_zone_label    = assignment.truck_name,
                 ))
 
-        if result.was_forced:
-            import uuid as _uuid_mod
-            db.add(AuditLog(
-                company_id   = company_uuid,
-                actor_id     = created_by_uuid,
-                action_type  = "sort.tier1_force_override",
-                target_table = "truck_zones",
-                target_id    = _uuid_mod.uuid4(),
-                after_snapshot = {
-                    "sort_date":     sort_date,
-                    "flagged_totes": len(result.verification.flagged),
-                    "zones_created": len(result.zones_persisted),
-                },
-            ))
-
         db.commit()
 
         # Notify the dispatcher who triggered the sort so the SSE stream wakes
@@ -246,10 +174,8 @@ def run_zone_sort(
             {
                 "truck_id":       str(a.truck_id),
                 "truck_name":     a.truck_name,
-                "match_type":     a.match_type,
                 "anchor_source":  a.anchor_source,
                 "workload_score": a.workload_score,
-                "is_overflow":    a.is_overflow,
                 "package_count":  len(a.cluster.packages),
             }
             for a in result.proposal.assignments
@@ -261,11 +187,11 @@ def run_zone_sort(
             "package_count":     result.package_count,
             "outlier_count":     result.outlier_count,
             "cluster_count":     result.cluster_count,
-            "tier1_passed":      result.tier1_passed,
-            "was_forced":        result.was_forced,
             "zones_created":     len(result.zones_persisted),
             "assignments":       assignments_out,
-            "flagged_bags":      [],
+            "station_removals":  len(result.analysis.station_removals),
+            "ap_flags":          len(result.analysis.ap_flags),
+            "unplaced_totes":    len(result.analysis.unplaced_bags),
             "volume_alert":      result.volume_alert,
             "volume_alert_msg":  result.volume_alert_msg,
         }
@@ -279,7 +205,6 @@ def run_zone_sort(
                 "sort_date":     sort_date,
                 "task_id":       task_id,
                 "zones_created": len(result.zones_persisted),
-                "tier1_passed":  result.tier1_passed,
             },
         )
         return payload

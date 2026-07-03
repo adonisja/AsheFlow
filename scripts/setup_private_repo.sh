@@ -111,7 +111,7 @@ SERVICES=(
   score_phase4.py
   seed_manifest.py
   derive_block_key.py
-  tier1_verify.py
+  sort_analysis.py
   run_sort.py
   persist_zones.py
   assign_totes.py

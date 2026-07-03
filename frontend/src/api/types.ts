@@ -57,15 +57,13 @@ export interface ToteTransferOut {
   to_driver_name?: string | null;
   package_count?: number | null;
   status: 'suggested' | 'confirmed' | 'completed' | 'kept' | 'undone';
-  reason: 'rerun_diff' | 'dispatch' | 'tier1_misaligned';
+  reason: 'rerun_diff' | 'dispatch';
 }
 
 export interface OvDetail {
   size: string;            // OV_S | OV_M | OV_L | OV_XL
   zone?: string | null;    // OV sort zone on the dock
 }
-
-export type ToteClassification = 'clean' | 'stray' | 'uncertain' | 'misaligned' | 'out_of_zone';
 
 export interface RosterTote {
   bag_id: string;
@@ -75,7 +73,6 @@ export interface RosterTote {
   ov_details?: OvDetail[];
   dock_tags: string[];
   ov_dock_tags: string[];
-  classification?: ToteClassification;
   rider_count?: number;
   pull_tbas?: string[];
   checked: boolean;
@@ -117,6 +114,7 @@ export interface RemovalOut {
   reason: string;
   locator?: string | null;
   status: 'flagged' | 'removed';
+  pull_point: 'station' | 'anchor_point';
   removed_by_name?: string | null;
   removed_at?: string | null;
 }
@@ -839,15 +837,9 @@ export interface ManifestStatusResponse {
 // Manifest sort run
 // ---------------------------------------------------------------------------
 
-export interface BagOverride {
-  bag_id: string;
-  truck_id: string;
-}
 
 export interface SortRunRequest {
-  sort_date: string;          // ISO date "YYYY-MM-DD"
-  force: boolean;
-  overrides: BagOverride[];
+  sort_date: string;
 }
 
 export type AnchorSource = 'truck_anchor' | 'zone_history' | 'building_profile' | 'quantile';
@@ -855,31 +847,9 @@ export type AnchorSource = 'truck_anchor' | 'zone_history' | 'building_profile' 
 export interface ClusterAssignmentOut {
   truck_id: string;
   truck_name: string;
-  match_type: 'anchor' | 'historical' | 'sequential' | 'overflow';
   anchor_source?: AnchorSource | null;
   workload_score: number | null;
-  is_overflow: boolean;
   package_count: number;
-}
-
-export interface BagPackageDetail {
-  tba: string;
-  tag_number: string | null;
-  normalised_address: string | null;
-}
-
-export interface BagResultOut {
-  bag_id: string;
-  inferred_truck_id: string | null;
-  classification: 'clean' | 'stray' | 'uncertain' | 'misaligned' | 'out_of_zone';
-  total_packages: number;
-  outside_packages: number;
-  outside_pct: number;
-  outside_tbas: string[];
-  outlier_tbas: string[];
-  suggested_truck_id: string | null;
-  unresolvable: boolean;
-  outside_packages_detail: BagPackageDetail[];
 }
 
 export interface SortRunResponse {
@@ -887,13 +857,13 @@ export interface SortRunResponse {
   package_count: number;
   outlier_count: number;
   cluster_count: number;
-  tier1_passed: boolean;
-  was_forced: boolean;
   zones_created: number;
-  assignments: ClusterAssignmentOut[];
-  flagged_bags: BagResultOut[];
+  station_removals: number;
+  ap_flags: number;
+  unplaced_totes: number;
   volume_alert: boolean;
   volume_alert_msg: string;
+  assignments: ClusterAssignmentOut[];
 }
 
 export interface SortRunAccepted {
@@ -905,23 +875,20 @@ export type SortRunTaskStatus = 'running' | 'done' | 'tier1_failed' | 'error';
 
 export interface SortRunStatusResponse {
   task_id: string;
-  status: SortRunTaskStatus;
-  // populated when status == "done"
+  status: 'running' | 'done' | 'error';
   sort_date?: string;
   package_count?: number;
   outlier_count?: number;
   cluster_count?: number;
-  tier1_passed?: boolean;
-  was_forced?: boolean;
   zones_created?: number;
+  station_removals?: number;
+  ap_flags?: number;
+  unplaced_totes?: number;
   volume_alert?: boolean;
   volume_alert_msg?: string;
   assignments: ClusterAssignmentOut[];
-  // populated when status == "tier1_failed"
-  flagged_bags: BagResultOut[];
-  // populated when status == "error" or "tier1_failed"
-  detail?: string;
-  http_status?: number;
+  detail?: string | null;
+  http_status?: number | null;
 }
 
 export interface ManifestPreviewRow {
@@ -961,10 +928,8 @@ export interface ManifestPackagePatchResponse {
 export interface SortPreviewAssignment {
   truck_id: string;
   truck_name: string;
-  match_type: string;
   anchor_source?: AnchorSource | null;
   workload_score: number | null;
-  is_overflow: boolean;
   package_count: number;
   outlier_count: number;
 }
@@ -975,9 +940,10 @@ export interface SortPreviewResponse {
   package_count: number;
   outlier_count: number;
   cluster_count: number;
-  tier1_passed: boolean;
-  was_forced: boolean;
   zones_created: number;
+  station_removals: number;
+  ap_flags: number;
+  unplaced_totes: number;
   volume_alert: boolean;
   volume_alert_msg: string;
   assignments: SortPreviewAssignment[];

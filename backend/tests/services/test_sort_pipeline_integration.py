@@ -1,11 +1,11 @@
 """
 Integration tests — manifest injection through TruckZone creation to route creation.
 
-Covers the full sort pipeline in one connected flow (ADR-169):
+Covers the full sort pipeline in one connected flow (ADR-169/177):
 
   assign_totes()               ← tote-level anchored balanced assignment
-      → tier1_verify()
-      → persist_zones()          ← TruckZone rows written
+      → analyze_sort()           ← non-blocking action lists (no review gate)
+      → persist_zones()          ← TruckZone rows written directly
       → (_persist_routes stub)   ← Route rows built from TruckZone.package_tbas
 
 The tests bypass Redis and the Celery task. Packages are injected as plain dicts
@@ -36,7 +36,7 @@ import pytest
 # The public repo ships the old tier1_verify without BagOverride — skip the entire
 # module at collection time if the updated private version is not present.
 try:
-    from app.services.tier1_verify import BagOverride, BagResult, tier1_verify, VerificationResult
+    from app.services.sort_analysis import analyze_sort, SortAnalysis
     from app.services.persist_zones import persist_zones
     from app.services.assign_clusters import AssignmentProposal, ClusterAssignment
     from app.services.assign_totes import assign_totes, AnchorPoint
@@ -60,23 +60,6 @@ _TRUCK_B_ID = uuid.UUID("cccccccc-0000-0000-0000-000000000002")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_cfg(
-    small_tote_cutoff: int  = 10,
-    small_stray_max: int    = 1,
-    small_uncertain_max: int = 3,
-    stray_pct: float        = 0.10,
-    uncertain_pct: float    = 0.40,
-):
-    """Minimal CompanyConfig-like object for tier1_verify."""
-    cfg = MagicMock()
-    cfg.tier1_small_tote_cutoff   = small_tote_cutoff
-    cfg.tier1_small_stray_max     = small_stray_max
-    cfg.tier1_small_uncertain_max = small_uncertain_max
-    cfg.tier1_stray_pct           = stray_pct
-    cfg.tier1_uncertain_pct       = uncertain_pct
-    return cfg
-
 
 def _make_package(tba: str, bag_id: str, lat: float, lng: float,
                   block_key: str = "W_36_St_300") -> dict:
@@ -110,9 +93,7 @@ def _make_cluster(cluster_id: int, packages: list[dict], truck_id: UUID) -> Clus
         cluster=cluster,
         truck_id=truck_id,
         truck_name=f"Truck {'A' if truck_id == _TRUCK_A_ID else 'B'}",
-        match_type="sequential",
         workload_score=None,
-        is_overflow=False,
     )
 
 
@@ -158,16 +139,6 @@ class TestHappyPath:
         proposal = _make_proposal([assignment_a, assignment_b])
 
         return pkgs_a + pkgs_b, proposal
-
-    def test_tier1_all_clean(self):
-        packages, proposal = self._build()
-        cfg = _make_cfg()
-
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg)
-
-        assert result.all_clean is True
-        assert result.flagged == []
-        assert len(result.bag_results) == 2
 
     def test_zone_tbas_split_by_truck(self):
         packages, proposal = self._build()
@@ -245,240 +216,6 @@ class TestHappyPath:
 
 
 # ---------------------------------------------------------------------------
-# 2. Tier-1 flagged path — misloaded bag detected
-# ---------------------------------------------------------------------------
-
-class TestTier1FlaggedPath:
-    """Bag-Mixed has TBAs split: 4 on Truck A, 1 on Truck B (misaligned)."""
-
-    def _build(self):
-        pkgs_a = [_make_package(f"TBA-A{i}", "Bag-Mixed", 40.750 + i * 0.001, -73.990) for i in range(4)]
-        # 1 package from Bag-Mixed is clustered to Truck B — misload
-        pkg_stray = _make_package("TBA-STRAY", "Bag-Mixed", 40.760, -73.980)
-
-        assignment_a = _make_cluster(0, pkgs_a, _TRUCK_A_ID)
-        assignment_b = _make_cluster(1, [pkg_stray], _TRUCK_B_ID)
-        proposal = _make_proposal([assignment_a, assignment_b])
-
-        packages = pkgs_a + [pkg_stray]
-        return packages, proposal
-
-    def test_tier1_detects_misloaded_bag(self):
-        packages, proposal = self._build()
-        # Large tote threshold so classification goes to pct-based path
-        cfg = _make_cfg(small_tote_cutoff=3, stray_pct=0.10, uncertain_pct=0.40)
-
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg)
-
-        # Bag-Mixed has 1/5 = 0.20 outside — above stray_pct=0.10 but below uncertain_pct=0.40
-        assert result.all_clean is False
-        assert len(result.flagged) == 1
-        flagged = result.flagged[0]
-        assert flagged.bag_id == "Bag-Mixed"
-        assert flagged.outside_packages == 1
-        assert flagged.inferred_truck_id == _TRUCK_A_ID  # 4 votes vs 1
-        assert flagged.suggested_truck_id == _TRUCK_B_ID  # stray is on Truck B
-
-    def test_tier1_stray_classification(self):
-        """1 outside on a small tote (< cutoff) → 'stray' if within small_stray_max."""
-        packages, proposal = self._build()
-        # cutoff=10 means 5-pkg bag is "small"; small_stray_max=1 → 1 outside = stray
-        cfg = _make_cfg(small_tote_cutoff=10, small_stray_max=1)
-
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg)
-
-        assert result.flagged[0].classification == "stray"
-
-    def test_tier1_misaligned_classification(self):
-        """Majority of packages on wrong truck → 'misaligned'."""
-        # 1 on Truck A, 4 on Truck B — inferred = B, outside = A
-        pkgs_b = [_make_package(f"TBA-B{i}", "Bag-M2", 40.760 + i * 0.001, -73.980) for i in range(4)]
-        pkg_stray = _make_package("TBA-A0", "Bag-M2", 40.750, -73.990)
-
-        assignment_a = _make_cluster(0, [pkg_stray], _TRUCK_A_ID)
-        assignment_b = _make_cluster(1, pkgs_b, _TRUCK_B_ID)
-        proposal = _make_proposal([assignment_a, assignment_b])
-        packages = [pkg_stray] + pkgs_b
-
-        cfg = _make_cfg(small_tote_cutoff=10, small_stray_max=0, small_uncertain_max=0)
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg)
-
-        assert result.flagged[0].classification in ("uncertain", "misaligned")
-
-
-# ---------------------------------------------------------------------------
-# 3. Tier-1 override — dispatch confirms bag correction
-# ---------------------------------------------------------------------------
-
-class TestTier1Override:
-    """Dispatch overrides Bag-Mixed to Truck B. Zones must move those TBAs."""
-
-    def _build_proposal(self):
-        # Bag-Mixed: 4 TBAs on Truck A, 1 (stray) on Truck B
-        pkgs_a = [_make_package(f"TBA-A{i}", "Bag-Mixed", 40.750 + i * 0.001, -73.990) for i in range(4)]
-        pkg_stray = _make_package("TBA-STRAY", "Bag-Mixed", 40.760, -73.980)
-
-        assignment_a = _make_cluster(0, pkgs_a, _TRUCK_A_ID)
-        assignment_b = _make_cluster(1, [pkg_stray], _TRUCK_B_ID)
-        proposal = _make_proposal([assignment_a, assignment_b])
-        packages = pkgs_a + [pkg_stray]
-        return proposal, packages
-
-    def test_overridden_bag_classifies_clean(self):
-        proposal, packages = self._build_proposal()
-        cfg = _make_cfg()
-        overrides = [BagOverride(bag_id="Bag-Mixed", truck_id=_TRUCK_B_ID)]
-
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg, overrides=overrides)
-
-        assert result.all_clean is True
-        assert result.flagged == []
-        mixed = next(r for r in result.bag_results if r.bag_id == "Bag-Mixed")
-        assert mixed.classification == "clean"
-        assert mixed.inferred_truck_id == _TRUCK_B_ID
-
-    def test_override_moves_all_tbas_to_confirmed_truck(self):
-        proposal, packages = self._build_proposal()
-        db = _make_db()
-        overrides = [BagOverride(bag_id="Bag-Mixed", truck_id=_TRUCK_B_ID)]
-
-        zones = persist_zones(
-            proposal=proposal,
-            zone_date=_SORT_DATE,
-            company_id=_COMPANY_ID,
-            created_by=_ACTOR_ID,
-            created_by_name="Dispatch",
-            db=db,
-            overrides=overrides,
-        )
-
-        truck_b_zone = next(z for z in zones if z.truck_id == _TRUCK_B_ID)
-        truck_a_zone = next(z for z in zones if z.truck_id == _TRUCK_A_ID)
-
-        # All Bag-Mixed TBAs should now be in Truck B's zone
-        all_mixed_tbas = {f"TBA-A{i}" for i in range(4)} | {"TBA-STRAY"}
-        assert all_mixed_tbas.issubset(set(truck_b_zone.package_tbas))
-
-        # None of Bag-Mixed TBAs should remain in Truck A's zone
-        truck_a_tbas = set(truck_a_zone.package_tbas)
-        assert truck_a_tbas.isdisjoint(all_mixed_tbas)
-
-    def test_non_overridden_tbas_stay_in_original_truck(self):
-        """Only overridden bag moves. Other packages stay with their DBSCAN truck."""
-        pkgs_a_clean = [_make_package(f"TBA-CLEAN{i}", "Bag-Clean", 40.740 + i * 0.001, -73.990) for i in range(3)]
-        pkgs_mixed_a = [_make_package(f"TBA-M{i}", "Bag-Mixed", 40.750 + i * 0.001, -73.990) for i in range(4)]
-        pkg_stray    = _make_package("TBA-STRAY", "Bag-Mixed", 40.760, -73.980)
-
-        assignment_a = _make_cluster(0, pkgs_a_clean + pkgs_mixed_a, _TRUCK_A_ID)
-        assignment_b = _make_cluster(1, [pkg_stray], _TRUCK_B_ID)
-        proposal = _make_proposal([assignment_a, assignment_b])
-
-        db = _make_db()
-        overrides = [BagOverride(bag_id="Bag-Mixed", truck_id=_TRUCK_B_ID)]
-
-        zones = persist_zones(
-            proposal=proposal,
-            zone_date=_SORT_DATE,
-            company_id=_COMPANY_ID,
-            created_by=_ACTOR_ID,
-            created_by_name="Dispatch",
-            db=db,
-            overrides=overrides,
-        )
-
-        truck_a_zone = next(z for z in zones if z.truck_id == _TRUCK_A_ID)
-        clean_tbas = {f"TBA-CLEAN{i}" for i in range(3)}
-        assert clean_tbas.issubset(set(truck_a_zone.package_tbas))
-
-
-# ---------------------------------------------------------------------------
-# 4. Outlier packages — DBSCAN label -1
-# ---------------------------------------------------------------------------
-
-class TestOutliers:
-    """Outlier TBAs (no cluster) surface in tier-1 but are not placed in any zone."""
-
-    def _build(self):
-        pkgs_a = [_make_package(f"TBA-A{i}", "Bag-A", 40.750 + i * 0.001, -73.990) for i in range(4)]
-        pkg_outlier = _make_package("TBA-OUTLIER", "Bag-A", 40.900, -73.800)  # far away
-
-        assignment_a = _make_cluster(0, pkgs_a, _TRUCK_A_ID)
-        # Outlier is in proposal.outliers, not in any cluster
-        proposal = _make_proposal([assignment_a], outliers=[pkg_outlier])
-        packages = pkgs_a + [pkg_outlier]
-        return proposal, packages
-
-    def test_outlier_tba_in_outlier_tbas_field(self):
-        proposal, packages = self._build()
-        cfg = _make_cfg(small_tote_cutoff=10)
-
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg)
-
-        bag_a = next(r for r in result.bag_results if r.bag_id == "Bag-A")
-        assert "TBA-OUTLIER" in bag_a.outlier_tbas
-
-    def test_fully_outlier_outside_bag_is_unresolvable(self):
-        """A bag where ALL outside TBAs are outliers is unresolvable."""
-        # Bag-Out has 3 TBAs in cluster (Truck A) + 2 outliers (no cluster)
-        pkgs_cluster = [_make_package(f"TBA-C{i}", "Bag-Out", 40.750 + i * 0.001, -73.990) for i in range(3)]
-        pkgs_outlier = [_make_package(f"TBA-OT{i}", "Bag-Out", 40.900 + i * 0.001, -73.800) for i in range(2)]
-
-        assignment_a = _make_cluster(0, pkgs_cluster, _TRUCK_A_ID)
-        proposal = _make_proposal([assignment_a], outliers=pkgs_outlier)
-        packages = pkgs_cluster + pkgs_outlier
-
-        cfg = _make_cfg(small_tote_cutoff=10, small_stray_max=0)
-        result = tier1_verify(proposal=proposal, packages=packages, cfg=cfg)
-
-        bag_out = next(r for r in result.bag_results if r.bag_id == "Bag-Out")
-        assert bag_out.unresolvable is True
-        assert bag_out.suggested_truck_id is None
-
-    def test_outlier_tbas_excluded_from_zones_without_override(self):
-        """Outlier TBAs with no override must not appear in any zone's package_tbas."""
-        proposal, packages = self._build()
-        db = _make_db()
-
-        zones = persist_zones(
-            proposal=proposal,
-            zone_date=_SORT_DATE,
-            company_id=_COMPANY_ID,
-            created_by=_ACTOR_ID,
-            created_by_name="Dispatch",
-            db=db,
-        )
-
-        all_zone_tbas = {tba for z in zones for tba in (z.package_tbas or [])}
-        assert "TBA-OUTLIER" not in all_zone_tbas
-
-    def test_outlier_with_override_placed_in_zone(self):
-        """An outlier TBA whose bag is overridden by dispatch enters the zone."""
-        pkgs_a = [_make_package(f"TBA-A{i}", "Bag-A", 40.750 + i * 0.001, -73.990) for i in range(3)]
-        pkgs_b = [_make_package(f"TBA-B{i}", "Bag-B", 40.760 + i * 0.001, -73.980) for i in range(3)]
-        pkg_outlier = _make_package("TBA-OUTLIER", "Bag-A", 40.900, -73.800)
-
-        assignment_a = _make_cluster(0, pkgs_a, _TRUCK_A_ID)
-        assignment_b = _make_cluster(1, pkgs_b, _TRUCK_B_ID)
-        # Outlier TBA belongs to Bag-A; dispatch overrides the whole bag to Truck B
-        proposal = _make_proposal([assignment_a, assignment_b], outliers=[pkg_outlier])
-        db = _make_db()
-        overrides = [BagOverride(bag_id="Bag-A", truck_id=_TRUCK_B_ID)]
-
-        zones = persist_zones(
-            proposal=proposal,
-            zone_date=_SORT_DATE,
-            company_id=_COMPANY_ID,
-            created_by=_ACTOR_ID,
-            created_by_name="Dispatch",
-            db=db,
-            overrides=overrides,
-        )
-
-        truck_b_zone = next(z for z in zones if z.truck_id == _TRUCK_B_ID)
-        assert "TBA-OUTLIER" in truck_b_zone.package_tbas
-
-
-# ---------------------------------------------------------------------------
 # 5. Zone → commit-sort handoff
 # ---------------------------------------------------------------------------
 
@@ -537,33 +274,6 @@ class TestZoneToCommitSortHandoff:
         tbas_b = set(next(z for z in zones if z.truck_id == _TRUCK_B_ID).package_tbas)
         assert tbas_a.isdisjoint(tbas_b), "TBAs must not overlap across zones"
 
-    def test_override_produces_disjoint_tba_sets(self):
-        """After an override, TBA sets must still be disjoint across zones."""
-        pkgs_a = [_make_package(f"TBA-A{i}", "Bag-A", 40.750 + i * 0.001, -73.990) for i in range(3)]
-        pkgs_b = [_make_package(f"TBA-B{i}", "Bag-B", 40.760 + i * 0.001, -73.980) for i in range(3)]
-        pkg_stray = _make_package("TBA-STRAY", "Bag-A", 40.760, -73.981)  # bag-A pkg in truck-B cluster
-
-        proposal = _make_proposal([
-            _make_cluster(0, pkgs_a, _TRUCK_A_ID),
-            _make_cluster(1, pkgs_b + [pkg_stray], _TRUCK_B_ID),
-        ])
-        db = _make_db()
-        # Dispatch confirms: Bag-A belongs entirely on Truck B
-        overrides = [BagOverride(bag_id="Bag-A", truck_id=_TRUCK_B_ID)]
-
-        zones = persist_zones(
-            proposal=proposal,
-            zone_date=_SORT_DATE,
-            company_id=_COMPANY_ID,
-            created_by=_ACTOR_ID,
-            created_by_name="Dispatch",
-            db=db,
-            overrides=overrides,
-        )
-
-        tbas_a = set(next(z for z in zones if z.truck_id == _TRUCK_A_ID).package_tbas)
-        tbas_b = set(next(z for z in zones if z.truck_id == _TRUCK_B_ID).package_tbas)
-        assert tbas_a.isdisjoint(tbas_b), "TBAs must not overlap after override"
 
 
 # ---------------------------------------------------------------------------
@@ -785,11 +495,10 @@ class TestAssignTotes:
             ratio = h1.intersection(h2).area / min(h1.area, h2.area)
             assert ratio < 0.05, f"territories overlap {ratio:.2f} — partition interleaved"
 
-    def test_match_type_is_anchor(self):
+    def test_anchor_source_recorded(self):
         pkgs = _tote("Bag-A1", 5, 40.744, -73.996)
         proposal = assign_totes(packages=pkgs, anchors=_anchors())
-        assert all(a.match_type == "anchor" for a in proposal.assignments)
-        assert all(a.is_overflow is False for a in proposal.assignments)
+        assert all(a.anchor_source == "truck_anchor" for a in proposal.assignments)
 
 
 # ---------------------------------------------------------------------------
@@ -927,8 +636,8 @@ class TestLoadFinalization:
         # dock-tag ordering: A-12 before B-07
         assert [e["bag_id"] for e in zones[0].tote_roster] == ["Bag-A", "Bag-B"]
 
-    def test_roster_classification_and_ov_details(self):
-        """tier-1 classifications land on roster entries; OVs carry size@zone."""
+    def test_roster_ov_details(self):
+        """OVs carry size@zone on the roster entry."""
         pkgs = [
             self._pkg("TBA-1", "Bag-A", None, "A-05"),
             self._pkg("TBA-2", "Bag-A", "OV_L", "OV-2"),
@@ -939,12 +648,11 @@ class TestLoadFinalization:
         zones = persist_zones(
             proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
             created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
-            bag_classifications={"Bag-A": "stray"},
         )
         entry = zones[0].tote_roster[0]
-        assert entry["classification"] == "stray"
         assert entry["ov_details"] == [{"size": "OV_L", "zone": "OV-2"}]
         assert entry["dock_tags"] == ["A-05"]
+        assert "classification" not in entry   # retired with tier-1 (ADR-177)
 
     def test_dock_tags_frequency_ordered(self):
         """A misroute rider's foreign dock tag ranks after the bag's own tag."""
@@ -1075,130 +783,101 @@ _ANCHORS = [
 ]
 
 
-class TestOutOfZoneRemovals:
-    def test_ooz_tote_classified_and_flagged_for_removal(self):
-        """A whole tote outside the company zone is out_of_zone — a removal
-        candidate, never a transfer."""
-        ooz = [_make_package(f"TBA-Q{i}", "Bag-OOZ", 40.700, -74.020) for i in range(3)]
-        for p in ooz:
-            p["tag_number"] = "A-14"
-        good = [_make_package(f"TBA-G{i}", "Bag-Good", 40.745, -73.995) for i in range(3)]
+class TestSortAnalysis:
+    """ADR-177: non-blocking action lists replace the tier-1 review wall."""
+
+    def _pkg(self, tba, bag, lat, lng, ptype=None, tag=None, block="W_36_St_300"):
+        p = _make_package(tba, bag, lat, lng, block_key=block)
+        p["package_type"] = ptype
+        p["tag_number"] = tag
+        return p
+
+    def test_ooz_tote_is_station_removal(self):
+        ooz = [self._pkg(f"TBA-Q{i}", "Bag-OOZ", 40.700, -74.020, tag="A-14") for i in range(3)]
+        good = [self._pkg(f"TBA-G{i}", "Bag-Good", 40.745, -73.995) for i in range(3)]
 
         proposal = _make_proposal([_make_cluster(0, good, _TRUCK_A_ID)], outliers=ooz)
-        result = tier1_verify(
-            proposal=proposal, packages=good + ooz, cfg=_make_cfg(),
-            boundary=_BOUNDARY, anchors=_ANCHORS,
-        )
+        analysis = analyze_sort(proposal, good + ooz, boundary=_BOUNDARY)
 
-        bag = next(r for r in result.bag_results if r.bag_id == "Bag-OOZ")
-        assert bag.classification == "out_of_zone"
-        assert len(result.removal_candidates) == 1
-        cand = result.removal_candidates[0]
-        assert cand["whole_tote"] is True
+        assert len(analysis.station_removals) == 1
+        cand = analysis.station_removals[0]
+        assert cand["bag_id"] == "Bag-OOZ"
         assert cand["package_count"] == 3
         assert cand["locator"] == "A-14"
-        assert result.misaligned_suggestions == []
+        assert analysis.ap_flags == []
+        assert analysis.unplaced_bags == []
 
-    def test_ooz_rider_inside_good_tote_flagged_individually(self):
-        """A single out-of-zone rider in an otherwise good tote becomes a
-        single-package removal candidate; the tote itself stays clean."""
-        pkgs = [_make_package(f"TBA-{i}", "Bag-A", 40.745, -73.995) for i in range(9)]
-        rider = _make_package("TBA-RIDER", "Bag-A", 40.700, -74.020, block_key="OTHER_BLOCK")
-        rider["tag_number"] = "F-02"
+    def test_ooz_rider_is_ap_flag(self):
+        """An out-of-zone rider inside a good tote is pulled at the ANCHOR
+        POINT (ADR-177 decision c), not the dock."""
+        pkgs = [self._pkg(f"TBA-{i}", "Bag-A", 40.745, -73.995) for i in range(9)]
+        rider = self._pkg("TBA-RIDER", "Bag-A", 40.700, -74.020, tag="F-02", block="OTHER_BLOCK")
         packages = pkgs + [rider]
 
         proposal = _make_proposal([_make_cluster(0, packages, _TRUCK_A_ID)])
-        result = tier1_verify(
-            proposal=proposal, packages=packages, cfg=_make_cfg(),
-            boundary=_BOUNDARY, anchors=_ANCHORS,
-        )
+        analysis = analyze_sort(proposal, packages, boundary=_BOUNDARY)
 
-        assert len(result.removal_candidates) == 1
-        cand = result.removal_candidates[0]
-        assert cand["tba"] == "TBA-RIDER" and cand["whole_tote"] is False
-        bag = next(r for r in result.bag_results if r.bag_id == "Bag-A")
-        assert bag.classification == "clean"   # OOZ rider is a removal, not a misalignment
+        assert analysis.ap_flags == [{"bag_id": "Bag-A", "tba": "TBA-RIDER", "locator": "F-02"}]
+        assert analysis.station_removals == []
 
-    def test_inzone_riders_drive_classification_and_misaligned_suggestion(self):
-        """In-zone riders whose territory is another truck feed the thresholds;
-        a majority-rider tote is misaligned with a suggested station swap."""
-        # 2 packages coherent with truck A territory, 8 riders deep in truck B territory
-        core = [_make_package(f"TBA-C{i}", "Bag-M", 40.745, -73.995) for i in range(2)]
-        riders = [
-            _make_package(f"TBA-R{i}", "Bag-M", 40.762, -73.985, block_key=f"B_SIDE_{i}")
-            for i in range(8)
-        ]
-        packages = core + riders
+    def test_unplaced_tote_reported(self):
+        """A tote with zero geocoded packages is a manual dispatch decision."""
+        blind = []
+        for i in range(3):
+            p = self._pkg(f"TBA-B{i}", "Bag-Blind", 0, 0)
+            p["lat"] = None
+            p["lng"] = None
+            blind.append(p)
+        proposal = _make_proposal([], outliers=blind)
+        analysis = analyze_sort(proposal, blind, boundary=_BOUNDARY)
 
+        assert analysis.unplaced_bags == [{"bag_id": "Bag-Blind", "package_count": 3}]
+        assert analysis.station_removals == []
+
+    def test_coherent_boundary_tote_produces_nothing(self):
+        """Packages coherent with their tote inherit its legitimacy — a
+        boundary tote placed by the equity solver yields no flags at all."""
+        packages = [self._pkg(f"TBA-{i}", "Bag-Edge", 40.758, -73.987) for i in range(6)]
         proposal = _make_proposal([_make_cluster(0, packages, _TRUCK_A_ID)])
-        cfg = _make_cfg(small_tote_cutoff=3, stray_pct=0.10, uncertain_pct=0.40)
-        result = tier1_verify(
-            proposal=proposal, packages=packages, cfg=cfg,
-            boundary=_BOUNDARY, anchors=_ANCHORS,
-        )
+        analysis = analyze_sort(proposal, packages, boundary=_BOUNDARY)
+        assert analysis.station_removals == [] and analysis.ap_flags == [] and analysis.unplaced_bags == []
 
-        bag = next(r for r in result.bag_results if r.bag_id == "Bag-M")
-        assert bag.classification == "misaligned"
-        assert bag.suggested_truck_id == _TRUCK_B_ID
-        assert result.misaligned_suggestions == [
-            {"bag_id": "Bag-M", "to_truck_id": _TRUCK_B_ID, "package_count": 10}
-        ]
-        assert result.removal_candidates == []
-
-    def test_boundary_tote_coherent_packages_do_not_flag(self):
-        """Packages coherent with their tote inherit its legitimacy even when
-        another anchor is marginally closer — no boundary false-positives."""
-        # Tote assigned to truck A but sitting nearer truck B's anchor; all
-        # packages share the tote's block → clean.
-        packages = [_make_package(f"TBA-{i}", "Bag-Edge", 40.758, -73.987) for i in range(6)]
-        proposal = _make_proposal([_make_cluster(0, packages, _TRUCK_A_ID)])
-        result = tier1_verify(
-            proposal=proposal, packages=packages, cfg=_make_cfg(),
-            boundary=_BOUNDARY, anchors=_ANCHORS,
-        )
-        assert result.all_clean is True
-
-    def test_persist_writes_removals_and_misaligned_suggestion(self):
+    def test_persist_writes_removals_with_pull_points(self):
         from app.models.tote_ops import PackageRemoval as _PRModel
-        pkgs = [self_pkgs := [_make_package(f"TBA-{i}", "Bag-A", 40.745, -73.995) for i in range(3)]][0]
+        pkgs = [self._pkg(f"TBA-{i}", "Bag-A", 40.745, -73.995) for i in range(3)]
         proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
         db = _make_db()
 
         persist_zones(
             proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
             created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
-            removal_candidates=[{
-                "bag_id": "Bag-OOZ", "tba": None,
-                "tba_numbers": ["TBA-Q0", "TBA-Q1"], "package_count": 2,
-                "whole_tote": True, "locator": "A-14",
+            station_removals=[{
+                "bag_id": "Bag-OOZ", "tba_numbers": ["TBA-Q0", "TBA-Q1"],
+                "package_count": 2, "locator": "A-14",
             }],
-            misaligned_suggestions=[{"bag_id": "Bag-A", "to_truck_id": _TRUCK_B_ID, "package_count": 3}],
+            ap_flags=[{"bag_id": "Bag-A", "tba": "TBA-RIDER", "locator": "F-02"}],
         )
 
         removals = [o for o in db._added if isinstance(o, _PRModel)]
-        assert len(removals) == 1
-        assert removals[0].whole_tote is True and removals[0].status == "flagged"
-
-        transfers = [o for o in db._added if isinstance(o, _TTModel)]
-        assert len(transfers) == 1
-        assert transfers[0].reason == "tier1_misaligned"
-        assert transfers[0].from_truck_id == _TRUCK_A_ID
-        assert transfers[0].to_truck_id == _TRUCK_B_ID
-
+        assert len(removals) == 2
+        by_point = {r.pull_point: r for r in removals}
+        assert by_point["station"].whole_tote is True
+        assert by_point["station"].bag_id == "Bag-OOZ"
+        assert by_point["anchor_point"].whole_tote is False
+        assert by_point["anchor_point"].tba == "TBA-RIDER"
+        assert all(r.status == "flagged" for r in removals)
 
 # ---------------------------------------------------------------------------
 # 7. Empty manifest — edge case
 # ---------------------------------------------------------------------------
 
 class TestEmptyManifest:
-    def test_empty_package_list_produces_no_bags(self):
+    def test_empty_analysis(self):
         proposal = _make_proposal([])
-        cfg = _make_cfg()
-
-        result = tier1_verify(proposal=proposal, packages=[], cfg=cfg)
-
-        assert result.all_clean is True
-        assert result.bag_results == []
+        analysis = analyze_sort(proposal, [], boundary=_BOUNDARY)
+        assert analysis.station_removals == []
+        assert analysis.ap_flags == []
+        assert analysis.unplaced_bags == []
 
     def test_empty_cluster_result_produces_no_zones(self):
         proposal = _make_proposal([])

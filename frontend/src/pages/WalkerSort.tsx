@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import ToteRosterPanel from '../components/ToteRosterPanel';
+import ApPullsPanel from '../components/ApPullsPanel';
 import type { RostersResponse } from '../api/types';
 
 /** Station-loading facts per truck, derived from /sort/{date}/rosters:
@@ -1343,6 +1344,7 @@ export default function WalkerSortMonitor() {
       <div className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Station loading</p>
         <ToteRosterPanel date={today} mode="driver" />
+        <ApPullsPanel date={today} />
       </div>
 
       {/* Completion progress */}
