@@ -77,12 +77,13 @@ function Sheet({ roster, date }: { roster: TruckRoster; date: string }) {
             <tr key={t.bag_id}>
               <td><span className="checkbox" /></td>
               <td className="mono" style={{ fontWeight: 700 }}>{t.bag_id}</td>
-              <td className="mono">{t.dock_tags.join(', ')}</td>
+              <td className="mono" style={{ fontWeight: 700 }}>{t.dock_tags[0] ?? ''}</td>
               <td style={{ textAlign: 'right' }}>{t.package_count}</td>
               <td>
                 {t.ov_count > 0
-                  ? `${t.ov_count} — ${t.ov_sizes.map(s => s.replace('OV_', '')).join(', ')}`
-                    + (t.ov_dock_tags.length ? ` @ ${t.ov_dock_tags.join(', ')}` : '')
+                  ? (t.ov_details && t.ov_details.length > 0
+                      ? t.ov_details.map(d => `${d.size.replace('OV_', '')}${d.zone ? `@${d.zone}` : ''}`).join(', ')
+                      : t.ov_sizes.map(s => s.replace('OV_', '')).join(', '))
                   : ''}
               </td>
               <td>

@@ -927,6 +927,38 @@ class TestLoadFinalization:
         # dock-tag ordering: A-12 before B-07
         assert [e["bag_id"] for e in zones[0].tote_roster] == ["Bag-A", "Bag-B"]
 
+    def test_roster_classification_and_ov_details(self):
+        """tier-1 classifications land on roster entries; OVs carry size@zone."""
+        pkgs = [
+            self._pkg("TBA-1", "Bag-A", None, "A-05"),
+            self._pkg("TBA-2", "Bag-A", "OV_L", "OV-2"),
+        ]
+        proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
+        db = _make_db()
+
+        zones = persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+            bag_classifications={"Bag-A": "stray"},
+        )
+        entry = zones[0].tote_roster[0]
+        assert entry["classification"] == "stray"
+        assert entry["ov_details"] == [{"size": "OV_L", "zone": "OV-2"}]
+        assert entry["dock_tags"] == ["A-05"]
+
+    def test_dock_tags_frequency_ordered(self):
+        """A misroute rider's foreign dock tag ranks after the bag's own tag."""
+        pkgs = [self._pkg(f"TBA-{i}", "Bag-A", None, "A-05") for i in range(4)]
+        pkgs.append(self._pkg("TBA-RIDER", "Bag-A", None, "F-19"))  # misroute's original tag
+        proposal = _make_proposal([_make_cluster(0, pkgs, _TRUCK_A_ID)])
+        db = _make_db()
+
+        zones = persist_zones(
+            proposal=proposal, zone_date=_SORT_DATE, company_id=_COMPANY_ID,
+            created_by=_ACTOR_ID, created_by_name="Dispatch", db=db,
+        )
+        assert zones[0].tote_roster[0]["dock_tags"] == ["A-05", "F-19"]
+
     def test_rerun_diff_creates_suggested_transfer(self):
         """A bag that moved trucks between runs becomes a suggested transfer
         from its previous (physical) truck to the new one."""

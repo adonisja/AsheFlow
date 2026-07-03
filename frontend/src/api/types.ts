@@ -56,17 +56,26 @@ export interface ToteTransferOut {
   to_truck_name: string;
   to_driver_name?: string | null;
   package_count?: number | null;
-  status: 'suggested' | 'confirmed' | 'completed' | 'kept';
+  status: 'suggested' | 'confirmed' | 'completed' | 'kept' | 'undone';
   reason: 'rerun_diff' | 'dispatch';
 }
+
+export interface OvDetail {
+  size: string;            // OV_S | OV_M | OV_L | OV_XL
+  zone?: string | null;    // OV sort zone on the dock
+}
+
+export type ToteClassification = 'clean' | 'stray' | 'uncertain' | 'misaligned';
 
 export interface RosterTote {
   bag_id: string;
   package_count: number;
   ov_count: number;
   ov_sizes: string[];
+  ov_details?: OvDetail[];
   dock_tags: string[];
   ov_dock_tags: string[];
+  classification?: ToteClassification;
   checked: boolean;
   checked_by_name?: string | null;
   transfer?: ToteTransferOut | null;

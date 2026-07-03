@@ -1934,16 +1934,23 @@ class ToteTransferOut(BaseModel):
     reason: str          # rerun_diff | dispatch
 
 
+class OvDetailOut(BaseModel):
+    size: str                      # OV_S | OV_M | OV_L | OV_XL
+    zone: Optional[str] = None     # OV sort zone on the dock (from the manifest)
+
+
 class RosterToteOut(BaseModel):
     bag_id: str
     package_count: int
     ov_count: int
     ov_sizes: list[str]
+    ov_details: list[OvDetailOut] = []
     dock_tags: list[str]
     ov_dock_tags: list[str]
+    classification: str = "clean"  # clean | stray | uncertain | misaligned (tier-1)
     checked: bool
     checked_by_name: Optional[str] = None
-    transfer: Optional[ToteTransferOut] = None   # active transfer touching this bag
+    transfer: Optional[ToteTransferOut] = None   # transfer touching this bag (incl. kept, for undo)
 
 
 class TruckRosterOut(BaseModel):
@@ -2078,8 +2085,10 @@ def get_load_rosters(
         )
         .all()
     )
+    # kept is included so the row can show the decision and offer undo;
+    # incoming/outgoing lists below stay limited to actionable moves.
     active_transfer_by_bag = {
-        t.bag_id: t for t in transfers if t.status in ("suggested", "confirmed")
+        t.bag_id: t for t in transfers if t.status in ("suggested", "confirmed", "kept")
     }
 
     rosters: list[TruckRosterOut] = []
@@ -2101,8 +2110,10 @@ def get_load_rosters(
                 package_count=entry.get("package_count", len(entry.get("tba_numbers", []))),
                 ov_count=entry.get("ov_count", 0),
                 ov_sizes=entry.get("ov_sizes", []),
+                ov_details=[OvDetailOut(**d) for d in entry.get("ov_details", [])],
                 dock_tags=entry.get("dock_tags", []),
                 ov_dock_tags=entry.get("ov_dock_tags", []),
+                classification=entry.get("classification", "clean"),
                 checked=chk is not None,
                 checked_by_name=chk.checked_by_name if chk else None,
                 transfer=_transfer_out(xfer, truck_names, drivers) if xfer else None,
@@ -2355,6 +2366,24 @@ def create_manual_transfer(
     if pending is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This tote already has a pending transfer — resolve it first.")
 
+    # Manual moves are restricted to totes tier-1 flagged (stray/uncertain/
+    # misaligned). Clean totes sit exactly where the balanced sort wants them —
+    # moving one silently degrades equity and geography; if the assignment is
+    # wrong the fix is an anchor change + re-run, which produces reviewable
+    # suggested transfers instead of ad-hoc moves.
+    zones_for_class = _active_zones(db, caller.company_id, sort_date)
+    entry_class = None
+    for z in zones_for_class:
+        for e in (z.tote_roster or []):
+            if e["bag_id"] == bag_id:
+                entry_class = e.get("classification", "clean")
+                break
+    if entry_class not in ("stray", "uncertain", "misaligned"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Only totes flagged by tier-1 verification (stray, uncertain or misaligned) can be manually transferred. Re-run the sort to change clean assignments.",
+        )
+
     src, dest = _move_bag_between_zones(db, caller.company_id, sort_date, bag_id, body.to_truck_id)
     if src.id == dest.id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Tote is already on that truck.")
@@ -2385,3 +2414,140 @@ def create_manual_transfer(
     ))
     db.commit()
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+
+
+@router.post("/{sort_date}/trucks/{truck_id}/check-all", response_model=RostersResponse)
+def check_all_totes(
+    sort_date: date,
+    truck_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Check off every remaining tote on one truck in a single action.
+
+    Dispatch-only — bulk confirmation is a supervisory act; drivers check
+    individually for accountability. Confirmed transfers whose destination is
+    this truck complete as their totes check in.
+    """
+    from datetime import datetime, timezone
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck
+
+    zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
+    if not zones:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+
+    already = {
+        c.bag_id
+        for c in db.query(ToteLoadCheck).filter(
+            ToteLoadCheck.company_id == caller.company_id,
+            ToteLoadCheck.load_date == sort_date,
+        ).all()
+    }
+    now = datetime.now(timezone.utc)
+    newly_checked: list[str] = []
+    for z in zones:
+        for entry in (z.tote_roster or []):
+            bag = entry["bag_id"]
+            if bag in already:
+                continue
+            db.add(ToteLoadCheck(
+                id=_uuid_mod.uuid4(),
+                company_id=caller.company_id,
+                load_date=sort_date,
+                truck_id=truck_id,
+                bag_id=bag,
+                checked_by=caller.id,
+                checked_by_name=caller.name,
+            ))
+            newly_checked.append(bag)
+
+    if newly_checked:
+        for xfer in db.query(ToteTransfer).filter(
+            ToteTransfer.company_id == caller.company_id,
+            ToteTransfer.transfer_date == sort_date,
+            ToteTransfer.status == "confirmed",
+            ToteTransfer.to_truck_id == truck_id,
+            ToteTransfer.bag_id.in_(newly_checked),
+        ).all():
+            xfer.status = "completed"
+            xfer.completed_at = now
+
+        db.flush()
+        db.add(AuditLog(
+            company_id=caller.company_id,
+            actor_id=caller.id,
+            action_type="sort.tote_check_all",
+            target_table="tote_load_checks",
+            target_id=zones[0].id,
+            after_snapshot={"truck_id": str(truck_id), "count": len(newly_checked), "date": sort_date.isoformat()},
+        ))
+        db.commit()
+    return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+
+
+@router.post("/transfers/{transfer_id}/undo", response_model=RostersResponse)
+def undo_transfer(
+    transfer_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Undo a transfer decision that hasn't physically completed.
+
+    confirmed + rerun_diff — zone data never moved; revert to `suggested`.
+    confirmed + dispatch   — zone data moved at creation; move it back and mark
+                             the record `undone` (kept for audit).
+    kept                   — zone data was realigned to the physical truck;
+                             move it forward again and revert to `suggested`.
+    completed              — cannot undo: the tote physically moved and was
+                             checked in. Issue a new manual transfer instead.
+    """
+    from app.models.audit_log import AuditLog
+    from app.models.tote_ops import ToteTransfer
+
+    xfer = (
+        db.query(ToteTransfer)
+        .filter(ToteTransfer.id == transfer_id, ToteTransfer.company_id == caller.company_id)
+        .first()
+    )
+    if xfer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer not found.")
+
+    if xfer.status == "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Transfer already completed — the tote was physically moved and checked in. Create a new transfer to move it again.",
+        )
+    if xfer.status == "suggested":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Transfer has no decision to undo yet.")
+    if xfer.status == "undone":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Transfer is already undone.")
+
+    if xfer.status == "confirmed" and xfer.reason == "dispatch":
+        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.from_truck_id)
+        xfer.status = "undone"
+    elif xfer.status == "confirmed":   # rerun_diff — zone data untouched by confirm
+        xfer.status = "suggested"
+        xfer.resolved_by = None
+        xfer.resolved_by_name = None
+        xfer.resolved_at = None
+    else:                              # kept — re-apply the sort's intent
+        _move_bag_between_zones(db, caller.company_id, xfer.transfer_date, xfer.bag_id, xfer.to_truck_id)
+        xfer.status = "suggested"
+        xfer.resolved_by = None
+        xfer.resolved_by_name = None
+        xfer.resolved_at = None
+
+    db.flush()
+    db.add(AuditLog(
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="sort.transfer_undo",
+        target_table="tote_transfers",
+        target_id=xfer.id,
+        after_snapshot={"bag_id": xfer.bag_id, "new_status": xfer.status},
+    ))
+    db.commit()
+    return get_load_rosters(sort_date=xfer.transfer_date, mine=False, caller=caller, _={}, db=db)
