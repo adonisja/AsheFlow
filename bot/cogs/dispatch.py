@@ -210,26 +210,35 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
         color=0x57F287,  # green
     )
 
-    # Table sized to ~40 monospace chars — the width phones wrap Discord code
-    # blocks at. Fixed columns first; the anchor column is LAST and untruncated
-    # so on a narrow screen only its tail wraps, leaving the grid intact.
+    # Pill-cell table: each cell is an inline-code span (the same pill boxes
+    # the truck-channel crew post uses), padded to its column width INSIDE the
+    # backticks — inline code renders monospace, so equal padding gives equal
+    # pill widths and the pills align into columns. On narrow phones a row
+    # wraps BETWEEN pills (whole cells drop down), never mid-word.
     TRUCK_COL, NAME_COL, CREW_COL = 7, 15, 4
+    anchors = [(e.get("anchor_point") or "—") for e in trucks_data]
+    anchor_col = max([len(a) for a in anchors] + [len("Anchor")])
 
-    header = f"{'Truck':<{TRUCK_COL}} {'Driver':<{NAME_COL}} {'Crew':>{CREW_COL}}  Anchor"
-    sep    = "─" * 40
-    rows   = [header, sep]
-
-    for entry in trucks_data:
-        crew         = entry["crew"]
-        anchor_point = entry.get("anchor_point") or "—"
-        driver       = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
-        rows.append(
-            f"{entry['truck_name'][:TRUCK_COL]:<{TRUCK_COL}} "
-            f"{_fit_name(driver, NAME_COL):<{NAME_COL}} "
-            f"{len(crew):>{CREW_COL}}  {anchor_point}"
+    def _row(truck: str, driver: str, crew: str, anchor: str) -> str:
+        return (
+            f"`{truck:<{TRUCK_COL}}` `{driver:<{NAME_COL}}` "
+            f"`{crew:>{CREW_COL}}` `{anchor:<{anchor_col}}`"
         )
 
-    embed.description = "```\n" + "\n".join(rows) + "\n```"
+    SEP = "------------------------------------------"
+    rows = [_row("Truck", "Driver", "Crew", "Anchor"), SEP]
+
+    for entry, anchor_point in zip(trucks_data, anchors):
+        crew   = entry["crew"]
+        driver = next((m["name"] for m in crew if m["role"] == "driver"), "TBD")
+        rows.append(_row(
+            entry["truck_name"][:TRUCK_COL],
+            _fit_name(driver, NAME_COL),
+            str(len(crew)),
+            anchor_point,
+        ))
+
+    embed.description = "\n".join(rows)
     embed.set_footer(text="Full crew details in each truck's channel.")
     return embed
 
@@ -259,13 +268,19 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
         for t, r in zip(all_trainees, phase_results)
     }
 
-    # Table sized to ~40 monospace chars (mobile code-block wrap width).
-    # Unpaired trainees keep the same row shape with "—" in the Trainer column.
+    # Pill-cell table — same inline-code pill boxes as the truck-channel crew
+    # post, padded inside the backticks so pills align into columns. Unpaired
+    # trainees keep the row shape with an em-dash Trainer pill.
     TRUCK_COL, TRAINER_COL, TRAINEE_COL = 7, 13, 13
 
-    header = f"{'Truck':<{TRUCK_COL}} {'Trainer':<{TRAINER_COL}} {'Trainee':<{TRAINEE_COL}} Day"
-    sep    = "─" * 40
-    rows   = [header, sep]
+    def _row(truck: str, trainer: str, trainee: str, day: str) -> str:
+        return (
+            f"`{truck:<{TRUCK_COL}}` `{trainer:<{TRAINER_COL}}` "
+            f"`{trainee:<{TRAINEE_COL}}` `{day:>3}`"
+        )
+
+    SEP = "------------------------------------------"
+    rows = [_row("Truck", "Trainer", "Trainee", "Day"), SEP]
     unpaired_count = 0
 
     for entry in trucks_data:
@@ -284,27 +299,26 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
         for trainer in trainers:
             for trainee in trainees:
                 if trainee.get("paired_trainer_id") == trainer["employee_id"]:
-                    rows.append(
-                        f"{truck_name:<{TRUCK_COL}} "
-                        f"{_fit_name(trainer['name'], TRAINER_COL):<{TRAINER_COL}} "
-                        f"{_fit_name(trainee['name'], TRAINEE_COL):<{TRAINEE_COL}} "
-                        f"{_day(trainee):>3}"
-                    )
+                    rows.append(_row(
+                        truck_name,
+                        _fit_name(trainer["name"], TRAINER_COL),
+                        _fit_name(trainee["name"], TRAINEE_COL),
+                        _day(trainee),
+                    ))
                     claimed_trainee_ids.add(trainee["employee_id"])
 
         for trainee in trainees:
             if trainee["employee_id"] not in claimed_trainee_ids:
                 unpaired_count += 1
-                rows.append(
-                    f"{truck_name:<{TRUCK_COL}} "
-                    f"{'—':<{TRAINER_COL}} "
-                    f"{_fit_name(trainee['name'], TRAINEE_COL):<{TRAINEE_COL}} "
-                    f"{_day(trainee):>3}"
-                )
+                rows.append(_row(
+                    truck_name,
+                    "—",
+                    _fit_name(trainee["name"], TRAINEE_COL),
+                    _day(trainee),
+                ))
 
     if len(rows) > 2:
-        rows.append(sep)
-        embed.description = "```\n" + "\n".join(rows) + "\n```"
+        embed.description = "\n".join(rows)
         if unpaired_count:
             embed.set_footer(text=f"{unpaired_count} trainee(s) without a trainer — fix in Dispatch.")
     else:
