@@ -432,6 +432,17 @@ function WavePoolPanel({
   const [propError, setPropError] = useState<string | null>(null);
   const intervalRef               = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // The wave is settled when nothing is left to distribute: no unassigned
+  // routes AND no route still assigned/in-progress. Once settled the pool can't
+  // change, so the poll stops (ADR-179 — this loop previously had no stop
+  // condition and ran forever).
+  const isWaveSettled = useCallback((data: WavePoolResponse): boolean => {
+    if (data.unassigned_routes.length > 0) return false;
+    return Object.values(data.wave_summary.waves).every(
+      w => w.assigned === 0 && w.in_progress === 0 && w.unassigned === 0,
+    );
+  }, []);
+
   const fetchPool = useCallback(async () => {
     try {
       const { data } = await axiosClient.get<WavePoolResponse>(
@@ -439,17 +450,32 @@ function WavePoolPanel({
         { params: { route_date: routeDate } },
       );
       setPool(data);
+      if (isWaveSettled(data) && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     } catch {
       // silent — pool is advisory
     } finally {
       setLoading(false);
     }
-  }, [taId, routeDate]);
+  }, [taId, routeDate, isWaveSettled]);
 
   useEffect(() => {
     fetchPool();
-    intervalRef.current = setInterval(fetchPool, 30_000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    // Visibility-gated 45s poll (ADR-179: was an ungated 30s loop). A
+    // backgrounded tab doesn't poll; focus resumes it.
+    const tick = () => { if (document.visibilityState === 'visible') fetchPool(); };
+    const start = () => {
+      if (!intervalRef.current) intervalRef.current = setInterval(tick, 45_000);
+    };
+    start();
+    const onFocus = () => { fetchPool(); start(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      window.removeEventListener('focus', onFocus);
+    };
   }, [fetchPool]);
 
   async function handleAutoPropose() {
@@ -1184,71 +1210,90 @@ export default function WalkerSortMonitor() {
     };
   };
 
+  const assignmentsRef = useRef<TruckAssignment[]>([]);
+
+  // Refetch the dynamic per-day state: station rosters, zone status, and each
+  // truck's routes. Reused by both the full load and the periodic tick, so the
+  // tick doesn't have to refetch the static assignments+employees lists.
+  const fetchDynamic = useCallback(async (tas: TruckAssignment[]) => {
+    const [zoneRes, rosterRes] = await Promise.allSettled([
+      axiosClient.get<{ zones: { truck_id: string }[] }>(`/sort/${today}`),
+      axiosClient.get<RostersResponse>(`/sort/${today}/rosters`),
+    ]);
+    if (rosterRes.status === 'fulfilled') {
+      const info = new Map<string, StationTruckInfo>();
+      rosterRes.value.data.rosters.forEach(r => {
+        const prev = info.get(r.truck_id);
+        const pending = [...r.incoming, ...r.outgoing].filter(t => t.status === 'suggested' || t.status === 'confirmed').length;
+        const riders = r.totes.reduce((n, t) => n + (t.rider_count ?? 0), 0);
+        info.set(r.truck_id, {
+          driverName: r.driver_name ?? prev?.driverName ?? null,
+          pendingTransfers: (prev?.pendingTransfers ?? 0) + pending,
+          riderCount: (prev?.riderCount ?? 0) + riders,
+        });
+      });
+      setStationInfo(info);
+    }
+    if (zoneRes.status === 'fulfilled') {
+      setZonedTruckIds(new Set((zoneRes.value.data.zones ?? []).map(z => z.truck_id)));
+    }
+    const states = await Promise.all(tas.map(async ta => {
+      try {
+        const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${ta.id}/routes`);
+        return buildInitialState(ta, r.data);
+      } catch {
+        return buildInitialState(ta, []);
+      }
+    }));
+    setTruckStates(states);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today]);
+
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const [taRes, empRes, zoneRes, rosterRes] = await Promise.allSettled([
+      const [taRes, empRes] = await Promise.allSettled([
         axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<{ id: string; role: string; name: string; injury_status?: string | null }[]>('/employees/', { params: { is_active: true } }),
-        axiosClient.get<{ zones: { truck_id: string }[] }>(`/sort/${today}`),
-        axiosClient.get<RostersResponse>(`/sort/${today}/rosters`),
       ]);
-      if (rosterRes.status === 'fulfilled') {
-        const info = new Map<string, StationTruckInfo>();
-        rosterRes.value.data.rosters.forEach(r => {
-          const prev = info.get(r.truck_id);
-          const pending = [...r.incoming, ...r.outgoing].filter(t => t.status === 'suggested' || t.status === 'confirmed').length;
-          const riders = r.totes.reduce((n, t) => n + (t.rider_count ?? 0), 0);
-          info.set(r.truck_id, {
-            driverName: r.driver_name ?? prev?.driverName ?? null,
-            pendingTransfers: (prev?.pendingTransfers ?? 0) + pending,
-            riderCount: (prev?.riderCount ?? 0) + riders,
-          });
-        });
-        setStationInfo(info);
-      }
-
-      if (zoneRes.status === 'fulfilled') {
-        setZonedTruckIds(new Set((zoneRes.value.data.zones ?? []).map(z => z.truck_id)));
-      }
       if (taRes.status === 'rejected') throw taRes.reason;
       if (empRes.status === 'rejected') throw empRes.reason;
 
       const tas  = Array.from(new Map(taRes.value.data.map(a => [a.truck_id, a])).values());
       const emps = empRes.value.data;
+      assignmentsRef.current = tas;
       setAssignments(tas);
       setWalkers(emps.filter(e => ['walker', 'trainee', 'trainer'].includes(e.role)));
       setTrainers(emps.filter(e => e.role === 'trainer'));
 
-      const states = await Promise.all(tas.map(async ta => {
-        try {
-          const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${ta.id}/routes`);
-          return buildInitialState(ta, r.data);
-        } catch {
-          return buildInitialState(ta, []);
-        }
-      }));
-      setTruckStates(states);
+      await fetchDynamic(tas);
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? 'Failed to load data.');
     } finally {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [today]);
+  }, [today, fetchDynamic]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Live-ish updates without SSE: silent refetch every 60s while the tab is
-  // visible, plus on window focus. Full push updates arrive with the
-  // notification rework's SSE phase.
+  // Live-ish updates without SSE (ADR-179): the periodic 90s tick refetches only
+  // the dynamic state (rosters/zones/routes) against the assignments already in
+  // hand — it no longer re-pulls the static assignments+employees lists every
+  // tick (those refresh on full load and on window focus). Visibility-gated so a
+  // backgrounded tab is silent.
   useEffect(() => {
-    const tick = () => { if (document.visibilityState === 'visible') fetchAll(true); };
-    const interval = setInterval(tick, 60_000);
-    window.addEventListener('focus', tick);
-    return () => { clearInterval(interval); window.removeEventListener('focus', tick); };
-  }, [fetchAll]);
+    const tick = () => {
+      if (document.visibilityState === 'visible' && assignmentsRef.current.length) {
+        fetchDynamic(assignmentsRef.current);
+      }
+    };
+    const interval = setInterval(tick, 90_000);
+    const onFocus = () => { fetchAll(true); };
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(interval); window.removeEventListener('focus', onFocus); };
+  }, [fetchAll, fetchDynamic]);
 
   const updateState = (taId: string, patch: Partial<TruckSortState>) => {
     setTruckStates(prev => prev.map(s => s.ta.id === taId ? { ...s, ...patch } : s));

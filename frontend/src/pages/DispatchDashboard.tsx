@@ -5,9 +5,11 @@ import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, 
 import type { UnavailableStaff, DispatchResult } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
+import { useNotificationContext } from '../contexts/NotificationContext';
 
 export default function DispatchDashboard() {
   const { groups } = useAuth();
+  const { setOnNotification } = useNotificationContext();
   const isAdmin = groups.includes('admin') || groups.includes('Admin');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalYMD());
   const [totalEmployees, setTotalEmployees] = useState<number | ''>('');
@@ -69,48 +71,62 @@ export default function DispatchDashboard() {
     }
   };
 
-  // Poll the dispatch endpoint every 30s to pick up phase changes made on another
-  // tab or device (e.g. a co-dispatcher clicking Publish or Finalize).
-  // Stops automatically once finalized — the phase can't regress.
+  // One-shot dispatch-phase fetch. Returns true once the terminal state
+  // (finalized) is reached so callers can stop their fallback poll. Used both
+  // by the fallback interval below and by the SSE handler (ADR-179).
+  const fetchDispatchPhaseOnce = useCallback(async (date: string): Promise<boolean> => {
+    try {
+      const res = await axiosClient.get(`/dispatch/${date}`);
+      const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
+      const hasStatus = !!res.data.workflow_status;
+      setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
+      return res.data.workflow_status === 'finalized';
+    } catch {
+      return false; // silent — stale UI is acceptable, user can Refresh
+    }
+  }, []);
+
+  // Fallback poll for phase changes made on another tab/device (co-dispatcher
+  // clicking Publish/Finalize). SSE (dispatch_finalized) is the primary channel;
+  // this 60s poll only catches a missed event. Self-terminates on finalized —
+  // the phase can't regress. (ADR-179: was a 30s primary poll.)
   const startDispatchPhasePolling = useCallback((date: string) => {
     stopDispatchPhasePolling();
     dispatchPhasePollRef.current = setInterval(async () => {
-      try {
-        const res = await axiosClient.get(`/dispatch/${date}`);
-        const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
-        const hasStatus = !!res.data.workflow_status;
-        setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
-        if (res.data.workflow_status === 'finalized') {
-          stopDispatchPhasePolling();
-        }
-      } catch { /* silent — stale UI is acceptable, user can Refresh */ }
-    }, 30000);
+      if (await fetchDispatchPhaseOnce(date)) stopDispatchPhasePolling();
+    }, 60000);
+  }, [fetchDispatchPhaseOnce]);
+
+  // One-shot confirmations fetch. Returns true once no confirmation is pending
+  // (terminal), so the fallback poll / SSE handler can stop.
+  const fetchConfirmationsOnce = useCallback(async (date: string): Promise<boolean> => {
+    try {
+      const res = await axiosClient.get(`/dispatch/${date}/confirmations`);
+      const data: Record<string, string> = res.data.confirmations || {};
+      pollFailureCount.current = 0;
+      setConfirmationsStale(false);
+      setConfirmations(data);
+      const values = Object.values(data);
+      return values.length > 0 && values.every(s => s !== 'pending');
+    } catch {
+      pollFailureCount.current += 1;
+      if (pollFailureCount.current >= 3) setConfirmationsStale(true);
+      return false;
+    }
   }, []);
 
-  // Start polling every 15s — stops automatically when all responses are in
+  // Fallback poll while the confirmation window is open. SSE (crew_all_confirmed)
+  // is the primary channel; this 60s poll catches individual confirms and a
+  // missed all-confirmed event. Self-terminates when all responses are in.
+  // (ADR-179: was a 15s primary poll.)
   const startConfirmationPolling = useCallback((date: string) => {
     stopConfirmationPolling();
     setIsPollingConfirmations(true);
     setConfirmationsStale(false);
     confirmationPollRef.current = setInterval(async () => {
-      try {
-        const res = await axiosClient.get(`/dispatch/${date}/confirmations`);
-        const data: Record<string, string> = res.data.confirmations || {};
-        pollFailureCount.current = 0;
-        setConfirmationsStale(false);
-        setConfirmations(data);
-        const values = Object.values(data);
-        if (values.length > 0 && values.every(s => s !== 'pending')) {
-          stopConfirmationPolling();
-        }
-      } catch {
-        pollFailureCount.current += 1;
-        if (pollFailureCount.current >= 3) {
-          setConfirmationsStale(true);
-        }
-      }
-    }, 15000);
-  }, []);
+      if (await fetchConfirmationsOnce(date)) stopConfirmationPolling();
+    }, 60000);
+  }, [fetchConfirmationsOnce]);
 
   useEffect(() => {
     fetchTrucksAndEmployees();
@@ -120,6 +136,25 @@ export default function DispatchDashboard() {
       stopDispatchPhasePolling();
     };
   }, []);
+
+  // SSE-driven refetch (ADR-179): the backend emits dispatch_finalized when
+  // dispatch is finalized and crew_all_confirmed when the last pending
+  // confirmation flips. Refetch once on receipt so terminal transitions arrive
+  // faster than the 60s fallback poll, then let those fetchers stop the polls.
+  useEffect(() => {
+    setOnNotification((type: string) => {
+      if (type === 'dispatch_finalized') {
+        fetchDispatchPhaseOnce(selectedDate).then(done => {
+          if (done) stopDispatchPhasePolling();
+        });
+      } else if (type === 'crew_all_confirmed') {
+        fetchConfirmationsOnce(selectedDate).then(done => {
+          if (done) stopConfirmationPolling();
+        });
+      }
+    });
+    return () => setOnNotification(null);
+  }, [selectedDate, setOnNotification, fetchDispatchPhaseOnce, fetchConfirmationsOnce]);
 
   useEffect(() => {
     stopConfirmationPolling();
