@@ -1178,17 +1178,34 @@ function TruckSortPanel({
 export default function WalkerSortMonitor() {
   const today = getLocalYMD();
   const { can } = useCan();
+  const { groups } = useAuth();
+
+  // Driver/trainer (no oversight): the AP Sort page is scoped to their own truck
+  // — only their commit-sort card, only their AP returns (server-scoped), and
+  // zoned-state from the driver-readable /zone-status endpoint (they can't call
+  // the dispatch-only /sort/{date} zones endpoint). ADR-185.
+  const isTruckScoped =
+    (groups.includes('driver') || groups.includes('trainer')) &&
+    !groups.some(g => ['dispatch', 'management', 'admin'].includes(g));
 
   const [assignments, setAssignments]   = useState<TruckAssignment[]>([]);
   const [truckStates, setTruckStates]   = useState<TruckSortState[]>([]);
   const [walkers, setWalkers]           = useState<Employee[]>([]);
   const [trainers, setTrainers]         = useState<Employee[]>([]);
   const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
+  const [scopedTruckIds, setScopedTruckIds] = useState<Set<string>>(new Set());  // ADR-185: driver's own truck(s)
   const [stationInfo, setStationInfo]   = useState<Map<string, StationTruckInfo>>(new Map());
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState<string | null>(null);
 
   const canReassign = can('reassignRoute');
+
+  // ADR-185: a driver/trainer sees only their own truck's card. zone-status is
+  // server-scoped to their truck, so scopedTruckIds names it; oversight roles
+  // see every truck.
+  const visibleTruckStates = isTruckScoped
+    ? truckStates.filter(s => scopedTruckIds.has(s.ta.truck_id))
+    : truckStates;
 
   const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
     const phase: SortPhase =
@@ -1216,9 +1233,11 @@ export default function WalkerSortMonitor() {
   // truck's routes. Reused by both the full load and the periodic tick, so the
   // tick doesn't have to refetch the static assignments+employees lists.
   const fetchDynamic = useCallback(async (tas: TruckAssignment[]) => {
+    // zone-status (ADR-185) replaces the dispatch-only /sort/{date} zones call so
+    // a driver's page can read its own truck's zoned state. Scoped for drivers.
     const [zoneRes, rosterRes] = await Promise.allSettled([
-      axiosClient.get<{ zones: { truck_id: string }[] }>(`/sort/${today}`),
-      axiosClient.get<RostersResponse>(`/sort/${today}/rosters`),
+      axiosClient.get<{ trucks: { truck_id: string; zoned: boolean }[] }>(`/sort/${today}/zone-status`),
+      axiosClient.get<RostersResponse>(`/sort/${today}/rosters`, { params: isTruckScoped ? { mine: true } : {} }),
     ]);
     if (rosterRes.status === 'fulfilled') {
       const info = new Map<string, StationTruckInfo>();
@@ -1235,7 +1254,11 @@ export default function WalkerSortMonitor() {
       setStationInfo(info);
     }
     if (zoneRes.status === 'fulfilled') {
-      setZonedTruckIds(new Set((zoneRes.value.data.zones ?? []).map(z => z.truck_id)));
+      const trucks = zoneRes.value.data.trucks ?? [];
+      setZonedTruckIds(new Set(trucks.filter(t => t.zoned).map(t => t.truck_id)));
+      // For a scoped driver/trainer, zone-status returns ONLY their truck — use
+      // it to filter the page to their own truck card.
+      if (isTruckScoped) setScopedTruckIds(new Set(trucks.map(t => t.truck_id)));
     }
     const states = await Promise.all(tas.map(async ta => {
       try {
@@ -1355,11 +1378,12 @@ export default function WalkerSortMonitor() {
   };
 
   // Aggregate stats
-  const totalRoutes     = truckStates.reduce((s, st) => s + st.routes.length, 0);
-  const totalPkgs       = truckStates.reduce((s, st) => s + st.packages_sorted, 0);
-  const assignedRoutes  = truckStates.reduce((s, st) => s + st.routes.filter(r => r.status !== 'unassigned').length, 0);
-  const completedRoutes = truckStates.reduce((s, st) => s + st.routes.filter(r => r.status === 'completed').length, 0);
-  const misrouteCount   = truckStates.reduce((s, st) =>
+  // Stats reflect the visible scope: a scoped driver sees their truck's totals only.
+  const totalRoutes     = visibleTruckStates.reduce((s, st) => s + st.routes.length, 0);
+  const totalPkgs       = visibleTruckStates.reduce((s, st) => s + st.packages_sorted, 0);
+  const assignedRoutes  = visibleTruckStates.reduce((s, st) => s + st.routes.filter(r => r.status !== 'unassigned').length, 0);
+  const completedRoutes = visibleTruckStates.reduce((s, st) => s + st.routes.filter(r => r.status === 'completed').length, 0);
+  const misrouteCount   = visibleTruckStates.reduce((s, st) =>
     s + st.routes.reduce((rs, r) => rs + r.misrouted_packages.length, 0) + st.unassigned_misroutes.length, 0);
 
   return (
@@ -1417,13 +1441,17 @@ export default function WalkerSortMonitor() {
         <div className="space-y-3">
           {[0, 1, 2].map(i => <SkeletonCard key={i} />)}
         </div>
-      ) : truckStates.length === 0 ? (
+      ) : visibleTruckStates.length === 0 ? (
         <div className="card text-center py-12">
-          <p className="text-muted-foreground">No truck assignments found for today.</p>
+          <p className="text-muted-foreground">
+            {isTruckScoped
+              ? 'You are not on a truck crew today yet, or your truck has not been zoned. This updates automatically.'
+              : 'No truck assignments found for today.'}
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {truckStates.map(state => (
+          {visibleTruckStates.map(state => (
             <TruckSortPanel
               key={state.ta.id}
               state={state}

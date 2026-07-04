@@ -1948,6 +1948,19 @@ class AddFreightResponse(RostersResponse):
     unrouted: list[UnroutedItem] = []
 
 
+# ── Zone status (ADR-185) — driver-readable commit-sort readiness ─────────────
+
+class ZoneStatusOut(BaseModel):
+    truck_id: UUID
+    truck_name: Optional[str] = None
+    zoned: bool                      # active zone with non-empty package_tbas
+    package_count: int = 0
+
+class ZoneStatusResponse(BaseModel):
+    sort_date: date
+    trucks: list[ZoneStatusOut]
+
+
 def _nearest_truck_by_coords(lat, lng, candidates):
     """Best-fit truck for a coordinate: nearest zone centroid, NO balancing
     (ADR-184). `candidates` is an iterable of (truck_id, c_lat, c_lng); rows with
@@ -3065,7 +3078,23 @@ def _complete_ap_removal(db: Session, company_id, removal) -> None:
             break
 
 
-def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsResponse":
+def _bag_truck_map(db: Session, company_id, sort_date: date) -> dict:
+    """bag_id → truck_id from the day's active zones (ADR-185).
+
+    PackageRemoval carries no truck_id; a bag's truck is whichever active zone's
+    roster/package list holds it. Used to scope AP returns to a driver's truck.
+    """
+    zones = _active_zones(db, company_id, sort_date)
+    m: dict = {}
+    for z in zones:
+        for e in (z.tote_roster or []):
+            m[e["bag_id"]] = z.truck_id
+        for t in (z.package_tbas or []):
+            m.setdefault(t, z.truck_id)  # tba-level fallback
+    return m
+
+
+def _removals_response(db: Session, company_id, sort_date: date, scope_truck_id=None) -> "RemovalsResponse":
     from app.models.tote_ops import PackageRemoval
     rows = (
         db.query(PackageRemoval)
@@ -3076,6 +3105,10 @@ def _removals_response(db: Session, company_id, sort_date: date) -> "RemovalsRes
         .order_by(PackageRemoval.status, PackageRemoval.bag_id)
         .all()
     )
+    if scope_truck_id is not None:
+        # Driver/trainer scope: only returns whose bag belongs to their truck.
+        bag_truck = _bag_truck_map(db, company_id, sort_date)
+        rows = [r for r in rows if bag_truck.get(r.bag_id) == scope_truck_id]
     owner = _bag_owner_map(db, company_id, sort_date) if any(r.pull_point == "anchor_point" for r in rows) else {}
     outs = []
     for r in rows:
@@ -3109,9 +3142,55 @@ def get_removals(
 
     These units are NOT the company's deliveries — they are pulled off the
     truck at the station and returned to Amazon, never transferred between
-    trucks (ADR-176).
+    trucks (ADR-176). Driver/trainer see only their own truck's returns (ADR-185);
+    dispatch/management/admin see all.
     """
-    return _removals_response(db, caller.company_id, sort_date)
+    scope = _caller_truck_id(db, caller, sort_date) if caller.role in ("driver", "trainer") else None
+    return _removals_response(db, caller.company_id, sort_date, scope_truck_id=scope)
+
+
+@router.get("/{sort_date}/zone-status", response_model=ZoneStatusResponse)
+def get_zone_status(
+    sort_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Per-truck commit-sort readiness (ADR-185).
+
+    A truck is `zoned` when it has an active TruckZone with non-empty
+    package_tbas — the exact precondition commit-sort checks. Drivers/trainers
+    can't call the dispatch-only /sort/{date} zones endpoint, so this gives them
+    a scoped, allowed way to know their truck is ready to commit. Driver/trainer
+    see only their own truck; oversight roles see all.
+    """
+    scope = _caller_truck_id(db, caller, sort_date) if caller.role in ("driver", "trainer") else None
+
+    zones = _active_zones(db, caller.company_id, sort_date)
+    truck_names = {
+        t.id: t.name
+        for t in db.query(Truck).filter(Truck.company_id == caller.company_id).all()
+    }
+    by_truck: dict = {}
+    for z in zones:
+        cur = by_truck.setdefault(z.truck_id, 0)
+        by_truck[z.truck_id] = cur + len(z.package_tbas or [])
+
+    if scope is not None:
+        truck_ids = [scope]
+    else:
+        truck_ids = list(by_truck.keys())
+
+    trucks = [
+        ZoneStatusOut(
+            truck_id=tid,
+            truck_name=truck_names.get(tid),
+            zoned=by_truck.get(tid, 0) > 0,
+            package_count=by_truck.get(tid, 0),
+        )
+        for tid in truck_ids
+    ]
+    return ZoneStatusResponse(sort_date=sort_date, trucks=trucks)
 
 
 @router.post("/removals/{removal_id}/confirm", response_model=RemovalsResponse)
