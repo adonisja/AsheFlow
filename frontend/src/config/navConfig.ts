@@ -67,7 +67,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/sort',                  label: 'Station Sort',      icon: Route,          roles: ['admin', 'dispatch', 'driver'] },
   { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
-  { path: '/trainer-dashboard',     label: 'Trainer Dash',      icon: ClipboardCheck, roles: ['admin', 'trainer'] },
+  // /trainer-dashboard is a trainer's Dashboard landing (homeRouteForGroups),
+  // so it needs no separate tab for trainers. Kept as an admin tab only, since
+  // admin's Dashboard lands on /admin.
+  { path: '/trainer-dashboard',     label: 'Trainer Dash',      icon: ClipboardCheck, roles: ['admin'] },
   { path: '/walker-performance',    label: 'Walkers',           icon: Star,           roles: ['admin', 'management'] },
 ];
 
