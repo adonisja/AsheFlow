@@ -90,6 +90,11 @@ export interface TruckRoster {
   checked_count: number;
   incoming: ToteTransferOut[];
   outgoing: ToteTransferOut[];
+  // ADR-181 driver handoff
+  load_confirmed?: boolean;
+  confirmed_by_name?: string | null;
+  confirmed_at?: string | null;
+  short_count?: number;
 }
 
 export interface RostersResponse {

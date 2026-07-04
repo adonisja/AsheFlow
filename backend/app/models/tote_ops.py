@@ -90,3 +90,30 @@ class PackageRemoval(Base):
     received_by     = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     received_by_name = Column(String(100), nullable=True)
     received_at     = Column(DateTime(timezone=True), nullable=True)
+
+
+class LoadConfirmation(Base):
+    """Driver's per-truck handoff to dispatch when loading is done (ADR-181).
+
+    One row per truck per load day. The driver checks their totes onto the truck
+    (ToteLoadCheck rows), then confirms the truck is loaded — a deliberate
+    handoff dispatch can see. Partial confirms are allowed: any roster bag still
+    unchecked at confirm time is recorded in short_bag_ids (missing/short), so
+    shortages surface instead of blocking. One-way stamp — a 409 guard prevents
+    re-confirming (see the confirm-load endpoint).
+    """
+    __tablename__ = "load_confirmations"
+    __table_args__ = (
+        UniqueConstraint("company_id", "load_date", "truck_id", name="uq_load_confirm_per_truck_day"),
+    )
+
+    id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id        = Column(UUID(as_uuid=True), nullable=False, index=True)
+    load_date         = Column(Date, nullable=False, index=True)
+    truck_id          = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False)
+    confirmed_by      = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    confirmed_by_name = Column(String(100), nullable=False)
+    confirmed_at      = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    short_bag_ids     = Column(JSONB, nullable=True)   # roster bags unchecked at confirm time
+    total_totes       = Column(Integer, nullable=False, default=0)
+    checked_totes     = Column(Integer, nullable=False, default=0)

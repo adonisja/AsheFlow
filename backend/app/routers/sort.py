@@ -1905,6 +1905,11 @@ class TruckRosterOut(BaseModel):
     checked_count: int
     incoming: list[ToteTransferOut]
     outgoing: list[ToteTransferOut]
+    # ADR-181 driver handoff — set when the driver confirms this truck is loaded.
+    load_confirmed: bool = False
+    confirmed_by_name: Optional[str] = None
+    confirmed_at: Optional[datetime] = None
+    short_count: int = 0           # roster bags unchecked at confirm time
 
 
 class RostersResponse(BaseModel):
@@ -2020,6 +2025,15 @@ def get_load_rosters(
             ToteLoadCheck.load_date == sort_date,
         ).all()
     }
+    # ADR-181: per-truck driver handoff confirmations for the day.
+    from app.models.tote_ops import LoadConfirmation
+    confirmations = {
+        lc.truck_id: lc
+        for lc in db.query(LoadConfirmation).filter(
+            LoadConfirmation.company_id == caller.company_id,
+            LoadConfirmation.load_date == sort_date,
+        ).all()
+    }
     transfers = (
         db.query(ToteTransfer)
         .filter(
@@ -2084,6 +2098,7 @@ def get_load_rosters(
                 transfer=_transfer_out(xfer, truck_names, drivers) if xfer else None,
             ))
         total_unchecked += len(roster) - checked_count
+        lc = confirmations.get(z.truck_id)
         rosters.append(TruckRosterOut(
             zone_id=z.id,
             truck_id=z.truck_id,
@@ -2102,6 +2117,10 @@ def get_load_rosters(
                 for t in transfers
                 if t.from_truck_id == z.truck_id and t.status in ("suggested", "confirmed")
             ],
+            load_confirmed=lc is not None,
+            confirmed_by_name=lc.confirmed_by_name if lc else None,
+            confirmed_at=lc.confirmed_at if lc else None,
+            short_count=len(lc.short_bag_ids or []) if lc else 0,
         ))
 
     if scope_truck is not None:
@@ -2437,6 +2456,106 @@ def check_all_totes(
             after_snapshot={"truck_id": str(truck_id), "count": len(newly_checked), "date": sort_date.isoformat()},
         ))
         db.commit()
+    return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+
+
+@router.post("/{sort_date}/trucks/{truck_id}/confirm-load", response_model=RostersResponse)
+def confirm_load(
+    sort_date: date,
+    truck_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Driver handoff: confirm this truck is loaded (ADR-181).
+
+    A deliberate driver→dispatch handoff. Partial confirms are allowed — any
+    roster bag still unchecked is recorded as short/missing, and the confirm
+    still succeeds so shortages surface instead of blocking. One-way stamp:
+    re-confirming a truck 409s. Drivers/trainers may only confirm their own
+    crewed truck. On success, dispatch is notified (SSE) so their view updates.
+    """
+    from datetime import datetime, timezone
+    from app.services.audit import write_audit
+    from app.models.tote_ops import ToteLoadCheck, LoadConfirmation
+    from app.models.notification import Notification
+    from app.models.employee import Employee as _Emp
+    from app.services.constants import OVERSIGHT_ROLES
+
+    zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
+    if not zones:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+
+    # Object-level ownership — a driver/trainer confirms only their own truck.
+    if caller.role in ("driver", "trainer"):
+        own = _caller_truck_id(db, caller, sort_date)
+        if own != truck_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only confirm your own truck.")
+
+    # One-way idempotency guard.
+    existing = (
+        db.query(LoadConfirmation)
+        .filter(
+            LoadConfirmation.company_id == caller.company_id,
+            LoadConfirmation.load_date == sort_date,
+            LoadConfirmation.truck_id == truck_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This truck's loading is already confirmed.")
+
+    roster_bags = [entry["bag_id"] for z in zones for entry in (z.tote_roster or [])]
+    checked = {
+        c.bag_id
+        for c in db.query(ToteLoadCheck).filter(
+            ToteLoadCheck.company_id == caller.company_id,
+            ToteLoadCheck.load_date == sort_date,
+            ToteLoadCheck.truck_id == truck_id,
+        ).all()
+    }
+    short = [b for b in roster_bags if b not in checked]
+
+    lc = LoadConfirmation(
+        company_id=caller.company_id,
+        load_date=sort_date,
+        truck_id=truck_id,
+        confirmed_by=caller.id,
+        confirmed_by_name=caller.name,
+        short_bag_ids=short or None,
+        total_totes=len(roster_bags),
+        checked_totes=len(roster_bags) - len(short),
+    )
+    db.add(lc)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="sort.load_confirmed",
+        target_table="load_confirmations",
+        target_id=str(lc.id),
+        detail={"truck_id": str(truck_id), "date": sort_date.isoformat(),
+                "total": len(roster_bags), "short": len(short)},
+    )
+
+    # SSE terminal event (ADR-179/181): tell the dispatch team a driver handed
+    # off, so their tote check-off view refetches instead of showing stale counts.
+    truck_label = zones[0].zone_label
+    short_note = f" ({len(short)} short)" if short else ""
+    for peer in db.query(_Emp).filter(
+        _Emp.company_id == caller.company_id,
+        _Emp.role.in_(list(OVERSIGHT_ROLES)),
+        _Emp.is_active.is_(True),
+    ).all():
+        db.add(Notification(
+            company_id=caller.company_id,
+            employee_id=peer.id,
+            type="load_confirmed",
+            dispatch_date=sort_date,
+            message=f"{caller.name} confirmed loading for {truck_label}{short_note}.",
+        ))
+    db.commit()
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
 
 

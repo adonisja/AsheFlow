@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import type { RostersResponse, TruckRoster, RosterTote, ToteTransferOut } from '../api/types';
+import { useNotificationContext } from '../contexts/NotificationContext';
 import {
   CheckCircle2, CheckCheck, ChevronDown, ChevronUp, Package, Printer,
   ArrowLeftRight, AlertTriangle, Loader2, Undo2, Search,
@@ -208,7 +209,7 @@ function ToteRow({
 }
 
 function TruckSection({
-  roster, allRosters, mode, busy, onCheck, onCheckAll, onTransfer, onUndo,
+  roster, allRosters, mode, busy, onCheck, onCheckAll, onTransfer, onUndo, onConfirmLoad,
 }: {
   roster: TruckRoster;
   allRosters: TruckRoster[];
@@ -218,6 +219,7 @@ function TruckSection({
   onCheckAll: (truckId: string) => void;
   onTransfer: (bag: string, toTruckId: string) => void;
   onUndo: (id: string) => void;
+  onConfirmLoad: (truckId: string) => void;
 }) {
   const [open, setOpen] = useState(mode === 'driver');
   const [filter, setFilter] = useState('');
@@ -248,6 +250,15 @@ function TruckSection({
         <span className="text-xs tabular-nums text-muted-foreground">
           {roster.checked_count}/{roster.totes.length} loaded
         </span>
+        {roster.load_confirmed && (
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-semibold text-success"
+            title={`Driver confirmed${roster.confirmed_by_name ? ` by ${roster.confirmed_by_name}` : ''}${roster.short_count ? ` — ${roster.short_count} short` : ''}`}
+          >
+            <CheckCheck className="w-3.5 h-3.5" /> Confirmed
+            {roster.short_count ? <span className="text-warning">({roster.short_count} short)</span> : null}
+          </span>
+        )}
         {roster.incoming.length + roster.outgoing.length > 0 && (
           <span className="text-[10px] font-semibold text-warning">
             ⇄ {roster.incoming.length + roster.outgoing.length}
@@ -280,6 +291,27 @@ function TruckSection({
               >
                 <CheckCheck className="w-3.5 h-3.5" /> Check all ({remaining})
               </button>
+            )}
+            {mode === 'driver' && !roster.load_confirmed && (
+              <button
+                disabled={busy}
+                onClick={() => {
+                  if (remaining > 0 && !window.confirm(
+                    `${remaining} tote${remaining === 1 ? '' : 's'} still unchecked. Confirm loading anyway? ` +
+                    `The unchecked totes will be reported to dispatch as short/missing.`,
+                  )) return;
+                  onConfirmLoad(roster.truck_id);
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-success/10 border border-success/40 hover:bg-success/20 text-success disabled:opacity-50"
+              >
+                <CheckCheck className="w-3.5 h-3.5" />
+                {remaining > 0 ? `Confirm loading (${remaining} short)` : 'Confirm loading complete'}
+              </button>
+            )}
+            {mode === 'driver' && roster.load_confirmed && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
+                <CheckCheck className="w-3.5 h-3.5" /> Loading confirmed — handed off to dispatch
+              </span>
             )}
           </div>
           <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
@@ -324,13 +356,14 @@ function TruckSection({
 }
 
 export default function ToteRosterPanel({ date, mode }: Props) {
+  const { setOnNotification } = useNotificationContext();
   const [data, setData] = useState<RostersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const res = await axiosClient.get<RostersResponse>(`/sort/${date}/rosters`, {
@@ -338,13 +371,32 @@ export default function ToteRosterPanel({ date, mode }: Props) {
       });
       setData(res.data);
     } catch {
-      setError('Could not load tote rosters.');
+      if (!silent) setError('Could not load tote rosters.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [date, mode]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Dispatch view: keep the roster fresh as drivers check off / confirm loading
+  // remotely (ADR-181, SSE per ADR-179). Refetch on a load_confirmed push;
+  // a slow visibility-gated fallback poll covers a dropped event and interim
+  // check-off progress. Driver mode doesn't need this — it mutates its own truck.
+  useEffect(() => {
+    if (mode !== 'dispatch') return;
+    setOnNotification((type: string) => {
+      if (type === 'load_confirmed' || type === 'tote_checked') load(true);
+    });
+    const tick = () => { if (document.visibilityState === 'visible') load(true); };
+    const interval = setInterval(tick, 45_000);
+    window.addEventListener('focus', tick);
+    return () => {
+      setOnNotification(null);
+      clearInterval(interval);
+      window.removeEventListener('focus', tick);
+    };
+  }, [mode, setOnNotification, load]);
 
   const mutate = async (fn: () => Promise<{ data: RostersResponse }>) => {
     setBusy(true);
@@ -372,6 +424,8 @@ export default function ToteRosterPanel({ date, mode }: Props) {
     mutate(() => axiosClient.post<RostersResponse>(`/sort/transfers/${id}/undo`));
   const onTransfer = (bag: string, toTruckId: string) =>
     mutate(() => axiosClient.post<RostersResponse>(`/sort/${date}/totes/${encodeURIComponent(bag)}/transfer`, { to_truck_id: toTruckId }));
+  const onConfirmLoad = (truckId: string) =>
+    mutate(() => axiosClient.post<RostersResponse>(`/sort/${date}/trucks/${truckId}/confirm-load`));
 
   if (loading) {
     return (
@@ -476,6 +530,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
             onCheckAll={onCheckAll}
             onTransfer={onTransfer}
             onUndo={onUndo}
+            onConfirmLoad={onConfirmLoad}
           />
         ))}
       </div>
