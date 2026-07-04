@@ -6,9 +6,15 @@ create/edit a manifest, which is a dispatch operation. This asserts both
 endpoints declare the allow_dispatch_mgmt RoleChecker dependency so the guard
 cannot silently regress.
 """
+import pytest
 from fastapi.routing import APIRoute
 
-from app.routers.dispatch import router, allow_dispatch_mgmt
+# dispatch.py is proprietary — present locally and on EC2, injected at deploy
+# time but absent from the public CI. Skip the whole module when it isn't there.
+try:
+    from app.routers.dispatch import router, allow_dispatch_mgmt
+except ImportError:
+    pytest.skip("proprietary dispatch router not available (CI skip)", allow_module_level=True)
 
 
 def _route(path: str, method: str) -> APIRoute:
