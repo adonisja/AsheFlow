@@ -1922,6 +1922,48 @@ class RostersResponse(BaseModel):
     roster_available: bool        # False when zones predate roster persistence
 
 
+# ── Mid-day freight addition (ADR-184) ───────────────────────────────────────
+
+class LooseFreightIn(BaseModel):
+    tba: str
+    address: str
+    size: Optional[str] = None       # OV_S|OV_M|OV_L|OV_XL; defaults to OV_M
+
+class ToteFreightIn(BaseModel):
+    truck_id: UUID
+    bag_id: str
+    tba_numbers: list[str]
+    address: Optional[str] = None    # optional — only used to attach a dock tag
+
+class AddFreightRequest(BaseModel):
+    loose: list[LooseFreightIn] = []
+    totes: list[ToteFreightIn] = []
+
+class UnroutedItem(BaseModel):
+    tba: str
+    reason: str                      # geocode_failed | truck_confirmed | no_match
+
+class AddFreightResponse(RostersResponse):
+    added: int
+    unrouted: list[UnroutedItem] = []
+
+
+def _nearest_truck_by_coords(lat, lng, candidates):
+    """Best-fit truck for a coordinate: nearest zone centroid, NO balancing
+    (ADR-184). `candidates` is an iterable of (truck_id, c_lat, c_lng); rows with
+    a missing centroid are skipped. Returns the nearest truck_id or None.
+    """
+    from app.services.route_sort import _haversine_km
+    best = None
+    for truck_id, c_lat, c_lng in candidates:
+        if c_lat is None or c_lng is None:
+            continue
+        d = _haversine_km(lat, lng, c_lat, c_lng)
+        if best is None or d < best[0]:
+            best = (d, truck_id)
+    return best[1] if best else None
+
+
 def _driver_names_by_truck(db: Session, company_id, sort_date: date) -> dict:
     """truck_id → driver display name for the date's crews."""
     from app.models.assignment_member import AssignmentMember
@@ -2660,6 +2702,228 @@ def unconfirm_load(
         ))
     db.commit()
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+
+
+@router.post("/{sort_date}/add-freight", response_model=AddFreightResponse)
+def add_freight(
+    sort_date: date,
+    body: AddFreightRequest,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Add mid-day freight to the day's load without re-running the sort (ADR-184).
+
+    Two modes (a call may mix both):
+    - loose: OV packages auto-routed to the best-fit truck by address/location
+      (nearest zone centroid; NO balancing). Each becomes its own standalone OV
+      roster entry. GeoClient enrichment with a raw-parse fallback.
+    - totes: a whole tote added to an explicitly named truck (failsafe).
+
+    A load-confirmed truck is locked (ADR-181/183): any item targeting it is
+    returned as unrouted:truck_confirmed — reopen the truck, then re-add.
+    Drivers/trainers may only add to their own crewed truck. Unroutable items
+    are reported, never silently dropped.
+    """
+    from app.services.audit import write_audit
+    from app.models.tote_ops import LoadConfirmation
+    from app.models.notification import Notification
+    from app.models.employee import Employee as _Emp
+    from app.services.constants import OVERSIGHT_ROLES
+    from app.services.derive_block_key import derive_block_key, ParsedBlock
+    from app.tasks.enrich_manifest import _geoclient_normalise
+
+    zones = _active_zones(db, caller.company_id, sort_date)
+    if not zones:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zones for this date.")
+
+    # Confirmed trucks are locked — precompute the set for cheap guarding.
+    confirmed_truck_ids = {
+        lc.truck_id
+        for lc in db.query(LoadConfirmation).filter(
+            LoadConfirmation.company_id == caller.company_id,
+            LoadConfirmation.load_date == sort_date,
+        ).all()
+    }
+
+    own_truck = _caller_truck_id(db, caller, sort_date) if caller.role in ("driver", "trainer") else None
+
+    # Borough for GeoClient: admin config, else infer from zone centroids, else manhattan.
+    cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+    if cfg and cfg.geoclient_borough:
+        borough = cfg.geoclient_borough
+    else:
+        borough = _infer_borough(
+            [{"lat": z.centroid_lat, "lng": z.centroid_lng} for z in zones if z.centroid_lat is not None]
+        ) or "manhattan"
+
+    # One representative zone per truck (primary = most totes) for best-fit + append.
+    zone_by_truck: dict = {}
+    for z in zones:
+        cur = zone_by_truck.get(z.truck_id)
+        if cur is None or (z.tote_count or 0) > (cur.tote_count or 0):
+            zone_by_truck[z.truck_id] = z
+
+    unrouted: list[UnroutedItem] = []
+    added = 0
+    touched_labels: set[str] = set()
+
+    def _append_ov(zone, bag_id: str, tba: str, size: str, dock_tag):
+        """Append a standalone OV roster entry + tba; bump count; nudge centroid."""
+        entry = {
+            "bag_id":        bag_id,
+            "tba_numbers":   [tba],
+            "package_count": 1,
+            "ov_count":      1,
+            "ov_sizes":      [size],
+            "ov_details":    [{"size": size, "zone": dock_tag}],
+            "dock_tags":     [dock_tag] if dock_tag else [],
+            "ov_dock_tags":  [dock_tag] if dock_tag else [],
+            "rider_count":   0,
+        }
+        roster = list(zone.tote_roster or [])
+        roster.append(entry)
+        roster.sort(key=lambda r: (r["dock_tags"][0] if r.get("dock_tags") else "~", r["bag_id"]))
+        zone.tote_roster = roster
+        zone.package_tbas = list(zone.package_tbas or []) + [tba]
+        zone.tote_count = (zone.tote_count or 0) + 1
+
+    def _nudge_centroid(zone, lat, lng):
+        if lat is None or lng is None:
+            return
+        n = zone.tote_count or 1
+        if zone.centroid_lat is None or zone.centroid_lng is None:
+            zone.centroid_lat, zone.centroid_lng = lat, lng
+        else:
+            # running mean weighted by the pre-add count (n-1, since count was just bumped)
+            w = max(n - 1, 1)
+            zone.centroid_lat = (zone.centroid_lat * w + lat) / (w + 1)
+            zone.centroid_lng = (zone.centroid_lng * w + lng) / (w + 1)
+
+    # ── Loose OV packages → auto-route by best-fit ──────────────────────────
+    for item in body.loose:
+        size = item.size or "OV_M"
+        lat = lng = None
+        dock_tag = None
+
+        geo = _geoclient_normalise(item.address, borough)
+        if geo and geo.lat is not None and geo.lng is not None:
+            lat, lng = geo.lat, geo.lng
+        else:
+            # raw-parse fallback (operator choice): derive a block_key from text
+            parsed = derive_block_key(item.address, item.tba)
+            if isinstance(parsed, ParsedBlock):
+                dock_tag = parsed.block_key
+            # no coords from raw parse — best-fit will use block_key match below
+
+        # best-fit truck
+        target_zone = None
+        if lat is not None and lng is not None:
+            nearest_truck = _nearest_truck_by_coords(
+                lat, lng,
+                ((z.truck_id, z.centroid_lat, z.centroid_lng) for z in zone_by_truck.values()),
+            )
+            target_zone = zone_by_truck.get(nearest_truck) if nearest_truck else None
+        elif dock_tag is not None:
+            # no coords: pick the zone already carrying this dock tag most often
+            best = None
+            for z in zone_by_truck.values():
+                hits = sum(1 for e in (z.tote_roster or []) if dock_tag in (e.get("dock_tags") or []))
+                if hits > 0 and (best is None or hits > best[0]):
+                    best = (hits, z)
+            target_zone = best[1] if best else None
+
+        if target_zone is None:
+            unrouted.append(UnroutedItem(tba=item.tba, reason="geocode_failed" if lat is None else "no_match"))
+            continue
+        if target_zone.truck_id in confirmed_truck_ids:
+            unrouted.append(UnroutedItem(tba=item.tba, reason="truck_confirmed"))
+            continue
+        if own_truck is not None and target_zone.truck_id != own_truck:
+            # driver/trainer: best-fit landed on another truck — they can't add there
+            unrouted.append(UnroutedItem(tba=item.tba, reason="no_match"))
+            continue
+
+        bag_id = f"ADD-{item.tba[-6:]}" if item.tba else f"ADD-{_uuid_mod.uuid4().hex[:6]}"
+        _append_ov(target_zone, bag_id, item.tba, size, dock_tag)
+        _nudge_centroid(target_zone, lat, lng)
+        added += 1
+        touched_labels.add(target_zone.zone_label)
+
+    # ── Whole totes → explicit truck ────────────────────────────────────────
+    for tote in body.totes:
+        z = zone_by_truck.get(tote.truck_id)
+        if z is None:
+            for t in tote.tba_numbers:
+                unrouted.append(UnroutedItem(tba=t, reason="no_match"))
+            continue
+        if own_truck is not None and tote.truck_id != own_truck:
+            for t in tote.tba_numbers:
+                unrouted.append(UnroutedItem(tba=t, reason="no_match"))
+            continue
+        if tote.truck_id in confirmed_truck_ids:
+            for t in tote.tba_numbers:
+                unrouted.append(UnroutedItem(tba=t, reason="truck_confirmed"))
+            continue
+
+        dock_tag = None
+        if tote.address:
+            parsed = derive_block_key(tote.address, tote.bag_id)
+            if isinstance(parsed, ParsedBlock):
+                dock_tag = parsed.block_key
+
+        roster = list(z.tote_roster or [])
+        roster.append({
+            "bag_id":        tote.bag_id,
+            "tba_numbers":   list(tote.tba_numbers),
+            "package_count": len(tote.tba_numbers),
+            "ov_count":      0,
+            "ov_sizes":      [],
+            "ov_details":    [],
+            "dock_tags":     [dock_tag] if dock_tag else [],
+            "ov_dock_tags":  [],
+            "rider_count":   0,
+        })
+        roster.sort(key=lambda r: (r["dock_tags"][0] if r.get("dock_tags") else "~", r["bag_id"]))
+        z.tote_roster = roster
+        z.package_tbas = list(z.package_tbas or []) + list(tote.tba_numbers)
+        z.tote_count = (z.tote_count or 0) + 1
+        added += 1
+        touched_labels.add(z.zone_label)
+
+    if added == 0 and not unrouted:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No freight supplied.")
+
+    if added > 0:
+        db.flush()
+        write_audit(
+            db=db,
+            company_id=str(caller.company_id),
+            actor_id=str(caller.id),
+            action_type="sort.freight_added",
+            target_table="truck_zones",
+            target_id=str(sort_date),
+            detail={"date": sort_date.isoformat(), "added": added,
+                    "unrouted": len(unrouted), "trucks": sorted(touched_labels)},
+        )
+        # SSE: dispatch panel refetches on load_confirmed.
+        labels = ", ".join(sorted(touched_labels))
+        for peer in db.query(_Emp).filter(
+            _Emp.company_id == caller.company_id,
+            _Emp.role.in_(list(OVERSIGHT_ROLES)),
+            _Emp.is_active.is_(True),
+        ).all():
+            db.add(Notification(
+                company_id=caller.company_id,
+                employee_id=peer.id,
+                type="load_confirmed",
+                dispatch_date=sort_date,
+                message=f"{caller.name} added {added} item(s) to {labels}.",
+            ))
+        db.commit()
+
+    base = get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+    return AddFreightResponse(**base.model_dump(), added=added, unrouted=unrouted)
 
 
 @router.post("/transfers/{transfer_id}/undo", response_model=RostersResponse)

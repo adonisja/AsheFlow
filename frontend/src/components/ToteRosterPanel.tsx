@@ -1,11 +1,113 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axiosClient from '../api/axiosClient';
-import type { RostersResponse, TruckRoster, RosterTote, ToteTransferOut } from '../api/types';
+import type { RostersResponse, TruckRoster, RosterTote, ToteTransferOut, AddFreightResponse, LooseFreightIn } from '../api/types';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import {
   CheckCircle2, CheckCheck, ChevronDown, ChevronUp, Package, Printer,
-  ArrowLeftRight, AlertTriangle, Loader2, Undo2, Search,
+  ArrowLeftRight, AlertTriangle, Loader2, Undo2, Search, Plus,
 } from 'lucide-react';
+
+// ADR-184: mid-day freight add — dispatch pastes loose packages (TBA + address),
+// the backend best-fits each to a truck by location. Unroutable items come back
+// for manual handling; confirmed trucks reject adds until reopened.
+function AddFreightForm({ date, busy, onDone }: {
+  date: string;
+  busy: boolean;
+  onDone: (res: AddFreightResponse) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<LooseFreightIn[]>([{ tba: '', address: '', size: '' }]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const update = (i: number, patch: Partial<LooseFreightIn>) =>
+    setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const addRow = () => setRows(rs => [...rs, { tba: '', address: '', size: '' }]);
+  const removeRow = (i: number) => setRows(rs => rs.filter((_, idx) => idx !== i));
+
+  const submit = async () => {
+    const loose = rows
+      .map(r => ({ tba: r.tba.trim(), address: r.address.trim(), size: r.size?.trim() || undefined }))
+      .filter(r => r.tba && r.address);
+    if (loose.length === 0) { setError('Add at least one package (TBA + address).'); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await axiosClient.post<AddFreightResponse>(`/sort/${date}/add-freight`, { loose });
+      onDone(res.data);
+      setRows([{ tba: '', address: '', size: '' }]);
+      setOpen(false);
+    } catch (e: unknown) {
+      setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Add failed.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <Plus className="w-3.5 h-3.5" /> Add freight
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full border border-border rounded-xl p-3 space-y-2 bg-card">
+      <div className="flex items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Add mid-day freight</p>
+        <span className="text-[11px] text-muted-foreground">— routed to the best-fit truck by address</span>
+      </div>
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <input
+            value={r.tba} onChange={e => update(i, { tba: e.target.value })}
+            placeholder="TBA / tracking #"
+            className="flex-1 min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <input
+            value={r.address} onChange={e => update(i, { address: e.target.value })}
+            placeholder="Delivery address"
+            className="flex-[2] min-w-0 px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <select
+            value={r.size ?? ''} onChange={e => update(i, { size: e.target.value })}
+            className="px-2 py-1 text-xs bg-accent/40 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">OV size…</option>
+            <option value="OV_S">OV_S</option>
+            <option value="OV_M">OV_M</option>
+            <option value="OV_L">OV_L</option>
+            <option value="OV_XL">OV_XL</option>
+          </select>
+          {rows.length > 1 && (
+            <button onClick={() => removeRow(i)} className="text-muted-foreground hover:text-danger text-xs px-1">✕</button>
+          )}
+        </div>
+      ))}
+      {error && <p className="text-xs text-danger">{error}</p>}
+      <div className="flex items-center gap-2">
+        <button onClick={addRow} className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1">
+          <Plus className="w-3 h-3" /> Another
+        </button>
+        <div className="flex-1" />
+        <button onClick={() => { setOpen(false); setError(null); }} className="text-[11px] px-2.5 py-1 rounded-lg border border-border hover:bg-accent text-foreground">
+          Cancel
+        </button>
+        <button
+          disabled={submitting || busy}
+          onClick={submit}
+          className="btn-primary text-[11px] px-3 py-1 disabled:opacity-50"
+        >
+          {submitting ? 'Adding…' : 'Add & route'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Station load finalization panel (ADR-174).
@@ -399,6 +501,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unrouted, setUnrouted] = useState<AddFreightResponse['unrouted']>([]);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -546,7 +649,15 @@ export default function ToteRosterPanel({ date, mode }: Props) {
       )}
 
       {mode === 'dispatch' && (
-        <div className="flex justify-end">
+        <div className="flex items-center gap-4 justify-end">
+          <AddFreightForm
+            date={date}
+            busy={busy}
+            onDone={(res) => {
+              setData(res);
+              setUnrouted(res.unrouted ?? []);
+            }}
+          />
           <a
             href={`/sort/print?date=${date}`}
             target="_blank"
@@ -555,6 +666,28 @@ export default function ToteRosterPanel({ date, mode }: Props) {
           >
             <Printer className="w-3.5 h-3.5" /> Print load sheets
           </a>
+        </div>
+      )}
+
+      {mode === 'dispatch' && unrouted.length > 0 && (
+        <div className="p-3 rounded-xl bg-warning/5 border border-warning/20 text-xs space-y-1">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
+            <span className="text-foreground font-medium">
+              {unrouted.length} package{unrouted.length === 1 ? '' : 's'} not routed — assign manually
+            </span>
+            <div className="flex-1" />
+            <button onClick={() => setUnrouted([])} className="text-muted-foreground hover:text-foreground text-[11px]">Dismiss</button>
+          </div>
+          <ul className="pl-6 space-y-0.5 text-muted-foreground">
+            {unrouted.map(u => (
+              <li key={u.tba} className="font-mono">
+                {u.tba} — {u.reason === 'truck_confirmed' ? 'target truck confirmed (reopen it first)'
+                  : u.reason === 'geocode_failed' ? 'address could not be located'
+                  : 'no matching truck'}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

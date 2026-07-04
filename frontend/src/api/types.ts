@@ -107,6 +107,23 @@ export interface RostersResponse {
   roster_available: boolean;
 }
 
+// ADR-184 mid-day freight addition
+export interface UnroutedItem {
+  tba: string;
+  reason: 'geocode_failed' | 'truck_confirmed' | 'no_match' | string;
+}
+
+export interface AddFreightResponse extends RostersResponse {
+  added: number;
+  unrouted: UnroutedItem[];
+}
+
+export interface LooseFreightIn {
+  tba: string;
+  address: string;
+  size?: string;
+}
+
 // ── Out-of-zone removals (ADR-176) ──────────────────────────────────────────
 
 export interface RemovalOut {
