@@ -31,14 +31,25 @@ def write_audit(
     company_id: Optional[str] = None,
     before: Optional[dict[str, Any]] = None,
     after: Optional[dict[str, Any]] = None,
+    detail: Optional[dict[str, Any]] = None,
 ) -> None:
     """Append one immutable audit row to the session (does NOT commit).
 
     The caller is responsible for committing.  Placing write_audit() just
     before db.commit() ensures the audit row is part of the same transaction
     as the state change it records — either both land or neither does.
+
+    `detail` is an accepted alias for `after` — many callers (walker_routes,
+    rts, roll_call, employees, building_profiles) pass the post-change payload
+    as `detail=`. It maps to `after` unless `after` is explicitly given.
+    Previously those calls raised TypeError and 500-ed the endpoint (e.g.
+    commit-sort, which surfaced in the browser as a misleading CORS error,
+    2026-07-04).
     """
     from uuid import UUID as _UUID
+
+    if after is None and detail is not None:
+        after = detail
 
     actor_uuid: Optional[_UUID] = None
     if actor_id:
