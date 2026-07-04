@@ -1089,14 +1089,30 @@ function CrewStationView({ today }: { today: string }) {
   // onto a crewed truck later in the day. Without re-fetching, a driver who
   // opened the page before their data existed would stay locked forever.
   const check = useCallback(async () => {
+    // The driver's own gate is decided ENTIRELY by their roster response.
+    // /sort/{date} (zones) is dispatch/management/admin-only and 403s for a
+    // driver — so it must NOT gate the roster. Previously both ran in a single
+    // Promise.all: the zones 403 rejected the whole batch and threw away a valid
+    // roster, leaving the page stuck on "not_zoned" even with totes staged.
+    // Now: roster first (authoritative); zones only as a tolerant tiebreaker for
+    // the empty-roster case, ignored entirely if forbidden.
     try {
-      const [mine, all] = await Promise.all([
-        axiosClient.get<{ rosters: unknown[]; roster_available: boolean }>(`/sort/${today}/rosters`, { params: { mine: true } }),
-        axiosClient.get<{ zones: unknown[] }>(`/sort/${today}`),
-      ]);
-      if (mine.data.roster_available && mine.data.rosters.length > 0) setState('ready');
-      else if ((all.data.zones ?? []).length > 0) setState('no_truck');
-      else setState('not_zoned');
+      const mine = await axiosClient.get<{ rosters: unknown[]; roster_available: boolean }>(
+        `/sort/${today}/rosters`, { params: { mine: true } },
+      );
+      if (mine.data.roster_available && mine.data.rosters.length > 0) {
+        setState('ready');
+        return;
+      }
+      // Empty roster: distinguish "no zones run yet" from "zones exist, I'm just
+      // not crewed on a zoned truck". This call may 403 for drivers — treat that
+      // as "can't tell", defaulting to not_zoned.
+      let zonesExist = false;
+      try {
+        const all = await axiosClient.get<{ zones: unknown[] }>(`/sort/${today}`);
+        zonesExist = (all.data.zones ?? []).length > 0;
+      } catch { /* forbidden or errored — leave zonesExist false */ }
+      setState(zonesExist ? 'no_truck' : 'not_zoned');
     } catch {
       setState('not_zoned');
     }
