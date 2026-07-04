@@ -2587,6 +2587,81 @@ def confirm_load(
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
 
 
+@router.delete("/{sort_date}/trucks/{truck_id}/confirm-load", response_model=RostersResponse)
+def unconfirm_load(
+    sort_date: date,
+    truck_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Reopen a confirmed truck's loading (ADR-183).
+
+    Mid-day reality: a missing tote turns up, or a late tote / extra packages
+    arrive after handoff. This lifts the confirmation so the crew can check the
+    new state, without clearing the whole dispatch. The removed LoadConfirmation
+    unlocks check-off again. Drivers/trainers may only reopen their own truck;
+    dispatch/management/admin may reopen any. Dispatch is notified either way.
+    """
+    from app.services.audit import write_audit
+    from app.models.tote_ops import LoadConfirmation
+    from app.models.notification import Notification
+    from app.models.employee import Employee as _Emp
+    from app.services.constants import OVERSIGHT_ROLES
+
+    zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
+    if not zones:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+
+    # Object-level ownership — a driver/trainer reopens only their own truck.
+    if caller.role in ("driver", "trainer"):
+        own = _caller_truck_id(db, caller, sort_date)
+        if own != truck_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only reopen your own truck.")
+
+    existing = (
+        db.query(LoadConfirmation)
+        .filter(
+            LoadConfirmation.company_id == caller.company_id,
+            LoadConfirmation.load_date == sort_date,
+            LoadConfirmation.truck_id == truck_id,
+        )
+        .first()
+    )
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This truck's loading is not confirmed.")
+
+    lc_id = str(existing.id)
+    db.delete(existing)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="sort.load_reopened",
+        target_table="load_confirmations",
+        target_id=lc_id,
+        detail={"truck_id": str(truck_id), "date": sort_date.isoformat()},
+    )
+
+    # SSE (ADR-179/181): reopening changes the lock state — refresh the dispatch view.
+    truck_label = zones[0].zone_label
+    for peer in db.query(_Emp).filter(
+        _Emp.company_id == caller.company_id,
+        _Emp.role.in_(list(OVERSIGHT_ROLES)),
+        _Emp.is_active.is_(True),
+    ).all():
+        db.add(Notification(
+            company_id=caller.company_id,
+            employee_id=peer.id,
+            type="load_confirmed",  # same channel — dispatch panel refetches on it
+            dispatch_date=sort_date,
+            message=f"{caller.name} reopened loading for {truck_label}.",
+        ))
+    db.commit()
+    return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
+
+
 @router.post("/transfers/{transfer_id}/undo", response_model=RostersResponse)
 def undo_transfer(
     transfer_id: UUID,

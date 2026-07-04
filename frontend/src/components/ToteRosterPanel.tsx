@@ -214,7 +214,7 @@ function ToteRow({
 }
 
 function TruckSection({
-  roster, allRosters, mode, busy, onCheck, onCheckAll, onTransfer, onUndo, onConfirmLoad,
+  roster, allRosters, mode, busy, onCheck, onCheckAll, onTransfer, onUndo, onConfirmLoad, onUnconfirmLoad,
 }: {
   roster: TruckRoster;
   allRosters: TruckRoster[];
@@ -225,6 +225,7 @@ function TruckSection({
   onTransfer: (bag: string, toTruckId: string) => void;
   onUndo: (id: string) => void;
   onConfirmLoad: (truckId: string) => void;
+  onUnconfirmLoad: (truckId: string) => void;
 }) {
   const [open, setOpen] = useState(mode === 'driver');
   const [filter, setFilter] = useState('');
@@ -298,9 +299,22 @@ function TruckSection({
               </button>
             )}
             {mode === 'dispatch' && roster.load_confirmed && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
-                <CheckCheck className="w-3.5 h-3.5" /> Loading locked
-              </span>
+              <>
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
+                  <CheckCheck className="w-3.5 h-3.5" /> Loading locked
+                </span>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    if (window.confirm('Reopen this truck’s loading? Check-off unlocks so the crew can add a late tote or clear a missing one.')) {
+                      onUnconfirmLoad(roster.truck_id);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border border-border hover:bg-accent text-foreground disabled:opacity-50"
+                >
+                  <Undo2 className="w-3.5 h-3.5" /> Reopen
+                </button>
+              </>
             )}
             {mode === 'driver' && !roster.load_confirmed && (
               <button
@@ -319,9 +333,22 @@ function TruckSection({
               </button>
             )}
             {mode === 'driver' && roster.load_confirmed && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
-                <CheckCheck className="w-3.5 h-3.5" /> Loading confirmed — handed off to dispatch
-              </span>
+              <>
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
+                  <CheckCheck className="w-3.5 h-3.5" /> Loading confirmed — handed off to dispatch
+                </span>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    if (window.confirm('Reopen loading? This unlocks check-off so you can add a late tote or fix a missing one, and notifies dispatch.')) {
+                      onUnconfirmLoad(roster.truck_id);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border border-border hover:bg-accent text-foreground disabled:opacity-50"
+                >
+                  <Undo2 className="w-3.5 h-3.5" /> Reopen
+                </button>
+              </>
             )}
           </div>
           <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
@@ -437,6 +464,8 @@ export default function ToteRosterPanel({ date, mode }: Props) {
     mutate(() => axiosClient.post<RostersResponse>(`/sort/${date}/totes/${encodeURIComponent(bag)}/transfer`, { to_truck_id: toTruckId }));
   const onConfirmLoad = (truckId: string) =>
     mutate(() => axiosClient.post<RostersResponse>(`/sort/${date}/trucks/${truckId}/confirm-load`));
+  const onUnconfirmLoad = (truckId: string) =>
+    mutate(() => axiosClient.delete<RostersResponse>(`/sort/${date}/trucks/${truckId}/confirm-load`));
 
   if (loading) {
     return (
@@ -542,6 +571,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
             onTransfer={onTransfer}
             onUndo={onUndo}
             onConfirmLoad={onConfirmLoad}
+            onUnconfirmLoad={onUnconfirmLoad}
           />
         ))}
       </div>
