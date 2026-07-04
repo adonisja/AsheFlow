@@ -23,6 +23,7 @@ interface StationTruckInfo {
   riderCount: number;
 }
 import { useAuth } from '../contexts/AuthContext';
+import { useCan } from '../hooks/useCan';
 import type {
   RouteResponse, MisroutedPackageOut,
   CommitSortResponse, WaveAssignmentEntry, ArrivalConfirmResponse,
@@ -1151,7 +1152,7 @@ function TruckSortPanel({
 
 export default function WalkerSortMonitor() {
   const today = getLocalYMD();
-  const { groups } = useAuth();
+  const { can } = useCan();
 
   const [assignments, setAssignments]   = useState<TruckAssignment[]>([]);
   const [truckStates, setTruckStates]   = useState<TruckSortState[]>([]);
@@ -1162,7 +1163,7 @@ export default function WalkerSortMonitor() {
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState<string | null>(null);
 
-  const canReassign = groups.some(r => ['trainer', 'driver', 'dispatch', 'management', 'admin'].includes(r));
+  const canReassign = can('reassignRoute');
 
   const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
     const phase: SortPhase =

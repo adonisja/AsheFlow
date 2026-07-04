@@ -8,6 +8,7 @@ import SectionHeader from '../components/ui/SectionHeader';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { BuildingProfileResponse, BuildingProfileCreate, BuildingProfileAnchorPatch, BuildingType } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
+import { useCan } from '../hooks/useCan';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -552,7 +553,7 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
 // ---------------------------------------------------------------------------
 
 export default function BuildingProfilesPage() {
-  const { groups } = useAuth();
+  const { can } = useCan();
 
   const [profiles, setProfiles]   = useState<BuildingProfileResponse[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -568,8 +569,8 @@ export default function BuildingProfilesPage() {
   const [noteTarget,    setNoteTarget]    = useState<BuildingProfileResponse | null>(null);
   const [anchorTarget,  setAnchorTarget]  = useState<BuildingProfileResponse | null>(null);
 
-  const canLock   = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
-  const canAnchor = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
+  const canLock   = can('lockBuildingProfile');
+  const canAnchor = can('anchorBuildingProfile');
 
   const load = useCallback(async () => {
     setLoading(true);
