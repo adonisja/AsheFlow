@@ -2162,7 +2162,7 @@ def check_tote(
     """
     from datetime import datetime, timezone
     from app.models.audit_log import AuditLog
-    from app.models.tote_ops import ToteTransfer, ToteLoadCheck
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck, LoadConfirmation
 
     zones = _active_zones(db, caller.company_id, sort_date)
     home_zone = next((z for z in zones if any(e["bag_id"] == bag_id for e in (z.tote_roster or []))), None)
@@ -2173,6 +2173,23 @@ def check_tote(
         own = _caller_truck_id(db, caller, sort_date)
         if own != home_zone.truck_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only check totes on your own truck.")
+
+    # ADR-181: once the driver confirms the handoff, the truck's contents are
+    # locked — no further check/uncheck. Reopen requires an explicit unconfirm.
+    confirmed = (
+        db.query(LoadConfirmation)
+        .filter(
+            LoadConfirmation.company_id == caller.company_id,
+            LoadConfirmation.load_date == sort_date,
+            LoadConfirmation.truck_id == home_zone.truck_id,
+        )
+        .first()
+    )
+    if confirmed is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Loading is confirmed for this truck — check-off is locked.",
+        )
 
     existing = (
         db.query(ToteLoadCheck)
@@ -2404,11 +2421,22 @@ def check_all_totes(
     """
     from datetime import datetime, timezone
     from app.models.audit_log import AuditLog
-    from app.models.tote_ops import ToteTransfer, ToteLoadCheck
+    from app.models.tote_ops import ToteTransfer, ToteLoadCheck, LoadConfirmation
 
     zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
     if not zones:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+
+    # ADR-181: a confirmed truck is locked — no bulk check-off either.
+    if db.query(LoadConfirmation).filter(
+        LoadConfirmation.company_id == caller.company_id,
+        LoadConfirmation.load_date == sort_date,
+        LoadConfirmation.truck_id == truck_id,
+    ).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Loading is confirmed for this truck — check-off is locked.",
+        )
 
     already = {
         c.bag_id

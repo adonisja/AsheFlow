@@ -109,29 +109,34 @@ function PendingTransferCard({
 }
 
 function ToteRow({
-  tote, roster, allRosters, mode, busy, onCheck, onTransfer, onUndo,
+  tote, roster, allRosters, mode, busy, locked, onCheck, onTransfer, onUndo,
 }: {
   tote: RosterTote;
   roster: TruckRoster;
   allRosters: TruckRoster[];
   mode: 'dispatch' | 'driver';
   busy: boolean;
+  locked: boolean;
   onCheck: (bag: string, checked: boolean) => void;
   onTransfer: (bag: string, toTruckId: string) => void;
   onUndo: (id: string) => void;
 }) {
   const [moveOpen, setMoveOpen] = useState(false);
-  const movable = mode === 'dispatch' && !tote.transfer;
+  const movable = mode === 'dispatch' && !tote.transfer && !locked;
   const primaryDock = tote.dock_tags[0];
   const extraDocks = tote.dock_tags.slice(1);
 
   return (
     <tr
-      onClick={() => !busy && onCheck(tote.bag_id, !tote.checked)}
-      className={`border-b border-border/40 last:border-0 cursor-pointer select-none transition-colors ${
-        tote.checked ? 'bg-success/5 opacity-60' : 'hover:bg-accent/30'
-      }`}
-      title={tote.checked && tote.checked_by_name ? `Checked by ${tote.checked_by_name}` : 'Tap row to check off'}
+      onClick={() => !busy && !locked && onCheck(tote.bag_id, !tote.checked)}
+      className={`border-b border-border/40 last:border-0 select-none transition-colors ${
+        locked ? 'cursor-default' : 'cursor-pointer'
+      } ${tote.checked ? 'bg-success/5 opacity-60' : locked ? '' : 'hover:bg-accent/30'}`}
+      title={
+        locked
+          ? 'Loading confirmed — check-off is locked'
+          : tote.checked && tote.checked_by_name ? `Checked by ${tote.checked_by_name}` : 'Tap row to check off'
+      }
     >
       <td className="px-3 py-2">
         <span className={`inline-flex items-center justify-center w-5 h-5 rounded-md border-2 ${
@@ -283,7 +288,7 @@ function TruckSection({
               Hide checked
             </label>
             <div className="flex-1" />
-            {mode === 'dispatch' && remaining > 0 && (
+            {mode === 'dispatch' && remaining > 0 && !roster.load_confirmed && (
               <button
                 disabled={busy}
                 onClick={() => onCheckAll(roster.truck_id)}
@@ -291,6 +296,11 @@ function TruckSection({
               >
                 <CheckCheck className="w-3.5 h-3.5" /> Check all ({remaining})
               </button>
+            )}
+            {mode === 'dispatch' && roster.load_confirmed && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
+                <CheckCheck className="w-3.5 h-3.5" /> Loading locked
+              </span>
             )}
             {mode === 'driver' && !roster.load_confirmed && (
               <button
@@ -336,6 +346,7 @@ function TruckSection({
                     allRosters={allRosters}
                     mode={mode}
                     busy={busy}
+                    locked={!!roster.load_confirmed}
                     onCheck={onCheck}
                     onTransfer={onTransfer}
                     onUndo={onUndo}
