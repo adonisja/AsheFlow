@@ -1084,21 +1084,35 @@ function CrewStationView({ today }: { today: string }) {
   // today) | 'not_zoned' (dispatch hasn't run zone assignment yet)
   const [state, setState] = useState<'loading' | 'ready' | 'no_truck' | 'not_zoned'>('loading');
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      axiosClient.get<{ rosters: unknown[]; roster_available: boolean }>(`/sort/${today}/rosters`, { params: { mine: true } }),
-      axiosClient.get<{ zones: unknown[] }>(`/sort/${today}`),
-    ])
-      .then(([mine, all]) => {
-        if (cancelled) return;
-        if (mine.data.roster_available && mine.data.rosters.length > 0) setState('ready');
-        else if ((all.data.zones ?? []).length > 0) setState('no_truck');
-        else setState('not_zoned');
-      })
-      .catch(() => { if (!cancelled) setState('not_zoned'); });
-    return () => { cancelled = true; };
+  // Re-runnable so the gate UNLOCKS when the driver's assignment/zone appears
+  // after mount — e.g. dispatch is cleared and re-run, or the driver is swapped
+  // onto a crewed truck later in the day. Without re-fetching, a driver who
+  // opened the page before their data existed would stay locked forever.
+  const check = useCallback(async () => {
+    try {
+      const [mine, all] = await Promise.all([
+        axiosClient.get<{ rosters: unknown[]; roster_available: boolean }>(`/sort/${today}/rosters`, { params: { mine: true } }),
+        axiosClient.get<{ zones: unknown[] }>(`/sort/${today}`),
+      ]);
+      if (mine.data.roster_available && mine.data.rosters.length > 0) setState('ready');
+      else if ((all.data.zones ?? []).length > 0) setState('no_truck');
+      else setState('not_zoned');
+    } catch {
+      setState('not_zoned');
+    }
   }, [today]);
+
+  useEffect(() => { check(); }, [check]);
+
+  // Poll while not yet ready + refetch on focus, so the gate opens as soon as
+  // dispatch/zone data lands without the driver reloading.
+  useEffect(() => {
+    if (state === 'ready') return;
+    const tick = () => { if (document.visibilityState === 'visible') check(); };
+    const interval = setInterval(tick, 20_000);
+    window.addEventListener('focus', tick);
+    return () => { clearInterval(interval); window.removeEventListener('focus', tick); };
+  }, [state, check]);
 
   return (
     <div className="space-y-8 animate-slide-up">
@@ -1106,6 +1120,11 @@ function CrewStationView({ today }: { today: string }) {
         eyebrow="Station Loading"
         title="Tote check-off"
         description={`Check your truck's totes onto the truck as they are staged — ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        actions={
+          <button onClick={check} className="btn-ghost flex items-center gap-1.5 text-sm">
+            <RefreshCw className="w-4 h-4" /> Refresh
+          </button>
+        }
       />
       {state === 'loading' ? (
         <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
@@ -1117,8 +1136,8 @@ function CrewStationView({ today }: { today: string }) {
         <div className="flex items-center gap-3 p-4 rounded-xl bg-accent/40 border border-border text-sm text-muted-foreground">
           <Layers className="w-4 h-4 shrink-0" />
           {state === 'no_truck'
-            ? 'You are not on a truck crew today, so there is nothing to check off.'
-            : 'Tote check-off unlocks once dispatch completes the zone assignment.'}
+            ? 'You are not on a truck crew today yet. If you were just assigned, this will unlock automatically.'
+            : 'Tote check-off unlocks once dispatch completes the zone assignment. This page refreshes automatically.'}
         </div>
       )}
     </div>

@@ -10,7 +10,6 @@ import {
   ArrowRightLeft, Shuffle,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
-import ToteRosterPanel from '../components/ToteRosterPanel';
 import ApPullsPanel from '../components/ApPullsPanel';
 import type { RostersResponse } from '../api/types';
 
@@ -1339,12 +1338,12 @@ export default function WalkerSortMonitor() {
         <StatCard label="Misroutes"       value={loading ? '—' : misrouteCount}                       icon={AlertTriangle} tone={misrouteCount > 0 ? 'warning' : 'success'} delay={0.15} />
       </div>
 
-      {/* Station loading payload — what each driver loads / receives / hands
-          off before departure. Soft gate: warns when loading is not finalized
-          at the station (ADR-174); nothing here is blocked. */}
+      {/* AP returns — out-of-zone packages walkers hand back to the driver at
+          the anchor point (ADR-178). Tote check-off itself lives ONLY on
+          Station Sort now (deduplicated); this page keeps just the AP-stage
+          actions that physically happen at the anchor point. */}
       <div className="space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Station loading</p>
-        <ToteRosterPanel date={today} mode="driver" />
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Anchor point returns</p>
         <ApPullsPanel date={today} />
       </div>
 
