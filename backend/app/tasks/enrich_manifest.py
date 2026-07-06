@@ -30,7 +30,7 @@ from app.core.config import settings
 from app.database import SessionLocal
 from app.models.employee import Employee
 from app.models.notification import Notification
-from app.services.derive_block_key import derive_block_key, ParsedBlock
+from app.services.derive_block_key import derive_block_key, ParsedBlock, strip_address_noise
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,11 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
     if not settings.geoclient_app_key:
         return None
 
-    parsed = _parse_house_and_street(address)
+    # Strip unit/suite/floor noise first — GeoClient can't match a street param
+    # carrying "Suite 301"/"APT 4A", which silently failed ~90% of geocodes and
+    # left topology null while lat/lng fell back to Amazon coords. Same stripper
+    # block_key derivation uses, so both paths agree.
+    parsed = _parse_house_and_street(strip_address_noise(address))
     if parsed is None:
         return None
     house, street = parsed
