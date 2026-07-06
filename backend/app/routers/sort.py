@@ -591,8 +591,9 @@ def download_enriched_manifest(
 ):
     """Download the full enriched manifest for a sort date as CSV.
 
-    Includes every field stored in Redis: tba, bag_id, raw_address,
-    normalised_address, block_key, lat, lng, geocode_reason.
+    Includes every field stored in Redis: the (block_key, segment_id) routing
+    pair, GeoClient segment topology (from/to LION nodes + endpoint coords) for
+    the neighborhood/adjacency algorithm, plus tba/bag/address/lat/lng/reason.
     Dispatch/management/admin only — same gate as the preview endpoint.
     """
     cid_str  = str(caller.company_id)
@@ -606,8 +607,15 @@ def download_enriched_manifest(
         )
     packages = json.loads(raw)
 
+    # NOTE: DictWriter uses extrasaction="ignore" below, so ANY enriched key not
+    # listed here is silently dropped from the CSV — new columns must be added
+    # explicitly. block_key = display identity; segment_id = routing identity.
     fields = ["tba", "bag_id", "raw_address", "normalised_address",
-              "block_key", "lat", "lng", "geocode_reason"]
+              "block_key", "segment_id",
+              "from_lion_node_id", "to_lion_node_id",
+              "x_low_address_end", "y_low_address_end",
+              "x_high_address_end", "y_high_address_end",
+              "lat", "lng", "geocode_reason"]
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")

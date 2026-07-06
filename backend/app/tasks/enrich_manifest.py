@@ -73,6 +73,13 @@ class GeoClientResult:
     lng: float | None
     first_cross_street: str | None
     second_cross_street: str | None
+    segment_id: str | None
+    from_lion_node_id: str | None
+    to_lion_node_id: str | None
+    x_low_address_end: int | None
+    y_low_address_end: int | None
+    x_high_address_end: int | None
+    y_high_address_end: int | None
 
 
 def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientResult | None:
@@ -119,6 +126,44 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
         except (TypeError, ValueError):
             lat, lng = None, None
 
+        # ID fields are already strings from GeoClient (or absent). Do NOT wrap
+        # str() in try/except: str(None) returns the literal "None" (it never
+        # raises), which would poison the adjacency graph — ten packages that each
+        # failed to get a node would all share the fake node "None" and be treated
+        # as neighbours. addr.get() gives the value or a real None, which is what
+        # the downstream `is not None` filters expect.
+        segment_id = str(v) if (v := addr.get("segmentIdentifier")) is not None else None
+        from_lion_node_id = addr.get("fromLionNodeId")
+        to_lion_node_id = addr.get("toLionNodeId")
+
+        x_low_address_end_raw = addr.get("xCoordinateLowAddressEnd")
+
+        try:
+            x_low_address_end = int(x_low_address_end_raw)
+        except (TypeError, ValueError):
+            x_low_address_end = None
+
+        y_low_address_end_raw = addr.get("yCoordinateLowAddressEnd")
+
+        try:
+            y_low_address_end = int(y_low_address_end_raw)
+        except (TypeError, ValueError):
+            y_low_address_end = None
+
+        x_high_raw = addr.get("xCoordinateHighAddressEnd")
+
+        try:
+            x_high_address_end = int(x_high_raw)
+        except (TypeError, ValueError):
+            x_high_address_end = None
+
+        y_high_raw = addr.get("yCoordinateHighAddressEnd")
+
+        try:
+            y_high_address_end = int(y_high_raw)
+        except (TypeError, ValueError):
+            y_high_address_end = None
+
         return GeoClientResult(
             normalised_address=f"{house} {first_street}",
             lat=lat,
@@ -138,6 +183,13 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
                 or addr.get("secondCrossStreetName")
                 or None
             ),
+            segment_id=segment_id,
+            from_lion_node_id=from_lion_node_id,
+            to_lion_node_id=to_lion_node_id,
+            x_low_address_end=x_low_address_end,
+            y_low_address_end=y_low_address_end,
+            x_high_address_end=x_high_address_end,
+            y_high_address_end=y_high_address_end
         )
     except Exception:
         pass
@@ -377,6 +429,18 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
         "normalised_address": geo.normalised_address if geo else None,
         "first_cross_street": geo.first_cross_street if geo else None,
         "second_cross_street":geo.second_cross_street if geo else None,
+        # Use `if geo else None` — NOT `if geo and geo.<field>`. The fields are
+        # already value-or-None from _geoclient_normalise, and a truthiness check
+        # (`and geo.x_low_address_end`) would drop a legitimate 0 coordinate
+        # (0 is falsy) or an empty-string id. `is not None` semantics, achieved by
+        # just guarding on `geo` existing.
+        "segment_id":         geo.segment_id if geo else None,
+        "from_lion_node_id":  geo.from_lion_node_id if geo else None,
+        "to_lion_node_id":    geo.to_lion_node_id if geo else None,
+        "x_low_address_end":  geo.x_low_address_end if geo else None,
+        "y_low_address_end":  geo.y_low_address_end if geo else None,
+        "x_high_address_end": geo.x_high_address_end if geo else None,
+        "y_high_address_end": geo.y_high_address_end if geo else None,
         "geocode_reason":     failure_reason,    # None for success; error code for failures
     }
 
