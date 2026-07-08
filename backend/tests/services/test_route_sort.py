@@ -636,3 +636,91 @@ class TestBFSClustering:
         assert len(result.routes) >= 2
         total = sum(len(r.tote_ids) for r in result.routes)
         assert total == n_full + 1
+
+
+# ---------------------------------------------------------------------------
+# ADR-186 — block-completion building, neighborhood misroutes, seed priority,
+# tote-atomic scoring
+# ---------------------------------------------------------------------------
+
+class TestADR186BlockCompletion:
+    def test_block_completed_before_next(self):
+        # Two adjacent blocks, each small enough to co-exist in one route. The
+        # route should hold BOTH (block completion + neighborhood expansion).
+        pkgs = (
+            [_pkg(f"A{i}", "300 W 36th St", f"BagA{i}", first_cross_street="8 AVENUE") for i in range(2)]
+            + [_pkg(f"B{i}", "400 W 36th St", f"BagB{i}", first_cross_street="9 AVENUE") for i in range(2)]
+        )
+        result = run_sort(_request(pkgs), {}, {}, {})
+        # 4 totes, standard cap = 6 totes → one route holding all 4
+        assert len(result.routes) == 1
+        assert len(result.routes[0].tote_ids) == 4
+
+    def test_large_block_spills_contiguously_across_routes(self):
+        # One block with more totes than a standard route holds must span
+        # consecutive routes, each carrying part of the SAME block.
+        n_full = EFFORT_CAPACITY["standard"] // TOTE_HALF_SLOTS
+        pkgs = [_pkg(f"T{i:03}", "300 W 36th St", f"Bag{i}") for i in range(n_full + 2)]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert len(result.routes) == 2
+        # every route's dominant coverage is the same block
+        for r in result.routes:
+            assert "W_36_St_300" in r.block_keys
+        assert sum(len(r.tote_ids) for r in result.routes) == n_full + 2
+
+
+class TestADR186NeighborhoodMisroute:
+    def test_adjacent_block_package_not_flagged(self):
+        # A tote dominated by W_36_St_300 with one W_36_St_400 package (adjacent).
+        # The adjacent package must NOT be flagged (rides silently).
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagX"),
+            _pkg("D2", "310 W 36th St", "BagX"),
+            _pkg("R1", "400 W 36th St", "BagX", first_cross_street="9 AVENUE"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "R1" not in flagged
+
+    def test_distant_block_package_flagged(self):
+        # W_57 package inside a W_36-dominant bag is genuinely distant → flagged.
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagY"),
+            _pkg("D2", "310 W 36th St", "BagY"),
+            _pkg("FAR", "350 W 57th St", "BagY", lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "FAR" in flagged
+
+
+class TestADR186SeedPriority:
+    def test_cold_start_is_densest_first(self):
+        # No profile/urgency data → seeding falls back to density. The densest
+        # block seeds route #1, so its blocks lead.
+        pkgs = (
+            [_pkg(f"H{i}", "300 W 36th St", f"BagH{i}") for i in range(5)]     # dense
+            + [_pkg("L1", "300 W 50th St", "BagL1", lat=40.76, lng=-73.98)]    # sparse, far
+        )
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert "W_36_St_300" in result.routes[0].block_keys
+
+
+class TestADR186NoInfiniteLoop:
+    def test_ov_near_full_route_terminates_and_spills(self):
+        # An OV_S tote costs 3 half-slots (2 + 1), making fits NON-exact:
+        # capacity 12 → OV tote (3) + 4 normal (8) = 11; the next tote (2)
+        # doesn't fit but 11 < 12. The original block-completion loop asked for
+        # the nearest neighbor, got the SAME block back, and spun forever
+        # (144% CPU in prod). Must terminate and spill the rest to route 2.
+        pkgs = [_pkg("OV1", "300 W 36th St", "BagOV", package_type="OV_S")]
+        pkgs += [_pkg(f"N{i}", "300 W 36th St", f"BagN{i}") for i in range(6)]
+        result = run_sort(_request(pkgs), {}, {}, {})   # hangs forever if regressed
+        assert len(result.routes) >= 2
+        total_totes = sum(len(r.tote_ids) for r in result.routes)
+        assert total_totes == 7
+        # every route respects its capacity lock
+        for r in result.routes:
+            assert r.slot_cost <= r.capacity_limit
