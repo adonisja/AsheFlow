@@ -1253,14 +1253,24 @@ export default function WalkerSortMonitor() {
       });
       setStationInfo(info);
     }
+    // For a scoped driver/trainer, only fetch routes for THEIR truck — fetching
+    // every assignment's routes 403s on all other trucks (server-side ownership
+    // guard) and just spams the console/server with forbidden requests.
+    let routeTas = tas;
     if (zoneRes.status === 'fulfilled') {
       const trucks = zoneRes.value.data.trucks ?? [];
       setZonedTruckIds(new Set(trucks.filter(t => t.zoned).map(t => t.truck_id)));
       // For a scoped driver/trainer, zone-status returns ONLY their truck — use
       // it to filter the page to their own truck card.
-      if (isTruckScoped) setScopedTruckIds(new Set(trucks.map(t => t.truck_id)));
+      if (isTruckScoped) {
+        const ids = new Set(trucks.map(t => t.truck_id));
+        setScopedTruckIds(ids);
+        routeTas = tas.filter(ta => ids.has(ta.truck_id));
+      }
+    } else if (isTruckScoped) {
+      routeTas = [];  // can't resolve own truck this tick — skip, retry next tick
     }
-    const states = await Promise.all(tas.map(async ta => {
+    const states = await Promise.all(routeTas.map(async ta => {
       try {
         const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${ta.id}/routes`);
         return buildInitialState(ta, r.data);

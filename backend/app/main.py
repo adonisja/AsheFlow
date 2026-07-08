@@ -85,6 +85,10 @@ api_v1_router.include_router(schedule.router,                 dependencies=_conf
 api_v1_router.include_router(time_off_requests.router,        dependencies=_configured)
 api_v1_router.include_router(feedback.router,                 dependencies=_configured)
 api_v1_router.include_router(notifications.router,            dependencies=_configured)
+# SSE stream router: NO _configured gate — that dependency reads the
+# Authorization header, which EventSource cannot send. The stream auths via
+# ?token= and enforces the configured-company check inline (see notifications.py).
+api_v1_router.include_router(notifications.stream_router)
 api_v1_router.include_router(continuation_requests.router,    dependencies=_configured)
 api_v1_router.include_router(assignment_change_requests.router, dependencies=_configured)
 api_v1_router.include_router(incidents.router,                dependencies=_configured)

@@ -17,6 +17,16 @@ from app.schemas.notification import NotificationResponse
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+# The SSE stream lives on its OWN router, registered in main.py WITHOUT the
+# router-level require_configured dependency. That gate depends on
+# get_current_user, which reads the Authorization HEADER — but EventSource
+# cannot send headers, so the stream authenticates via ?token=. With the gate
+# attached, every stream request 401'd ("Not authenticated") before the
+# query-token auth ever ran, and browsers spun in an EventSource 401-reconnect
+# loop. The stream enforces the same configured-company check INLINE after its
+# token auth, so security parity is preserved.
+stream_router = APIRouter(prefix="/notifications", tags=["notifications"])
+
 allow_any_auth   = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
 allow_management = RoleChecker(["dispatch", "management", "admin"])
 
@@ -127,7 +137,7 @@ _SSE_POLL_SECONDS = 10
 _SSE_KEEPALIVE_SECONDS = 25
 
 
-@router.get("/{employee_id}/stream")
+@stream_router.get("/{employee_id}/stream")
 async def stream_notifications(
     employee_id: UUID,
     token: str = Query(..., description="Cognito ID token for authentication"),
@@ -165,6 +175,22 @@ async def stream_notifications(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee not found.")
     if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
+
+    # Inline require_configured parity (this router skips the header-based
+    # router-level gate — see stream_router comment above).
+    from app.models.company import CompanyConfig
+    db = SessionLocal()
+    try:
+        cfg = db.query(CompanyConfig).filter(
+            CompanyConfig.company_id == caller.company_id
+        ).first()
+    finally:
+        db.close()
+    if cfg is None or not cfg.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Company setup is not complete.",
+        )
 
     company_id = caller.company_id
 
