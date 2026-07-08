@@ -80,6 +80,12 @@ class GeoClientResult:
     y_low_address_end: int | None
     x_high_address_end: int | None
     y_high_address_end: int | None
+    # Geosupport return code + message ("42" / "ADDRESS NUMBER OUT OF RANGE"):
+    # GeoClient can answer 200 with the street matched but the house number
+    # nonexistent — normalised street name present, NO segment/coords. Captured
+    # so the manifest can say WHY topology is missing (geo_warning column).
+    geo_grc: str | None = None
+    geo_message: str | None = None
 
 
 def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientResult | None:
@@ -193,7 +199,9 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
             x_low_address_end=x_low_address_end,
             y_low_address_end=y_low_address_end,
             x_high_address_end=x_high_address_end,
-            y_high_address_end=y_high_address_end
+            y_high_address_end=y_high_address_end,
+            geo_grc=addr.get("geosupportReturnCode"),
+            geo_message=addr.get("message"),
         )
     except Exception:
         pass
@@ -421,6 +429,18 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
     final_lat = geo.lat if geo and geo.lat is not None else amazon_lat
     final_lng = geo.lng if geo and geo.lng is not None else amazon_lng
 
+    # Partial GeoClient match: street recognized but no segment topology (e.g.
+    # Geosupport grc 42 "ADDRESS NUMBER OUT OF RANGE" — the house number doesn't
+    # exist on that street). NOT a failure — block_key still derives and the
+    # package stays routable via fallback coords — so geocode_reason/failed_count
+    # are untouched; geo_warning just records WHY topology is missing.
+    geo_warning = None
+    if geo is not None and geo.segment_id is None:
+        if geo.geo_grc or geo.geo_message:
+            geo_warning = f"grc {geo.geo_grc}: {geo.geo_message}"
+        else:
+            geo_warning = "no_segment_topology"
+
     enriched_pkg = {
         "tba":                tba,
         "bag_id":             bag_id,
@@ -445,6 +465,7 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
         "y_low_address_end":  geo.y_low_address_end if geo else None,
         "x_high_address_end": geo.x_high_address_end if geo else None,
         "y_high_address_end": geo.y_high_address_end if geo else None,
+        "geo_warning":        geo_warning,       # partial match: why topology is missing
         "geocode_reason":     failure_reason,    # None for success; error code for failures
     }
 

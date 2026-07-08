@@ -615,7 +615,7 @@ def download_enriched_manifest(
               "from_lion_node_id", "to_lion_node_id",
               "x_low_address_end", "y_low_address_end",
               "x_high_address_end", "y_high_address_end",
-              "lat", "lng", "geocode_reason"]
+              "lat", "lng", "geo_warning", "geocode_reason"]
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
