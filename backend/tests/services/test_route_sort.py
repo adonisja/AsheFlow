@@ -363,13 +363,15 @@ class TestPairOvs:
         totes = {"Bag1": self._make_tote_with_ov("Bag1", ["OV_S"])}
         _pair_ovs(totes)
         assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["S"]
-        assert totes["Bag1"].half_slot_cost == TOTE_HALF_SLOTS + 1
+        # An all-OV bag is a STANDALONE item — no tote base (see TestStandaloneOVCost)
+        assert totes["Bag1"].half_slot_cost == OV_HALF_SLOTS["S"]
 
     def test_ov_xl_adds_four_half_slots(self):
         totes = {"Bag1": self._make_tote_with_ov("Bag1", ["OV_XL"])}
         _pair_ovs(totes)
         assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["XL"]
-        assert totes["Bag1"].half_slot_cost == TOTE_HALF_SLOTS + 4
+        # An all-OV bag is a STANDALONE item — no tote base (see TestStandaloneOVCost)
+        assert totes["Bag1"].half_slot_cost == OV_HALF_SLOTS["XL"]
 
     def test_multiple_ovs_accumulate(self):
         totes = {"Bag1": self._make_tote_with_ov("Bag1", ["OV_M", "OV_L"])}
@@ -724,3 +726,30 @@ class TestADR186NoInfiniteLoop:
         # every route respects its capacity lock
         for r in result.routes:
             assert r.slot_cost <= r.capacity_limit
+
+
+class TestStandaloneOVCost:
+    def test_standalone_ov_bag_costs_only_ov_half_slots(self):
+        # An OV with its own bag_id is a loose item, not a tote: no +2 base.
+        pkgs = [_pkg("OV1", "300 W 36th St", "OV0001", package_type="OV_L")]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert result.routes[0].slot_cost == OV_HALF_SLOTS["L"]   # 3, not 5
+
+    def test_five_totes_plus_two_small_ovs_fill_one_route(self):
+        # 5 totes (2 each) + 2 standalone OV_S (1 each) = 12 = exactly one
+        # standard route — the operational definition of a full cart.
+        pkgs = [_pkg(f"N{i}", "300 W 36th St", f"Bag{i}") for i in range(5)]
+        pkgs += [_pkg(f"OV{i}", "300 W 36th St", f"OV000{i}", package_type="OV_S") for i in range(2)]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert len(result.routes) == 1
+        assert result.routes[0].slot_cost == 12
+        assert len(result.routes[0].tote_ids) == 7
+
+    def test_in_tote_ov_still_adds_to_tote_base(self):
+        # A bag with a normal package AND an OV is a real tote: 2 + OV extras.
+        pkgs = [
+            _pkg("N1", "300 W 36th St", "BagA"),
+            _pkg("OVX", "300 W 36th St", "BagA", package_type="OV_XL"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert result.routes[0].slot_cost == TOTE_HALF_SLOTS + OV_HALF_SLOTS["XL"]
