@@ -360,6 +360,57 @@ def upload_manifest(
     r.setex(_enriching_key(cid_str, date_str), _ENRICHING_KEY_TTL, "1")
     r.setex(f"manifest_failed:{cid_str}:{date_str}", _REDIS_TTL_SECONDS, "worker_unreachable")
 
+    # A new manifest invalidates EVERY derived sort artifact for the date — the
+    # old zones/routes reference TBAs that no longer exist (same lesson as
+    # ADR-182: date-keyed derived rows don't cascade from anything; they must be
+    # swept explicitly). Dispatch crews (TruckAssignment) are NOT touched —
+    # only sort outputs. Zone assignment + commit sort must re-run on new data.
+    from app.models.walker_route import Route, RouteClusterCentroid
+    from app.models.tote_ops import (
+        ToteTransfer, ToteLoadCheck, PackageRemoval, LoadConfirmation,
+    )
+    from app.models.dock_assignment import DockAssignment
+
+    cid = caller.company_id
+    routes_cleared = db.query(Route).filter(
+        Route.company_id == cid, Route.route_date == sort_date,
+    ).delete(synchronize_session=False)   # MisroutedPackageFlag cascades via FK
+    db.query(RouteClusterCentroid).filter(
+        RouteClusterCentroid.company_id == cid,
+        RouteClusterCentroid.route_date == sort_date,
+    ).delete(synchronize_session=False)
+    zones_cleared = db.query(TruckZone).filter(
+        TruckZone.company_id == cid, TruckZone.zone_date == sort_date,
+    ).delete(synchronize_session=False)
+    db.query(ToteTransfer).filter(
+        ToteTransfer.company_id == cid, ToteTransfer.transfer_date == sort_date,
+    ).delete(synchronize_session=False)
+    db.query(ToteLoadCheck).filter(
+        ToteLoadCheck.company_id == cid, ToteLoadCheck.load_date == sort_date,
+    ).delete(synchronize_session=False)
+    db.query(PackageRemoval).filter(
+        PackageRemoval.company_id == cid, PackageRemoval.removal_date == sort_date,
+    ).delete(synchronize_session=False)
+    db.query(LoadConfirmation).filter(
+        LoadConfirmation.company_id == cid, LoadConfirmation.load_date == sort_date,
+    ).delete(synchronize_session=False)
+    db.query(DockAssignment).filter(
+        DockAssignment.company_id == cid, DockAssignment.date == sort_date,
+    ).delete(synchronize_session=False)
+
+    from app.services.audit import write_audit
+    write_audit(
+        db=db,
+        company_id=cid_str,
+        actor_id=str(caller.id),
+        action_type="sort.manifest_replaced",
+        target_table="truck_zones",
+        target_id=date_str,
+        detail={"date": date_str, "routes_cleared": routes_cleared,
+                "zones_cleared": zones_cleared},
+    )
+    db.commit()
+
     # Only valid packages (with TBAs) go to the enrichment task.
     # Pending packages have no TBA — dispatch must resolve them via a separate input.
     raw_dicts = [
