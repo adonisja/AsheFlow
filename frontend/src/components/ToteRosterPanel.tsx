@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import type { RostersResponse, TruckRoster, RosterTote, ToteTransferOut, AddFreightResponse, LooseFreightIn } from '../api/types';
@@ -38,7 +39,7 @@ function AddFreightForm({ date, busy, onDone }: {
       setRows([{ tba: '', address: '', size: '' }]);
       setOpen(false);
     } catch (e: unknown) {
-      setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Add failed.');
+      setError(errorText(e, 'Add failed.'));
     } finally {
       setSubmitting(false);
     }
@@ -546,7 +547,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
       const res = await fn();
       setData(res.data);
     } catch (e: unknown) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      const detail = errorText(e, '') || undefined;
       setError(detail ?? 'Action failed — refresh and try again.');
     } finally {
       setBusy(false);

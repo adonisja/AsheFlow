@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -165,7 +166,7 @@ export default function GearRequest() {
       setOrders(ordersRes.data);
       setTimeout(() => setSubmitSuccess(false), 4000);
     } catch (err: any) {
-      const detail = err.response?.data?.detail;
+      const detail = errorText(err, '') || undefined;
       setSubmitError(Array.isArray(detail) ? detail : (detail ?? 'Failed to submit order.'));
     } finally {
       setSubmitting(false);

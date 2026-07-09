@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
 import { Building2, CheckCircle2, Clock, Lock, Plus, RefreshCw, Search, XCircle, AlertTriangle, FileText } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -127,7 +128,7 @@ function SubmitModal({
       onSubmitted();
       onClose();
     } catch (err: any) {
-      const msg = err?.response?.data?.detail;
+      const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Failed to submit. Try again.');
     } finally {
       setSubmitting(false);
@@ -221,7 +222,7 @@ function ProfilePanel({
       });
       onUpdate(res.data);
     } catch (err: any) {
-      const msg = err?.response?.data?.detail;
+      const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Verification failed.');
     } finally {
       setVerifying(false);
@@ -237,7 +238,7 @@ function ProfilePanel({
       });
       onUpdate(res.data);
     } catch (err: any) {
-      const msg = err?.response?.data?.detail;
+      const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Failed to save note.');
     } finally {
       setSavingNote(false);
@@ -251,7 +252,7 @@ function ProfilePanel({
       const res = await axiosClient.post<LocationProfile>(`/location-profiles/${profile.id}/verify-note`);
       onUpdate(res.data);
     } catch (err: any) {
-      const msg = err?.response?.data?.detail;
+      const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Failed to verify note.');
     } finally {
       setVerifyingNote(false);

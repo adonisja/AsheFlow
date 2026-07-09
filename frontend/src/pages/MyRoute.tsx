@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import { useState, useEffect, useCallback } from 'react';
 import {
   MapPin, Package, AlertTriangle, PackageX, CheckCircle2,
@@ -207,7 +208,7 @@ function RtsModal({ tba, routeId, onClose, onSubmitted }: RtsModalProps) {
       onSubmitted();
       onClose();
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to record RTS.');
+      setError(errorText(e, 'Failed to record RTS.'));
     } finally {
       setSaving(false);
     }
@@ -272,7 +273,7 @@ function MissingModal({ tba, routeId, onClose, onSubmitted }: MissingModalProps)
       onSubmitted();
       onClose();
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to report missing package.');
+      setError(errorText(e, 'Failed to report missing package.'));
     } finally {
       setSaving(false);
     }
@@ -329,7 +330,7 @@ function BuildingModal({ address, blockKey, onClose }: BuildingModalProps) {
       await axiosClient.post('/building-profiles/', body);
       setDone(true);
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to submit building profile.');
+      setError(errorText(e, 'Failed to submit building profile.'));
     } finally {
       setSaving(false);
     }
@@ -435,7 +436,7 @@ export default function MyRoute() {
       const active = data.find(r => r.status === 'in_progress') ?? data.find(r => r.status === 'assigned');
       if (active) setActiveRouteId(active.id);
     } catch (e: any) {
-      setRouteError(e.response?.data?.detail ?? 'Could not load your route.');
+      setRouteError(errorText(e, 'Could not load your route.'));
     } finally {
       setLoadingRoutes(false);
     }
@@ -475,7 +476,7 @@ export default function MyRoute() {
       await axiosClient.patch(`/walker-routes/routes/${activeRouteId}/status`, { status: 'in_progress' });
       await loadRoutes();
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to start route.');
+      setError(errorText(e, 'Failed to start route.'));
     } finally {
       setStatusBusy(false);
     }
@@ -489,7 +490,7 @@ export default function MyRoute() {
       await axiosClient.post(`/walker-routes/routes/${activeRouteId}/back-at-truck`);
       await loadRoutes();
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to record return.');
+      setError(errorText(e, 'Failed to record return.'));
     } finally {
       setStatusBusy(false);
     }
@@ -503,7 +504,7 @@ export default function MyRoute() {
       setArrivalResult(data);
       await loadRoutes();
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Arrival confirm failed.');
+      setError(errorText(e, 'Arrival confirm failed.'));
     } finally {
       setArrivalBusy(false);
     }
@@ -517,7 +518,7 @@ export default function MyRoute() {
       await axiosClient.post('/rts/stops', body);
       await loadSuggestions(routeId);
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Failed to record stop.');
+      setError(errorText(e, 'Failed to record stop.'));
     } finally {
       setCompletingStop(false);
     }
@@ -535,7 +536,7 @@ export default function MyRoute() {
       });
       await loadRoutes();
     } catch (e: any) {
-      setError(e.response?.data?.detail ?? 'Phase 4 opt-in failed.');
+      setError(errorText(e, 'Phase 4 opt-in failed.'));
     } finally {
       setPhase4Busy(false);
     }

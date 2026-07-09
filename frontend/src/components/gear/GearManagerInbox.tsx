@@ -1,3 +1,4 @@
+import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState, useCallback } from 'react';
 import { CheckCircle2, XCircle, Clock, Package, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -302,7 +303,7 @@ export default function GearManagerInbox() {
         ));
       }
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Action failed.');
+      setError(errorText(err, 'Action failed.'));
     }
   };
 

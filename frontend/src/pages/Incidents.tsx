@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -132,7 +133,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
       setBodyPart(''); setMedicalAttention(null);
       onSubmitted();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit incident.');
+      setError(errorText(err, 'Failed to submit incident.'));
     } finally {
       setLoading(false);
     }
@@ -403,7 +404,7 @@ function ManagementView() {
       await axiosClient.patch(`/incidents/${id}/resolve`);
       load();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to resolve.');
+      alert(errorText(err, 'Failed to resolve.'));
     } finally {
       setResolving(null);
     }

@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users, Truck, Plus, Pencil, CheckCircle2, AlertTriangle,
@@ -208,7 +209,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
         phone_number: form.phone_number ? toE164Phone(form.phone_number) : '',
       });
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Something went wrong.');
+      setError(errorText(err, 'Something went wrong.'));
       setStep('form');
     } finally {
       setSaving(false);
@@ -453,7 +454,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
         discord_channel_id: channelId.trim() || null,
       });
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Something went wrong.');
+      setError(errorText(err, 'Something went wrong.'));
     } finally {
       setSaving(false);
     }
@@ -598,7 +599,7 @@ function PeopleTab() {
       await axiosClient.post('/registration/invite', { employee_id: emp.id });
       setResendMsg({ id: emp.id, ok: true, text: `Invite re-sent to ${emp.email}.` });
     } catch (err: any) {
-      setResendMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Failed to send invite.' });
+      setResendMsg({ id: emp.id, ok: false, text: errorText(err, 'Failed to send invite.') });
     } finally {
       setResendingId(null);
     }
@@ -611,7 +612,7 @@ function PeopleTab() {
       await axiosClient.post('/registration/resend-credentials', { employee_id: emp.id });
       setResendMsg({ id: emp.id, ok: true, text: `Credentials re-sent to ${emp.email}.` });
     } catch (err: any) {
-      setResendMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Failed to resend credentials.' });
+      setResendMsg({ id: emp.id, ok: false, text: errorText(err, 'Failed to resend credentials.') });
     } finally {
       setResendingId(null);
     }
@@ -645,7 +646,7 @@ function PeopleTab() {
       setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
       setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} promoted to trainer.` });
     } catch (err: any) {
-      setPromoteMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Promotion failed.' });
+      setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Promotion failed.') });
     } finally {
       setPromotingId(null);
     }
@@ -666,7 +667,7 @@ function PeopleTab() {
       setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
       setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} demoted to walker.` });
     } catch (err: any) {
-      setPromoteMsg({ id: emp.id, ok: false, text: err?.response?.data?.detail ?? 'Demotion failed.' });
+      setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Demotion failed.') });
     } finally {
       setPromotingId(null);
     }
@@ -1137,7 +1138,7 @@ function TruckAnchorModal({
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Geocoding failed. Check the address and try again.');
+      setError(errorText(e, 'Geocoding failed. Check the address and try again.'));
     } finally {
       setSaving(false);
     }
@@ -1151,7 +1152,7 @@ function TruckAnchorModal({
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to clear anchor.');
+      setError(errorText(e, 'Failed to clear anchor.'));
     } finally {
       setClearing(false);
     }
@@ -1281,7 +1282,7 @@ function TruckAnchor2Modal({
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Geocoding failed. Check the address and try again.');
+      setError(errorText(e, 'Geocoding failed. Check the address and try again.'));
     } finally {
       setSaving(false);
     }
@@ -1295,7 +1296,7 @@ function TruckAnchor2Modal({
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to clear anchor.');
+      setError(errorText(e, 'Failed to clear anchor.'));
     } finally {
       setClearing(false);
     }
@@ -1804,7 +1805,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
       cacheZone(data); setZone(data); setEditing(false);
       setSuccess(true); setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
-      const detail = e?.response?.data?.detail;
+      const detail = errorText(e, '') || undefined;
       setError(typeof detail === 'string' ? detail : `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`);
     } finally { setSaving(false); }
   }
@@ -1821,10 +1822,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
       cacheZone(data); setZone(data); setEditing(false);
       setSuccess(true); setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
-      const detail = e?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail
-        : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
-        : `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`);
+      setError(errorText(e, `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`));
     } finally { setSaving(false); }
   }
 
@@ -1838,10 +1836,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
       cacheZone(data); setZone(data); setEditing(false);
       setSuccess(true); setTimeout(() => setSuccess(false), 3000);
     } catch (e: any) {
-      const detail = e?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail
-        : Array.isArray(detail) ? detail.map((d: any) => d?.msg ?? String(d)).join('; ')
-        : `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`);
+      setError(errorText(e, `Save failed (HTTP ${e?.response?.status ?? 'unknown'}).`));
     } finally { setSaving(false); }
   }
 
@@ -2132,7 +2127,7 @@ function SystemTab() {
       const res = await axiosClient.delete(`/notifications/prune?days=${days}`);
       setResult(res.data);
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? 'Something went wrong.');
+      setError(errorText(err, 'Something went wrong.'));
     } finally {
       setPruning(false);
     }

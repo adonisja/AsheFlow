@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import { useCallback, useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import type { RemovalsResponse, RemovalOut } from '../api/types';
@@ -74,7 +75,7 @@ export default function RemovalsPanel({ date }: { date: string }) {
       const res = await axiosClient.post<RemovalsResponse>(`/sort/removals/${id}/confirm`);
       setData(res.data);
     } catch (e: unknown) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      const detail = errorText(e, '') || undefined;
       setError(detail ?? 'Confirm failed — refresh and try again.');
     } finally {
       setBusy(false);

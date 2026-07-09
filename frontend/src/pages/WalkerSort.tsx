@@ -1,4 +1,6 @@
+import { errorText } from '../utils/errorText';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
@@ -126,7 +128,7 @@ function ReassignModal({ route, walkers, onClose, onReassigned }: ReassignModalP
       onReassigned();
       onClose();
     } catch (e: any) {
-      const detail = e?.response?.data?.detail;
+      const detail = errorText(e, '') || undefined;
       setError(typeof detail === 'string' ? detail : 'Reassign failed.');
     } finally {
       setSaving(false);
@@ -205,7 +207,7 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
       onResolved();
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Resolve failed.');
+      setError(errorText(e, 'Resolve failed.'));
     } finally {
       setSaving(false);
     }
@@ -272,17 +274,44 @@ function AssignCombobox({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  // Portal positioning: RouteCard's overflow-hidden (rounded corners) clipped an
+  // absolutely-positioned panel to the card, making it invisible. Rendering the
+  // panel through a portal at document.body escapes ANY ancestor clipping; it's
+  // fixed-positioned from the trigger's rect and closes on scroll so it never
+  // drifts away from its button.
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  const toggle = () => {
+    if (!open && boxRef.current) {
+      const r = boxRef.current.getBoundingClientRect();
+      setRect({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
+    setOpen(o => !o);
+  };
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (boxRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onScroll = (e: Event) => {
+      // typing in the panel can scroll its own list — only close on outside scrolls
+      if (panelRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+    document.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('scroll', onScroll, true);
+    };
   }, [open]);
 
   const current = walkers.find(w => w.id === currentId);
@@ -305,7 +334,7 @@ function AssignCombobox({
     <div ref={boxRef} className="relative flex-1 min-w-0">
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={toggle}
         className="w-full flex items-center justify-between gap-2 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground hover:bg-accent/40 focus:outline-none focus:ring-1 focus:ring-primary/40"
       >
         <span className={`truncate ${current ? 'font-medium' : 'text-muted-foreground'}`}>
@@ -313,8 +342,12 @@ function AssignCombobox({
         </span>
         <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
       </button>
-      {open && (
-        <div className="absolute z-30 mt-1 left-0 right-0 rounded-xl border border-border bg-background shadow-lg overflow-hidden">
+      {open && rect && createPortal(
+        <div
+          ref={panelRef}
+          style={{ position: 'fixed', top: rect.top, left: rect.left, width: rect.width, zIndex: 50 }}
+          className="rounded-xl border border-border bg-background shadow-lg overflow-hidden"
+        >
           <input
             autoFocus
             value={q}
@@ -348,7 +381,8 @@ function AssignCombobox({
             ))}
             {empty && <p className="px-3 py-2 text-xs text-muted-foreground">No staff match “{q}”</p>}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -592,7 +626,7 @@ function WavePoolPanel({
         setPropError(`Conflicts: ${res.data.conflicts.join('; ')}`);
       }
     } catch (e: any) {
-      setPropError(e?.response?.data?.detail ?? 'Auto-propose failed.');
+      setPropError(errorText(e, 'Auto-propose failed.'));
     } finally {
       setProposing(false);
     }
@@ -747,7 +781,7 @@ function ProposalReviewPanel({
         .map(([rn, eid]) => ({ route_number: Number(rn), employee_id: eid }));
       await onConfirm(taId, assignments);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Confirm failed.');
+      setError(errorText(e, 'Confirm failed.'));
     } finally {
       setConfirming(false);
     }
@@ -823,13 +857,41 @@ function TruckSortPanel({
   const [distributeLoading, setDistributeLoading] = useState(false);
   const [arrivalLoading, setArrivalLoading]     = useState(false);
   const [error, setError]                       = useState<string | null>(null);
-  const [waveMap, setWaveMap]                   = useState<Record<number, string>>({});
-  const [firstWaveProposal, setFirstWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
+  // ── Staging persistence (sessionStorage) ──────────────────────────────────
+  // waveMap / proposal / trainer picks are pre-confirmation staging state that
+  // previously lived only in component state — any refresh (or crash) lost the
+  // whole staged wave. Persisted per truck-assignment+date, restored on mount,
+  // cleared on successful Send Wave. Same pattern as the sort task id.
+  const stagingKey = `apsort-staging:${state.ta.id}:${routeDate}`;
+  const stagedRef = useRef<{
+    waveMap?: Record<number, string>;
+    firstWaveProposal?: ProposedAssignmentEntry[] | null;
+    selectedTrainerId?: string;
+    selectedTraineeId?: string;
+    traineePhase?: number;
+  } | null>(null);
+  if (stagedRef.current === null) {
+    try { stagedRef.current = JSON.parse(sessionStorage.getItem(stagingKey) ?? '{}'); }
+    catch { stagedRef.current = {}; }
+  }
+  const staged = stagedRef.current!;
+
+  const [waveMap, setWaveMap]                   = useState<Record<number, string>>(staged.waveMap ?? {});
+  const [firstWaveProposal, setFirstWaveProposal] = useState<ProposedAssignmentEntry[] | null>(staged.firstWaveProposal ?? null);
   const [firstWaveProposing, setFirstWaveProposing] = useState(false);
   const [secondWaveProposal, setSecondWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
-  const [selectedTrainerId, setSelectedTrainerId] = useState('');
-  const [selectedTraineeId, setSelectedTraineeId] = useState('');
-  const [traineePhase, setTraineePhase]         = useState<number>(1);
+  const [selectedTrainerId, setSelectedTrainerId] = useState(staged.selectedTrainerId ?? '');
+  const [selectedTraineeId, setSelectedTraineeId] = useState(staged.selectedTraineeId ?? '');
+  const [traineePhase, setTraineePhase]         = useState<number>(staged.traineePhase ?? 1);
+
+  // Write-through: every staging change survives a refresh until Send Wave.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(stagingKey, JSON.stringify({
+        waveMap, firstWaveProposal, selectedTrainerId, selectedTraineeId, traineePhase,
+      }));
+    } catch { /* storage quota — non-fatal, staging just won't survive refresh */ }
+  }, [stagingKey, waveMap, firstWaveProposal, selectedTrainerId, selectedTraineeId, traineePhase]);
   const [arrivalTrainerId, setArrivalTrainerId] = useState('');
   const [arrivalTraineeId, setArrivalTraineeId] = useState('');
   const [reassignTarget, setReassignTarget]     = useState<RouteResponse | null>(null);
@@ -849,7 +911,7 @@ function TruckSortPanel({
     setError(null);
     setCommitLoading(true);
     try { await onCommit(state.ta.id); }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Commit failed.'); }
+    catch (e: any) { setError(errorText(e, 'Commit failed.')); }
     finally { setCommitLoading(false); }
   };
 
@@ -863,7 +925,7 @@ function TruckSortPanel({
       );
       setFirstWaveProposal(data.proposed_assignments);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Auto-propose failed.');
+      setError(errorText(e, 'Auto-propose failed.'));
     } finally {
       setFirstWaveProposing(false);
     }
@@ -892,8 +954,10 @@ function TruckSortPanel({
         selectedTraineeId || undefined,
         selectedTraineeId ? traineePhase : undefined,
       );
+      // Wave is committed server-side — staged state has served its purpose.
+      try { sessionStorage.removeItem(stagingKey); } catch { /* non-fatal */ }
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Wave distribution failed.');
+      setError(errorText(e, 'Wave distribution failed.'));
     } finally {
       setDistributeLoading(false);
     }
@@ -904,7 +968,7 @@ function TruckSortPanel({
     if (!arrivalTrainerId || !arrivalTraineeId) { setError('Select trainer and trainee.'); return; }
     setArrivalLoading(true);
     try { await onArrivalConfirm(state.ta.id, arrivalTrainerId, arrivalTraineeId); }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Arrival confirmation failed.'); }
+    catch (e: any) { setError(errorText(e, 'Arrival confirmation failed.')); }
     finally { setArrivalLoading(false); }
   };
 
@@ -1403,7 +1467,7 @@ export default function WalkerSortMonitor() {
 
       await fetchDynamic(tas);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to load data.');
+      setError(errorText(e, 'Failed to load data.'));
     } finally {
       setLoading(false);
     }

@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import { useCallback, useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import type { RemovalsResponse } from '../api/types';
@@ -40,7 +41,7 @@ export default function WalkerApReturnsPanel({ date, bagIds }: { date: string; b
       const res = await axiosClient.post<RemovalsResponse>(`/sort/removals/${id}/handover`);
       setData(res.data);
     } catch (e: unknown) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      const detail = errorText(e, '') || undefined;
       setError(detail ?? 'Action failed.');
     } finally {
       setBusy(false);

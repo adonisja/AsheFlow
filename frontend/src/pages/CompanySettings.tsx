@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -438,7 +439,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Failed to save configuration.');
+      setError(errorText(err, 'Failed to save configuration.'));
     } finally {
       setSaving(false);
     }
@@ -456,7 +457,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
       setDiscordSaved(true);
       setTimeout(() => setDiscordSaved(false), 3000);
     } catch (err: any) {
-      setDiscordError(err.response?.data?.detail ?? 'Failed to save Discord configuration.');
+      setDiscordError(errorText(err, 'Failed to save Discord configuration.'));
     } finally {
       setDiscordSaving(false);
     }

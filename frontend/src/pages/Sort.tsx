@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -103,7 +104,7 @@ function PackageAddressEditor({
       onPatched(data);
       setEditing(false);
     } catch (e: any) {
-      setSaveError(e?.response?.data?.detail ?? 'Save failed.');
+      setSaveError(errorText(e, 'Save failed.'));
     } finally {
       setSaving(false);
     }
@@ -166,7 +167,7 @@ function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
       setPage(p);
       setExpanded(true);
     } catch (e: any) {
-      const detail = e?.response?.data?.detail ?? 'Failed to load preview.';
+      const detail = errorText(e, 'Failed to load preview.');
       setError(typeof detail === 'string' ? detail : 'Failed to load preview.');
     } finally {
       setLoading(false);
@@ -439,7 +440,7 @@ function ManifestUploadPanel({
       setPhase('enriching');
       startPolling(uploadDate);
     } catch (err: any) {
-      const detail = err?.response?.data?.detail ?? 'Upload failed.';
+      const detail = errorText(err, 'Upload failed.');
       setErrorMsg(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setPhase('error');
     }
@@ -674,7 +675,7 @@ function SortPreviewPanel({ today, taskId }: { today: string; taskId: string }) 
       .then(({ data }) => { if (!cancelled) { setPreview(data); setLoading(false); } })
       .catch((e: any) => {
         if (!cancelled) {
-          setError(e?.response?.data?.detail ?? 'Preview unavailable.');
+          setError(errorText(e, 'Preview unavailable.'));
           setLoading(false);
         }
       });
@@ -918,7 +919,7 @@ function ManifestSortPanel({
       // (e.g. notification already read, SSE reconnecting, token refresh gap)
       pollRef.current = setInterval(() => fetchStatus(taskId), _SORT_POLL_INTERVAL);
     } catch (err: any) {
-      const detail = err?.response?.data?.detail ?? 'Sort failed.';
+      const detail = errorText(err, 'Sort failed.');
       setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setPhase('idle');
       setRunning(false);
@@ -1220,7 +1221,7 @@ export default function SortPage() {
       if (taRes.status === 'rejected') throw taRes.reason;
       setAssignments(taRes.value.data);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to load data.');
+      setError(errorText(e, 'Failed to load data.'));
     } finally {
       setLoading(false);
     }

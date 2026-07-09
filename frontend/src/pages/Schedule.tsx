@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useMemo } from 'react';
 import Select from 'react-select';
 import { useAuth } from '../contexts/AuthContext';
@@ -572,7 +573,7 @@ const Schedule = () => {
       setScheduleData(data);
       setLoadError(null);
     } catch (err: any) {
-      setLoadError(err?.response?.data?.detail || 'Failed to load schedule.');
+      setLoadError(errorText(err, 'Failed to load schedule.'));
     }
   };
 
@@ -618,7 +619,7 @@ const Schedule = () => {
       await createTimeOffRequest(myId, dateStr);
       await fetchSchedule(myId, currentMonth);
     } catch (err: any) {
-      if (err.response?.data?.detail) alert(err.response.data.detail);
+      const alertText = errorText(err, ''); if (alertText) alert(alertText);
     }
   };
 

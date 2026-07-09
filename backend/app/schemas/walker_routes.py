@@ -120,7 +120,12 @@ class WaveDistributionRequest(BaseModel):
     truck_assignment_id: UUID
     route_date: date
     assignments: list[WaveAssignmentEntry] = []
-    trainer_id: UUID
+    # Optional at the schema level: auto_assign=True is a PROPOSAL-ONLY call
+    # (ADR-139 §5 — nothing is committed; the auto branch never reads
+    # trainer_id) and the frontend sends null/omits it there. Requiring a UUID
+    # here 422'd every auto-propose. The endpoint enforces trainer_id where it
+    # is actually consumed: the manual branch's trainee-pairing sync.
+    trainer_id: Optional[UUID] = None
     trainee_id: Optional[UUID] = None
     trainee_phase: Optional[int] = Field(None, ge=1, le=5)
     auto_assign: bool = False

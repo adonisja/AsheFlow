@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
 import { ClipboardList, Users, CheckCircle, XCircle, RefreshCw, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
@@ -239,7 +240,7 @@ export default function DriverSurveys() {
       await loadSurveys(0);
       await loadDetail(selectedDate);
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Failed to activate survey.');
+      setError(errorText(err, 'Failed to activate survey.'));
     } finally {
       setActivating(false);
     }

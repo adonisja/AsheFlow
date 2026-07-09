@@ -1,3 +1,4 @@
+import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -258,7 +259,7 @@ function IdentityCard({
       onUpdated(res.data);
       setEditing(false);
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Failed to save.');
+      setError(errorText(err, 'Failed to save.'));
     } finally {
       setSaving(false);
     }
@@ -564,7 +565,7 @@ function ConfigEditorCard({
       onUpdated(res.data);
       setEditing(false);
     } catch (err: any) {
-      setSaveError(err.response?.data?.detail ?? 'Failed to save config.');
+      setSaveError(errorText(err, 'Failed to save config.'));
     } finally {
       setSaving(false);
     }
@@ -741,7 +742,7 @@ function DiscordConfigCard({ companyId }: { companyId: string }) {
       setCfg(res.data);
       setEditing(false);
     } catch (err: any) {
-      setSaveError(err.response?.data?.detail ?? 'Failed to save Discord config.');
+      setSaveError(errorText(err, 'Failed to save Discord config.'));
     } finally {
       setSaving(false);
     }
@@ -853,7 +854,7 @@ function DangerZoneCard({
       await axiosClient.patch(`/admin/companies/${detail.id}/${action}`);
       onToggled(!detail.is_active);
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Action failed.');
+      setError(errorText(err, 'Action failed.'));
     } finally {
       setToggling(false);
     }

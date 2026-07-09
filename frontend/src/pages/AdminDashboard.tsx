@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
@@ -190,7 +191,7 @@ export default function AdminDashboard() {
       setSeedData(res.data);
       setSeedPhase('ready');
     } catch (err: any) {
-      const detail = err?.response?.data?.detail ?? 'Failed to generate manifest.';
+      const detail = errorText(err, 'Failed to generate manifest.');
       setSeedError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setSeedPhase('error');
     }
@@ -211,7 +212,7 @@ export default function AdminDashboard() {
       setUploadResult(res.data);
       setSeedPhase('done');
     } catch (err: any) {
-      const detail = err?.response?.data?.detail ?? 'Upload failed.';
+      const detail = errorText(err, 'Upload failed.');
       setSeedError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setSeedPhase('error');
     }

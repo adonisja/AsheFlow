@@ -8,6 +8,7 @@
  * Accessible to management and admin only (enforced at the call site and backend).
  */
 
+import { errorText } from '../utils/errorText';
 import React, { useRef, useState, useCallback } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -605,7 +606,7 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
       if (anyCreated) onComplete();
     } catch (e: any) {
       // Surface top-level API errors (e.g. 400 too many rows) back in preview
-      alert(e?.response?.data?.detail ?? 'Import failed. Please try again.');
+      alert(errorText(e, 'Import failed. Please try again.'));
     } finally {
       setSubmitting(false);
     }

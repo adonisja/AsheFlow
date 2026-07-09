@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -243,7 +244,7 @@ const ScheduleChanges = () => {
       setReason('');
       loadMyRequests();
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit request.');
+      setError(errorText(err, 'Failed to submit request.'));
     } finally {
       setSubmitting(false);
     }
@@ -261,7 +262,7 @@ const ScheduleChanges = () => {
       await axiosClient.delete(`/schedule-change-requests/${id}`);
       loadMyRequests();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to cancel.');
+      alert(errorText(err, 'Failed to cancel.'));
     }
   };
 
@@ -280,7 +281,7 @@ const ScheduleChanges = () => {
       loadPendingRequests();
       if (isPrivileged) loadAllRequests();
     } catch (err: any) {
-      alert(err.response?.data?.detail || `Failed to ${action}.`);
+      alert(errorText(err, `Failed to ${action}.`));
     }
   };
 

@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useMemo } from 'react';
 import Select from 'react-select';
 import { useAuth } from '../contexts/AuthContext';
@@ -379,7 +380,7 @@ const Preferences = () => {
       setChangeRequestReason('');
       loadChangeRequests(myId);
     } catch (err: any) {
-      setChangeRequestError(err.response?.data?.detail || 'Failed to submit request.');
+      setChangeRequestError(errorText(err, 'Failed to submit request.'));
     }
   };
 
@@ -395,7 +396,7 @@ const Preferences = () => {
       await axiosClient.delete(`/assignment-change-requests/${id}`);
       loadChangeRequests(myId);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to cancel request.');
+      alert(errorText(err, 'Failed to cancel request.'));
     }
   };
 

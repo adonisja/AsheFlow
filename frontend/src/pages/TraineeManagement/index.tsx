@@ -1,3 +1,4 @@
+import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import {
@@ -241,7 +242,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
       setExisting(res.data);
       setOpen(false);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to send credentials.');
+      setError(errorText(e, 'Failed to send credentials.'));
     } finally {
       setSaving(false);
     }

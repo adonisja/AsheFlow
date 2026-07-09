@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send, History, Navigation, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -252,7 +253,7 @@ function DriverView() {
       setShowRelocate(false);
       loadData();
     } catch (e: any) {
-      setSubmitError(e.response?.data?.detail || 'Failed to submit anchor point.');
+      setSubmitError(errorText(e, 'Failed to submit anchor point.'));
     } finally {
       setSubmitting(false);
     }
@@ -269,7 +270,7 @@ function DriverView() {
       });
       loadData();
     } catch (e: any) {
-      setSubmitError(e.response?.data?.detail || 'Failed to confirm arrival.');
+      setSubmitError(errorText(e, 'Failed to confirm arrival.'));
     } finally {
       setArriving(false);
     }

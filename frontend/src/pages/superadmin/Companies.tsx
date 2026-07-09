@@ -1,3 +1,4 @@
+import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -73,7 +74,7 @@ function CreateCompanyForm({
       onCreated(res.data);
       onClose();
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Failed to create company.');
+      setError(errorText(err, 'Failed to create company.'));
     } finally {
       setSaving(false);
     }
@@ -184,7 +185,7 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
       setOpen(false);
       setName(''); setEmail('');
     } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Bootstrap failed.');
+      setError(errorText(err, 'Bootstrap failed.'));
     } finally {
       setSaving(false);
     }

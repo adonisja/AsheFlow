@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -76,7 +77,7 @@ function InspectionPanel({ employeeId, onComplete }: { employeeId: string; onCom
       setSubmittedData({ has_failures, items: results as Record<string, boolean>, notes: notes.trim() || undefined });
       onComplete?.();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Inspection submission failed.');
+      alert(errorText(err, 'Inspection submission failed.'));
     } finally {
       setLoading(false);
     }
@@ -213,7 +214,7 @@ function CheckInPanel({ employeeId, onComplete }: { employeeId: string; onComple
         setCheckedInAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Check-in failed.');
+      alert(errorText(err, 'Check-in failed.'));
     } finally {
       setLoading(false);
     }
@@ -305,7 +306,7 @@ function DeparturePanel({ employeeId, onComplete }: { employeeId: string; onComp
       setDeparted(true);
       onComplete?.();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Departure record failed.');
+      alert(errorText(err, 'Departure record failed.'));
     } finally {
       setLoading(false);
     }
@@ -395,7 +396,7 @@ function ReturnPanel({ employeeId, onComplete }: { employeeId: string; onComplet
         setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to record return.');
+      alert(errorText(err, 'Failed to record return.'));
     } finally {
       setLoading(false);
     }
@@ -537,7 +538,7 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
       setLog(res.data);
       onStartComplete?.();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to save fuel log.');
+      alert(errorText(err, 'Failed to save fuel log.'));
     } finally {
       setLoading(false);
     }
@@ -559,7 +560,7 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
       setLog(res.data);
       onEndComplete?.();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update fuel log.');
+      alert(errorText(err, 'Failed to update fuel log.'));
     } finally {
       setLoading(false);
     }
@@ -760,7 +761,7 @@ function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
       await axiosClient.post('/field-ops/rating', payload);
       setEntries(prev => ({ ...prev, [walker.id]: { ...prev[walker.id], submitted: true } }));
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to submit.');
+      alert(errorText(err, 'Failed to submit.'));
     }
   };
 
@@ -1124,7 +1125,7 @@ function AdminFieldOpsView() {
       await axiosClient.delete(`/shift-sessions/driver/${driverId}/active/wipe`);
       setSessions(prev => prev.filter(s => s.driver_id !== driverId));
     } catch (e: any) {
-      alert(e?.response?.data?.detail ?? 'Failed to wipe session.');
+      alert(errorText(e, 'Failed to wipe session.'));
     } finally {
       setWipingId(null);
     }
@@ -1429,7 +1430,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
       await axiosClient.patch(`/anchor-points/${activeAP.id}/arrive`, {});
       loadAPs();
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to confirm arrival.');
+      setError(errorText(e, 'Failed to confirm arrival.'));
     } finally {
       setArriving(false);
     }
@@ -1443,7 +1444,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
       await axiosClient.patch(`/anchor-points/${activeAP.id}/depart`);
       loadAPs();
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to record departure.');
+      setError(errorText(e, 'Failed to record departure.'));
     } finally {
       setDeparting(false);
     }
@@ -1473,7 +1474,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
       setRelocDeptTime('');
       loadAPs();
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to submit relocation.');
+      setError(errorText(e, 'Failed to submit relocation.'));
     } finally {
       setRelocLoading(false);
     }
@@ -1910,7 +1911,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       const res = await axiosClient.post<ShiftSession>('/shift-sessions/');
       setSession(res.data);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to start shift.');
+      setError(errorText(e, 'Failed to start shift.'));
     } finally {
       setAdvancing(false);
     }
@@ -1924,7 +1925,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       const res = await axiosClient.patch<ShiftSession>('/shift-sessions/me/active/advance');
       setSession(res.data);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to advance gate.');
+      setError(errorText(e, 'Failed to advance gate.'));
     } finally {
       setAdvancing(false);
     }
@@ -1938,7 +1939,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       setSession(res.data);
       setSkipOpen(false);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to skip gate.');
+      setError(errorText(e, 'Failed to skip gate.'));
     } finally {
       setAdvancing(false);
     }

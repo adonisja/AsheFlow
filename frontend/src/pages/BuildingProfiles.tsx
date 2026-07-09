@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import { useState, useEffect, useCallback } from 'react';
 import {
   Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw,
@@ -72,7 +73,7 @@ function SubmitModal({ onClose, onCreated }: SubmitModalProps) {
       onCreated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Submission failed.');
+      setError(errorText(e, 'Submission failed.'));
     } finally {
       setSaving(false);
     }
@@ -164,7 +165,7 @@ function VerifyModal({ profile, onClose, onUpdated }: VerifyModalProps) {
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Verify failed.');
+      setError(errorText(e, 'Verify failed.'));
     } finally {
       setSaving(false);
     }
@@ -250,7 +251,7 @@ function NoteModal({ profile, onClose, onUpdated }: NoteModalProps) {
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Note update failed.');
+      setError(errorText(e, 'Note update failed.'));
     } finally {
       setSaving(false);
     }
@@ -323,7 +324,7 @@ function AnchorModal({ profile, onClose, onUpdated }: AnchorModalProps) {
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to save anchor point.');
+      setError(errorText(e, 'Failed to save anchor point.'));
     } finally {
       setSaving(false);
     }
@@ -340,7 +341,7 @@ function AnchorModal({ profile, onClose, onUpdated }: AnchorModalProps) {
       onUpdated(data);
       onClose();
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to clear anchor point.');
+      setError(errorText(e, 'Failed to clear anchor point.'));
     } finally {
       setSaving(false);
     }
@@ -579,7 +580,7 @@ export default function BuildingProfilesPage() {
       const { data } = await axiosClient.get<BuildingProfileResponse[]>('/building-profiles/');
       setProfiles(data);
     } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to load building profiles.');
+      setError(errorText(e, 'Failed to load building profiles.'));
     } finally {
       setLoading(false);
     }
@@ -602,7 +603,7 @@ export default function BuildingProfilesPage() {
       const { data } = await axiosClient.post<BuildingProfileResponse>(`/building-profiles/${profile.id}/lock`);
       applyUpdate(data);
     } catch (e: any) {
-      setLockError(e?.response?.data?.detail ?? 'Lock failed.');
+      setLockError(errorText(e, 'Lock failed.'));
     } finally {
       setLockBusy(null);
     }
