@@ -738,6 +738,44 @@ export interface MissingPackageResponse {
   delivery_stop_id: string | null;
 }
 
+// Dispatch queue view of MissingPackageResponse — adds route context (ADR-190)
+export interface MissingQueueEntry extends MissingPackageResponse {
+  route_number: number | null;
+  route_date: string | null;
+}
+
+// Pre-route damage reporting (ADR-190). On-route damage stays in the RTS flow.
+export type DamageStage = 'station_sort' | 'truck_load' | 'in_truck';
+
+export interface DamagedPackageCreate {
+  route_date: string;
+  tba_number: string;
+  stage: DamageStage;
+  damage_notes: string;
+  bag_id?: string | null;
+  truck_assignment_id?: string | null;
+}
+
+export interface DamagedPackageResponse {
+  id: string;
+  company_id: string;
+  route_date: string;
+  tba_number: string;
+  bag_id: string | null;
+  truck_assignment_id: string | null;
+  stage: string;
+  damage_notes: string;
+  normalised_address: string | null;
+  reported_by: string | null;
+  reported_by_name: string | null;
+  reported_at: string;
+  resolution_status: string;
+  resolution_notes: string | null;
+  resolved_by: string | null;
+  resolved_by_name: string | null;
+  resolved_at: string | null;
+}
+
 export interface DeliveryStopCreate {
   route_id: string;
   tba_numbers: string[];

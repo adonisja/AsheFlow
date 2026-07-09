@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Optional, Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
@@ -88,6 +88,53 @@ class MissingPackageResponse(BaseModel):
     resolved_by_name: Optional[str] = None
     resolved_at: Optional[datetime] = None
     delivery_stop_id: Optional[UUID] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MissingQueueEntry(MissingPackageResponse):
+    """Company-wide dispatch queue view — adds route context for display."""
+    route_number: Optional[int] = None
+    route_date: Optional[date] = None
+
+
+# ---------------------------------------------------------------------------
+# Damaged Package — pre-route damage (ADR-190). On-route damage stays RTS.
+# ---------------------------------------------------------------------------
+
+DamageStage = Literal["station_sort", "truck_load", "in_truck"]
+
+
+class DamagedPackageCreate(BaseModel):
+    route_date: date
+    tba_number: str = Field(..., min_length=1, max_length=50)
+    stage: DamageStage
+    damage_notes: str = Field(..., min_length=1)
+    bag_id: Optional[str] = Field(None, max_length=50)
+    truck_assignment_id: Optional[UUID] = None
+
+
+class DamagedPackageResolveRequest(BaseModel):
+    resolution_notes: str = Field(..., min_length=1)
+
+
+class DamagedPackageResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    route_date: date
+    tba_number: str
+    bag_id: Optional[str] = None
+    truck_assignment_id: Optional[UUID] = None
+    stage: str
+    damage_notes: str
+    normalised_address: Optional[str] = None
+    reported_by: Optional[UUID] = None
+    reported_by_name: Optional[str] = None
+    reported_at: datetime
+    resolution_status: str
+    resolution_notes: Optional[str] = None
+    resolved_by: Optional[UUID] = None
+    resolved_by_name: Optional[str] = None
+    resolved_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 

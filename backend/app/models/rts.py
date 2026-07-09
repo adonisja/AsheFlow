@@ -1,7 +1,7 @@
 import uuid
 from datetime import time
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
+    Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.sql import func
@@ -117,6 +117,46 @@ class RouteHandoff(Base):
     discrepancy_resolved_by_name = Column(String(100), nullable=True)
     discrepancy_resolved_at     = Column(DateTime(timezone=True), nullable=True)
     created_at                  = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+DAMAGE_STAGES = ("station_sort", "truck_load", "in_truck")
+
+
+class DamagedPackage(Base):
+    """Damage discovered BEFORE a route exists — station sort, truck load, or
+    loose in the truck mid-day (ADR-190).
+
+    On-route damage stays in the RTS flow (rts_type='package_damaged'); this
+    table covers the pre-route window where RTSPackage can't reach (route_id
+    is non-nullable there by design).
+
+    truck_assignment_id is SET NULL, not CASCADE: a damage report is a record
+    of a physical event (like an RTS row or audit entry), so clearing and
+    re-running dispatch must not erase it — deliberate ADR-182 divergence.
+
+    normalised_address is resolved best-effort from the enriched Redis manifest
+    at record time (RTSPackage precedent) so it survives Redis TTL for
+    troublesome-shipper/address analysis.
+    """
+    __tablename__ = "damaged_packages"
+
+    id                  = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id          = Column(UUID(as_uuid=True), nullable=False, index=True)
+    route_date          = Column(Date,        nullable=False, index=True)
+    tba_number          = Column(String(50),  nullable=False)
+    bag_id              = Column(String(50),  nullable=True)
+    truck_assignment_id = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="SET NULL"), nullable=True)
+    stage               = Column(String(20),  nullable=False)   # station_sort | truck_load | in_truck
+    damage_notes        = Column(Text,        nullable=False)
+    normalised_address  = Column(String(200), nullable=True, index=True)
+    reported_by         = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    reported_by_name    = Column(String(100), nullable=True)
+    reported_at         = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolution_status   = Column(String(20),  nullable=False, server_default="open", index=True)   # open | resolved
+    resolution_notes    = Column(Text,        nullable=True)
+    resolved_by         = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    resolved_by_name    = Column(String(100), nullable=True)
+    resolved_at         = Column(DateTime(timezone=True), nullable=True)
 
 
 class ReattemptAssignment(Base):

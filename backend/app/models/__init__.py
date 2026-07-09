@@ -43,5 +43,5 @@ from app.models.flex_timesheets import FlexTimesheet
 from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.driver_survey import DriverSurvey, DriverSurveyResponse
 from app.models.delivery_stop import DeliveryStop
-from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment
+from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment, DamagedPackage
 from app.models.shift_roll_call import ShiftRollCall

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import ApPullsPanel from '../components/ApPullsPanel';
+import ReportDamagedModal from '../components/ReportDamagedModal';
 import type { RostersResponse } from '../api/types';
 
 /** Station-loading facts per truck, derived from /sort/{date}/rosters:
@@ -1428,6 +1429,7 @@ export default function WalkerSortMonitor() {
     !groups.some(g => ['dispatch', 'management', 'admin'].includes(g));
 
   const [assignments, setAssignments]   = useState<TruckAssignment[]>([]);
+  const [showDamaged, setShowDamaged]   = useState(false);
   const [truckStates, setTruckStates]   = useState<TruckSortState[]>([]);
   const [walkers, setWalkers]           = useState<Employee[]>([]);
   const [trainers, setTrainers]         = useState<Employee[]>([]);
@@ -1642,11 +1644,25 @@ export default function WalkerSortMonitor() {
         title="AP Sort"
         description={`Package sort, route assignment, and walker dispatch for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
-          <button onClick={() => fetchAll()} className="btn-ghost flex items-center gap-1.5 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowDamaged(true)} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <AlertTriangle className="w-4 h-4" /> Report damaged
+            </button>
+            <button onClick={() => fetchAll()} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         }
       />
+
+      {showDamaged && (
+        <ReportDamagedModal
+          routeDate={today}
+          defaultStage="truck_load"
+          truckAssignmentId={assignments.length === 1 ? assignments[0].id : null}
+          onClose={() => setShowDamaged(false)}
+        />
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

@@ -9,6 +9,7 @@ import {
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import MotionCard from '../components/ui/MotionCard';
+import PackageExceptionsCard from '../components/PackageExceptionsCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { CrewMember, UnavailableStaff } from '../api/types';
 import { getLocalYMD } from '../utils/date';
@@ -478,6 +479,11 @@ export default function DispatchHome() {
             ))}
           </div>
         )}
+      </MotionCard>
+
+      {/* Package exceptions: unresolved missing + open damaged (ADR-190) */}
+      <MotionCard delay={0.4} hoverable={false}>
+        <PackageExceptionsCard />
       </MotionCard>
     </div>
   );

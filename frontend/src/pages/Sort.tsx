@@ -16,6 +16,7 @@ import {
   Upload, X, FileText, ArrowRight, AlertTriangle,
   Route, Zap, Send, Download,
 } from 'lucide-react';
+import ReportDamagedModal from '../components/ReportDamagedModal';
 import { getLocalYMD } from '../utils/date';
 
 // How each truck's territory seed was resolved (ADR-169 fallback chain)
@@ -1172,6 +1173,7 @@ export default function SortPage() {
   if (isDriverOnly) return <CrewStationView today={getLocalYMD()} />;
 
   const today = getLocalYMD();
+  const [showDamaged, setShowDamaged] = useState(false);
   const [assignments, setAssignments] = useState<TruckAssignment[]>([]);
   const [zones, setZones] = useState<ZonePolygon[]>([]);
   const [centroids, setCentroids] = useState<Centroid[]>([]);
@@ -1238,11 +1240,24 @@ export default function SortPage() {
         title="Station Sort"
         description={`Upload manifest, assign packages to truck zones, and hand off to AP Sort for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
-          <button onClick={fetchAll} className="btn-ghost flex items-center gap-1.5 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowDamaged(true)} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <AlertTriangle className="w-4 h-4" /> Report damaged
+            </button>
+            <button onClick={fetchAll} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         }
       />
+
+      {showDamaged && (
+        <ReportDamagedModal
+          routeDate={today}
+          defaultStage="station_sort"
+          onClose={() => setShowDamaged(false)}
+        />
+      )}
 
       {/* Stats — manifest-level metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
