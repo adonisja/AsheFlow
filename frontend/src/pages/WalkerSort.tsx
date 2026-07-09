@@ -254,12 +254,113 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
 //   arrived     → same as distributed
 // ---------------------------------------------------------------------------
 
+/** Searchable, role-grouped staff picker for route assignment.
+ *
+ * Replaces the native <select> that rendered every staff member as one flat,
+ * unsearchable list (painful at 40+ routes). Adds: type-ahead filter, Walkers/
+ * Trainees/Trainers grouping, injury markers, and "route #N" tags on staff
+ * already staged on another route (dimmed, sorted last — still selectable,
+ * since re-picking someone is a legitimate reassignment).
+ */
+function AssignCombobox({
+  walkers, takenBy, currentId, onSelect,
+}: {
+  walkers: Employee[];
+  takenBy: Record<string, number>;   // employee_id → route_number staged elsewhere
+  currentId: string;
+  onSelect: (employeeId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const current = walkers.find(w => w.id === currentId);
+  const needle = q.trim().toLowerCase();
+  const groups: { label: string; list: Employee[] }[] = [
+    { label: 'Walkers', list: [] }, { label: 'Trainees', list: [] }, { label: 'Trainers', list: [] },
+  ];
+  for (const w of walkers) {
+    if (needle && !w.name.toLowerCase().includes(needle)) continue;
+    groups[w.role === 'walker' ? 0 : w.role === 'trainee' ? 1 : 2].list.push(w);
+  }
+  for (const g of groups) {
+    g.list.sort((a, b) =>
+      Number(!!takenBy[a.id] && a.id !== currentId) - Number(!!takenBy[b.id] && b.id !== currentId)
+      || a.name.localeCompare(b.name));
+  }
+  const empty = groups.every(g => g.list.length === 0);
+
+  return (
+    <div ref={boxRef} className="relative flex-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-2 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground hover:bg-accent/40 focus:outline-none focus:ring-1 focus:ring-primary/40"
+      >
+        <span className={`truncate ${current ? 'font-medium' : 'text-muted-foreground'}`}>
+          {current ? current.name : 'Assign walker…'}
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 left-0 right-0 rounded-xl border border-border bg-background shadow-lg overflow-hidden">
+          <input
+            autoFocus
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            placeholder="Search staff…"
+            className="w-full px-3 py-1.5 text-xs bg-accent/30 border-b border-border text-foreground placeholder:text-muted-foreground focus:outline-none"
+          />
+          <div className="max-h-56 overflow-y-auto py-1">
+            {groups.map(g => g.list.length > 0 && (
+              <div key={g.label}>
+                <p className="px-3 pt-1.5 pb-0.5 text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">{g.label}</p>
+                {g.list.map(w => {
+                  const taken = takenBy[w.id];
+                  const isCurrent = w.id === currentId;
+                  return (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => { onSelect(w.id); setOpen(false); setQ(''); }}
+                      className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-accent/50 ${taken && !isCurrent ? 'opacity-50' : ''}`}
+                    >
+                      <span className="flex-1 truncate text-foreground">{w.name}</span>
+                      {w.injury_status && <ShieldAlert className="w-3 h-3 text-warning shrink-0" />}
+                      {isCurrent
+                        ? <span className="text-[10px] text-success font-semibold shrink-0">assigned</span>
+                        : taken ? <span className="text-[10px] text-muted-foreground shrink-0">route #{taken}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {empty && <p className="px-3 py-2 text-xs text-muted-foreground">No staff match “{q}”</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 interface RouteCardProps {
   route: RouteResponse;
   phase: SortPhase;
   walkers: Employee[];
   // committed phase
-  waveAssignedName?: string | null;
+  waveMap?: Record<number, string>;   // staged assignments: route_number → employee_id
   onAssign?: (routeNumber: number, employeeId: string) => void;
   // distributed/arrived phase
   canReassign?: boolean;
@@ -271,12 +372,19 @@ function RouteCard({
   route,
   phase,
   walkers,
-  waveAssignedName,
+  waveMap,
   onAssign,
   canReassign,
   onReassign,
   onResolveMisroute,
 }: RouteCardProps) {
+  // Staff staged on OTHER routes (for the combobox's "route #N" tags).
+  const takenBy: Record<string, number> = {};
+  if (waveMap) {
+    for (const [rn, eid] of Object.entries(waveMap)) {
+      if (Number(rn) !== route.route_number && eid) takenBy[eid] = Number(rn);
+    }
+  }
   const [open, setOpen] = useState(false);
   const slotPct  = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
   const barColor = slotPct >= 90 ? 'bg-danger' : slotPct >= 70 ? 'bg-warning' : 'bg-success';
@@ -320,23 +428,16 @@ function RouteCard({
         {open ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
       </button>
 
-      {/* Committed phase: inline assignment dropdown */}
+      {/* Committed phase: searchable role-grouped assignment picker */}
       {phase === 'committed' && onAssign && (
         <div className="px-3 pb-2.5 flex items-center gap-2">
           <UserCheck className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-          <select
-            value={route.assigned_to ?? ''}
-            onChange={e => { if (e.target.value) onAssign(route.route_number, e.target.value); }}
-            className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-          >
-            <option value="">Assign walker…</option>
-            {walkers.map(w => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
-          </select>
-          {waveAssignedName && (
-            <span className="text-xs font-medium text-foreground shrink-0 max-w-[100px] truncate">{waveAssignedName}</span>
-          )}
+          <AssignCombobox
+            walkers={walkers}
+            takenBy={takenBy}
+            currentId={waveMap?.[route.route_number] ?? route.assigned_to ?? ''}
+            onSelect={eid => onAssign(route.route_number, eid)}
+          />
         </div>
       )}
 
@@ -932,7 +1033,7 @@ function TruckSortPanel({
                           route={r}
                           phase={state.phase}
                           walkers={walkers}
-                          waveAssignedName={waveMap[r.route_number] ? (walkers.find(w => w.id === waveMap[r.route_number])?.name ?? null) : null}
+                          waveMap={waveMap}
                           onAssign={(rn, eid) => setWaveMap(prev => ({ ...prev, [rn]: eid }))}
                           canReassign={true}
                           onReassign={setReassignTarget}
