@@ -107,6 +107,11 @@ class SortResult(BaseModel):
 class WaveAssignmentEntry(BaseModel):
     route_number: int
     employee_id: UUID
+    # D9.2 (ADR-187): frontend marks whether this row was accepted from the
+    # auto-proposal as-is (True), human-overridden (False), or manual/unknown
+    # (None). The accept audit aggregates these — per-signal override rate is
+    # the primary weight-tuning feedback for the smart matcher.
+    auto_proposed: Optional[bool] = None
 
 
 class WaveDistributionRequest(BaseModel):

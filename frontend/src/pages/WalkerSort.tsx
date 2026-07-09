@@ -866,6 +866,7 @@ function TruckSortPanel({
   const stagedRef = useRef<{
     waveMap?: Record<number, string>;
     firstWaveProposal?: ProposedAssignmentEntry[] | null;
+    proposalMap?: Record<number, string>;
     selectedTrainerId?: string;
     selectedTraineeId?: string;
     traineePhase?: number;
@@ -878,6 +879,11 @@ function TruckSortPanel({
 
   const [waveMap, setWaveMap]                   = useState<Record<number, string>>(staged.waveMap ?? {});
   const [firstWaveProposal, setFirstWaveProposal] = useState<ProposedAssignmentEntry[] | null>(staged.firstWaveProposal ?? null);
+  // route_number → ORIGINALLY auto-proposed employee_id. At Send Wave each row's
+  // auto_proposed flag derives from this (kept as-is vs overridden vs manual) —
+  // the D9.2 override-rate telemetry that tunes the matcher's weights.
+  const [proposalMap, setProposalMap] = useState<Record<number, string>>(staged.proposalMap ?? {});
+  const [firstWaveConflicts, setFirstWaveConflicts] = useState<string[]>([]);
   const [firstWaveProposing, setFirstWaveProposing] = useState(false);
   const [secondWaveProposal, setSecondWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
   const [selectedTrainerId, setSelectedTrainerId] = useState(staged.selectedTrainerId ?? '');
@@ -888,10 +894,10 @@ function TruckSortPanel({
   useEffect(() => {
     try {
       sessionStorage.setItem(stagingKey, JSON.stringify({
-        waveMap, firstWaveProposal, selectedTrainerId, selectedTraineeId, traineePhase,
+        waveMap, firstWaveProposal, proposalMap, selectedTrainerId, selectedTraineeId, traineePhase,
       }));
     } catch { /* storage quota — non-fatal, staging just won't survive refresh */ }
-  }, [stagingKey, waveMap, firstWaveProposal, selectedTrainerId, selectedTraineeId, traineePhase]);
+  }, [stagingKey, waveMap, firstWaveProposal, proposalMap, selectedTrainerId, selectedTraineeId, traineePhase]);
   const [arrivalTrainerId, setArrivalTrainerId] = useState('');
   const [arrivalTraineeId, setArrivalTraineeId] = useState('');
   const [reassignTarget, setReassignTarget]     = useState<RouteResponse | null>(null);
@@ -906,6 +912,28 @@ function TruckSortPanel({
       return next;
     });
   }, [state.routes]);
+
+  // D6 (ADR-187): pairing derives from dispatch. Pre-fill the trainer/trainee
+  // selectors from AssignmentMember.paired_trainer_id (dispatch is the source
+  // of truth); the dropdowns stay editable for day-of overrides. Skip if the
+  // user already staged a selection (sessionStorage restore).
+  useEffect(() => {
+    if (state.phase !== 'committed' || selectedTrainerId || selectedTraineeId) return;
+    axiosClient.get<{ employee_id: string; role: string; paired_trainer_id?: string | null }[]>(
+      `/assignment-members/${state.ta.id}`,
+    ).then(({ data }) => {
+      const pairedTrainee = data.find(m => m.role === 'trainee' && m.paired_trainer_id);
+      if (pairedTrainee?.paired_trainer_id) {
+        setSelectedTrainerId(pairedTrainee.paired_trainer_id);
+        setSelectedTraineeId(pairedTrainee.employee_id);
+      } else {
+        // no pair on this truck — default trainer to any trainer on the crew
+        const trainer = data.find(m => m.role === 'trainer');
+        if (trainer) setSelectedTrainerId(trainer.employee_id);
+      }
+    }).catch(() => { /* derive is best-effort; selectors remain manual */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.phase, state.ta.id]);
 
   const handleCommit = async () => {
     setError(null);
@@ -924,6 +952,11 @@ function TruckSortPanel({
         { truck_assignment_id: state.ta.id, route_date: routeDate, auto_assign: true },
       );
       setFirstWaveProposal(data.proposed_assignments);
+      setFirstWaveConflicts(data.conflicts ?? []);
+      // snapshot the ORIGINAL proposal for D9.2 override telemetry
+      setProposalMap(Object.fromEntries(
+        data.proposed_assignments.map(p => [p.route_number, p.employee_id]),
+      ));
     } catch (e: any) {
       setError(errorText(e, 'Auto-propose failed.'));
     } finally {
@@ -944,7 +977,14 @@ function TruckSortPanel({
     setError(null);
     const assignments = Object.entries(waveMap)
       .filter(([, eid]) => eid)
-      .map(([rn, eid]) => ({ route_number: Number(rn), employee_id: eid }));
+      .map(([rn, eid]) => ({
+        route_number: Number(rn),
+        employee_id: eid,
+        // D9.2: kept-as-proposed vs overridden vs manual — the matcher's tuning signal
+        auto_proposed: proposalMap[Number(rn)] === undefined
+          ? null
+          : proposalMap[Number(rn)] === eid,
+      }));
     if (assignments.length === 0) { setError('Assign at least one route before distributing.'); return; }
     if (!selectedTrainerId) { setError('Select a trainer.'); return; }
     setDistributeLoading(true);
@@ -1149,18 +1189,52 @@ function TruckSortPanel({
                 {state.phase === 'committed' && firstWaveProposal && (
                   <div className="space-y-2 p-3 bg-info/5 border border-info/20 rounded-xl">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-info uppercase tracking-widest">Auto-proposed assignments</p>
-                      <button onClick={() => setFirstWaveProposal(null)} className="text-xs text-muted-foreground hover:text-foreground">Discard</button>
+                      <p className="text-xs font-semibold text-info uppercase tracking-widest">
+                        Auto-proposed assignments · wave of {firstWaveProposal.length}
+                      </p>
+                      <button onClick={() => { setFirstWaveProposal(null); setFirstWaveConflicts([]); }} className="text-xs text-muted-foreground hover:text-foreground">Discard</button>
                     </div>
+                    {firstWaveConflicts.length > 0 && (
+                      <div className="p-2 rounded-lg bg-warning/5 border border-warning/20 space-y-0.5">
+                        {firstWaveConflicts.map((c, i) => (
+                          <p key={i} className="text-[11px] text-warning">{c}</p>
+                        ))}
+                      </div>
+                    )}
                     <div className="space-y-1">
-                      {firstWaveProposal.map(p => (
-                        <div key={p.route_number} className="flex items-center gap-2 text-xs">
-                          <span className="font-semibold text-foreground w-8">#{p.route_number}</span>
-                          <EffortBadge effort={p.effort_class} />
-                          <span className="text-foreground">{p.employee_name}</span>
-                          {p.auto_proposed && <span className="text-info text-[10px]">auto</span>}
-                        </div>
-                      ))}
+                      {firstWaveProposal
+                        .slice()
+                        .sort((a, b) => a.route_number - b.route_number)
+                        .map(p => {
+                          const overridden = proposalMap[p.route_number] !== undefined
+                            && proposalMap[p.route_number] !== p.employee_id;
+                          const takenBy: Record<string, number> = {};
+                          firstWaveProposal.forEach(q => {
+                            if (q.route_number !== p.route_number) takenBy[q.employee_id] = q.route_number;
+                          });
+                          return (
+                            <div key={p.route_number} className="flex items-center gap-2 text-xs">
+                              <span className="font-semibold text-foreground w-8 shrink-0">#{p.route_number}</span>
+                              <EffortBadge effort={p.effort_class} />
+                              <AssignCombobox
+                                walkers={walkers}
+                                takenBy={takenBy}
+                                currentId={p.employee_id}
+                                onSelect={eid => {
+                                  const emp = walkers.find(w => w.id === eid);
+                                  setFirstWaveProposal(prev => prev?.map(q =>
+                                    q.route_number === p.route_number
+                                      ? { ...q, employee_id: eid, employee_name: emp?.name ?? '?', auto_proposed: false }
+                                      : q,
+                                  ) ?? prev);
+                                }}
+                              />
+                              <span className={`text-[10px] shrink-0 ${overridden ? 'text-warning' : 'text-info'}`}>
+                                {overridden ? 'edited' : 'auto'}
+                              </span>
+                            </div>
+                          );
+                        })}
                     </div>
                     <button
                       onClick={() => handleFirstWaveProposalConfirm(firstWaveProposal)}

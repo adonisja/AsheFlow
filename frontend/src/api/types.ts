@@ -597,6 +597,9 @@ export interface CommitSortResponse {
 export interface WaveAssignmentEntry {
   route_number: number;
   employee_id: string;
+  // D9.2: true = accepted from auto-proposal as-is; false = human overrode;
+  // null/undefined = manually assigned (no proposal for this route)
+  auto_proposed?: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
