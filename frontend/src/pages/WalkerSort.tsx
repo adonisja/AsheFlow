@@ -222,17 +222,46 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
           <h3 className="font-semibold text-foreground">Resolve misroute</h3>
         </div>
         <p className="text-xs text-muted-foreground font-mono">{tbaNumber}</p>
+
+        {/* Lead with the answer: the sort already knows which route covers
+            this block. One click for the common case; the dropdown stays as
+            the escape hatch. */}
+        {suggested && (
+          <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 flex items-center justify-between gap-2">
+            <div className="text-xs">
+              <span className="font-semibold text-foreground">Belongs on #{suggested.route_number}</span>
+              <span className="text-muted-foreground"> · {suggested.assigned_to_name ?? 'unassigned'} — covers this block</span>
+            </div>
+            {destRouteId !== suggested.id ? (
+              <button
+                onClick={() => setDestRouteId(suggested.id)}
+                className="text-xs font-medium text-primary border border-primary/30 rounded px-2 py-0.5 hover:bg-primary/10 shrink-0"
+              >
+                Use suggestion
+              </button>
+            ) : (
+              <span className="text-xs text-primary font-semibold shrink-0">✓ selected</span>
+            )}
+          </div>
+        )}
+
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Package moved to route</label>
+          <label className="text-xs text-muted-foreground">
+            {suggested ? 'Or pick a different route' : 'Package moved to route'}
+          </label>
           <select
             className="input w-full"
             value={destRouteId}
             onChange={e => setDestRouteId(e.target.value)}
           >
             <option value="">Select destination route…</option>
-            {routes.map(r => (
+            {/* Suggested route floats to the top */}
+            {[...routes].sort((a, b) =>
+              (a.route_number === suggestedRouteNumber ? -1 : 0) - (b.route_number === suggestedRouteNumber ? -1 : 0)
+              || a.route_number - b.route_number,
+            ).map(r => (
               <option key={r.id} value={r.id}>
-                #{r.route_number} — {r.assigned_to_name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested: covers this block' : ''}
+                {r.route_number === suggestedRouteNumber ? '★ ' : ''}#{r.route_number} — {r.assigned_to_name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested' : ''}
               </option>
             ))}
           </select>
@@ -426,7 +455,12 @@ function RouteCard({
   }
   const [open, setOpen] = useState(false);
   const slotPct  = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
-  const barColor = slotPct >= 90 ? 'bg-danger' : slotPct >= 70 ? 'bg-warning' : 'bg-success';
+  // The sort PACKS routes to capacity by design — a 12/12 route is healthy,
+  // not an alarm. Red-at-full painted every route red and buried real signal.
+  // Over capacity (shouldn't happen) = danger; badly underfilled = warning
+  // (wasted cart trip); otherwise the fill just reads as fill.
+  const overCap  = route.slot_cost > route.capacity_limit;
+  const barColor = overCap ? 'bg-danger' : slotPct < 60 ? 'bg-warning' : 'bg-primary';
   const assignee     = walkers.find(w => w.id === route.assigned_to);
   const injuryStatus = assignee?.injury_status ?? null;
   const isOperational = phase === 'distributed' || phase === 'arrived';

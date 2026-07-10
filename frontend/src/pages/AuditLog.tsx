@@ -221,15 +221,7 @@ function CategoryDropdown({
 // Snapshot / diff viewer
 // ---------------------------------------------------------------------------
 
-function SnapshotViewer({
-  before, after,
-}: {
-  before: Record<string, unknown> | null;
-  after:  Record<string, unknown> | null;
-}) {
-  const [open, setOpen] = useState(false);
-  if (!before && !after) return null;
-
+function diffKeys(before: Record<string, unknown> | null, after: Record<string, unknown> | null): Set<string> {
   const changedKeys = new Set<string>();
   if (before && after) {
     const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
@@ -237,25 +229,24 @@ function SnapshotViewer({
       if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) changedKeys.add(k);
     }
   }
+  return changedKeys;
+}
 
+/** Expanded details body — the row itself is the toggle now. */
+function SnapshotBody({
+  before, after,
+}: {
+  before: Record<string, unknown> | null;
+  after:  Record<string, unknown> | null;
+}) {
+  if (!before && !after) {
+    return <p className="text-xs text-muted-foreground italic mt-2">No snapshot recorded for this action.</p>;
+  }
+  const changedKeys = diffKeys(before, after);
   const hasDiff = changedKeys.size > 0;
 
   return (
-    <div className="mt-3 pt-3 border-t border-border/30">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-        {open ? 'Hide' : 'Show'} details
-        {hasDiff && !open && (
-          <span className="ml-1 px-1.5 py-0.5 rounded bg-warning/10 text-warning text-[10px] font-semibold border border-warning/20">
-            {changedKeys.size} change{changedKeys.size !== 1 ? 's' : ''}
-          </span>
-        )}
-      </button>
-
-      {open && (
+      (
         <div className="mt-3 space-y-3">
           {before && after && hasDiff ? (
             <div>
@@ -296,6 +287,94 @@ function SnapshotViewer({
                   </pre>
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )
+  );
+}
+
+/** Humanize unmapped action types: "route_sort.wave_distributed" →
+ * "Route sort — wave distributed". Mapped labels take precedence. */
+function prettyAction(actionType: string): string {
+  const mapped = ACTION_LABELS[actionType];
+  if (mapped) return mapped;
+  const [cat, ...rest] = actionType.split('.');
+  const humanize = (s: string) => s.replace(/_/g, ' ');
+  const catH = humanize(cat ?? '');
+  const restH = humanize(rest.join('.'));
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  return restH ? `${cap(catH)} — ${restH}` : cap(catH);
+}
+
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const day = new Date(d);  day.setHours(0, 0, 0, 0);
+  const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+/** One compact row — possibly a RUN of consecutive identical actions
+ * (same action + actor + table), collapsed with a ×N count. The whole row
+ * toggles details; repeated one-per-card noise was burying real signal. */
+function EntryCard({ group }: { group: AuditEntry[] }) {
+  const [open, setOpen] = useState(false);
+  const entry   = group[0];
+  const variant = getBadgeVariant(entry.action_type);
+  const label   = prettyAction(entry.action_type);
+  const table   = TABLE_LABELS[entry.target_table] ?? entry.target_table;
+  const changed = diffKeys(entry.before_snapshot, entry.after_snapshot);
+
+  return (
+    <div className={`card border-l-4 ${LEFT_BORDER_CLASSES[variant]} overflow-hidden`}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-accent/30 transition-colors"
+      >
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border shrink-0 ${BADGE_CLASSES[variant]}`}>
+          {label}
+        </span>
+        {group.length > 1 && (
+          <span className="text-[10px] font-bold text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full shrink-0">
+            ×{group.length}
+          </span>
+        )}
+        <span className="text-sm font-medium text-foreground truncate">
+          {entry.actor_name ?? <span className="text-muted-foreground italic text-xs">system</span>}
+        </span>
+        <span className="text-xs text-muted-foreground truncate">{table}</span>
+        {changed.size > 0 && !open && (
+          <span className="px-1.5 py-0.5 rounded bg-warning/10 text-warning text-[10px] font-semibold border border-warning/20 shrink-0">
+            {changed.size} change{changed.size !== 1 ? 's' : ''}
+          </span>
+        )}
+        <span className="ml-auto text-xs text-muted-foreground shrink-0 tabular-nums">
+          {group.length > 1
+            ? `${fmtTime(group[group.length - 1].created_at)}–${fmtTime(entry.created_at)}`
+            : fmtTime(entry.created_at)}
+        </span>
+        {open ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 border-t border-border/30">
+          {group.length === 1 ? (
+            <SnapshotBody before={entry.before_snapshot} after={entry.after_snapshot} />
+          ) : (
+            <div className="mt-2 space-y-2">
+              {group.map(e => (
+                <div key={e.id} className="rounded-lg border border-border/40 px-3 py-2">
+                  <p className="text-[11px] text-muted-foreground tabular-nums mb-1">{fmtTime(e.created_at)}</p>
+                  <SnapshotBody before={e.before_snapshot} after={e.after_snapshot} />
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -453,41 +532,43 @@ export default function AuditLog() {
           <p className="text-xs text-muted-foreground mt-1">Try adjusting your filters.</p>
         </div>
       ) : (
-        <div className="space-y-2">
-          {entries.map(entry => {
-            const variant = getBadgeVariant(entry.action_type);
-            const label   = ACTION_LABELS[entry.action_type] ?? entry.action_type;
-            const table   = TABLE_LABELS[entry.target_table]  ?? entry.target_table;
-
-            return (
-              <div
-                key={entry.id}
-                className={`card p-4 border-l-4 ${LEFT_BORDER_CLASSES[variant]}`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  {/* Left: badge + actor + table */}
-                  <div className="flex items-start gap-3 min-w-0 flex-1">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border shrink-0 mt-0.5 ${BADGE_CLASSES[variant]}`}>
-                      {label}
-                    </span>
-                    <div className="min-w-0">
-                      <span className="text-sm font-medium text-foreground">
-                        {entry.actor_name ?? <span className="text-muted-foreground italic text-xs">system</span>}
-                      </span>
-                      <span className="text-xs text-muted-foreground ml-2">{table}</span>
+        <div className="space-y-1.5">
+          {(() => {
+            // Collapse consecutive identical actions (same action + actor +
+            // table) into one ×N row, and insert day separators — five
+            // sort.removal_confirmed cards in a row carry one bit of signal.
+            const groups: AuditEntry[][] = [];
+            for (const e of entries) {
+              const last = groups[groups.length - 1];
+              if (
+                last &&
+                last[0].action_type === e.action_type &&
+                last[0].actor_name === e.actor_name &&
+                last[0].target_table === e.target_table
+              ) {
+                last.push(e);
+              } else {
+                groups.push([e]);
+              }
+            }
+            let lastDay = '';
+            return groups.map(group => {
+              const day = dayLabel(group[0].created_at);
+              const separator = day !== lastDay;
+              lastDay = day;
+              return (
+                <React.Fragment key={group[0].id}>
+                  {separator && (
+                    <div className="flex items-center gap-2 pt-3 pb-1 first:pt-0">
+                      <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">{day}</span>
+                      <div className="h-px bg-border/60 flex-1" />
                     </div>
-                  </div>
-
-                  {/* Right: timestamp */}
-                  <span className="text-xs text-muted-foreground shrink-0 tabular-nums whitespace-nowrap">
-                    {fmtDateShort(entry.created_at)}
-                  </span>
-                </div>
-
-                <SnapshotViewer before={entry.before_snapshot} after={entry.after_snapshot} />
-              </div>
-            );
-          })}
+                  )}
+                  <EntryCard group={group} />
+                </React.Fragment>
+              );
+            });
+          })()}
         </div>
       )}
 
