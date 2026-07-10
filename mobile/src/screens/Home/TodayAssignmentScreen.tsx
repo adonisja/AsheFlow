@@ -254,6 +254,15 @@ export default function TodayAssignmentScreen() {
         </View>
       )}
 
+      {/* Pre-publish: make it clear why there's nothing to confirm yet */}
+      {assignment?.dispatchPhase === 'planned' && (
+        <View style={s.plannedHint}>
+          <Text style={s.plannedHintText}>
+            Dispatch isn't published yet — attendance confirmation opens once dispatch publishes.
+          </Text>
+        </View>
+      )}
+
       {/* Attendance confirmation — the one action this page exists for */}
       {assignment?.dispatchPhase === 'active' && (
         myStatus === 'pending' ? (
@@ -367,6 +376,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   myRolePill:    { alignSelf: 'flex-start', paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.full },
   myRoleText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   pairedName:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, paddingVertical: 2 },
+
+  plannedHint:     { backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md },
+  plannedHintText: { fontSize: fontSize.xs, color: c.mutedForeground, textAlign: 'center' },
 
   confirmCard:   { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: '#0EA5D855', padding: spacing.md, marginBottom: spacing.md },
   confirmTitle:  { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: c.foreground },

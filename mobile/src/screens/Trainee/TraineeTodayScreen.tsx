@@ -29,7 +29,13 @@ export default function TraineeTodayScreen() {
     if (!eid) return;
     try {
       const res = await apiClient.get(`/training/trainee/${eid}`);
-      const today = res.data?.[0] ?? null;
+      // History is ordered newest-first — but [0] may be a PREVIOUS session
+      // (records are created at publish; pre-publish there is none for today).
+      // Showing a stale record as "TRAINER TODAY" misled operators — only a
+      // record dated today counts as today's session.
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const today = (res.data ?? []).find((r: any) => r.record_date === todayStr) ?? null;
       if (!today) { setData(null); setLoading(false); setRefreshing(false); return; }
       let trainer_name: string | null = null;
       if (today.trainer_id) {
