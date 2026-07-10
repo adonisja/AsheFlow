@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@contexts/AuthContext';
-import { useTabSwitch } from '@navigation/index';
+import { useTabSwitch, FIELD_OPS_ROLES } from '@navigation/index';
 import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import {
@@ -45,9 +45,12 @@ const roleBadgeTone: Record<string, 'slate' | 'teal' | 'gold' | 'info' | 'neutra
   driver: 'slate', walker: 'teal', trainer: 'gold', trainee: 'info',
 };
 
-// Quick-action definitions — key matches tab key in navigation
-const QUICK_ACTIONS = [
-  { key: 'FieldOps',      label: 'Field Ops',    icon: '🔧' },
+// Quick-action definitions — key matches tab key in navigation.
+// `roles` must mirror the tab's role gate (navigation/index.tsx): a tile for
+// a tab the role doesn't have silently no-ops on tap (Field Ops showed for
+// trainers/trainees/walkers but only drivers have the tab).
+const QUICK_ACTIONS: { key: string; label: string; icon: string; roles?: readonly string[] }[] = [
+  { key: 'FieldOps',      label: 'Field Ops',    icon: '🔧', roles: FIELD_OPS_ROLES },
   { key: 'Schedule',      label: 'Schedule',     icon: '📅' },
   { key: 'Notifications', label: 'Inbox',        icon: '🔔' },
   { key: 'Account',       label: 'Account',      icon: '👤' },
@@ -182,7 +185,9 @@ export default function HomeScreen() {
 
         {/* ── Quick actions ── */}
         <View style={s.quickRow}>
-          {QUICK_ACTIONS.map(action => (
+          {QUICK_ACTIONS.filter(a =>
+            !a.roles || a.roles.some(r => user?.groups?.includes(r)),
+          ).map(action => (
             <TouchableOpacity
               key={action.key}
               style={[s.quickBtn, { backgroundColor: c.card, borderColor: c.border }]}
