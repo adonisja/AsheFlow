@@ -36,6 +36,7 @@ type RouteResp = {
   assigned_to: string | null;
   assigned_to_name: string | null;
   returned_at: string | null;
+  paired_trainee_id: string | null;
 };
 
 type Proposal = {
@@ -71,6 +72,8 @@ export default function RouteSortScreen() {
   const [overridden, setOverridden] = useState<Set<number>>(new Set());
   const [sending,    setSending]    = useState(false);
   const [pickerFor,  setPickerFor]  = useState<number | null>(null);   // route_number being reassigned
+  const [traineeArrivedAt, setTraineeArrivedAt] = useState<string | null>(null);
+  const [rebalancing, setRebalancing] = useState(false);
 
   const todayStr = () => {
     const now = new Date();
@@ -108,6 +111,19 @@ export default function RouteSortScreen() {
         setTruckName(mine?.truck_name ?? '');
       }
       setRoutes(routesRes.status === 'fulfilled' ? (routesRes.value.data ?? []) : []);
+
+      // Paired trainee's AP-arrival stamp (ADR-145 flow) — drives the
+      // rebalance card below.
+      const pairedTrainee = myCrew.find(m => m.role === 'trainee' && m.paired_trainer_id);
+      if (pairedTrainee && assignmentId) {
+        try {
+          const members = await apiClient.get(`/assignment-members/${assignmentId}`);
+          const row = (members.data ?? []).find((m: any) => m.employee_id === pairedTrainee.employee_id);
+          setTraineeArrivedAt(row?.ap_arrived_at ?? null);
+        } catch { setTraineeArrivedAt(null); }
+      } else {
+        setTraineeArrivedAt(null);
+      }
     } catch {
       setTaId(null);
     } finally {
@@ -203,12 +219,37 @@ export default function RouteSortScreen() {
     }
   };
 
+  const runRebalance = async () => {
+    if (!taId) return;
+    setRebalancing(true);
+    try {
+      // Pair is DERIVED server-side from the dispatch pairing.
+      const res = await apiClient.post('/walker-routes/arrival-confirm', {
+        truck_assignment_id: taId,
+        route_date: todayStr(),
+      });
+      const absorbed = res.data?.absorbed_route_numbers?.length ?? 0;
+      Alert.alert(
+        'Rebalance complete',
+        `Paired route expanded to ${res.data?.paired_capacity_limit ?? '1.5×'} half-slots`
+        + (absorbed ? ` — absorbed ${absorbed} route${absorbed === 1 ? '' : 's'}.` : '.'),
+      );
+      await load();
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not run the rebalance.'));
+    } finally {
+      setRebalancing(false);
+    }
+  };
+
   // ── Derived ──────────────────────────────────────────────────────────────
 
   const unassigned = routes.filter(r => r.status === 'unassigned');
   const active     = routes.filter(r => r.status === 'assigned' || r.status === 'in_progress');
   const completed  = routes.filter(r => r.status === 'completed');
   const pickerOptions = crew.filter(m => m.role !== 'driver');
+  const pairedTrainee = crew.find(m => m.role === 'trainee' && m.paired_trainer_id);
+  const rebalanced = routes.some(r => r.paired_trainee_id);
 
   if (!loading && !taId) {
     return (
@@ -268,6 +309,36 @@ export default function RouteSortScreen() {
                 ? <ActivityIndicator color="#fff" />
                 : <Text style={s.primaryBtnText}>⚡ Distribute Wave ({unassigned.length} route{unassigned.length === 1 ? '' : 's'} waiting)</Text>}
             </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Paired arrival & rebalance (ADR-145): trainee confirms arrival from
+          their app; this card completes the 1.5× route expansion. */}
+      {routes.length > 0 && pairedTrainee && (
+        <View style={[s.card, { backgroundColor: c.card, borderColor: rebalanced ? c.border : '#0FA87055' }]}>
+          {rebalanced ? (
+            <Text style={[s.cardSub, { marginBottom: 0 }]}>
+              🤝 Paired route active — {pairedTrainee.name} rides with you at 1.5× capacity.
+            </Text>
+          ) : (
+            <>
+              <Text style={s.cardTitle}>Paired arrival — {pairedTrainee.name}</Text>
+              <Text style={s.cardSub}>
+                {traineeArrivedAt
+                  ? `📍 Arrived ${new Date(traineeArrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — run the rebalance to expand your shared route to 1.5×.`
+                  : 'Waiting for your trainee to confirm arrival in their app — you can rebalance anyway if they\'re standing next to you.'}
+              </Text>
+              <TouchableOpacity
+                style={[s.primaryBtn, { backgroundColor: traineeArrivedAt ? '#0FA870' : c.primary }]}
+                onPress={runRebalance}
+                disabled={rebalancing}
+              >
+                {rebalancing
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={s.primaryBtnText}>🤝 Confirm Arrival & Rebalance (1.5×)</Text>}
+              </TouchableOpacity>
+            </>
           )}
         </View>
       )}

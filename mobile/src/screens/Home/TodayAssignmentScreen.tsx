@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
+import { errorText } from '@api/errorText';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
@@ -34,6 +35,10 @@ type Assignment = {
   /** Who I'm paired with (trainee → their trainer, trainer → their trainees). */
   pairedNames: string[];
   confirmations: Record<string, ConfirmStatus>;
+  /** TruckAssignment id — needed for the AP-arrival confirmation. */
+  assignmentId: string | null;
+  /** My ap_arrived_at stamp (paired trainees confirm arrival from here). */
+  apArrivedAt: string | null;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -95,6 +100,8 @@ export default function TodayAssignmentScreen() {
       // Determine dispatch phase + my pairing from the dispatch response.
       let dispatchPhase: Assignment['dispatchPhase'] = 'planned';
       const pairedNames: string[] = [];
+      let assignmentId: string | null = null;
+      let apArrivedAt: string | null = null;
       if (dispatchRes.status === 'fulfilled') {
         const dispatch = dispatchRes.value.data;
         const assignedCrews: Record<string, CrewMember[] & { employee_id?: string }[]> =
@@ -107,9 +114,19 @@ export default function TodayAssignmentScreen() {
 
         if (myTruckEntry) {
           const [myTruckId, myCrew] = myTruckEntry as [string, any[]];
-          const ta = truckAssignments.find((t) => t.truck_id === myTruckId);
+          const ta: any = truckAssignments.find((t) => t.truck_id === myTruckId);
           if (ta?.status === 'completed') dispatchPhase = 'completed';
           else if (ta?.status === 'active') dispatchPhase = 'active';
+          assignmentId = ta?.assignment_id ?? null;
+
+          // My arrival stamp (ADR-145 flow: trainee confirms from here).
+          if (assignmentId) {
+            try {
+              const members = await apiClient.get(`/assignment-members/${assignmentId}`);
+              const me2 = (members.data ?? []).find((m: any) => m.employee_id === eid);
+              apArrivedAt = me2?.ap_arrived_at ?? null;
+            } catch { /* best-effort */ }
+          }
 
           // Pairing: trainee → their trainer's name; trainer → their trainees.
           const myEntry = myCrew.find((m) => m.employee_id === eid);
@@ -139,6 +156,8 @@ export default function TodayAssignmentScreen() {
         transfer,
         pairedNames,
         confirmations,
+        assignmentId,
+        apArrivedAt,
       });
     } catch {
       setAssignment(null);
@@ -149,6 +168,23 @@ export default function TodayAssignmentScreen() {
   }, [today, fetchId]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const [arriving, setArriving] = useState(false);
+
+  const confirmApArrival = async () => {
+    if (!assignment?.assignmentId) return;
+    setArriving(true);
+    try {
+      const res = await apiClient.post('/walker-routes/ap-arrival', {
+        truck_assignment_id: assignment.assignmentId,
+      });
+      setAssignment(prev => prev ? { ...prev, apArrivedAt: res.data?.arrived_at ?? new Date().toISOString() } : prev);
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not confirm your arrival.'));
+    } finally {
+      setArriving(false);
+    }
+  };
 
   const respond = async (status: 'confirmed' | 'declined') => {
     const eid = cachedId.current;
@@ -251,6 +287,29 @@ export default function TodayAssignmentScreen() {
               </View>
             )}
           </View>
+
+          {/* ADR-145: paired trainee confirms physical AP arrival — this
+              notifies their trainer, who then runs the 1.5× rebalance. */}
+          {assignment.role === 'trainee' && assignment.pairedNames.length > 0
+            && assignment.dispatchPhase !== 'planned' && (
+            assignment.apArrivedAt ? (
+              <View style={[s.arrivedBanner, { backgroundColor: c.success + '15' }]}>
+                <Text style={[s.arrivedBannerText, { color: c.success }]}>
+                  📍 Arrival confirmed {new Date(assignment.apArrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — your trainer has been notified
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={[s.arriveBtn, { backgroundColor: c.primary }]}
+                onPress={confirmApArrival}
+                disabled={arriving}
+              >
+                {arriving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={s.arriveBtnText}>📍 I've arrived at the AP</Text>}
+              </TouchableOpacity>
+            )
+          )}
         </View>
       )}
 
@@ -376,6 +435,11 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   myRolePill:    { alignSelf: 'flex-start', paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.full },
   myRoleText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   pairedName:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, paddingVertical: 2 },
+
+  arriveBtn:        { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginTop: spacing.md },
+  arriveBtnText:    { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  arrivedBanner:    { borderRadius: radius.md, padding: spacing.sm, alignItems: 'center', marginTop: spacing.md },
+  arrivedBannerText:{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center' },
 
   plannedHint:     { backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md },
   plannedHintText: { fontSize: fontSize.xs, color: c.mutedForeground, textAlign: 'center' },

@@ -149,8 +149,12 @@ class RouteReassignRequest(BaseModel):
 class ArrivalConfirmRequest(BaseModel):
     truck_assignment_id: UUID
     route_date: date
-    trainer_id: UUID
-    trainee_id: UUID
+    # Optional since the ADR-145 flow rework: the pair is DERIVED from the
+    # dispatch pairing (AssignmentMember.paired_trainer_id) — arbitrary
+    # trainer/trainee combinations were never meaningful. Explicit ids remain
+    # honored for the multi-pair disambiguation case.
+    trainer_id: Optional[UUID] = None
+    trainee_id: Optional[UUID] = None
 
 
 class ArrivalConfirmResponse(BaseModel):

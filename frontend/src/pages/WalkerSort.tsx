@@ -954,8 +954,23 @@ function TruckSortPanel({
       }));
     } catch { /* storage quota — non-fatal, staging just won't survive refresh */ }
   }, [stagingKey, waveMap, firstWaveProposal, proposalMap, selectedTrainerId, selectedTraineeId, traineePhase]);
-  const [arrivalTrainerId, setArrivalTrainerId] = useState('');
-  const [arrivalTraineeId, setArrivalTraineeId] = useState('');
+  // ADR-145 flow rework: the pair comes from dispatch (paired_trainer_id) and
+  // the trainee confirms arrival from their app — no manual picking.
+  const [pairStatus, setPairStatus] = useState<{
+    trainerId: string; traineeId: string; arrivedAt: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (state.phase !== 'distributed') return;
+    axiosClient.get<{ employee_id: string; role: string; paired_trainer_id?: string | null; ap_arrived_at?: string | null }[]>(
+      `/assignment-members/${state.ta.id}`,
+    ).then(({ data }) => {
+      const pair = data.find(m => m.role === 'trainee' && m.paired_trainer_id);
+      setPairStatus(pair
+        ? { trainerId: pair.paired_trainer_id!, traineeId: pair.employee_id, arrivedAt: pair.ap_arrived_at ?? null }
+        : null);
+    }).catch(() => setPairStatus(null));
+  }, [state.phase, state.ta.id]);
   const [reassignTarget, setReassignTarget]     = useState<RouteResponse | null>(null);
   const [misrouteTarget, setMisrouteTarget]     = useState<{ routeId: string; flagId: string; tba: string; suggestedRouteNumber?: number | null } | null>(null);
 
@@ -1061,9 +1076,9 @@ function TruckSortPanel({
 
   const handleArrival = async () => {
     setError(null);
-    if (!arrivalTrainerId || !arrivalTraineeId) { setError('Select trainer and trainee.'); return; }
+    if (!pairStatus) { setError('No trainer–trainee pair on this truck.'); return; }
     setArrivalLoading(true);
-    try { await onArrivalConfirm(state.ta.id, arrivalTrainerId, arrivalTraineeId); }
+    try { await onArrivalConfirm(state.ta.id, pairStatus.trainerId, pairStatus.traineeId); }
     catch (e: any) { setError(errorText(e, 'Arrival confirmation failed.')); }
     finally { setArrivalLoading(false); }
   };
@@ -1328,42 +1343,43 @@ function TruckSortPanel({
             {/* ── Step 3: Arrival confirm ── */}
             {state.phase === 'distributed' && (
               <div className="space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Step 3 — Arrival confirmation</p>
-                <p className="text-xs text-muted-foreground">
-                  Confirm trainer and trainee are both physically present at the anchor point to trigger the 1.5× rebalance.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Trainer present</label>
-                    <select
-                      value={arrivalTrainerId}
-                      onChange={e => setArrivalTrainerId(e.target.value)}
-                      className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Step 3 — Paired arrival & rebalance</p>
+                {pairStatus ? (
+                  <>
+                    <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-border bg-surface">
+                      <div className="text-xs">
+                        <p className="font-semibold text-foreground">
+                          {trainers.find(t => t.id === pairStatus.trainerId)?.name ?? 'Trainer'}
+                          {' + '}
+                          {walkers.find(w => w.id === pairStatus.traineeId)?.name ?? 'Trainee'}
+                        </p>
+                        <p className="text-muted-foreground mt-0.5">Paired at dispatch — rebalance expands their route to 1.5×.</p>
+                      </div>
+                      {pairStatus.arrivedAt ? (
+                        <span className="text-xs font-semibold text-success shrink-0">
+                          📍 Trainee arrived {new Date(pairStatus.arrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-warning shrink-0">
+                          Waiting for the trainee to confirm arrival in their app…
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleArrival}
+                      disabled={arrivalLoading}
+                      className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+                      title={pairStatus.arrivedAt ? undefined : 'You can confirm anyway if the trainee is physically present'}
                     >
-                      <option value="">Select trainer…</option>
-                      {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">Trainee present</label>
-                    <select
-                      value={arrivalTraineeId}
-                      onChange={e => setArrivalTraineeId(e.target.value)}
-                      className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                    >
-                      <option value="">Select trainee…</option>
-                      {walkers.filter(w => w.role === 'trainee').map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <button
-                  onClick={handleArrival}
-                  disabled={arrivalLoading}
-                  className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
-                >
-                  {arrivalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
-                  {arrivalLoading ? 'Confirming…' : 'Confirm Arrival & Rebalance'}
-                </button>
+                      {arrivalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                      {arrivalLoading ? 'Confirming…' : 'Confirm Arrival & Rebalance'}
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-surface">
+                    No trainer–trainee pair on this truck today — the rebalance step doesn't apply.
+                  </p>
+                )}
               </div>
             )}
 

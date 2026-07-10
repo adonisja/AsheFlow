@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -39,3 +39,7 @@ class AssignmentMember(Base):
     # True when a dispatch coordinator placed this member manually after the algorithm ran.
     # False (default) = algorithm-placed. Used for fill-rate analytics.
     is_manual         = Column(Boolean,            nullable=False, default=False)
+    # Stamped when the member confirms physical arrival at the anchor point
+    # from their app (ADR-145 flow: trainee confirms → trainer is notified →
+    # trainer runs the paired rebalance). Nullable = not yet confirmed.
+    ap_arrived_at     = Column(DateTime(timezone=True), nullable=True)
