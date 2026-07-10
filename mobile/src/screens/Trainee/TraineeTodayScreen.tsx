@@ -95,6 +95,15 @@ export default function TraineeTodayScreen() {
         trainer_rating: today.trainer_rating ?? null,
         tasks: today.tasks ?? [],
       });
+
+      // Restore "request sent" across refreshes — an active (pending/accepted)
+      // continuation request aimed at today's trainer means it's already sent.
+      if (today.trainer_id) {
+        try {
+          const reqs = await apiClient.get(`/continuation-requests/trainee/${eid}/active`);
+          setContinueSent((reqs.data ?? []).some((r: any) => r.trainer_id === today.trainer_id));
+        } catch { /* best-effort */ }
+      }
     } catch {
       setData(null);
     } finally {

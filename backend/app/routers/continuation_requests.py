@@ -134,6 +134,33 @@ def get_pending_requests_for_trainer(
     ).all()
 
 
+@router.get("/trainee/{trainee_id}/active", response_model=List[ContinuationRequestResponse])
+def get_active_request_for_trainee(
+    trainee_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(allow_trainee),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Return the trainee's active (pending or accepted) continuation request.
+
+    Lets the app show "request sent" state across refreshes — previously the
+    sent-state lived only in component memory and reset on every reload,
+    inviting duplicate submissions. Trainees can only read their own; admins
+    can read any. At most one row (submit nullifies prior active requests).
+    """
+    caller_groups = current_user.get("cognito_groups", [])
+    if "admin" not in caller_groups and caller.id != trainee_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own continuation requests.",
+        )
+    return db.query(TrainerContinuationRequest).filter(
+        TrainerContinuationRequest.trainee_id == trainee_id,
+        TrainerContinuationRequest.company_id == caller.company_id,
+        TrainerContinuationRequest.status.in_(["pending", "accepted"]),
+    ).all()
+
+
 @router.patch("/{request_id}/accept", response_model=ContinuationRequestResponse)
 def accept_continuation_request(
     request_id: UUID,

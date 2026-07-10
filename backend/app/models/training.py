@@ -60,6 +60,15 @@ class TrainingRecord(Base):
     trainer_comments  = Column(Text, nullable=True)
     manager_comments  = Column(Text, nullable=True)
 
+    # Trainee's review of the trainer (submitted via /record/{id}/review).
+    # RESTORED 2026-07-10: dropped as "orphaned" by migration j1k2l3m4n5o6
+    # after being removed from the ORM — but the review endpoint, schemas, and
+    # both rating UIs still used them, so assigning the unmapped attribute
+    # silently persisted NOTHING (200 OK, no write). A column referenced by an
+    # endpoint is not an orphan.
+    trainee_comments  = Column(Text, nullable=True)
+    trainer_rating    = Column(Integer, nullable=True)   # 1–5 stars
+
     # Phase gate tracking
     submitted_at    = Column(DateTime(timezone=True), nullable=True)
     phase_closed    = Column(Boolean, nullable=False, default=False)
