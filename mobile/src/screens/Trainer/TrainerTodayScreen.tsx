@@ -153,13 +153,15 @@ export default function TrainerTodayScreen() {
     try {
       await apiClient.post(`/training/trainee/${session.trainee_id}/trainer-comments`, { comments: handoff });
       setNoteSaved(true);
+      setHandoff('');
       setTimeout(() => setNoteSaved(false), 2500);
+      load();   // pull the merged note back (server appends "[Added later]")
     } catch (e) {
       Alert.alert('Error', errorText(e, 'Could not save note. Try again.'));
     } finally {
       setSavingNote(false);
     }
-  }, [session, handoff]);
+  }, [session, handoff, load]);
 
   const doSubmit = useCallback(async () => {
     if (!session) return;
@@ -427,6 +429,31 @@ export default function TrainerTodayScreen() {
             <View style={[s.existingNote, { backgroundColor: c.card, alignSelf: 'stretch', marginTop: spacing.sm, marginBottom: 0 }]}>
               <Text style={[s.existingNoteLabel, { color: c.primary }]}>Your Handoff Note</Text>
               <Text style={[s.existingNoteText, { color: c.foreground }]}>{session.handoff_notes || handoff}</Text>
+            </View>
+          )}
+
+          {/* Same-day append only (ADR-046 §5): the record soft-locks at
+              midnight; management reopens if needed. Appends are tagged
+              "[Added later]" server-side. */}
+          {!session.is_locked && (
+            <View style={{ alignSelf: 'stretch', marginTop: spacing.sm }}>
+              <TextInput
+                style={[s.textArea, { color: c.foreground, borderColor: c.border, backgroundColor: c.background, minHeight: 56, marginBottom: spacing.xs }]}
+                value={handoff}
+                onChangeText={setHandoff}
+                placeholder="Forgot something? Append a note (until midnight)…"
+                placeholderTextColor={c.mutedForeground}
+                multiline
+              />
+              {handoff.trim() !== '' && (
+                <TouchableOpacity style={s.ghostBtn} onPress={saveHandoff} disabled={savingNote}>
+                  {savingNote
+                    ? <ActivityIndicator size="small" color={c.mutedForeground} />
+                    : <Text style={[s.ghostBtnText, { color: noteSaved ? c.success : c.primary }]}>
+                        {noteSaved ? '✓ Note appended' : 'Append note'}
+                      </Text>}
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </View>

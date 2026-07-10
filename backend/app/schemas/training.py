@@ -41,6 +41,11 @@ class TrainingRecordResponse(TrainingRecordBase):
     id: UUID
     trainee_id: UUID
     trainer_id: Optional[UUID] = None
+    # Persisted on submit but was never serialized — clients couldn't tell a
+    # submitted day from an open one, so submit UIs re-rendered their forms
+    # after every refetch.
+    submitted_at: Optional[datetime] = None
+    phase_closed: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
     
