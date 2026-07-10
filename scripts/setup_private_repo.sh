@@ -95,6 +95,9 @@ ROUTERS=(
   training.py
   field_ops.py
   walker_routes.py
+  rts.py
+  building_profiles.py
+  building_profile_library.py
 )
 
 SERVICES=(
@@ -115,6 +118,7 @@ SERVICES=(
   run_sort.py
   persist_zones.py
   assign_totes.py
+  wave_distribution.py
 )
 
 echo ""
