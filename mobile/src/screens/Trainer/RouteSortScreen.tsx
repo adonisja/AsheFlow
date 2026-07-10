@@ -26,6 +26,14 @@ type CrewMember = {
   paired_trainer_id: string | null;
 };
 
+type MisrouteFlag = {
+  id: string;
+  tba_number: string;
+  destination_block_key: string | null;
+  suggested_route_id: string | null;
+  resolved: boolean;
+};
+
 type RouteResp = {
   id: string;
   route_number: number;
@@ -37,6 +45,7 @@ type RouteResp = {
   assigned_to_name: string | null;
   returned_at: string | null;
   paired_trainee_id: string | null;
+  misrouted_packages: MisrouteFlag[];
 };
 
 type Proposal = {
@@ -251,6 +260,29 @@ export default function RouteSortScreen() {
   const pairedTrainee = crew.find(m => m.role === 'trainee' && m.paired_trainer_id);
   const rebalanced = routes.some(r => r.paired_trainee_id);
 
+  // Unresolved misroutes across all routes, with source + suggested resolution
+  const routesById = new Map(routes.map(r => [r.id, r]));
+  const misroutes = routes.flatMap(r =>
+    (r.misrouted_packages ?? [])
+      .filter(f => !f.resolved)
+      .map(f => ({ flag: f, source: r, suggested: f.suggested_route_id ? routesById.get(f.suggested_route_id) ?? null : null })),
+  );
+
+  const [resolvingFlag, setResolvingFlag] = useState<string | null>(null);
+  const resolveMisroute = async (flagId: string, sourceRouteId: string, destRouteId: string) => {
+    setResolvingFlag(flagId);
+    try {
+      await apiClient.patch(`/walker-routes/routes/${sourceRouteId}/misroutes/${flagId}/resolve`, {
+        destination_route_id: destRouteId,
+      });
+      await load();
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not resolve the misroute.'));
+    } finally {
+      setResolvingFlag(null);
+    }
+  };
+
   if (!loading && !taId) {
     return (
       <ScreenShell edges={[]} noHeader title="AP Sort" subtitle="No truck assignment today."
@@ -339,6 +371,43 @@ export default function RouteSortScreen() {
                   : <Text style={s.primaryBtnText}>🤝 Confirm Arrival & Rebalance (1.5×)</Text>}
               </TouchableOpacity>
             </>
+          )}
+        </View>
+      )}
+
+      {/* Misrouted packages — resolve at the AP before walkers depart. The
+          sort computed where each belongs; one tap moves the package data
+          with it (pull it from the wrong tote as you tap). */}
+      {misroutes.length > 0 && (
+        <View style={[s.card, { backgroundColor: c.card, borderColor: '#E8820C55' }]}>
+          <Text style={s.cardTitle}>⚠ Misrouted packages · {misroutes.length}</Text>
+          <Text style={s.cardSub}>Pull each from its current tote and hand it to the right walker.</Text>
+          {misroutes.slice(0, 12).map(({ flag, source, suggested }) => (
+            <View key={flag.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: fontSize.xs, color: c.foreground, fontVariant: ['tabular-nums'] }}>
+                  …{flag.tba_number.slice(-8)} <Text style={{ color: c.mutedForeground }}>in #{source.route_number}</Text>
+                </Text>
+                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
+                  {flag.destination_block_key ?? 'unknown block'}
+                  {suggested ? ` → #${suggested.route_number} ${suggested.assigned_to_name ?? ''}` : ' → no covering route (captain review)'}
+                </Text>
+              </View>
+              {suggested && (
+                <TouchableOpacity
+                  style={{ backgroundColor: c.primary, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
+                  onPress={() => resolveMisroute(flag.id, source.id, suggested.id)}
+                  disabled={resolvingFlag === flag.id}
+                >
+                  {resolvingFlag === flag.id
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={{ color: '#fff', fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Move to #{suggested.route_number}</Text>}
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+          {misroutes.length > 12 && (
+            <Text style={[s.cardSub, { marginTop: spacing.xs, marginBottom: 0 }]}>…and {misroutes.length - 12} more — resolve these first, then refresh.</Text>
           )}
         </View>
       )}
