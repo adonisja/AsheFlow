@@ -1,10 +1,14 @@
 #!/bin/bash
 # Usage:
-#   ./start.sh          — Docker stack + web frontend (Vite)
-#   ./start.sh mobile   — Docker stack + iOS simulator + Metro bundler
-#   ./start.sh --mobile — same as above
+#   ./start.sh                    — Docker stack + web frontend (Vite)
+#   ./start.sh ios [Simulator]    — Docker stack + Metro + iOS app (default: iPhone 16 Pro)
+#   ./start.sh android [AVD]      — Docker stack + Metro + Android app (boots AVD if none running)
+#   ./start.sh mobile             — legacy alias for `ios`
 
 cd "$(dirname "$0")"
+
+PLATFORM="${1:-web}"
+DEVICE_ARG="${2:-}"
 
 echo "Starting AsheFlow backend stack (Postgres, Redis, FastAPI, Bot, Celery)..."
 if ! docker compose up -d; then
@@ -22,14 +26,26 @@ done
 echo "Backend is up."
 echo ""
 
-if [ "${1}" = "mobile" ] || [ "${1}" = "--mobile" ]; then
-  echo "Launching iPhone 16 Pro simulator and installing app..."
+# ── Shared Metro startup (iOS + Android) ─────────────────────────────────────
+start_metro() {
   cd mobile
 
-  # Kill any stale Metro process on 8081 before starting a fresh one.
+  # Reuse a HEALTHY Metro instead of killing it. Both simulators share one
+  # bundler; killing it here is what made ios/android runs order-dependent —
+  # the second platform's start.sh killed the first's Metro mid-session, and
+  # whichever app was connected went stale until something restarted it.
+  if curl -sf http://localhost:8081/status > /dev/null 2>&1; then
+    echo "Metro already running on 8081 — reusing it (both apps share one bundler)."
+    echo "NOTE: if you changed mobile/.env, kill Metro first (kill \$(lsof -ti tcp:8081))"
+    echo "      so the next start.sh run restarts it with --reset-cache."
+    METRO_PID=""
+    return
+  fi
+
+  # A process squatting on 8081 that doesn't answer /status is a zombie — clear it.
   STALE=$(lsof -ti tcp:8081 2>/dev/null)
   if [ -n "$STALE" ]; then
-    echo "Killing stale Metro process on port 8081..."
+    echo "Killing unresponsive process on port 8081..."
     kill -9 $STALE 2>/dev/null
     sleep 1
   fi
@@ -43,17 +59,88 @@ if [ "${1}" = "mobile" ] || [ "${1}" = "--mobile" ]; then
   done
   echo "Metro is up."
   echo ""
+}
 
-  echo "Building and launching on iPhone 16 Pro..."
-  npx react-native run-ios --simulator "iPhone 16 Pro"
+# After the app launches: keep Metro foreground if this run owns it.
+finish_metro() {
+  echo ""
+  if [ -n "$METRO_PID" ]; then
+    echo "App launched. Metro is running — press ^C to stop."
+    wait $METRO_PID
+  else
+    echo "App launched against the already-running Metro. This terminal is free."
+  fi
+}
 
-  # Keep Metro in the foreground after the build so hot reload keeps working.
-  echo ""
-  echo "App launched. Metro is running — press ^C to stop."
-  wait $METRO_PID
-else
-  echo "Starting AsheFlow web frontend (Vite)..."
-  echo "Press ^C to stop the frontend server."
-  echo ""
-  cd frontend && npm run dev
-fi
+case "$PLATFORM" in
+
+  ios|mobile|--mobile)
+    SIMULATOR="${DEVICE_ARG:-iPhone 16 Pro}"
+    echo "Launching $SIMULATOR simulator and installing app..."
+
+    # First run on a fresh checkout: install CocoaPods deps. UTF-8 locale is
+    # required — CocoaPods crashes with "Unicode Normalization not appropriate
+    # for ASCII-8BIT" under the default shell locale.
+    if [ ! -d mobile/ios/Pods ]; then
+      echo "CocoaPods not installed yet — running bundle/pod install..."
+      export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+      (cd mobile && bundle install && cd ios && bundle exec pod install) || exit 1
+    fi
+
+    start_metro
+
+    echo "Building and launching on $SIMULATOR..."
+    npx react-native run-ios --simulator "$SIMULATOR"
+
+    finish_metro
+    ;;
+
+  android)
+    # Android SDK tools aren't on PATH by default on this machine.
+    export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+    export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
+
+    # Gradle needs a JDK; fall back to Android Studio's bundled one.
+    if [ -z "$JAVA_HOME" ] && [ -d "/Applications/Android Studio.app/Contents/jbr/Contents/Home" ]; then
+      export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+    fi
+
+    # Boot an emulator only if no device/emulator is already attached.
+    if ! adb devices | grep -qE "device$"; then
+      AVD="${DEVICE_ARG:-$(emulator -list-avds 2>/dev/null | head -1)}"
+      if [ -z "$AVD" ]; then
+        echo "ERROR: no Android AVD found. Create one in Android Studio > Device Manager."
+        exit 1
+      fi
+      # -no-snapshot: this AVD's quickboot snapshot has corrupted before
+      # ("Failed to restore previous context") — cold boot is slower but reliable.
+      echo "Booting Android emulator: $AVD..."
+      emulator -avd "$AVD" -no-snapshot -netdelay none -netspeed full > /dev/null 2>&1 &
+
+      echo "Waiting for Android to finish booting..."
+      adb wait-for-device
+      until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+        sleep 2
+      done
+      echo "Android is up."
+      echo ""
+    fi
+
+    start_metro
+
+    echo "Building and launching on Android..."
+    # run-android sets up `adb reverse tcp:8081` for Metro automatically; the
+    # app itself reaches the backend via 10.0.2.2:8000 (see mobile/src/api/client.ts).
+    npx react-native run-android
+
+    finish_metro
+    ;;
+
+  web|*)
+    echo "Starting AsheFlow web frontend (Vite)..."
+    echo "Press ^C to stop the frontend server."
+    echo ""
+    cd frontend && npm run dev
+    ;;
+
+esac

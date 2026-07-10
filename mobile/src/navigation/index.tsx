@@ -34,19 +34,16 @@ import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
 import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
 
 // ── Role constants ────────────────────────────────────────────────────────────
-export const FIELD_ROLES              = ['driver', 'trainer', 'trainee', 'walker'] as const;
-export const FIELD_OPS_ROLES          = ['driver'] as const;
-export const ANCHOR_POINT_ROLES       = ['driver'] as const;
-export const PREFERENCES_ROLES        = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const SCHEDULE_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const SCHEDULE_CHANGE_ROLES    = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'] as const;
-export const INCIDENT_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const TRAINER_ROLES            = ['trainer'] as const;
-export const TRAINEE_ROLES            = ['trainee'] as const;
-export const WALKER_ROLES             = ['walker'] as const;
-export const LOCATION_PROFILE_ROLES   = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const ROUTE_SORT_ROLES         = ['driver'] as const;
-export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
+// Moved to ./roles (cycle-free module) — screens must import from
+// '@navigation/roles', never from this file (it imports every screen, so a
+// screen importing back from here evaluates the constant as undefined).
+// Re-exported for existing imports within this file's consumers.
+export * from './roles';
+import {
+  FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
+  SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
+  WALKER_ROLES, LOCATION_PROFILE_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
+} from './roles';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});

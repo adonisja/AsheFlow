@@ -6,7 +6,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@contexts/AuthContext';
-import { useTabSwitch, FIELD_OPS_ROLES } from '@navigation/index';
+import { useTabSwitch } from '@navigation/index';
+// NOT from @navigation/index — that would be a require cycle (index imports
+// this screen), which evaluates the constant as undefined and broke the
+// role filter silently. See @navigation/roles.
+import { FIELD_OPS_ROLES } from '@navigation/roles';
 import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import {
