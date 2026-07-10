@@ -83,23 +83,37 @@ def mark_all_read(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
 ):
-    """Mark all non-dispatch notifications as read.
+    """Mark all notifications as read, except ACTIONABLE dispatch assignments.
 
-    dispatch_assignment notifications are intentionally excluded — they require
-    an explicit Confirm or Decline response and cannot be bulk-dismissed.
-    They are marked read automatically by the individual /read endpoint once
-    the employee has responded via the app or the Discord bot.
+    dispatch_assignment notifications for TODAY or later still require an
+    explicit Confirm/Decline and cannot be bulk-dismissed. Past ones can no
+    longer be responded to (the confirmation window is closed), so excluding
+    them left users with permanently-unread rows that "All read" appeared to
+    ignore — those are now included in the bulk mark.
+
+    Returns counts so clients can explain any rows deliberately left unread.
     """
     if caller.id != employee_id and caller.role not in ("dispatch", "management", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied.")
-    db.query(Notification).filter(
+
+    from datetime import date as _date
+    from sqlalchemy import and_, or_
+    today = _date.today()
+
+    base = db.query(Notification).filter(
         Notification.employee_id == employee_id,
         Notification.company_id == caller.company_id,
-        Notification.is_read == False,
-        Notification.type != "dispatch_assignment",
-    ).update({"is_read": True})
+        Notification.is_read == False,  # noqa: E712
+    )
+    # Actionable = assignment for today/future (or unknown date — err safe).
+    actionable = and_(
+        Notification.type == "dispatch_assignment",
+        or_(Notification.dispatch_date == None, Notification.dispatch_date >= today),  # noqa: E711
+    )
+    marked = base.filter(~actionable).update({"is_read": True}, synchronize_session=False)
+    skipped = base.filter(actionable).count()
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "marked": marked, "skipped_actionable": skipped}
 
 
 @router.delete("/prune", status_code=status.HTTP_200_OK)

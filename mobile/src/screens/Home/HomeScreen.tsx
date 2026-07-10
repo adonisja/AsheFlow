@@ -99,9 +99,12 @@ export default function HomeScreen() {
   }, []);
 
   const fetchAssignment = useCallback(async () => {
-    const eid = await resolveEmployeeId();
-    if (!eid) return;
     try {
+      // The eid resolve must live INSIDE try/finally — an early `return`
+      // before it left the loading flag true forever (skeletons hung
+      // indefinitely after navigating away and back).
+      const eid = await resolveEmployeeId();
+      if (!eid) { setTruckName(null); return; }
       const res   = await apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`);
       const entry = (res.data ?? [])[0];
       if (!entry || entry.status !== 'Assigned' || !entry.truck_name) {
@@ -121,9 +124,9 @@ export default function HomeScreen() {
   }, [today, resolveEmployeeId]);
 
   const fetchNotifications = useCallback(async () => {
-    const eid = await resolveEmployeeId();
-    if (!eid) return;
     try {
+      const eid = await resolveEmployeeId();
+      if (!eid) { setUnreadCount(0); return; }
       // limit must cover the whole unread set — counting within a 10-item
       // page showed "10 unread" while 14 existed.
       const res  = await apiClient.get(`/notifications/${eid}?limit=50`);
