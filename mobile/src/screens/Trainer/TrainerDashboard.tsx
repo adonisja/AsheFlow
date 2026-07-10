@@ -14,7 +14,9 @@ import TrainerPerformanceScreen from './TrainerPerformanceScreen';
 import Phase4Screen             from './Phase4Screen';
 import RouteSortScreen          from './RouteSortScreen';
 
-type Tab = 'today' | 'history' | 'performance' | 'phase4' | 'routesort';
+import MyRouteScreen            from '@screens/Trainee/MyRouteScreen';
+
+type Tab = 'today' | 'myroute' | 'history' | 'performance' | 'phase4' | 'routesort';
 
 export default function TrainerDashboard() {
   const c = useColors();
@@ -36,6 +38,9 @@ export default function TrainerDashboard() {
 
   const tabs: { key: Tab; label: string; icon: string }[] = [
     { key: 'today',       label: "Today",       icon: '📋' },
+    // Trainers carry routes too — solo via the wave pool, or working their
+    // paired trainee's route (the screen resolves both cases).
+    { key: 'myroute',     label: 'My Route',    icon: '🗺️' },
     { key: 'history',     label: 'History',     icon: '📂' },
     { key: 'performance', label: 'Performance', icon: '📊' },
     { key: 'routesort',   label: 'Route Sort',  icon: '🗺️' },
@@ -81,6 +86,7 @@ export default function TrainerDashboard() {
       {/* Screen content — rendered directly, not as a navigator */}
       <View style={{ flex: 1 }}>
         {activeTab === 'today'       && <TrainerTodayScreen />}
+        {activeTab === 'myroute'     && <MyRouteScreen />}
         {activeTab === 'history'     && <TrainerHistoryScreen />}
         {activeTab === 'performance' && <TrainerPerformanceScreen />}
         {activeTab === 'routesort'   && <RouteSortScreen />}

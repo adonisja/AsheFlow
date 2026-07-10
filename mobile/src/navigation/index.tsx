@@ -43,7 +43,9 @@ import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
   WALKER_ROLES, LOCATION_PROFILE_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
+  GEAR_ROLES,
 } from './roles';
+import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -93,6 +95,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'SchChanges',      label: 'Sch. Changes',     icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
   { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
   { key: 'Locations',       label: 'Locations',        icon: '📍', roles: LOCATION_PROFILE_ROLES,  component: LocationProfilesScreen },
+  { key: 'Gear',            label: 'Gear',             icon: '🎒', roles: GEAR_ROLES,              component: GearRequestsScreen },
   { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', roles: PREFERENCES_ROLES,       component: PreferencesScreen },
   { key: 'Notifications',   label: 'Notifications',    icon: '🔔', roles: [],                      component: NotificationsScreen },
   { key: 'Account',         label: 'Account',          icon: '👤', roles: [],                      component: MyAccountScreen },

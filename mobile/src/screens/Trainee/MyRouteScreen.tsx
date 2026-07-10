@@ -8,6 +8,7 @@ import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
+import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
@@ -30,6 +31,8 @@ type RouteResp = {
   block_keys: string[];
   returned_at: string | null;
   wave_number: number;
+  assigned_to: string | null;
+  paired_trainee_id: string | null;
 };
 
 type StopSignal = { signal: string; reason: string; urgency: number };
@@ -55,6 +58,17 @@ const RTS_TYPES: { value: string; label: string }[] = [
   { value: 'customer_cancelled_order',           label: 'Customer cancelled order' },
 ];
 
+const BUILDING_TYPES: { value: string; label: string }[] = [
+  { value: 'receptionist',     label: 'Receptionist' },
+  { value: 'walkup',           label: 'Walk-up' },
+  { value: 'elevator',         label: 'Elevator building' },
+  { value: 'doorman',          label: 'Doorman' },
+  { value: 'mailroom',         label: 'Mailroom' },
+  { value: 'biz_freight',      label: 'Business — freight entrance' },
+  { value: 'biz_security',     label: 'Business — security desk' },
+  { value: 'biz_loading_dock', label: 'Business — loading dock' },
+];
+
 const SIGNAL_COLORS: Record<string, string> = {
   closing_soon: '#E8443A', break_approaching: '#E8820C', not_open_yet: '#0EA5D8',
   closed_today: '#E8443A', high_wait: '#E8820C', rts_history: '#8B5CF6',
@@ -63,6 +77,7 @@ const SIGNAL_COLORS: Record<string, string> = {
 export default function MyRouteScreen() {
   const c = useColors();
   const { fetchId } = useEmployeeId();
+  const { hasRole } = useAuth();
   const s = styles(c);
 
   const [loading,    setLoading]    = useState(true);
@@ -72,16 +87,41 @@ export default function MyRouteScreen() {
   const [acting,     setActing]     = useState(false);
   const [completingStop, setCompletingStop] = useState<string | null>(null);
   const [rtsTarget,  setRtsTarget]  = useState<{ tba: string; kind: 'rts' | 'missing' } | null>(null);
+  const [bpTarget,   setBpTarget]   = useState<Stop | null>(null);
 
   const load = useCallback(async (opts?: { refresh?: boolean }) => {
     if (opts?.refresh) setRefreshing(true);
     try {
-      const res = await apiClient.get('/walker-routes/me/routes');
+      const eid = await fetchId();
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const res = await apiClient.get(`/walker-routes/me/routes?route_date=${today}`);
       const routes: RouteResp[] = res.data ?? [];
+
+      // "Mine": assigned to me, or (trainer) the paired route I'm working —
+      // me/routes returns the whole TRUCK for trainers, so filter first.
+      let mine = routes.filter(r =>
+        r.assigned_to === eid || r.paired_trainee_id === eid,
+      );
+      if (mine.length === 0 && routes.length > 0 && eid) {
+        // Trainer on a pair: the route is assigned to the TRAINEE. Find my
+        // trainee via today's dispatch pairing, then their route.
+        try {
+          const disp = await apiClient.get(`/dispatch/${today}`);
+          const crews: Record<string, any[]> = disp.data?.assigned_crews ?? {};
+          const myTraineeIds = new Set(
+            Object.values(crews).flat()
+              .filter((m: any) => m.role === 'trainee' && m.paired_trainer_id === eid)
+              .map((m: any) => m.employee_id),
+          );
+          mine = routes.filter(r => r.assigned_to && myTraineeIds.has(r.assigned_to));
+        } catch { /* fall through to empty */ }
+      }
+
       const active =
-        routes.find(r => r.status === 'in_progress')
-        ?? routes.find(r => r.status === 'assigned')
-        ?? routes.find(r => r.status === 'completed' && !r.returned_at)
+        mine.find(r => r.status === 'in_progress')
+        ?? mine.find(r => r.status === 'assigned')
+        ?? mine.find(r => r.status === 'completed' && !r.returned_at)
         ?? null;
       setRoute(active);
       if (active && active.status !== 'assigned') {
@@ -96,7 +136,7 @@ export default function MyRouteScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [fetchId]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -113,6 +153,29 @@ export default function MyRouteScreen() {
     } finally {
       setActing(false);
     }
+  };
+
+  const requestHelp = () => {
+    if (!route) return;
+    Alert.alert(
+      'Request help?',
+      'Your trainer gets an alert with your route context (dispatch if you have no trainer today).',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Send Help Request',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const res = await apiClient.post(`/walker-routes/routes/${route.id}/request-help`);
+              Alert.alert('Help is coming', res.data?.detail ?? 'Your trainer has been notified.');
+            } catch (e) {
+              Alert.alert('Error', errorText(e, 'Could not send the request. Call the station.'));
+            }
+          },
+        },
+      ],
+    );
   };
 
   const backAtTruck = async () => {
@@ -242,6 +305,14 @@ export default function MyRouteScreen() {
               </Text>
             </View>
           )}
+
+          {/* ADR-187 D8 — trainee lifeline, all phases (trainer may not be
+              physically present even in 1–3) */}
+          {hasRole('trainee') && route.status === 'in_progress' && (
+            <TouchableOpacity style={[s.helpBtn, { borderColor: '#E8443A55' }]} onPress={requestHelp}>
+              <Text style={s.helpBtnText}>🆘 Request Help from my Trainer</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -252,6 +323,7 @@ export default function MyRouteScreen() {
           completing={completingStop === nextStop.normalised_address}
           onComplete={() => completeStop(nextStop)}
           onFlag={(tba, kind) => setRtsTarget({ tba, kind })}
+          onBuildingInfo={() => setBpTarget(nextStop)}
         />
       )}
 
@@ -266,6 +338,7 @@ export default function MyRouteScreen() {
               completing={completingStop === st.normalised_address}
               onComplete={() => completeStop(st)}
               onFlag={(tba, kind) => setRtsTarget({ tba, kind })}
+              onBuildingInfo={() => setBpTarget(st)}
             />
           ))}
         </>
@@ -281,16 +354,91 @@ export default function MyRouteScreen() {
           onSubmitMissing={submitMissing}
         />
       )}
+
+      {/* Building profile at the door — feeds the sort algorithm's workload
+          intelligence and the next walker's operational notes */}
+      {bpTarget && (
+        <BuildingProfileModal stop={bpTarget} c={c} onClose={() => setBpTarget(null)} />
+      )}
     </ScreenShell>
+  );
+}
+
+// ── Building profile modal ─────────────────────────────────────────────────
+
+function BuildingProfileModal({ stop, c, onClose }: {
+  stop: Stop; c: ThemeColors; onClose: () => void;
+}) {
+  const [buildingType, setBuildingType] = useState('walkup');
+  const [note, setNote]                 = useState('');
+  const [submitting, setSubmitting]     = useState(false);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await apiClient.post('/building-profiles/', {
+        normalised_address: stop.normalised_address,
+        block_key: stop.block_key,
+        building_type: buildingType,
+        raw_note: note.trim() || undefined,
+      });
+      onClose();
+      Alert.alert('Thanks!', 'Building info submitted — it helps route this address better.');
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not submit building info.'));
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <View style={ms.backdrop}>
+        <View style={[ms.sheet, { backgroundColor: c.card }]}>
+          <Text style={[ms.title, { color: c.foreground }]}>🏢 Building info</Text>
+          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: spacing.sm }}>
+            {stop.normalised_address}
+          </Text>
+          <ScrollView style={{ maxHeight: 260 }}>
+            {BUILDING_TYPES.map(t => (
+              <TouchableOpacity key={t.value} style={ms.reasonRow} onPress={() => setBuildingType(t.value)}>
+                <View style={[ms.radio, { borderColor: buildingType === t.value ? c.primary : c.border }]}>
+                  {buildingType === t.value && <View style={[ms.radioDot, { backgroundColor: c.primary }]} />}
+                </View>
+                <Text style={[ms.reasonText, { color: c.foreground }]}>{t.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <TextInput
+            style={[ms.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
+            value={note}
+            onChangeText={setNote}
+            placeholder="Anything the next walker should know? (optional)"
+            placeholderTextColor={c.mutedForeground}
+            multiline
+          />
+          <View style={ms.btnRow}>
+            <TouchableOpacity style={[ms.cancelBtn, { borderColor: c.border }]} onPress={onClose} disabled={submitting}>
+              <Text style={{ color: c.mutedForeground, fontWeight: '600', fontSize: 13 }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[ms.submitBtn, { backgroundColor: c.primary }]} onPress={submit} disabled={submitting}>
+              {submitting
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Submit</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
 // ── Stop card ──────────────────────────────────────────────────────────────
 
-function StopCard({ stop, featured, completing, onComplete, onFlag, c }: {
+function StopCard({ stop, featured, completing, onComplete, onFlag, onBuildingInfo, c }: {
   stop: Stop; featured?: boolean; completing: boolean;
   onComplete: () => void;
   onFlag: (tba: string, kind: 'rts' | 'missing') => void;
+  onBuildingInfo: () => void;
   c: ThemeColors;
 }) {
   const [expanded, setExpanded] = useState(!!featured);
@@ -356,15 +504,23 @@ function StopCard({ stop, featured, completing, onComplete, onFlag, c }: {
       )}
 
       {expanded && (
-        <TouchableOpacity
-          style={[cs.completeBtn, { backgroundColor: c.success }]}
-          onPress={onComplete}
-          disabled={completing}
-        >
-          {completing
-            ? <ActivityIndicator color="#fff" size="small" />
-            : <Text style={cs.completeBtnText}>✓ Delivered — Complete Stop</Text>}
-        </TouchableOpacity>
+        <>
+          <TouchableOpacity
+            style={[cs.completeBtn, { backgroundColor: c.success }]}
+            onPress={onComplete}
+            disabled={completing}
+          >
+            {completing
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={cs.completeBtnText}>✓ Delivered — Complete Stop</Text>}
+          </TouchableOpacity>
+          {/* Only offer the report when no verified profile exists yet */}
+          {!stop.building_type && (
+            <TouchableOpacity style={cs.bpBtn} onPress={onBuildingInfo}>
+              <Text style={[cs.bpBtnText, { color: c.mutedForeground }]}>🏢 Report building info</Text>
+            </TouchableOpacity>
+          )}
+        </>
       )}
     </View>
   );
@@ -494,6 +650,8 @@ const cs = StyleSheet.create({
   tbaHint:     { fontSize: 10, marginTop: 4, fontStyle: 'italic' },
   completeBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginTop: spacing.sm },
   completeBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  bpBtn:       { alignItems: 'center', paddingVertical: spacing.xs + 2, marginTop: 2 },
+  bpBtnText:   { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 });
 
 const ms = StyleSheet.create({
@@ -530,6 +688,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   doneBanner: { borderRadius: radius.md, padding: spacing.sm, alignItems: 'center' },
   doneBannerText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center' },
+  helpBtn:    { borderWidth: 1.5, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center', marginTop: spacing.sm },
+  helpBtnText:{ color: '#E8443A', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
   sectionLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.xs, marginTop: spacing.xs },
 });
