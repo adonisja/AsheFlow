@@ -1,7 +1,7 @@
 import {
   Home, ClipboardCheck, BarChart2, Users, ScrollText, Building2, ClipboardList,
   MapPin, MessageSquare, Shield, ShoppingBag, AlertTriangle, Route, Calendar,
-  RefreshCw, Settings, Activity, Navigation, ShieldAlert, Star,
+  RefreshCw, Settings, Activity, ShieldAlert, Star,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -50,7 +50,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
-  { path: '/dispatch-home',         label: 'Dispatch Home',     icon: Navigation,     roles: ['dispatch'] },
+  // /dispatch-home has NO tab: it is dispatch's Dashboard landing
+  // (homeRouteForGroups), and every role has its own scoped home dashboard —
+  // admin lands on /admin and doesn't need dispatch's. Route access is gated
+  // in App.tsx (admin retains URL access per the full-access role model).
   { path: '/driver-surveys',        label: 'Driver Surveys',    icon: ClipboardList,  roles: ['admin', 'management'] },
   { path: '/feedback',              label: 'Feedback',          icon: MessageSquare,  roles: ['admin'] },
   { path: '/field-ops',             label: 'Field Ops',         icon: Shield,         roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },

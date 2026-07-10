@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -148,14 +149,23 @@ const NotificationBanner: React.FC = () => {
           <Bell className="w-3.5 h-3.5" />
           Notifications
         </span>
-        {notifications.length > 1 && (
-          <button
-            onClick={dismissAll}
+        <span className="flex items-center gap-3">
+          {/* Dismissing only clears the banner — full history stays at /notifications */}
+          <Link
+            to="/notifications"
             className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
           >
-            Dismiss all
-          </button>
-        )}
+            View all
+          </Link>
+          {notifications.length > 1 && (
+            <button
+              onClick={dismissAll}
+              className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
+            >
+              Dismiss all
+            </button>
+          )}
+        </span>
       </div>
 
       {notifications.map(n => {
