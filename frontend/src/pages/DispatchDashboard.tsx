@@ -228,7 +228,12 @@ export default function DispatchDashboard() {
         setIsPublishing(true);
         setError(null);
         try {
-          await axiosClient.post(`/dispatch/${selectedDate}/publish`);
+          const res = await axiosClient.post(`/dispatch/${selectedDate}/publish`);
+          // Partial-success channel: publish committed but a delivery leg
+          // (e.g. Discord bot) failed — surface it without blocking.
+          if (res.data?.warnings?.length) {
+            setError(res.data.warnings.join(' '));
+          }
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
           startConfirmationPolling(selectedDate);
         } catch (err: any) {

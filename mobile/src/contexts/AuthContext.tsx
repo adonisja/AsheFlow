@@ -10,6 +10,7 @@ import InAppBrowser from 'react-native-inappbrowser-reborn';
 import { Linking } from 'react-native';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
+import { getValidIdToken, touchLastActive, clearTokens } from '../api/tokenRefresh';
 
 const USER_POOL_ID    = COGNITO_USER_POOL_ID ?? '';
 const CLIENT_ID       = COGNITO_CLIENT_ID ?? '';
@@ -51,8 +52,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const restoreSession = async () => {
     try {
-      const idToken = await AsyncStorage.getItem('asheflow_id_token');
+      // Refreshes a stale ID token via the Cognito refresh token, or returns
+      // null (tokens cleared) when the inactivity window has lapsed — so a
+      // crash/restart re-enters the app silently within the window and forces
+      // re-login after it.
+      const idToken = await getValidIdToken();
       if (!idToken) { setLoading(false); return; }
+      await touchLastActive();
       const base = buildUserFromToken(idToken);
       setUser(base);
       setLoading(false);
@@ -155,11 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await AsyncStorage.multiRemove([
-      'asheflow_access_token',
-      'asheflow_id_token',
-      'asheflow_refresh_token',
-    ]);
+    await clearTokens();
     setUser(null);
   }, []);
 
@@ -243,6 +245,7 @@ async function storeTokens(tokens: {
   await AsyncStorage.setItem('asheflow_access_token',  tokens.AccessToken);
   await AsyncStorage.setItem('asheflow_id_token',      tokens.IdToken);
   await AsyncStorage.setItem('asheflow_refresh_token', tokens.RefreshToken);
+  await touchLastActive();
 }
 
 function parseJwtPayload(token: string): Record<string, any> {
