@@ -265,7 +265,11 @@ export default function RouteSortScreen() {
   const misroutes = routes.flatMap(r =>
     (r.misrouted_packages ?? [])
       .filter(f => !f.resolved)
-      .map(f => ({ flag: f, source: r, suggested: f.suggested_route_id ? routesById.get(f.suggested_route_id) ?? null : null })),
+      .map(f => {
+        const sug = f.suggested_route_id ? routesById.get(f.suggested_route_id) ?? null : null;
+        // Guard: a package never "belongs on" the route it was flagged from.
+        return { flag: f, source: r, suggested: sug && sug.id !== r.id ? sug : null };
+      }),
   );
 
   const [resolvingFlag, setResolvingFlag] = useState<string | null>(null);

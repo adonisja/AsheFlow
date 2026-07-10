@@ -520,11 +520,31 @@ function RouteCard({
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-1.5">Blocks</p>
             <div className="flex flex-wrap gap-1">
-              {route.block_keys.map(k => (
-                <span key={k} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs text-foreground font-mono">
-                  <MapPin className="w-2.5 h-2.5 text-muted-foreground" />{k}
-                </span>
-              ))}
+              {(() => {
+                // block_keys is CARRIED coverage — it includes each stray
+                // rider's own (distant) block, which made routes look like
+                // they sprawled across the map. Ghost the chips that exist
+                // only because a flagged misroute is riding here.
+                const strayBlocks = new Set(
+                  (route.misrouted_packages ?? [])
+                    // pre-commit shape lacks `resolved`; treat missing as unresolved
+                    .filter(m => !(m as any).resolved && m.destination_block_key)
+                    .map(m => m.destination_block_key as string),
+                );
+                return route.block_keys.map(k => strayBlocks.has(k) ? (
+                  <span
+                    key={k}
+                    title="Carried by accident — a flagged misroute rides in this route's totes; not part of its territory"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-warning/10 border border-dashed border-warning/40 rounded text-xs text-muted-foreground font-mono line-through"
+                  >
+                    <MapPin className="w-2.5 h-2.5 text-warning" />{k}
+                  </span>
+                ) : (
+                  <span key={k} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs text-foreground font-mono">
+                    <MapPin className="w-2.5 h-2.5 text-muted-foreground" />{k}
+                  </span>
+                ));
+              })()}
             </div>
           </div>
 
@@ -555,9 +575,12 @@ function RouteCard({
                   // showed it (and passed the wrong field to the modal, so
                   // the suggestion was silently dropped). Resolve it to a
                   // route + walker and lead with that.
-                  const suggested = allRoutes?.find(r =>
+                  const suggestedRaw = allRoutes?.find(r =>
                     r.id === (m as any).suggested_route_id
                     || r.route_number === (m as any).suggested_route_number);
+                  // Never suggest the route the package was flagged FROM —
+                  // stale carried-block-derived data produced self-suggestions.
+                  const suggested = suggestedRaw && suggestedRaw.id !== route.id ? suggestedRaw : undefined;
                   return (
                     <div key={m.tba_number} className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-xs min-w-0 flex-wrap">
