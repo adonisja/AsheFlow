@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, RefreshControl,
@@ -120,7 +121,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
       setReason('');
       load(myId);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit request.');
+      setError(errorText(err, 'Failed to submit request.'));
     } finally {
       setSubmitting(false);
     }
@@ -137,7 +138,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
             await apiClient.delete(`/schedule-change-requests/${id}`);
             load(myId);
           } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || 'Failed to cancel.');
+            Alert.alert('Error', errorText(err, 'Failed to cancel.'));
           }
         },
       },
@@ -306,7 +307,7 @@ function PrivilegedView({ c }: { c: ThemeColors }) {
             await apiClient.patch(`/schedule-change-requests/${id}/${action}`);
             load();
           } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || `Failed to ${action}.`);
+            Alert.alert('Error', errorText(err, `Failed to ${action}.`));
           }
         },
       },

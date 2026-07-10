@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, RefreshControl,
@@ -85,20 +86,26 @@ export default function IncidentsScreen() {
     if (!description.trim()) { Alert.alert('Required', 'Please enter a description.'); return; }
     setSubmitting(true);
     try {
+      // Field names must match IncidentCreate exactly — the old payload
+      // omitted the required `date` and used unknown keys (body_part,
+      // tba_count, location), so every submit 422'd.
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const payload: Record<string, any> = {
+        date: todayStr,
         category,
         severity: AUTO_SEVERITY[category] ?? 'info',
         description,
       };
       if (category === 'injury') {
-        payload.body_part = bodyPart;
-        payload.medical_attention = medAttn;
+        payload.body_part_affected = bodyPart || undefined;
+        payload.medical_attention_required = medAttn;
       }
       if (category === 'stolen_packages') {
-        payload.tba_count = tbaCount ? Number(tbaCount) : undefined;
-        payload.location = location;
-        payload.witness_name = witness;
-        payload.incident_time = stolenTime;
+        payload.packages_tba = tbaCount ? Number(tbaCount) : undefined;
+        payload.incident_location = location || undefined;
+        payload.witness_name = witness || undefined;
+        payload.incident_time = stolenTime || undefined;
       }
       await apiClient.post('/incidents/', payload);
       Alert.alert('Submitted', 'Incident report filed. Management has been notified.');
@@ -106,7 +113,7 @@ export default function IncidentsScreen() {
       setTbaCount(''); setLocation(''); setWitness(''); setStolenTime('');
       setCategory('vehicle');
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
     }

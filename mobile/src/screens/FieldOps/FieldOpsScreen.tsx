@@ -36,6 +36,7 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl,
@@ -360,7 +361,7 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
         notes: notes.trim() || null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit inspection. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not submit inspection. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -885,7 +886,7 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
       });
       onDone();
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail ?? 'Could not record response. Try again.');
+      Alert.alert('Error', errorText(e, 'Could not record response. Try again.'));
     } finally {
       setActing(null);
       submitting.current = false;
@@ -1002,7 +1003,7 @@ function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shi
     try {
       await apiClient.post('/field-ops/check-in', { employee_id: employeeId, date: localToday() });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Check-in failed.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Check-in failed.')); }
     finally { setActing(false); }
   };
   if (shift.checkedIn) {
@@ -1078,7 +1079,7 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
     try {
       await apiClient.post('/field-ops/fuel-log', { driver_id: employeeId, date: localToday(), odometer_start: toMi(n, unit) });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not log odometer reading. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not log odometer reading. Try again.')); }
     finally { setSaving(false); }
   };
   if (done) {
@@ -1130,7 +1131,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
         missing_items: staged ? [] : Object.keys(missing).filter(k => missing[k]),
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record station arrival. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not record station arrival. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1199,7 +1200,7 @@ function StepManifest({ truckId, shift, employeeId, onDone, c }: {
     try {
       await apiClient.patch(`/field-ops/manifest/${truckId}/acknowledge`);
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not confirm manifest. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not confirm manifest. Try again.')); }
     finally { setAcking(false); }
   };
 
@@ -1255,7 +1256,7 @@ function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; s
     try {
       await apiClient.post('/field-ops/departure', { employee_id: employeeId, date: localToday() });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record departure. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not record departure. Try again.')); }
     finally { setActing(false); }
   };
   if (shift.departed) {
@@ -1297,7 +1298,7 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
         location: location.trim(), eta: etaLabel ?? null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not post anchor point. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not post anchor point. Try again.')); }
     finally { setSaving(false); submitting.current = false; }
   };
 
@@ -1368,7 +1369,7 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeC
         notes: notes.trim() || undefined,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not confirm AP arrival. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not confirm AP arrival. Try again.')); }
     finally { setActing(false); }
   };
 
@@ -1443,7 +1444,7 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
         ncns_count: ncns,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit check-in. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not submit check-in. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1609,7 +1610,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
         ncns_count: shift.checkIn1?.ncns_count ?? 0,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit check-in. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not submit check-in. Try again.')); }
     finally { setSaving(false); setPending(null); }
   };
 
@@ -1769,7 +1770,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
         crew_confirmed: cc, rts_packages: pkgs,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit departure request. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not submit departure request. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1850,7 +1851,7 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
         employee_id: employeeId, date: localToday(), arrival_type: 'return',
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record station return. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not record station return. Try again.')); }
     finally { setActing(false); }
   };
   if (done) {
@@ -1882,7 +1883,7 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
         totes_returned: t, rts_count: r, notes: notes.trim() || null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit station handoff. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not submit station handoff. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1961,7 +1962,7 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
       // Clear drafts from storage
       await AsyncStorage.removeItem(`asheflow_walker_drafts_${employeeId}_${localToday()}`);
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not log end odometer. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not log end odometer. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -2033,7 +2034,7 @@ function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shi
     try {
       await apiClient.post(`/field-ops/return/${employeeId}`, {});
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not sign out. Try again.'); }
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not sign out. Try again.')); }
     finally { setActing(false); }
   };
   if (done) {

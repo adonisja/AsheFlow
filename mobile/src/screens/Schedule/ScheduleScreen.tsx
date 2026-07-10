@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl, Modal,
@@ -117,7 +118,7 @@ export default function ScheduleScreen() {
       setFetchError(null);
     } catch (err: any) {
       setSchedule([]);
-      setFetchError(err?.response?.data?.detail ?? err?.message ?? 'Failed to load schedule.');
+      setFetchError(errorText(err, 'Failed to load schedule.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -171,7 +172,7 @@ export default function ScheduleScreen() {
       setPtoModal(false);
       fetchSchedule();
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setPtoSubmitting(false);
     }
@@ -207,7 +208,7 @@ export default function ScheduleScreen() {
       setScrDaysAdd([]); setScrDaysDrop([]); setScrProposed([]); setScrReason('');
       fetchSchedule();
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setScrSubmitting(false);
     }

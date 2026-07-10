@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl, Modal, Pressable, Alert,
@@ -223,7 +224,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
         [{ text: 'OK', onPress: onClose }],
       );
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail ?? 'Could not record your response. Try again.');
+      Alert.alert('Error', errorText(e, 'Could not record your response. Try again.'));
     } finally {
       setActing(null);
       submitting.current = false;

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, RefreshControl,
@@ -201,7 +202,7 @@ export default function DriverSurveyScreen() {
               });
               await loadSurveyData();
             } catch (err: any) {
-              Alert.alert('Error', err.response?.data?.detail ?? 'Failed to submit. Please try again.');
+              Alert.alert('Error', errorText(err, 'Failed to submit. Please try again.'));
             } finally {
               setSubmitting(false);
             }

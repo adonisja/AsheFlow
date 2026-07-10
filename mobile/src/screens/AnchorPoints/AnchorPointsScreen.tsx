@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, Modal, RefreshControl,
@@ -156,7 +157,7 @@ export default function AnchorPointsScreen() {
       setApLocation(''); setApEta(''); setApNotes('');
       fetchAPs();
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
     }
@@ -182,7 +183,7 @@ export default function AnchorPointsScreen() {
       setArriveModal(false);
       fetchAPs();
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not confirm. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not confirm. Try again.'));
     } finally {
       setArriving(false);
     }

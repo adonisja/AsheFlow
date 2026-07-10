@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView,
@@ -198,12 +199,12 @@ export default function RouteSortScreen() {
               Alert.alert('Sort committed', `${res.data.packages_sorted} packages distributed across ${walkerIds.length} routes.`);
             } catch (err: any) {
               const status = err?.response?.status;
-              const detail = err?.response?.data?.detail;
+              const detail = errorText(err, '');
               if (status === 409) {
-                Alert.alert('Already committed', detail ?? 'Another trainer already ran the sort.');
+                Alert.alert('Already committed', detail || 'Another trainer already ran the sort.');
                 load();
               } else {
-                Alert.alert('Error', detail ?? 'Could not commit sort. Try again.');
+                Alert.alert('Error', detail || 'Could not commit sort. Try again.');
               }
             } finally {
               setCommitting(false);

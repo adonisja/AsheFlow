@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, Modal,
@@ -195,7 +196,7 @@ export default function PreferencesScreen() {
       setSearchQuery('');
       fetchRelationships();
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not add. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not add. Try again.'));
     } finally {
       setAdding(false);
     }
@@ -234,7 +235,7 @@ export default function PreferencesScreen() {
       setReassignReason('');
       fetchReassignments();
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setReassigning(false);
     }

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   ScrollView, TextInput, Alert, ActivityIndicator,
@@ -57,7 +58,7 @@ export default function MyAccountScreen() {
       });
       setEmailStep('verifying');
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail ?? e.message ?? 'Could not send verification code.');
+      Alert.alert('Error', errorText(e, e.message ?? 'Could not send verification code.'));
     } finally {
       setEmailBusy(false);
     }
@@ -86,7 +87,7 @@ export default function MyAccountScreen() {
         { text: 'Later', style: 'cancel' },
       ]);
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail ?? e.message ?? 'Could not verify code.');
+      Alert.alert('Error', errorText(e, e.message ?? 'Could not verify code.'));
     } finally {
       setEmailBusy(false);
     }

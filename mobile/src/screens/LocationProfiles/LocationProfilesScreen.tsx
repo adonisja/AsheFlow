@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, FlatList,
@@ -115,11 +116,11 @@ export default function LocationProfilesScreen() {
       loadProfiles();
     } catch (err: any) {
       const status = err?.response?.status;
-      const detail = err?.response?.data?.detail;
+      const detail = errorText(err, '');
       if (status === 409) {
-        Alert.alert('Already locked', detail ?? 'This profile is locked. No changes accepted.');
+        Alert.alert('Already locked', detail || 'This profile is locked. No changes accepted.');
       } else {
-        Alert.alert('Error', detail ?? 'Could not submit. Try again.');
+        Alert.alert('Error', detail || 'Could not submit. Try again.');
       }
     } finally {
       setSubmitting(false);

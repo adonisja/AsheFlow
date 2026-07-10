@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView,
@@ -114,8 +115,7 @@ export default function GraduationQuizScreen() {
               });
               setSubmitted(true);
             } catch (err: any) {
-              const detail = err?.response?.data?.detail;
-              Alert.alert('Error', detail ?? 'Could not submit quiz. Try again.');
+              Alert.alert('Error', errorText(err, 'Could not submit quiz. Try again.'));
             } finally {
               setSubmitting(false);
             }
