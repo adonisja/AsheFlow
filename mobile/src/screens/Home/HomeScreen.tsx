@@ -4,7 +4,7 @@ import {
   TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@contexts/AuthContext';
 import { useTabSwitch } from '@navigation/index';
 import { useColors } from '@contexts/ThemeContext';
@@ -117,7 +117,9 @@ export default function HomeScreen() {
     const eid = await resolveEmployeeId();
     if (!eid) return;
     try {
-      const res  = await apiClient.get(`/notifications/${eid}?limit=10`);
+      // limit must cover the whole unread set — counting within a 10-item
+      // page showed "10 unread" while 14 existed.
+      const res  = await apiClient.get(`/notifications/${eid}?limit=50`);
       const list: any[] = res.data ?? [];
       setUnreadCount(list.filter(n => !n.is_read).length);
       setLatestMessage(list[0]?.message ?? null);
@@ -128,10 +130,12 @@ export default function HomeScreen() {
     }
   }, [resolveEmployeeId]);
 
-  useEffect(() => {
+  // Refetch on every focus, not just mount — returning from the Notifications
+  // screen (where items get read) must not leave a stale unread badge here.
+  useFocusEffect(useCallback(() => {
     fetchAssignment();
     fetchNotifications();
-  }, [fetchAssignment, fetchNotifications]);
+  }, [fetchAssignment, fetchNotifications]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
