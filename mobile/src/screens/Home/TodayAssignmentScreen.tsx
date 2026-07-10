@@ -1,24 +1,28 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
-import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
-import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
-type CrewMember = { id: string; name: string; role: string };
+type CrewMember = {
+  id: string;
+  name: string;
+  role: string;
+  paired_trainer_id: string | null;
+};
 
 type Transfer = {
   to_truck_name: string;
   from_truck_name: string;
   transferred_at: string;
 };
+
+type ConfirmStatus = 'pending' | 'confirmed' | 'declined';
 
 type Assignment = {
   truck_name: string;
@@ -27,6 +31,9 @@ type Assignment = {
   dispatchPhase: 'planned' | 'active' | 'completed';
   crew: CrewMember[];
   transfer: Transfer | null;
+  /** Who I'm paired with (trainee → their trainer, trainer → their trainees). */
+  pairedNames: string[];
+  confirmations: Record<string, ConfirmStatus>;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -48,15 +55,20 @@ const PHASE_BADGE = {
   completed: { label: 'Confirmed',  color: '#0FA870', bg: '#0FA87022' },
 };
 
+/** Sections longer than this start collapsed — a 20+ walker roster shouldn't
+ * bury the page; headers stay tappable to expand. */
+const COLLAPSE_THRESHOLD = 6;
+
 export default function TodayAssignmentScreen() {
   const c = useColors();
-  const { user } = useAuth();
+  const navigation = useNavigation();
   const { fetchId, cachedId } = useEmployeeId();
-  const switchTab = useTabSwitch();
 
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [expanded,   setExpanded]   = useState<Record<string, boolean>>({});
+  const [responding, setResponding] = useState<ConfirmStatus | null>(null);
 
   const todayLocal = new Date();
   const today = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth() + 1).padStart(2, '0')}-${String(todayLocal.getDate()).padStart(2, '0')}`;
@@ -65,10 +77,11 @@ export default function TodayAssignmentScreen() {
     const eid = await fetchId();
     if (!eid) return;
     try {
-      const [schedRes, dispatchRes, transferRes] = await Promise.allSettled([
+      const [schedRes, dispatchRes, transferRes, confRes] = await Promise.allSettled([
         apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`),
         apiClient.get(`/dispatch/${today}`),
         apiClient.get(`/truck-transfers/mine?date=${today}`),
+        apiClient.get(`/dispatch/${today}/confirmations`),
       ]);
 
       const entry = schedRes.status === 'fulfilled' ? (schedRes.value.data ?? [])[0] : null;
@@ -79,21 +92,35 @@ export default function TodayAssignmentScreen() {
 
       const me = (entry.crew ?? []).find((m: any) => m.id === eid);
 
-      // Determine dispatch phase by finding the employee's truck in the dispatch response.
+      // Determine dispatch phase + my pairing from the dispatch response.
       let dispatchPhase: Assignment['dispatchPhase'] = 'planned';
+      const pairedNames: string[] = [];
       if (dispatchRes.status === 'fulfilled') {
         const dispatch = dispatchRes.value.data;
-        const assignedCrews: Record<string, { employee_id: string }[]> = dispatch?.assigned_crews ?? {};
+        const assignedCrews: Record<string, CrewMember[] & { employee_id?: string }[]> =
+          dispatch?.assigned_crews ?? {};
         const truckAssignments: { truck_id: string; status: string }[] = dispatch?.truck_assignments ?? [];
 
-        const myTruckId = Object.entries(assignedCrews).find(([, crew]) =>
-          crew.some((m) => m.employee_id === eid),
-        )?.[0];
+        const myTruckEntry = Object.entries(assignedCrews).find(([, crew]) =>
+          (crew as any[]).some((m) => m.employee_id === eid),
+        );
 
-        if (myTruckId) {
+        if (myTruckEntry) {
+          const [myTruckId, myCrew] = myTruckEntry as [string, any[]];
           const ta = truckAssignments.find((t) => t.truck_id === myTruckId);
           if (ta?.status === 'completed') dispatchPhase = 'completed';
           else if (ta?.status === 'active') dispatchPhase = 'active';
+
+          // Pairing: trainee → their trainer's name; trainer → their trainees.
+          const myEntry = myCrew.find((m) => m.employee_id === eid);
+          if (myEntry?.role === 'trainee' && myEntry.paired_trainer_id) {
+            const trainer = myCrew.find((m) => m.employee_id === myEntry.paired_trainer_id);
+            if (trainer) pairedNames.push(trainer.name);
+          } else if (myEntry?.role === 'trainer') {
+            for (const m of myCrew) {
+              if (m.role === 'trainee' && m.paired_trainer_id === eid) pairedNames.push(m.name);
+            }
+          }
         }
       }
 
@@ -101,12 +128,17 @@ export default function TodayAssignmentScreen() {
       const transferList: Transfer[] = transferRes.status === 'fulfilled' ? transferRes.value.data ?? [] : [];
       const transfer = transferList.length > 0 ? transferList[transferList.length - 1] : null;
 
+      const confirmations: Record<string, ConfirmStatus> =
+        confRes.status === 'fulfilled' ? (confRes.value.data?.confirmations ?? confRes.value.data ?? {}) : {};
+
       setAssignment({
         truck_name: entry.truck_name,
         role: me?.role ?? 'unknown',
         dispatchPhase,
         crew: entry.crew ?? [],
         transfer,
+        pairedNames,
+        confirmations,
       });
     } catch {
       setAssignment(null);
@@ -118,11 +150,27 @@ export default function TodayAssignmentScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  const respond = async (status: 'confirmed' | 'declined') => {
+    const eid = cachedId.current;
+    if (!eid || responding) return;
+    setResponding(status);
+    try {
+      await apiClient.post(`/dispatch/${today}/confirmations`, { employee_id: eid, status });
+      setAssignment(prev => prev
+        ? { ...prev, confirmations: { ...prev.confirmations, [eid]: status } }
+        : prev);
+    } catch {
+      // leave state as-is; pull-to-refresh recovers
+    } finally {
+      setResponding(null);
+    }
+  };
+
   const s = styles(c);
 
   if (!loading && !assignment) {
     return (
-      <ScreenShell title="Today's Assignment" subtitle={today} onBack={() => switchTab('Home')}>
+      <ScreenShell title="Today's Assignment" subtitle={today} onBack={() => navigation.goBack()}>
         <View style={s.emptyCard}>
           <Text style={s.emptyIcon}>🚚</Text>
           <Text style={s.emptyText}>No assignment for today</Text>
@@ -139,6 +187,21 @@ export default function TodayAssignmentScreen() {
   }
   const roleOrder = ROLE_ORDER.filter(r => grouped[r]?.length);
 
+  const myId = cachedId.current ?? '';
+  const myStatus: ConfirmStatus = assignment?.confirmations[myId] ?? 'pending';
+  const confirmationsKnown = Object.keys(assignment?.confirmations ?? {}).length > 0;
+
+  const isExpanded = (role: string) =>
+    expanded[role] ?? (grouped[role].length <= COLLAPSE_THRESHOLD);
+
+  const statusGlyph = (memberId: string) => {
+    if (!confirmationsKnown) return null;
+    const st = assignment?.confirmations[memberId];
+    if (st === 'confirmed') return <Text style={[s.confirmGlyph, { color: '#0FA870' }]}>✓</Text>;
+    if (st === 'declined')  return <Text style={[s.confirmGlyph, { color: '#E8443A' }]}>✗</Text>;
+    return <Text style={[s.confirmGlyph, { color: c.mutedForeground }]}>·</Text>;
+  };
+
   return (
     <ScreenShell
       title="Today's Assignment"
@@ -146,9 +209,9 @@ export default function TodayAssignmentScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}
-      onBack={() => switchTab('Home')}
+      onBack={() => navigation.goBack()}
     >
-      {/* Truck + my role */}
+      {/* Truck + my role + pairing */}
       {assignment && (
         <View style={s.heroCard}>
           <View style={s.truckRow}>
@@ -168,13 +231,63 @@ export default function TodayAssignmentScreen() {
 
           <View style={s.divider} />
 
-          <Text style={s.myRoleLabel}>Your Role</Text>
-          <View style={[s.myRolePill, { backgroundColor: (ROLE_COLORS[assignment.role] ?? c.primary) + '18' }]}>
-            <Text style={[s.myRoleText, { color: ROLE_COLORS[assignment.role] ?? c.primary }]}>
-              {ROLE_LABELS[assignment.role] ?? assignment.role}
-            </Text>
+          <View style={s.roleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.myRoleLabel}>Your Role</Text>
+              <View style={[s.myRolePill, { backgroundColor: (ROLE_COLORS[assignment.role] ?? c.primary) + '18' }]}>
+                <Text style={[s.myRoleText, { color: ROLE_COLORS[assignment.role] ?? c.primary }]}>
+                  {ROLE_LABELS[assignment.role] ?? assignment.role}
+                </Text>
+              </View>
+            </View>
+            {assignment.pairedNames.length > 0 && (
+              <View style={{ flex: 1 }}>
+                <Text style={s.myRoleLabel}>
+                  {assignment.role === 'trainer' ? 'Your Trainee' : 'Your Trainer'}
+                </Text>
+                {assignment.pairedNames.map(n => (
+                  <Text key={n} style={s.pairedName}>{n}</Text>
+                ))}
+              </View>
+            )}
           </View>
         </View>
+      )}
+
+      {/* Attendance confirmation — the one action this page exists for */}
+      {assignment?.dispatchPhase === 'active' && (
+        myStatus === 'pending' ? (
+          <View style={s.confirmCard}>
+            <Text style={s.confirmTitle}>Confirm your attendance</Text>
+            <Text style={s.confirmSub}>Dispatch is waiting on your response for today.</Text>
+            <View style={s.confirmBtnRow}>
+              <TouchableOpacity
+                style={[s.confirmBtn, { backgroundColor: '#0FA870' }]}
+                onPress={() => respond('confirmed')}
+                disabled={responding !== null}
+              >
+                {responding === 'confirmed'
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={s.confirmBtnText}>✓  I'll be there</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.confirmBtn, s.declineBtn]}
+                onPress={() => respond('declined')}
+                disabled={responding !== null}
+              >
+                {responding === 'declined'
+                  ? <ActivityIndicator color="#E8443A" size="small" />
+                  : <Text style={[s.confirmBtnText, { color: '#E8443A' }]}>Can't make it</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={[s.respondedCard, myStatus === 'confirmed' ? s.respondedOk : s.respondedNo]}>
+            <Text style={[s.respondedText, { color: myStatus === 'confirmed' ? '#0FA870' : '#E8443A' }]}>
+              {myStatus === 'confirmed' ? "✓ You're confirmed for today" : '✗ You declined today'}
+            </Text>
+          </View>
+        )
       )}
 
       {/* Transfer banner — shown when employee was moved mid-day */}
@@ -191,41 +304,56 @@ export default function TodayAssignmentScreen() {
         </View>
       )}
 
-      {/* Crew — grouped by role */}
-      {roleOrder.map(role => (
-        <View key={role} style={s.section}>
-          <View style={s.sectionHeader}>
-            <View style={[s.roleDot, { backgroundColor: ROLE_COLORS[role] ?? c.primary }]} />
-            <Text style={s.sectionTitle}>{ROLE_LABELS[role] ?? role}s</Text>
-            <Text style={s.sectionCount}>{grouped[role].length}</Text>
-          </View>
-          {grouped[role].map((m, i) => (
-            <View
-              key={m.id}
-              style={[
-                s.memberRow,
-                i < grouped[role].length - 1 && s.memberRowBorder,
-                m.id === cachedId.current && s.memberRowMe,
-              ]}
+      {/* Crew — grouped by role; large sections start collapsed */}
+      {roleOrder.map(role => {
+        const members = grouped[role];
+        const open = isExpanded(role);
+        const confirmedCount = confirmationsKnown
+          ? members.filter(m => assignment?.confirmations[m.id] === 'confirmed').length
+          : null;
+        return (
+          <View key={role} style={s.section}>
+            <TouchableOpacity
+              style={s.sectionHeader}
+              onPress={() => setExpanded(prev => ({ ...prev, [role]: !open }))}
+              activeOpacity={0.7}
             >
-              <View style={[s.avatar, { backgroundColor: (ROLE_COLORS[role] ?? c.primary) + '18' }]}>
-                <Text style={[s.avatarText, { color: ROLE_COLORS[role] ?? c.primary }]}>
-                  {m.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                </Text>
-              </View>
-              <Text style={[s.memberName, m.id === cachedId.current && { color: c.primary, fontWeight: fontWeight.semibold }]}>
-                {m.name}{m.id === cachedId.current ? ' (you)' : ''}
+              <View style={[s.roleDot, { backgroundColor: ROLE_COLORS[role] ?? c.primary }]} />
+              <Text style={s.sectionTitle}>{ROLE_LABELS[role] ?? role}s</Text>
+              <Text style={s.sectionCount}>
+                {confirmedCount !== null ? `${confirmedCount}/${members.length} confirmed` : members.length}
               </Text>
-            </View>
-          ))}
-        </View>
-      ))}
+              <Text style={s.chevron}>{open ? '▾' : '▸'}</Text>
+            </TouchableOpacity>
+            {open && members.map((m, i) => (
+              <View
+                key={m.id}
+                style={[
+                  s.memberRow,
+                  i < members.length - 1 && s.memberRowBorder,
+                  m.id === myId && s.memberRowMe,
+                ]}
+              >
+                <View style={[s.avatar, { backgroundColor: (ROLE_COLORS[role] ?? c.primary) + '18' }]}>
+                  <Text style={[s.avatarText, { color: ROLE_COLORS[role] ?? c.primary }]}>
+                    {m.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  </Text>
+                </View>
+                <Text style={[s.memberName, m.id === myId && { color: c.primary, fontWeight: fontWeight.semibold }]}>
+                  {m.name}{m.id === myId ? ' (you)' : ''}
+                </Text>
+                {statusGlyph(m.id)}
+              </View>
+            ))}
+          </View>
+        );
+      })}
     </ScreenShell>
   );
 }
 
 const styles = (c: ThemeColors) => StyleSheet.create({
-  heroCard:      { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.lg },
+  heroCard:      { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.md },
   truckRow:      { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   truckIcon:     { width: 48, height: 48, borderRadius: radius.md, backgroundColor: c.primaryLight, alignItems: 'center', justifyContent: 'center' },
   truckEmoji:    { fontSize: 22 },
@@ -234,15 +362,30 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   statusBadge:   { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
   statusText:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   divider:       { height: 1, backgroundColor: c.border, marginVertical: spacing.md },
+  roleRow:       { flexDirection: 'row', gap: spacing.md },
   myRoleLabel:   { fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: fontWeight.semibold, marginBottom: spacing.xs },
   myRolePill:    { alignSelf: 'flex-start', paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.full },
   myRoleText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
+  pairedName:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, paddingVertical: 2 },
+
+  confirmCard:   { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: '#0EA5D855', padding: spacing.md, marginBottom: spacing.md },
+  confirmTitle:  { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: c.foreground },
+  confirmSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.md },
+  confirmBtnRow: { flexDirection: 'row', gap: spacing.sm },
+  confirmBtn:    { flex: 1, paddingVertical: spacing.sm + 2, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  declineBtn:    { backgroundColor: '#E8443A18', borderWidth: 1, borderColor: '#E8443A44' },
+  confirmBtnText:{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: '#fff' },
+  respondedCard: { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md, alignItems: 'center' },
+  respondedOk:   { backgroundColor: '#0FA87011', borderColor: '#0FA87044' },
+  respondedNo:   { backgroundColor: '#E8443A11', borderColor: '#E8443A44' },
+  respondedText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   section:       { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, marginBottom: spacing.md, overflow: 'hidden' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, backgroundColor: c.surfaceMuted },
   roleDot:       { width: 8, height: 8, borderRadius: 4 },
   sectionTitle:  { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.foreground, textTransform: 'uppercase', letterSpacing: 0.8, flex: 1 },
   sectionCount:  { fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.medium },
+  chevron:       { fontSize: fontSize.sm, color: c.mutedForeground, marginLeft: spacing.xs },
 
   memberRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   memberRowBorder:{ borderBottomWidth: 1, borderBottomColor: c.border },
@@ -250,6 +393,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   avatar:        { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   avatarText:    { fontSize: fontSize.xs, fontWeight: fontWeight.bold },
   memberName:    { fontSize: fontSize.sm, color: c.foreground, flex: 1 },
+  confirmGlyph:  { fontSize: fontSize.md, fontWeight: fontWeight.bold, width: 20, textAlign: 'center' },
 
   transferCard:  { backgroundColor: '#E8820C11', borderRadius: radius.lg, borderWidth: 1, borderColor: '#E8820C44', padding: spacing.md, marginBottom: spacing.md },
   transferLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: '#E8820C', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },

@@ -980,6 +980,16 @@ export default function DispatchDashboard() {
                                    <p className="text-sm font-medium text-foreground leading-tight">{member.name || member.employee_id}</p>
                                    <div className="flex items-center gap-1.5">
                                      <p className="text-[10px] text-subtle uppercase tracking-wider">{employees[member.employee_id]?.role || member.role}</p>
+                                     {member.paired_trainer_id && (
+                                       <span
+                                         className="text-[9px] font-bold bg-info/15 text-info px-1 py-0.5 rounded tracking-wide"
+                                         title="Paired trainer for today"
+                                       >
+                                         ⇄ {employees[member.paired_trainer_id]?.name
+                                           || sortedCrew.find((m: any) => m.employee_id === member.paired_trainer_id)?.name
+                                           || 'trainer'}
+                                       </span>
+                                     )}
                                      {transfers[member.employee_id] && (
                                        <span className="text-[9px] font-bold bg-warning/15 text-warning px-1 py-0.5 rounded uppercase tracking-wide" title={`Transferred to ${transfers[member.employee_id].to_truck_name}`}>
                                          ↗ {transfers[member.employee_id].to_truck_name}
