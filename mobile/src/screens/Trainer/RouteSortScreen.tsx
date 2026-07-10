@@ -1,463 +1,421 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { errorText } from '@api/errorText';
+import React, { useState, useCallback } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
+  Alert, Modal, ScrollView,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
-import { useAuth } from '@contexts/AuthContext';
-import { useColors } from '@contexts/ThemeContext';
+import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
+import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+/** AP Sort — mobile-first (drivers and trainers run this AT the anchor point).
+ *
+ * Rebuilt on the current API (the old screen called /walker-routes/assignment
+ * and /walker-routes/commit, which no longer exist):
+ *   zone-status (ADR-185 driver-readable commit gate) → commit-sort →
+ *   wave-distribution auto-propose (ADR-187/189) → review/override → send.
+ */
 
-type AssignmentMember = {
+type CrewMember = {
+  employee_id: string;
+  name: string;
+  role: string;
+  paired_trainer_id: string | null;
+};
+
+type RouteResp = {
   id: string;
+  route_number: number;
+  status: string;
+  effort_class: string;
+  package_count: number;
+  wave_number: number;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  returned_at: string | null;
+};
+
+type Proposal = {
+  route_number: number;
+  route_id: string;
   employee_id: string;
   employee_name: string;
-  role: string;
+  effort_class: string;
+  auto_proposed: boolean;
 };
 
-type TruckAssignment = {
-  id: string;
-  truck_id: string;
-  date: string;
-  status: string;
-  sort_initiated_by: string | null;
-  sort_committed_at: string | null;
+const EFFORT_COLORS: Record<string, string> = {
+  easy: '#0FA870', standard: '#0EA5D8', heavy: '#E8820C', very_heavy: '#E8443A',
 };
-
-type WalkerTrip = {
-  id: string;
-  trip_number: number;
-  bag_ids: string[];
-  tba_numbers: string[];
-  status: string;
-};
-
-type WalkerRoute = {
-  id: string;
-  walker_id: string;
-  total_packages: number;
-  total_bags: number;
-  planned_trips: number;
-  trips: WalkerTrip[];
-};
-
-type CommitResult = {
-  routes: WalkerRoute[];
-  packages_sorted: number;
-  packages_dropped: number;
-  dropped_tbas: string[];
-  sort_initiated_by_name: string | null;
-  sort_committed_at: string | null;
-};
-
-type OVRow = { sort_zone: string; size_tier: 'XL' | 'L' | 'M' | 'S'; paired_bag_id: string };
-
-const SIZE_TIERS: OVRow['size_tier'][] = ['XL', 'L', 'M', 'S'];
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-// ── Main component ────────────────────────────────────────────────────────────
 
 export default function RouteSortScreen() {
   const c = useColors();
-  const { user } = useAuth();
   const { fetchId } = useEmployeeId();
   const s = styles(c);
 
-  // ── State ──
-  const [loading,      setLoading]      = useState(true);
-  const [assignment,   setAssignment]   = useState<TruckAssignment | null>(null);
-  const [members,      setMembers]      = useState<AssignmentMember[]>([]);
-  const [lockedResult, setLockedResult] = useState<CommitResult | null>(null);
-  const [lockedByName, setLockedByName] = useState<string | null>(null);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [taId,       setTaId]       = useState<string | null>(null);
+  const [truckName,  setTruckName]  = useState<string>('');
+  const [zoned,      setZoned]      = useState(false);
+  const [zonePkgs,   setZonePkgs]   = useState(0);
+  const [crew,       setCrew]       = useState<CrewMember[]>([]);
+  const [routes,     setRoutes]     = useState<RouteResp[]>([]);
+  const [committing, setCommitting] = useState(false);
+  const [proposing,  setProposing]  = useState(false);
+  const [proposal,   setProposal]   = useState<Proposal[] | null>(null);
+  const [conflicts,  setConflicts]  = useState<string[]>([]);
+  const [overridden, setOverridden] = useState<Set<number>>(new Set());
+  const [sending,    setSending]    = useState(false);
+  const [pickerFor,  setPickerFor]  = useState<number | null>(null);   // route_number being reassigned
 
-  // Walker picker
-  const [walkerIds,    setWalkerIds]    = useState<string[]>([]);
+  const todayStr = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  };
 
-  // OV rows
-  const [ovs,          setOvs]          = useState<OVRow[]>([]);
-
-  // Submitting
-  const [committing,   setCommitting]   = useState(false);
-
-  // ── Load today's assignment for this trainer ──
-  const load = useCallback(async () => {
-    const eid = await fetchId();
-    if (!eid) return;
-    setLoading(true);
+  const load = useCallback(async (opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) setRefreshing(true);
+    const today = todayStr();
     try {
-      // Today's dispatch — find the truck assignment this trainer is on
-      const dispRes = await apiClient.get(`/dispatch/${today()}`);
-      const dispatch = dispRes.data;
-      const myMember = dispatch?.assignment_members?.find(
-        (m: any) => m.employee_id === eid
-      );
-      if (!myMember) { setAssignment(null); setLoading(false); return; }
+      const eid = await fetchId();
+      const disp = await apiClient.get(`/dispatch/${today}`);
+      const crews: Record<string, CrewMember[]> = disp.data?.assigned_crews ?? {};
+      const truckAssignments: { id?: string; truck_id: string }[] = disp.data?.truck_assignments ?? [];
 
-      const assignmentId = myMember.truck_assignment_id;
+      const myTruckEntry = Object.entries(crews).find(([, members]) =>
+        members.some(m => m.employee_id === eid));
+      if (!myTruckEntry) { setTaId(null); return; }
+      const [myTruckId, myCrew] = myTruckEntry;
+      setCrew(myCrew);
 
-      // Fetch full assignment (includes sort_initiated_by etc.)
-      const aRes = await apiClient.get(`/dispatch/assignments/${assignmentId}`);
-      const a: TruckAssignment = aRes.data;
-      setAssignment(a);
+      const ta: any = truckAssignments.find(t => t.truck_id === myTruckId);
+      const assignmentId = ta?.id ?? ta?.assignment_id ?? null;
+      if (!assignmentId) { setTaId(null); return; }
+      setTaId(assignmentId);
 
-      // All members on this truck
-      const allMembers: AssignmentMember[] = dispatch.assignment_members.filter(
-        (m: any) => m.truck_assignment_id === assignmentId
-      );
-      setMembers(allMembers);
-
-      // Pre-select walkers (trainee counts as walker for sort)
-      const walkers = allMembers
-        .filter(m => m.role === 'walker' || m.role === 'trainee')
-        .map(m => m.employee_id);
-      setWalkerIds(walkers);
-
-      // If already locked, load committed routes
-      if (a.sort_initiated_by) {
-        const routesRes = await apiClient.get(`/walker-routes/assignment/${assignmentId}`);
-        // Fetch initiator name from members list
-        const initiator = allMembers.find(m => m.employee_id === a.sort_initiated_by);
-        setLockedByName(initiator?.employee_name ?? 'another trainer');
-        setLockedResult({
-          routes:                routesRes.data,
-          packages_sorted:       0,
-          packages_dropped:      0,
-          dropped_tbas:          [],
-          sort_initiated_by_name: initiator?.employee_name ?? null,
-          sort_committed_at:     a.sort_committed_at,
-        });
+      const [zoneRes, routesRes] = await Promise.allSettled([
+        apiClient.get(`/sort/${today}/zone-status`),
+        apiClient.get(`/walker-routes/${assignmentId}/routes`),
+      ]);
+      if (zoneRes.status === 'fulfilled') {
+        const mine = (zoneRes.value.data?.trucks ?? []).find((t: any) => t.truck_id === myTruckId);
+        setZoned(!!mine?.zoned);
+        setZonePkgs(mine?.package_count ?? 0);
+        setTruckName(mine?.truck_name ?? '');
       }
+      setRoutes(routesRes.status === 'fulfilled' ? (routesRes.value.data ?? []) : []);
     } catch {
-      setAssignment(null);
+      setTaId(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [fetchId]);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  // ── OV helpers ──
-  function addOV() {
-    setOvs(prev => [...prev, { sort_zone: '', size_tier: 'XL', paired_bag_id: '' }]);
-  }
-  function removeOV(i: number) {
-    setOvs(prev => prev.filter((_, idx) => idx !== i));
-  }
-  function updateOV<K extends keyof OVRow>(i: number, key: K, val: OVRow[K]) {
-    setOvs(prev => prev.map((row, idx) => idx === i ? { ...row, [key]: val } : row));
-  }
+  // ── Commit sort ──────────────────────────────────────────────────────────
 
-  // ── Toggle walker selection ──
-  function toggleWalker(id: string) {
-    setWalkerIds(prev =>
-      prev.includes(id) ? prev.filter(w => w !== id) : [...prev, id]
-    );
-  }
-
-  // ── Commit ──
-  async function handleCommit() {
-    if (!assignment) return;
-    if (walkerIds.length === 0) {
-      Alert.alert('No walkers selected', 'Select at least one walker or trainee to sort routes.');
-      return;
+  const commitSort = async () => {
+    if (!taId) return;
+    setCommitting(true);
+    try {
+      const res = await apiClient.post('/walker-routes/commit-sort', {
+        truck_assignment_id: taId,
+        route_date: todayStr(),
+      });
+      Alert.alert('Sort committed', `${res.data.packages_sorted} packages sorted into ${res.data.routes?.length ?? 0} routes.`);
+      await load();
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not commit the sort.'));
+    } finally {
+      setCommitting(false);
     }
-    const invalidOvs = ovs.filter(o => !o.sort_zone.trim() || !o.paired_bag_id.trim());
-    if (invalidOvs.length > 0) {
-      Alert.alert('Incomplete OV entries', 'Fill in sort zone and bag ID for all OV rows, or remove them.');
-      return;
+  };
+
+  // ── Wave distribution ────────────────────────────────────────────────────
+
+  const propose = async () => {
+    if (!taId) return;
+    setProposing(true);
+    try {
+      const res = await apiClient.post('/walker-routes/wave-distribution', {
+        truck_assignment_id: taId,
+        route_date: todayStr(),
+        auto_assign: true,
+        assignments: [],
+        trainer_id: null,
+        trainee_id: null,
+        trainee_phase: null,
+      });
+      setProposal(res.data.proposed_assignments ?? []);
+      setConflicts(res.data.conflicts ?? []);
+      setOverridden(new Set());
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not build a wave proposal.'));
+    } finally {
+      setProposing(false);
     }
+  };
 
-    Alert.alert(
-      'Commit Route Sort',
-      `Sort routes for ${walkerIds.length} walker(s)? This cannot be undone — only one sort per assignment is allowed.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Commit', style: 'destructive',
-          onPress: async () => {
-            setCommitting(true);
-            try {
-              const res = await apiClient.post('/walker-routes/commit', {
-                truck_assignment_id: assignment.id,
-                route_date:          assignment.date,
-                walker_count:        walkerIds.length,
-                walker_ids:          walkerIds,
-                ovs:                 ovs.filter(o => o.sort_zone.trim()),
-              });
-              setLockedResult(res.data);
-              setLockedByName(res.data.sort_initiated_by_name ?? user?.firstName ?? 'You');
-              Alert.alert('Sort committed', `${res.data.packages_sorted} packages distributed across ${walkerIds.length} routes.`);
-            } catch (err: any) {
-              const status = err?.response?.status;
-              const detail = errorText(err, '');
-              if (status === 409) {
-                Alert.alert('Already committed', detail || 'Another trainer already ran the sort.');
-                load();
-              } else {
-                Alert.alert('Error', detail || 'Could not commit sort. Try again.');
-              }
-            } finally {
-              setCommitting(false);
-            }
-          },
-        },
-      ]
-    );
-  }
+  const overrideAssignee = (routeNumber: number, member: CrewMember) => {
+    setProposal(prev => prev?.map(p =>
+      p.route_number === routeNumber
+        ? { ...p, employee_id: member.employee_id, employee_name: member.name }
+        : p) ?? null);
+    setOverridden(prev => new Set(prev).add(routeNumber));
+    setPickerFor(null);
+  };
 
-  // ── Render ──
-  const s2 = styles(c);
+  const sendWave = async () => {
+    if (!taId || !proposal || proposal.length === 0) return;
+    setSending(true);
+    try {
+      // Pairing sync: the manual branch requires trainer_id when a trainee is
+      // assigned — derive from dispatch pairing (same as web's D6 derive).
+      const pairedTrainee = crew.find(m => m.role === 'trainee' && m.paired_trainer_id);
+      await apiClient.post('/walker-routes/wave-distribution', {
+        truck_assignment_id: taId,
+        route_date: todayStr(),
+        auto_assign: false,
+        assignments: proposal.map(p => ({
+          route_number: p.route_number,
+          employee_id: p.employee_id,
+          // D9.2 telemetry: accepted-as-proposed vs human-overridden
+          auto_proposed: overridden.has(p.route_number) ? false : true,
+        })),
+        trainer_id: pairedTrainee?.paired_trainer_id ?? null,
+        trainee_id: pairedTrainee?.employee_id ?? null,
+        trainee_phase: null,
+      });
+      const sent = proposal.length;
+      setProposal(null);
+      await load();
+      Alert.alert('Wave sent', `${sent} route${sent === 1 ? '' : 's'} assigned. Walkers see them on My Route.`);
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not send the wave.'));
+    } finally {
+      setSending(false);
+    }
+  };
 
-  if (loading) {
+  // ── Derived ──────────────────────────────────────────────────────────────
+
+  const unassigned = routes.filter(r => r.status === 'unassigned');
+  const active     = routes.filter(r => r.status === 'assigned' || r.status === 'in_progress');
+  const completed  = routes.filter(r => r.status === 'completed');
+  const pickerOptions = crew.filter(m => m.role !== 'driver');
+
+  if (!loading && !taId) {
     return (
-      <View style={s2.center}>
-        <ActivityIndicator size="large" color={c.primary} />
-      </View>
-    );
-  }
-
-  if (!assignment) {
-    return (
-      <ScreenShell edges={[]} noHeader title="Route Sort" subtitle="">
-        <View style={s2.center}>
+      <ScreenShell edges={[]} noHeader title="AP Sort" subtitle="No truck assignment today."
+        refreshing={refreshing} onRefresh={() => load({ refresh: true })}>
+        <View style={s.center}>
           <Text style={{ fontSize: 40 }}>🗺️</Text>
-          <Text style={[s2.emptyTitle]}>No assignment today</Text>
-          <Text style={[s2.emptySub]}>You are not on a truck assignment for today.</Text>
+          <Text style={s.emptyTitle}>Not on a truck today</Text>
+          <Text style={s.emptySub}>AP Sort opens once dispatch assigns you to a truck.</Text>
         </View>
       </ScreenShell>
     );
   }
 
-  // ── Locked view (sort already committed) ──
-  if (lockedResult) {
-    return (
-      <ScrollView style={s2.scroll} contentContainerStyle={{ padding: spacing.md }}>
-        <View style={[s2.lockBanner, { backgroundColor: c.primary + '22', borderColor: c.primary }]}>
-          <Text style={[s2.lockBannerIcon]}>🔒</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={[s2.lockTitle, { color: c.primary }]}>Sort committed</Text>
-            <Text style={[s2.lockSub, { color: c.foreground }]}>
-              By {lockedByName}
-              {lockedResult.sort_committed_at
-                ? ` · ${new Date(lockedResult.sort_committed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                : ''}
-            </Text>
-          </View>
+  return (
+    <ScreenShell
+      edges={[]} noHeader
+      title="AP Sort"
+      subtitle={truckName ? `${truckName} · ${todayStr()}` : todayStr()}
+      loading={loading}
+      refreshing={refreshing}
+      onRefresh={() => load({ refresh: true })}
+    >
+      {/* Phase: not yet committed */}
+      {routes.length === 0 && (
+        <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
+          {zoned ? (
+            <>
+              <Text style={s.cardTitle}>Ready to sort</Text>
+              <Text style={s.cardSub}>{zonePkgs} packages zoned to this truck by station sort.</Text>
+              <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={commitSort} disabled={committing}>
+                {committing
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={s.primaryBtnText}>Commit Sort — build routes</Text>}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={s.cardTitle}>Waiting on station sort</Text>
+              <Text style={s.cardSub}>This truck has no zoned packages yet — check back after the station finishes sorting.</Text>
+            </>
+          )}
         </View>
+      )}
 
-        <Text style={[s2.sectionTitle, { marginTop: spacing.lg }]}>Routes</Text>
-        {lockedResult.routes.map((route, i) => (
-          <RouteCard key={route.id} route={route} index={i} c={c} />
+      {/* Phase: routes exist — wave control */}
+      {routes.length > 0 && (
+        <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={s.summaryRow}>
+            <Summary label="Unassigned" value={unassigned.length} color={unassigned.length > 0 ? '#E8820C' : c.mutedForeground} c={c} />
+            <Summary label="Out now" value={active.length} color="#0EA5D8" c={c} />
+            <Summary label="Done" value={completed.length} color="#0FA870" c={c} />
+          </View>
+          {unassigned.length > 0 && (
+            <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={propose} disabled={proposing}>
+              {proposing
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={s.primaryBtnText}>⚡ Distribute Wave ({unassigned.length} route{unassigned.length === 1 ? '' : 's'} waiting)</Text>}
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Route lists */}
+      {[{ label: 'OUT NOW', data: active }, { label: 'UNASSIGNED', data: unassigned }, { label: 'COMPLETED', data: completed }]
+        .filter(g => g.data.length > 0)
+        .map(g => (
+          <View key={g.label}>
+            <Text style={s.sectionLabel}>{g.label} · {g.data.length}</Text>
+            {g.data.map(r => (
+              <View key={r.id} style={[s.routeRow, { backgroundColor: c.card, borderColor: c.border }]}>
+                <View style={[s.routeNum, { backgroundColor: (EFFORT_COLORS[r.effort_class] ?? c.primary) + '1E' }]}>
+                  <Text style={[s.routeNumText, { color: EFFORT_COLORS[r.effort_class] ?? c.primary }]}>{r.route_number}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.routeName, { color: c.foreground }]}>
+                    {r.assigned_to_name ?? 'Unassigned'}
+                  </Text>
+                  <Text style={[s.routeMeta, { color: c.mutedForeground }]}>
+                    {r.package_count} pkgs · {r.effort_class} · wave {r.wave_number}
+                    {r.returned_at ? ' · returned' : ''}
+                  </Text>
+                </View>
+                <Text style={[s.routeStatus, { color: c.mutedForeground }]}>{r.status.replace('_', ' ')}</Text>
+              </View>
+            ))}
+          </View>
         ))}
 
-        {lockedResult.packages_dropped > 0 && (
-          <View style={[s2.droppedBox, { borderColor: c.border }]}>
-            <Text style={[s2.droppedTitle, { color: c.mutedForeground }]}>
-              {lockedResult.packages_dropped} package(s) excluded (no address)
-            </Text>
-          </View>
-        )}
-      </ScrollView>
-    );
-  }
+      {/* ── Wave proposal sheet ── */}
+      {proposal && (
+        <Modal transparent animationType="slide" onRequestClose={() => setProposal(null)}>
+          <View style={ms.backdrop}>
+            <View style={[ms.sheet, { backgroundColor: c.card }]}>
+              <Text style={[ms.title, { color: c.foreground }]}>Wave proposal · {proposal.length} route{proposal.length === 1 ? '' : 's'}</Text>
+              <Text style={[ms.hint, { color: c.mutedForeground }]}>Tap a row to change who takes it.</Text>
 
-  // ── Form: select walkers, add OVs, commit ──
-  const walkersOnTruck = members.filter(m => m.role === 'walker' || m.role === 'trainee');
+              {conflicts.length > 0 && (
+                <View style={[ms.conflictBox, { backgroundColor: '#E8820C15', borderColor: '#E8820C44' }]}>
+                  {conflicts.map((cf, i) => (
+                    <Text key={i} style={[ms.conflictText, { color: '#B45309' }]}>⚠ {cf}</Text>
+                  ))}
+                </View>
+              )}
 
-  return (
-    <ScrollView style={s2.scroll} contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}>
+              <ScrollView style={{ maxHeight: 340 }}>
+                {[...proposal].sort((a, b) => a.route_number - b.route_number).map(p => (
+                  <TouchableOpacity
+                    key={p.route_number}
+                    style={[ms.propRow, { borderBottomColor: c.border }]}
+                    onPress={() => setPickerFor(p.route_number)}
+                  >
+                    <View style={[s.routeNum, { backgroundColor: (EFFORT_COLORS[p.effort_class] ?? c.primary) + '1E' }]}>
+                      <Text style={[s.routeNumText, { color: EFFORT_COLORS[p.effort_class] ?? c.primary }]}>{p.route_number}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[ms.propName, { color: c.foreground }]}>{p.employee_name}</Text>
+                      <Text style={[ms.propMeta, { color: c.mutedForeground }]}>{p.effort_class}</Text>
+                    </View>
+                    <Text style={[ms.propTag, { color: overridden.has(p.route_number) ? '#E8820C' : c.mutedForeground }]}>
+                      {overridden.has(p.route_number) ? 'edited' : 'auto'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-      <View style={[s2.infoCard, { borderColor: c.border }]}>
-        <Text style={[s2.infoLabel, { color: c.mutedForeground }]}>Assignment</Text>
-        <Text style={[s2.infoValue, { color: c.foreground }]}>
-          {assignment.date} · {assignment.status.toUpperCase()}
-        </Text>
-      </View>
-
-      {/* Walker selection */}
-      <Text style={s2.sectionTitle}>Walkers / Trainees</Text>
-      <Text style={[s2.hint, { color: c.mutedForeground }]}>
-        Select who is present on this truck today.
-      </Text>
-      {walkersOnTruck.length === 0 ? (
-        <Text style={[s2.emptyText, { color: c.mutedForeground }]}>No walkers or trainees on this assignment.</Text>
-      ) : (
-        walkersOnTruck.map(m => {
-          const selected = walkerIds.includes(m.employee_id);
-          return (
-            <TouchableOpacity
-              key={m.employee_id}
-              style={[s2.memberRow, { borderColor: selected ? c.primary : c.border, backgroundColor: selected ? c.primary + '18' : c.surface }]}
-              onPress={() => toggleWalker(m.employee_id)}
-              activeOpacity={0.7}
-            >
-              <View style={[s2.checkBox, { borderColor: selected ? c.primary : c.border, backgroundColor: selected ? c.primary : 'transparent' }]}>
-                {selected && <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>✓</Text>}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[s2.memberName, { color: c.foreground }]}>{m.employee_name}</Text>
-                <Text style={[s2.memberRole, { color: c.mutedForeground }]}>{m.role}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })
-      )}
-
-      {/* OV pairings */}
-      <View style={s2.ovHeader}>
-        <Text style={s2.sectionTitle}>OV Pairings</Text>
-        <TouchableOpacity onPress={addOV} style={[s2.addBtn, { backgroundColor: c.primary }]}>
-          <Text style={{ color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>+ Add OV</Text>
-        </TouchableOpacity>
-      </View>
-      <Text style={[s2.hint, { color: c.mutedForeground }]}>
-        Oversized items that must travel with a specific bag. Physical observation required.
-      </Text>
-      {ovs.map((ov, i) => (
-        <View key={i} style={[s2.ovRow, { borderColor: c.border, backgroundColor: c.surface }]}>
-          <View style={{ flex: 1, gap: spacing.xs }}>
-            <TextInput
-              style={[s2.input, { borderColor: c.border, color: c.foreground, backgroundColor: c.background }]}
-              placeholder="Sort zone (e.g. A-12)"
-              placeholderTextColor={c.mutedForeground}
-              value={ov.sort_zone}
-              onChangeText={v => updateOV(i, 'sort_zone', v)}
-            />
-            <TextInput
-              style={[s2.input, { borderColor: c.border, color: c.foreground, backgroundColor: c.background }]}
-              placeholder="Paired bag ID (e.g. Green 5270)"
-              placeholderTextColor={c.mutedForeground}
-              value={ov.paired_bag_id}
-              onChangeText={v => updateOV(i, 'paired_bag_id', v)}
-            />
-            <View style={{ flexDirection: 'row', gap: spacing.xs }}>
-              {SIZE_TIERS.map(tier => (
-                <TouchableOpacity
-                  key={tier}
-                  style={[s2.tierBtn, {
-                    borderColor:     ov.size_tier === tier ? c.primary : c.border,
-                    backgroundColor: ov.size_tier === tier ? c.primary : c.surface,
-                  }]}
-                  onPress={() => updateOV(i, 'size_tier', tier)}
-                >
-                  <Text style={{ color: ov.size_tier === tier ? '#fff' : c.mutedForeground, fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>
-                    {tier}
-                  </Text>
+              <View style={ms.btnRow}>
+                <TouchableOpacity style={[ms.cancelBtn, { borderColor: c.border }]} onPress={() => setProposal(null)} disabled={sending}>
+                  <Text style={{ color: c.mutedForeground, fontWeight: '600', fontSize: 13 }}>Cancel</Text>
                 </TouchableOpacity>
-              ))}
+                <TouchableOpacity style={[ms.sendBtn, { backgroundColor: c.primary }]} onPress={sendWave} disabled={sending}>
+                  {sending
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Send Wave</Text>}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-          <TouchableOpacity onPress={() => removeOV(i)} style={s2.removeOvBtn}>
-            <Text style={{ color: '#EF4444', fontSize: 18 }}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
 
-      {/* Commit button */}
-      <TouchableOpacity
-        style={[s2.commitBtn, { backgroundColor: c.primary, opacity: committing ? 0.7 : 1 }]}
-        onPress={handleCommit}
-        disabled={committing}
-        activeOpacity={0.8}
-      >
-        {committing
-          ? <ActivityIndicator size="small" color="#fff" />
-          : <Text style={s2.commitBtnText}>Commit Route Sort</Text>
-        }
-      </TouchableOpacity>
-
-      <View style={{ height: spacing.xl }} />
-    </ScrollView>
-  );
-}
-
-// ── Route card sub-component ──────────────────────────────────────────────────
-
-function RouteCard({ route, index, c }: { route: WalkerRoute; index: number; c: any }) {
-  const [open, setOpen] = useState(false);
-  const s = styles(c);
-  return (
-    <TouchableOpacity
-      style={[s.routeCard, { borderColor: c.border, backgroundColor: c.surface }]}
-      onPress={() => setOpen(o => !o)}
-      activeOpacity={0.8}
-    >
-      <View style={s.routeCardHeader}>
-        <Text style={[s.routeCardTitle, { color: c.foreground }]}>Walker {index + 1}</Text>
-        <Text style={[s.routeCardMeta, { color: c.mutedForeground }]}>
-          {route.total_packages} pkgs · {route.total_bags} bags · {route.planned_trips} trips
-        </Text>
-        <Text style={{ color: c.mutedForeground, fontSize: 12 }}>{open ? '▲' : '▼'}</Text>
-      </View>
-      {open && (
-        <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
-          {route.trips.map(trip => (
-            <View key={trip.id} style={[s.tripRow, { borderColor: c.border }]}>
-              <Text style={[s.tripLabel, { color: c.foreground }]}>Trip {trip.trip_number}</Text>
-              <Text style={[s.tripDetail, { color: c.mutedForeground }]}>
-                Bags: {trip.bag_ids.join(', ')}
-              </Text>
-            </View>
-          ))}
-        </View>
+          {/* Assignee picker overlays the sheet */}
+          {pickerFor !== null && (
+            <Modal transparent animationType="fade" onRequestClose={() => setPickerFor(null)}>
+              <TouchableOpacity style={ms.backdrop} activeOpacity={1} onPress={() => setPickerFor(null)}>
+                <View style={[ms.picker, { backgroundColor: c.card }]}>
+                  <Text style={[ms.title, { color: c.foreground }]}>Route {pickerFor} → who takes it?</Text>
+                  <ScrollView style={{ maxHeight: 320 }}>
+                    {pickerOptions.map(m => (
+                      <TouchableOpacity key={m.employee_id} style={[ms.propRow, { borderBottomColor: c.border }]}
+                        onPress={() => overrideAssignee(pickerFor, m)}>
+                        <Text style={[ms.propName, { color: c.foreground, flex: 1 }]}>{m.name}</Text>
+                        <Text style={[ms.propMeta, { color: c.mutedForeground, textTransform: 'capitalize' }]}>{m.role}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </TouchableOpacity>
+            </Modal>
+          )}
+        </Modal>
       )}
-    </TouchableOpacity>
+    </ScreenShell>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+function Summary({ label, value, color, c }: { label: string; value: number; color: string; c: ThemeColors }) {
+  return (
+    <View style={{ flex: 1, alignItems: 'center' }}>
+      <Text style={{ fontSize: fontSize.xl, fontWeight: fontWeight.extrabold, color }}>{value}</Text>
+      <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>{label}</Text>
+    </View>
+  );
+}
+
+const ms = StyleSheet.create({
+  backdrop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheet:       { borderTopLeftRadius: radius.lg * 1.5, borderTopRightRadius: radius.lg * 1.5, padding: spacing.lg, paddingBottom: spacing.xl },
+  picker:      { borderTopLeftRadius: radius.lg * 1.5, borderTopRightRadius: radius.lg * 1.5, padding: spacing.lg, paddingBottom: spacing.xl },
+  title:       { fontSize: fontSize.md, fontWeight: fontWeight.bold, marginBottom: 2 },
+  hint:        { fontSize: fontSize.xs, marginBottom: spacing.sm },
+  conflictBox: { borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm },
+  conflictText:{ fontSize: fontSize.xs, lineHeight: 17 },
+  propRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1 },
+  propName:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  propMeta:    { fontSize: fontSize.xs },
+  propTag:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  btnRow:      { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  cancelBtn:   { flex: 1, borderWidth: 1, borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
+  sendBtn:     { flex: 2, borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
+});
 
 const styles = (c: ThemeColors) => StyleSheet.create({
-  scroll:          { flex: 1, backgroundColor: c.background },
-  center:          { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: c.background },
-  emptyTitle:      { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, marginTop: spacing.sm },
-  emptySub:        { fontSize: fontSize.sm, color: c.mutedForeground, textAlign: 'center', paddingHorizontal: spacing.xl },
-  emptyText:       { fontSize: fontSize.sm, paddingVertical: spacing.sm },
-  sectionTitle:    { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.xs },
-  hint:            { fontSize: fontSize.xs, marginBottom: spacing.sm },
+  center:     { alignItems: 'center', marginTop: 64, gap: spacing.sm, paddingHorizontal: spacing.lg },
+  emptyTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground },
+  emptySub:   { fontSize: fontSize.sm, color: c.mutedForeground, textAlign: 'center' },
 
-  infoCard:        { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, backgroundColor: c.surface },
-  infoLabel:       { fontSize: fontSize.xs, fontWeight: fontWeight.medium, marginBottom: 2 },
-  infoValue:       { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  card:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md },
+  cardTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground },
+  cardSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.sm },
+  primaryBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
+  primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  summaryRow: { flexDirection: 'row', marginBottom: spacing.sm },
 
-  memberRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.sm, borderWidth: 1, borderRadius: radius.md, marginBottom: spacing.xs },
-  checkBox:        { width: 22, height: 22, borderRadius: 4, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  memberName:      { fontSize: fontSize.base, fontWeight: fontWeight.medium },
-  memberRole:      { fontSize: fontSize.xs, textTransform: 'capitalize' },
-
-  ovHeader:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  addBtn:          { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radius.sm },
-  ovRow:           { borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm, flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' },
-  input:           { borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs + 2, fontSize: fontSize.sm },
-  tierBtn:         { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.sm, borderWidth: 1 },
-  removeOvBtn:     { paddingLeft: spacing.xs, paddingTop: spacing.xs },
-
-  commitBtn:       { borderRadius: radius.md, padding: spacing.md, alignItems: 'center', marginTop: spacing.sm },
-  commitBtnText:   { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.bold },
-
-  lockBanner:      { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderWidth: 1.5, borderRadius: radius.md, padding: spacing.md },
-  lockBannerIcon:  { fontSize: 24 },
-  lockTitle:       { fontSize: fontSize.base, fontWeight: fontWeight.bold },
-  lockSub:         { fontSize: fontSize.sm, marginTop: 2 },
-
-  routeCard:       { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
-  routeCardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  routeCardTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.semibold, flex: 1 },
-  routeCardMeta:   { fontSize: fontSize.xs },
-  tripRow:         { borderWidth: 1, borderRadius: radius.sm, padding: spacing.xs, borderLeftWidth: 3 },
-  tripLabel:       { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  tripDetail:      { fontSize: fontSize.xs, marginTop: 2 },
-
-  droppedBox:      { borderWidth: 1, borderRadius: radius.sm, padding: spacing.sm, marginTop: spacing.sm },
-  droppedTitle:    { fontSize: fontSize.xs },
+  sectionLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.xs, marginTop: spacing.xs },
+  routeRow:   { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.md, borderWidth: 1, padding: spacing.sm, marginBottom: 6 },
+  routeNum:   { width: 34, height: 34, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  routeNumText: { fontSize: fontSize.sm, fontWeight: fontWeight.extrabold },
+  routeName:  { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  routeMeta:  { fontSize: fontSize.xs, marginTop: 1 },
+  routeStatus:{ fontSize: fontSize.xs, textTransform: 'capitalize' },
 });
