@@ -18,6 +18,10 @@ export const TRAINER_ROLES            = ['trainer'] as const;
 export const TRAINEE_ROLES            = ['trainee'] as const;
 export const WALKER_ROLES             = ['walker'] as const;
 export const LOCATION_PROFILE_ROLES   = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const ROUTE_SORT_ROLES         = ['driver'] as const;
+// Drivers AND trainers run AP Sort at the anchor point (mobile-first page).
+export const ROUTE_SORT_ROLES         = ['driver', 'trainer'] as const;
+// Trainers carry routes too (solo wave assignment or the paired trainee's) —
+// walkers/trainees reach My Route inside their own dashboards instead.
+export const MY_ROUTE_TAB_ROLES       = ['trainer'] as const;
 export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
 export const GEAR_ROLES               = ['driver', 'walker', 'trainer', 'trainee'] as const;

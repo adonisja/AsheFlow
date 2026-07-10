@@ -7,6 +7,7 @@ import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useAuth } from '@contexts/AuthContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
@@ -33,9 +34,50 @@ type Session = {
   submitted_at: string | null;
 };
 
+type ContinuationRequest = {
+  id: string;
+  trainee_id: string;
+  trainee_name?: string | null;
+};
+
 export default function TrainerTodayScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
+
+  const [continuations, setContinuations] = useState<ContinuationRequest[]>([]);
+  const [continuationBusy, setContinuationBusy] = useState<string | null>(null);
+
+  const loadContinuations = useCallback(async () => {
+    try {
+      const eid = await fetchId();
+      if (!eid) return;
+      const res = await apiClient.get(`/continuation-requests/trainer/${eid}`);
+      const pending: ContinuationRequest[] = (res.data ?? []).filter((r: any) => r.status === 'pending');
+      // Response carries ids only — resolve trainee names for display.
+      const named = await Promise.all(pending.map(async r => {
+        try {
+          const emp = await apiClient.get(`/employees/${r.trainee_id}`);
+          return { ...r, trainee_name: emp.data?.name ?? null };
+        } catch { return r; }
+      }));
+      setContinuations(named);
+    } catch { /* card is best-effort */ }
+  }, [fetchId]);
+
+  useEffect(() => { loadContinuations(); }, [loadContinuations]);
+
+  const respondContinuation = async (req: ContinuationRequest, action: 'accept' | 'reject') => {
+    setContinuationBusy(req.id);
+    try {
+      await apiClient.patch(`/continuation-requests/${req.id}/${action}`);
+      setContinuations(prev => prev.filter(r => r.id !== req.id));
+    } catch (e) {
+      Alert.alert('Error', errorText(e, `Could not ${action} the request.`));
+    } finally {
+      setContinuationBusy(null);
+    }
+  };
 
   const [session,      setSession]      = useState<Session | null>(null);
   const [loading,      setLoading]      = useState(true);
@@ -221,6 +263,35 @@ export default function TrainerTodayScreen() {
             <View style={[s.progressBarFill, { width: `${Math.round(progress * 100)}%` as any, backgroundColor: progress === 1 ? c.success : c.primary }]} />
           </View>
           <Text style={s.progressCaption}>{Math.round(progress * 100)}% complete</Text>
+        </View>
+      )}
+
+      {/* Continuation requests — trainees asking to keep this trainer (ADR-012).
+          Accept boosts the pairing; Decline silently releases it. */}
+      {continuations.length > 0 && (
+        <View style={[s.bannerCard, { borderLeftColor: c.success, backgroundColor: c.success + '10' }]}>
+          <Text style={[s.bannerLabel, { color: c.success }]}>Continuation Requests</Text>
+          {continuations.map(req => (
+            <View key={req.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs }}>
+              <Text style={[s.bannerText, { color: c.foreground, flex: 1 }]}>
+                🤝 {req.trainee_name ?? 'A trainee'} wants to keep training with you
+              </Text>
+              <TouchableOpacity
+                style={{ backgroundColor: c.success, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 1 }}
+                onPress={() => respondContinuation(req, 'accept')}
+                disabled={continuationBusy === req.id}
+              >
+                <Text style={{ color: '#fff', fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Accept</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 1 }}
+                onPress={() => respondContinuation(req, 'reject')}
+                disabled={continuationBusy === req.id}
+              >
+                <Text style={{ color: c.mutedForeground, fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>Decline</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
         </View>
       )}
 

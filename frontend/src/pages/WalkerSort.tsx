@@ -401,6 +401,9 @@ interface RouteCardProps {
   canReassign?: boolean;
   onReassign?: (route: RouteResponse) => void;
   onResolveMisroute?: (routeId: string, flagId: string, tba: string, suggestedRouteNumber?: number | null) => void;
+  /** All routes on the truck — resolves misroute suggested_route_id to a
+   * route number + assignee so the row can SHOW where the package belongs. */
+  allRoutes?: RouteResponse[];
 }
 
 function RouteCard({
@@ -412,6 +415,7 @@ function RouteCard({
   canReassign,
   onReassign,
   onResolveMisroute,
+  allRoutes,
 }: RouteCardProps) {
   // Staff staged on OTHER routes (for the combobox's "route #N" tags).
   const takenBy: Record<string, number> = {};
@@ -511,24 +515,41 @@ function RouteCard({
                 <AlertTriangle className="w-3 h-3" /> Misrouted packages
               </p>
               <div className="space-y-1.5">
-                {route.misrouted_packages.map(m => (
-                  <div key={m.tba_number} className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs min-w-0">
-                      <span className="font-mono text-foreground">{m.tba_number}</span>
-                      {m.destination_block_key && (
-                        <span className="text-warning">→ {m.destination_block_key}</span>
+                {route.misrouted_packages.map(m => {
+                  // The sort already computed WHERE this package belongs —
+                  // the flag carries suggested_route_id, but the row never
+                  // showed it (and passed the wrong field to the modal, so
+                  // the suggestion was silently dropped). Resolve it to a
+                  // route + walker and lead with that.
+                  const suggested = allRoutes?.find(r =>
+                    r.id === (m as any).suggested_route_id
+                    || r.route_number === (m as any).suggested_route_number);
+                  return (
+                    <div key={m.tba_number} className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs min-w-0 flex-wrap">
+                        <span className="font-mono text-foreground">{m.tba_number}</span>
+                        {m.destination_block_key && (
+                          <span className="text-warning">→ {m.destination_block_key}</span>
+                        )}
+                        {suggested && (
+                          <span className="text-primary font-medium">
+                            → belongs on #{suggested.route_number}
+                            {suggested.assigned_to_name ? ` · ${suggested.assigned_to_name}` : ' (unassigned)'}
+                          </span>
+                        )}
+                      </div>
+                      {isOperational && canReassign && onResolveMisroute && (
+                        <button
+                          onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number, suggested?.route_number ?? null)}
+                          className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
+                          title={suggested ? `Move to route #${suggested.route_number}` : 'Pick destination route'}
+                        >
+                          {suggested ? `Move to #${suggested.route_number}` : 'Resolve'}
+                        </button>
                       )}
                     </div>
-                    {isOperational && canReassign && onResolveMisroute && (
-                      <button
-                        onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number, m.suggested_route_number)}
-                        className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
-                      >
-                        Resolve
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1143,6 +1164,7 @@ function TruckSortPanel({
                           canReassign={true}
                           onReassign={setReassignTarget}
                           onResolveMisroute={(routeId, flagId, tba, suggestedRouteNumber) => setMisrouteTarget({ routeId, flagId, tba, suggestedRouteNumber })}
+                          allRoutes={state.routes}
                         />
                       ))}
                 </div>

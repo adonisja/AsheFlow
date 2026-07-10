@@ -12,11 +12,8 @@ import TrainerTodayScreen       from './TrainerTodayScreen';
 import TrainerHistoryScreen     from './TrainerHistoryScreen';
 import TrainerPerformanceScreen from './TrainerPerformanceScreen';
 import Phase4Screen             from './Phase4Screen';
-import RouteSortScreen          from './RouteSortScreen';
 
-import MyRouteScreen            from '@screens/Trainee/MyRouteScreen';
-
-type Tab = 'today' | 'myroute' | 'history' | 'performance' | 'phase4' | 'routesort';
+type Tab = 'today' | 'history' | 'performance' | 'phase4';
 
 export default function TrainerDashboard() {
   const c = useColors();
@@ -37,13 +34,11 @@ export default function TrainerDashboard() {
   }, [user?.id]);
 
   const tabs: { key: Tab; label: string; icon: string }[] = [
+    // My Route and Route Sort are TOP-LEVEL tabs now (field actions, not
+    // training) — this dashboard is training-only.
     { key: 'today',       label: "Today",       icon: '📋' },
-    // Trainers carry routes too — solo via the wave pool, or working their
-    // paired trainee's route (the screen resolves both cases).
-    { key: 'myroute',     label: 'My Route',    icon: '🗺️' },
     { key: 'history',     label: 'History',     icon: '📂' },
     { key: 'performance', label: 'Performance', icon: '📊' },
-    { key: 'routesort',   label: 'Route Sort',  icon: '🗺️' },
     ...(isPhase4 ? [{ key: 'phase4' as Tab, label: 'Phase 4', icon: '🎯' }] : []),
   ];
 
@@ -86,10 +81,8 @@ export default function TrainerDashboard() {
       {/* Screen content — rendered directly, not as a navigator */}
       <View style={{ flex: 1 }}>
         {activeTab === 'today'       && <TrainerTodayScreen />}
-        {activeTab === 'myroute'     && <MyRouteScreen />}
         {activeTab === 'history'     && <TrainerHistoryScreen />}
         {activeTab === 'performance' && <TrainerPerformanceScreen />}
-        {activeTab === 'routesort'   && <RouteSortScreen />}
         {activeTab === 'phase4'      && <Phase4Screen />}
       </View>
     </SafeAreaView>
