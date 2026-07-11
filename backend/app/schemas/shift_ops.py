@@ -91,6 +91,7 @@ class RTSReportResponse(BaseModel):
     status: str
     dispatch_notes: Optional[str] = None
     reviewed_by: Optional[UUID] = None
+    reviewed_by_name: Optional[str] = None
     submitted_at: datetime
     reviewed_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
@@ -114,6 +115,7 @@ class StationHandoffResponse(BaseModel):
     date: date
     totes_returned: int
     rts_count: int
+    missing_count: int = 0
     notes: Optional[str] = None
     submitted_at: datetime
     model_config = ConfigDict(from_attributes=True)

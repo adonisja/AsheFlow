@@ -175,6 +175,31 @@ class RouteHandoffResolveRequest(BaseModel):
     pass   # resolved_by derived from caller; no extra fields needed
 
 
+class RouteRTSSummaryOut(BaseModel):
+    """Per-route RTS/handoff rollup for the driver's end-of-day view (ADR-193 D4)."""
+    route_id: UUID
+    route_number: int
+    walker_id: Optional[UUID] = None
+    walker_name: Optional[str] = None
+    route_status: str
+    handoff_exists: bool                       # walker tapped "Back at Truck"
+    driver_confirmed_at: Optional[datetime] = None
+    discrepancy_flagged: bool = False
+    rts_count: int = 0                         # handoff count if declared, else live RTSPackage count
+    missing_count: int = 0                     # unresolved MissingPackage rows on this route
+
+
+class TruckRTSSummaryOut(BaseModel):
+    """Whole-truck RTS rollup: drives the Walker Handoffs card and the
+    RTS-report prefill on mobile."""
+    truck_assignment_id: UUID
+    routes: list[RouteRTSSummaryOut]
+    reason_totals: dict[str, int]              # rts_type → package count across the truck
+    total_rts: int
+    total_missing: int
+    unconfirmed_handoffs: int                  # handoffs awaiting driver confirm
+
+
 # ---------------------------------------------------------------------------
 # Reattempt Assignment
 # ---------------------------------------------------------------------------

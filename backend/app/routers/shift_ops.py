@@ -16,6 +16,8 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.crew_compliance import CrewCompliance
 from app.models.driver_check_in import DriverCheckIn
 from app.models.rts_clearance import RTSReport, StationHandoff, RTS_REPORT_STATUSES
+from app.models.rts import MissingPackage
+from app.services.audit import write_audit
 from app.schemas.shift_ops import (
     CrewComplianceCreate, CrewComplianceResponse,
     DriverCheckInCreate, DriverCheckInResponse,
@@ -289,6 +291,7 @@ def submit_rts_report(
         raise HTTPException(status_code=403, detail="You can only submit your own RTS report.")
 
     existing = db.query(RTSReport).filter(
+        RTSReport.company_id == caller.company_id,
         RTSReport.driver_id == payload.driver_id,
         RTSReport.date == payload.date,
     ).first()
@@ -299,6 +302,7 @@ def submit_rts_report(
     total_rts = sum(e.count for e in payload.rts_packages)
 
     row = RTSReport(
+        company_id=caller.company_id,
         driver_id=payload.driver_id,
         date=payload.date,
         crew_confirmed=payload.crew_confirmed,
@@ -307,6 +311,16 @@ def submit_rts_report(
         status="pending",
     )
     db.add(row)
+    db.flush()
+    write_audit(
+        db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="rts_report.submit",
+        target_table="rts_reports",
+        target_id=str(row.id),
+        detail={"date": str(payload.date), "total_rts": total_rts, "crew_confirmed": payload.crew_confirmed},
+    )
 
     dispatch_recipients = db.query(Employee).filter(
         Employee.company_id == caller.company_id,
@@ -365,7 +379,17 @@ def review_rts_report(
     row.status = payload.status
     row.dispatch_notes = payload.dispatch_notes
     row.reviewed_by = caller.id
+    row.reviewed_by_name = caller.name
     row.reviewed_at = datetime.now(timezone.utc)
+    write_audit(
+        db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type=f"rts_report.{payload.status}",
+        target_table="rts_reports",
+        target_id=str(row.id),
+        detail={"date": str(target_date), "driver_id": str(driver_id)},
+    )
 
     driver = db.query(Employee).filter(
         Employee.id == driver_id,
@@ -483,6 +507,7 @@ def submit_station_handoff(
         raise HTTPException(status_code=403, detail="You can only submit your own station handoff.")
 
     rts_report = db.query(RTSReport).filter(
+        RTSReport.company_id == caller.company_id,
         RTSReport.driver_id == payload.driver_id,
         RTSReport.date == payload.date,
     ).first()
@@ -498,20 +523,62 @@ def submit_station_handoff(
         )
 
     existing = db.query(StationHandoff).filter(
+        StationHandoff.company_id == caller.company_id,
         StationHandoff.driver_id == payload.driver_id,
         StationHandoff.date == payload.date,
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Station handoff already recorded for today.")
 
+    # missing_count is computed, not typed: unresolved MissingPackage rows across
+    # the driver's truck assignment for the date (ADR-193 D5).
+    ta = (
+        db.query(TruckAssignment)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == payload.date,
+            AssignmentMember.employee_id == caller.id,
+        )
+        .first()
+    )
+    missing_count = 0
+    if ta is not None:
+        missing_count = (
+            db.query(MissingPackage)
+            .filter(
+                MissingPackage.company_id == caller.company_id,
+                MissingPackage.truck_assignment_id == ta.id,
+                MissingPackage.resolution_status == "unresolved",
+            )
+            .count()
+        )
+
     row = StationHandoff(
+        company_id=caller.company_id,
         driver_id=payload.driver_id,
         date=payload.date,
         totes_returned=payload.totes_returned,
         rts_count=payload.rts_count,
+        missing_count=missing_count,
         notes=payload.notes,
     )
     db.add(row)
+    db.flush()
+    write_audit(
+        db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="station_handoff.submit",
+        target_table="station_handoffs",
+        target_id=str(row.id),
+        detail={
+            "date": str(payload.date),
+            "totes_returned": payload.totes_returned,
+            "rts_count": payload.rts_count,
+            "missing_count": missing_count,
+        },
+    )
     db.commit()
     db.refresh(row)
     return row

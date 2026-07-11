@@ -100,7 +100,9 @@ type ShiftState = {
   stationLoadArrived: boolean; stationLoadAt: string | null;
   wasStaged: boolean | null; missingItems: string[];
   truckId: string | null;
+  taId: string | null;
   manifest: Manifest | null;
+  roster: TruckRoster | null; rosterAvailable: boolean;
   departed: boolean; departedAt: string | null;
   // route / AP
   activeAP: AP | null;
@@ -108,6 +110,7 @@ type ShiftState = {
   checkIn2: CheckInRecord | null;
   checkIn3: CheckInRecord | null;
   rtsReport: RTSReport | null;
+  rtsSummary: RTSSummary | null;
   crew: CrewMember[];
   walkerRatingsSubmitted: Record<string, boolean>; // walkerId → true once posted
   // station return
@@ -124,6 +127,30 @@ type Manifest  = { id: string; tote_count: number; ov_count: number; notes: stri
 type AP        = { id: string; location: string; eta: string | null; status: string; sequence: number };
 type CheckInRecord = { check_in_number: number; routes_remaining: number; help_requested: boolean; working_crew_count: number; ncns_count: number; submitted_at: string };
 type RTSReport = { id: string; status: string; crew_confirmed: number; total_rts: number; rts_packages: { reason: string; count: number }[]; dispatch_notes: string | null };
+// ADR-181 dock flow (tote check-off + driver load confirmation)
+type RosterTote  = { bag_id: string; package_count: number; ov_count: number; checked: boolean; checked_by_name: string | null };
+type TruckRoster = {
+  truck_id: string; zone_label: string; totes: RosterTote[];
+  tote_count: number; checked_count: number;
+  load_confirmed: boolean; confirmed_at: string | null; short_count: number;
+};
+// ADR-193 D4 — whole-truck RTS rollup (handoff confirms + report prefill)
+type RTSSummaryRoute = {
+  route_id: string; route_number: number; walker_name: string | null; route_status: string;
+  handoff_exists: boolean; driver_confirmed_at: string | null; discrepancy_flagged: boolean;
+  rts_count: number; missing_count: number;
+};
+type RTSSummary = {
+  routes: RTSSummaryRoute[]; reason_totals: Record<string, number>;
+  total_rts: number; total_missing: number; unconfirmed_handoffs: number;
+};
+
+const RTS_TYPE_LABELS: Record<string, string> = {
+  no_access: 'No Access', business_closed: 'Business Closed',
+  package_damaged: 'Damaged Package', inclement_weather: 'Inclement Weather',
+  customer_requested_future_delivery: 'Customer Request',
+  customer_cancelled_order: 'Customer Cancelled',
+};
 
 const EMPTY_SHIFT: ShiftState = {
   confirmationStatus: null, dispatchDate: null, dispatchMessage: null,
@@ -134,11 +161,14 @@ const EMPTY_SHIFT: ShiftState = {
   stationLoadArrived: false, stationLoadAt: null,
   wasStaged: null, missingItems: [],
   truckId: null,
+  taId: null,
   manifest: null,
+  roster: null, rosterAvailable: false,
   departed: false, departedAt: null,
   activeAP: null,
   checkIn1: null, checkIn2: null, checkIn3: null,
   rtsReport: null,
+  rtsSummary: null,
   crew: [],
   walkerRatingsSubmitted: {},
   stationReturnArrived: false, stationReturnAt: null,
@@ -470,7 +500,8 @@ export default function FieldOpsScreen() {
 
     const today = localToday();
     const [ciRes, dockRes, inspRes, fuelRes, crewRes, arrRes, depRes, apRes,
-           ci1Res, ci2Res, ci3Res, rtsRes, handoffRes, notifRes, confRes] = await Promise.allSettled([
+           ci1Res, ci2Res, ci3Res, rtsRes, handoffRes, notifRes, confRes,
+           rosterRes, dispRes] = await Promise.allSettled([
       apiClient.get(`/field-ops/check-in/${empId}`, sig),
       apiClient.get(`/field-ops/dock-assignment/${empId}`, sig),
       apiClient.get(`/field-ops/inspection/${empId}`, sig),
@@ -488,6 +519,10 @@ export default function FieldOpsScreen() {
       apiClient.get(`/notifications/${empId}?limit=10`, sig),
       // Confirmation status for today
       apiClient.get(`/dispatch/${today}/my-confirmation`, sig),
+      // ADR-181 dock flow — server scopes drivers to their own truck's roster
+      apiClient.get(`/sort/${today}/rosters`, sig),
+      // TruckAssignment id (for the RTS summary + handoff confirms)
+      apiClient.get(`/dispatch/${today}`, sig),
     ]);
     if (ctrl.signal.aborted) return;
 
@@ -532,11 +567,30 @@ export default function FieldOpsScreen() {
     // Truck ID from crew endpoint
     const truckId: string | null = crewRes.status === 'fulfilled' ? (crewRes.value.data.truck_id ?? null) : null;
 
+    // Dock roster — driver-scoped server-side, so ours is the only entry.
+    const rosterData = rosterRes.status === 'fulfilled' ? rosterRes.value.data : null;
+    const roster: TruckRoster | null = rosterData?.rosters?.[0] ?? null;
+    const rosterAvailable: boolean = !!rosterData?.roster_available && !!roster;
+
+    // TruckAssignment id for today's truck (RTS summary + handoff confirms).
+    let taId: string | null = null;
+    if (truckId && dispRes.status === 'fulfilled') {
+      const tas: { truck_id: string; assignment_id?: string }[] = dispRes.value.data?.truck_assignments ?? [];
+      taId = tas.find(t => t.truck_id === truckId)?.assignment_id ?? null;
+    }
+
     // Manifest — needs truck_id
     let manifest: Manifest | null = null;
     if (truckId) {
       const mRes = await apiClient.get(`/field-ops/manifest/${truckId}`).catch(() => null);
       manifest = mRes?.data ?? null;
+    }
+
+    // Whole-truck RTS rollup (ADR-193 D4) — only meaningful once on the road.
+    let rtsSummary: RTSSummary | null = null;
+    if (taId) {
+      const sRes = await apiClient.get(`/rts/summary/${taId}`).catch(() => null);
+      rtsSummary = sRes?.data ?? null;
     }
 
     // Submitted walker ratings
@@ -558,11 +612,14 @@ export default function FieldOpsScreen() {
       stationLoadArrived: !!loadArr, stationLoadAt: loadArr?.arrived_at ?? null,
       wasStaged: loadArr?.was_staged ?? null, missingItems: loadArr?.missing_items ?? [],
       truckId,
+      taId,
       manifest,
+      roster, rosterAvailable,
       departed: !!dep, departedAt: dep?.departed_at ?? null,
       activeAP: activeAP ? { id: activeAP.id, location: activeAP.location, eta: activeAP.eta, status: activeAP.status, sequence: activeAP.sequence } : null,
       checkIn1: ci1, checkIn2: ci2, checkIn3: ci3,
       rtsReport: rts,
+      rtsSummary,
       crew,
       walkerRatingsSubmitted,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
@@ -620,9 +677,10 @@ export default function FieldOpsScreen() {
   const {
     confirmationStatus,
     checkedIn, dockZone, preTripDone, fuelLog, stationLoadArrived, wasStaged,
-    missingItems, manifest, departed, activeAP, checkIn1, checkIn2, checkIn3,
-    rtsReport, crew, walkerRatingsSubmitted, stationReturnArrived, stationHandoff,
-    eodDone, returned, truckId,
+    missingItems, manifest, roster, rosterAvailable, departed, activeAP,
+    checkIn1, checkIn2, checkIn3,
+    rtsReport, rtsSummary, crew, walkerRatingsSubmitted, stationReturnArrived,
+    stationHandoff, eodDone, returned, truckId, taId,
   } = shift;
 
   const walkers      = crew.filter(m => m.role === 'walker');
@@ -649,7 +707,9 @@ export default function FieldOpsScreen() {
     !!preTripDone,
     !!fuelLog?.odometer_start,
     !!stationLoadArrived,
-    !!manifest,
+    // Step 6: tote check-off + confirm-load when a roster exists (ADR-181),
+    // legacy manifest acknowledge otherwise.
+    rosterAvailable ? !!roster?.load_confirmed : !!manifest,
     !!departed,
     !!(activeAP && activeAP.status !== 'preliminary'),
     !!(activeAP && activeAP.status === 'arrived'),
@@ -732,9 +792,12 @@ export default function FieldOpsScreen() {
                 {/* 5 · Station arrival + staging check */}
                 <StepStationArrival employeeId={employeeId} shift={shift} onDone={reload} c={c} />
 
-                {/* 6 · Package manifest (after station loading arrival) */}
+                {/* 6 · Load truck — tote check-off + confirm (ADR-181); falls
+                    back to the legacy manifest card when no roster exists. */}
                 {stationLoadArrived && (
-                  <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} />
+                  rosterAvailable
+                    ? <StepLoadTruck roster={roster!} onDone={reload} c={c} />
+                    : <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} />
                 )}
 
                 {/* 7 · Departure (after manifest acknowledged or no manifest) */}
@@ -783,6 +846,12 @@ export default function FieldOpsScreen() {
                 {checkIn2 && (
                   <StepCheckInN employeeId={employeeId} shift={shift} num={3} time={CI_TIMES[2]}
                     record={checkIn3} prevRecord={checkIn2} crew={crew} onDone={reload} c={c} />
+                )}
+
+                {/* 13.5 · Walker handoffs — confirm each returned route's RTS
+                    (ADR-193 D4). Informational: doesn't hard-gate Step 14. */}
+                {checkIn1 && rtsSummary && rtsSummary.routes.some(r => r.handoff_exists) && (
+                  <StepWalkerHandoffs summary={rtsSummary} onDone={reload} c={c} />
                 )}
 
                 {/* 14 · Departure request (RTS) */}
@@ -1184,6 +1253,191 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
         </View>
       )}
       <Btn label="Record Arrival" onPress={submit} disabled={staged === null} loading={saving} c={c} />
+    </Card>
+  );
+}
+
+function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () => void; c: ThemeColors }) {
+  const [togglingBag, setTogglingBag] = useState<string | null>(null);
+  const [confirming,  setConfirming]  = useState(false);
+
+  const unchecked = roster.tote_count - roster.checked_count;
+
+  const toggle = async (tote: RosterTote) => {
+    if (roster.load_confirmed || togglingBag) return;
+    setTogglingBag(tote.bag_id);
+    try {
+      await apiClient.post(`/sort/${localToday()}/totes/${tote.bag_id}/check`, { checked: !tote.checked });
+      onDone();
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not update the tote.')); }
+    finally { setTogglingBag(null); }
+  };
+
+  const confirmLoad = () => {
+    const doConfirm = async () => {
+      setConfirming(true);
+      try {
+        await apiClient.post(`/sort/${localToday()}/trucks/${roster.truck_id}/confirm-load`);
+        onDone();
+      } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not confirm the load.')); }
+      finally { setConfirming(false); }
+    };
+    if (unchecked > 0) {
+      Alert.alert(
+        'Confirm with missing totes?',
+        `${unchecked} roster tote${unchecked === 1 ? ' is' : 's are'} still unchecked. They'll be recorded as short and dispatch will be notified.`,
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Confirm Anyway', style: 'destructive', onPress: doConfirm }],
+      );
+    } else {
+      doConfirm();
+    }
+  };
+
+  const reopen = () => {
+    Alert.alert('Reopen loading?', 'This unlocks tote check-off and clears your confirmation.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reopen', style: 'destructive', onPress: async () => {
+        try {
+          await apiClient.delete(`/sort/${localToday()}/trucks/${roster.truck_id}/confirm-load`);
+          onDone();
+        } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not reopen loading.')); }
+      }},
+    ]);
+  };
+
+  if (roster.load_confirmed) {
+    return (
+      <View>
+        <CompletedRow num="6" title="Load Truck" c={c}
+          summary={`${roster.checked_count}/${roster.tote_count} totes confirmed ${fmtTime(roster.confirmed_at)}${roster.short_count ? ` · ${roster.short_count} short` : ''}`} />
+        <TouchableOpacity onPress={reopen} style={{ alignSelf: 'flex-end', marginTop: -6, marginBottom: spacing.sm, padding: spacing.xs }}>
+          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textDecorationLine: 'underline' }}>Reopen loading</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <Card c={c}>
+      <SectionHeader num="6" title="Load Truck"
+        subtitle="Check each tote off as it goes on the truck, then confirm your load. Dispatch sees this live." c={c} />
+      <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>
+        {roster.checked_count}/{roster.tote_count} totes checked{roster.zone_label ? ` · ${roster.zone_label}` : ''}
+      </Text>
+      {roster.totes.map(t => (
+        <TouchableOpacity
+          key={t.bag_id}
+          onPress={() => toggle(t)}
+          disabled={togglingBag !== null}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+            paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: c.border }}
+        >
+          <View style={{ width: 24, height: 24, borderRadius: 6, borderWidth: 2,
+            borderColor: t.checked ? '#0FA870' : c.border,
+            backgroundColor: t.checked ? '#0FA870' : 'transparent',
+            alignItems: 'center', justifyContent: 'center' }}>
+            {togglingBag === t.bag_id
+              ? <ActivityIndicator size="small" color={t.checked ? '#fff' : c.primary} />
+              : t.checked ? <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>✓</Text> : null}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>{t.bag_id}</Text>
+            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
+              {t.package_count} pkgs{t.ov_count ? ` · ${t.ov_count} OV` : ''}
+              {t.checked && t.checked_by_name ? ` · ${t.checked_by_name}` : ''}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      ))}
+      <View style={{ marginTop: spacing.md }}>
+        <Btn
+          label={unchecked > 0 ? `Confirm Load (${unchecked} unchecked)` : 'Confirm Load'}
+          onPress={confirmLoad} loading={confirming} c={c}
+        />
+      </View>
+    </Card>
+  );
+}
+
+function StepWalkerHandoffs({ summary, onDone, c }: { summary: RTSSummary; onDone: () => void; c: ThemeColors }) {
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [flaggingId,   setFlaggingId]   = useState<string | null>(null);
+  const [flagNotes,    setFlagNotes]    = useState('');
+
+  const returned = summary.routes.filter(r => r.handoff_exists);
+  const pending  = returned.filter(r => !r.driver_confirmed_at);
+
+  const confirm = async (r: RTSSummaryRoute, discrepancy?: string) => {
+    setConfirmingId(r.route_id);
+    try {
+      await apiClient.post(`/rts/handoff/${r.route_id}/confirm`, discrepancy
+        ? { discrepancy_flagged: true, discrepancy_notes: discrepancy }
+        : { discrepancy_flagged: false });
+      setFlaggingId(null); setFlagNotes('');
+      onDone();
+    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not confirm the handoff.')); }
+    finally { setConfirmingId(null); }
+  };
+
+  return (
+    <Card c={c}>
+      <SectionHeader num="✓" title="Walker Handoffs"
+        subtitle={pending.length > 0
+          ? `Count each walker's returned RTS packages against their declared number, then confirm.`
+          : 'All returned routes confirmed.'} c={c} />
+      {returned.map(r => (
+        <View key={r.route_id} style={{ borderTopWidth: 1, borderTopColor: c.border, paddingVertical: spacing.sm }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
+                Route {r.route_number}{r.walker_name ? ` · ${r.walker_name}` : ''}
+              </Text>
+              <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 1 }}>
+                {r.rts_count} RTS{r.missing_count ? ` · ${r.missing_count} missing` : ''}
+                {r.discrepancy_flagged ? ' · ⚠ discrepancy flagged' : ''}
+              </Text>
+            </View>
+            {r.driver_confirmed_at ? (
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: '#0FA870' }}>
+                ✓ {fmtTime(r.driver_confirmed_at)}
+              </Text>
+            ) : (
+              <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+                <TouchableOpacity
+                  onPress={() => { setFlaggingId(flaggingId === r.route_id ? null : r.route_id); setFlagNotes(''); }}
+                  style={{ borderWidth: 1, borderColor: c.warning + '66', borderRadius: radius.md,
+                    paddingHorizontal: spacing.sm, paddingVertical: spacing.xs + 2 }}>
+                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.warning }}>Flag</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => confirm(r)}
+                  disabled={confirmingId !== null}
+                  style={{ backgroundColor: '#0FA870', borderRadius: radius.md,
+                    paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}>
+                  {confirmingId === r.route_id
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: '#fff' }}>Confirm</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+          {flaggingId === r.route_id && !r.driver_confirmed_at && (
+            <View style={{ marginTop: spacing.sm }}>
+              <TextInput
+                style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
+                  fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background }}
+                value={flagNotes} onChangeText={setFlagNotes}
+                placeholder="What doesn't match? (e.g. declared 4, received 3)"
+                placeholderTextColor={c.mutedForeground} multiline />
+              <View style={{ marginTop: spacing.xs }}>
+                <Btn label="Confirm with Discrepancy" variant="ghost"
+                  onPress={() => flagNotes.trim() ? confirm(r, flagNotes.trim()) : Alert.alert('Required', 'Describe the discrepancy first.')}
+                  loading={confirmingId === r.route_id} c={c} />
+              </View>
+            </View>
+          )}
+        </View>
+      ))}
     </Card>
   );
 }
@@ -1750,6 +2004,20 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
   const [crewCount,  setCrewCount]  = useState('');
   const [entries,    setEntries]    = useState<{ reason: string; count: string }[]>([{ reason: '', count: '' }]);
   const [saving,     setSaving]     = useState(false);
+  const [prefilled,  setPrefilled]  = useState(false);
+
+  // ADR-193 D4: prefill from what walkers actually recorded — the driver
+  // adjusts instead of recalling from memory. Runs once; never overwrites edits.
+  const reasonTotals = shift.rtsSummary?.reason_totals;
+  useEffect(() => {
+    if (prefilled || done || !reasonTotals) return;
+    const rows = Object.entries(reasonTotals)
+      .filter(([, n]) => n > 0)
+      .map(([type, n]) => ({ reason: RTS_TYPE_LABELS[type] ?? type, count: String(n) }));
+    if (rows.length > 0) { setEntries(rows); setPrefilled(true); }
+  }, [prefilled, done, reasonTotals]);
+
+  const unconfirmed = shift.rtsSummary?.unconfirmed_handoffs ?? 0;
 
   const addEntry    = () => setEntries(p => [...p, { reason: '', count: '' }]);
   const removeEntry = (i: number) => setEntries(p => p.filter((_, j) => j !== i));
@@ -1798,6 +2066,19 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
     <Card c={c}>
       <SectionHeader num="14" title="Departure Request — RTS Report"
         subtitle="All walkers returned and all packages attempted. Submit RTS groupings for dispatch review." c={c} />
+      {unconfirmed > 0 && (
+        <View style={{ backgroundColor: c.warning + '12', borderWidth: 1, borderColor: c.warning + '40',
+          borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md }}>
+          <Text style={{ fontSize: fontSize.xs, color: c.warning, fontWeight: fontWeight.semibold }}>
+            {unconfirmed} walker handoff{unconfirmed === 1 ? '' : 's'} not confirmed yet — confirm them above so these counts are trustworthy.
+          </Text>
+        </View>
+      )}
+      {prefilled && (
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: spacing.sm }}>
+          Prefilled from your walkers' recorded RTS packages — adjust if the physical count differs.
+        </Text>
+      )}
       <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
         fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.md }}
         value={crewCount} onChangeText={setCrewCount}
@@ -1868,8 +2149,10 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
 
 function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationHandoff;
-  const [totes,  setTotes]  = useState('');
-  const [rtsN,   setRtsN]   = useState('');
+  // Prefill from what the system already knows: roster tote count and the
+  // approved RTS report total. Driver corrects to the physical count.
+  const [totes,  setTotes]  = useState(shift.roster ? String(shift.roster.tote_count) : '');
+  const [rtsN,   setRtsN]   = useState(shift.rtsReport ? String(shift.rtsReport.total_rts) : '');
   const [notes,  setNotes]  = useState('');
   const [saving, setSaving] = useState(false);
 
