@@ -888,3 +888,88 @@ class TestCrossStreetRangeGate:
         flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
         flagged += [m.tba_number for m in result.unassigned_misroutes]
         assert "NEAR" not in flagged
+
+
+# ---------------------------------------------------------------------------
+# ADR-195 F3 — geographic fallback for misroute suggestions (thin/diagonal blocks)
+# ---------------------------------------------------------------------------
+
+class TestMisrouteGeographicFallback:
+    """Block-key adjacency is a discrete grid and misses 'diagonal' proximity
+    (different street AND different hundred). A package physically near another
+    route but not block-key-adjacent to it used to dead-end as 'no covering
+    route'. The centroid fallback should suggest the nearest route within
+    _MISROUTE_SUGGEST_MAX_KM, while a genuinely distant outlier still dead-ends."""
+
+    def test_diagonal_block_gets_a_suggestion_not_orphan(self):
+        # Two dense routes (W_31_St_300 and W_33_St_200) close together, plus a
+        # thin W_32_St_100 rider that is neither same-street ±100 nor parallel
+        # (street ±1 same hundred) of either seed — the real orphan geometry.
+        pkgs = []
+        for i in range(12):
+            pkgs.append(_pkg(f"A{i}", f"3{i}0 W 31st St", "BagA", lat=40.7503, lng=-73.9925))
+        for i in range(12):
+            pkgs.append(_pkg(f"C{i}", f"2{i}0 W 33rd St", "BagC", lat=40.7519, lng=-73.9910))
+        # thin rider physically between them, riding in BagA
+        pkgs.append(_pkg("THIN", "110 W 32nd St", "BagA", lat=40.7511, lng=-73.9917))
+
+        result = run_sort(_request(pkgs), {}, {}, {})
+        # THIN must be flagged WITH a suggested route (not an orphan).
+        orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
+        flagged = {m.tba_number: m.suggested_route_number
+                   for r in result.routes for m in r.misrouted_packages}
+        assert "THIN" not in orphan_tbas, "diagonal thin block should not dead-end"
+        assert flagged.get("THIN") is not None, "THIN should get a nearest-route suggestion"
+
+    def test_distant_outlier_still_dead_ends(self):
+        # A W_57 rider ~2 km from the only (W_36) route must NOT be suggested to
+        # it — beyond _MISROUTE_SUGGEST_MAX_KM → captain review.
+        pkgs = [_pkg(f"D{i}", f"3{i}0 W 36th St", "BagX", lat=40.7501, lng=-73.9886)
+                for i in range(12)]
+        pkgs.append(_pkg("FAR", "450 W 57th St", "BagX", lat=40.7680, lng=-73.9850))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
+        assert "FAR" in orphan_tbas, "distant outlier must still dead-end to captain review"
+
+    def test_fallback_requires_coordinates(self):
+        # Without lat/lng the fallback cannot fire — a no-coord orphan dead-ends.
+        pkgs = [_pkg(f"D{i}", f"3{i}0 W 36th St", "BagX", lat=None, lng=None)
+                for i in range(12)]
+        pkgs.append(_pkg("NOGEO", "450 W 57th St", "BagX", lat=None, lng=None))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        # NOGEO has no coords and W_57 isn't block-adjacent to W_36 → orphan.
+        orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
+        assert "NOGEO" in orphan_tbas
+
+
+# ---------------------------------------------------------------------------
+# ADR-195 F4 — time-urgency seeding (ADR-186 W_TIME term, now fed data)
+# ---------------------------------------------------------------------------
+
+class TestTimeUrgencySeeding:
+    """The W_TIME seed-priority term was implemented in ADR-186 but never fed
+    data (commit-sort passed no block_time_urgency). These pin the behavior now
+    that it is wired: a time-critical block seeds an earlier route than a denser
+    block with no time pressure, and empty urgency preserves densest-first."""
+
+    def _dense_plus_urgent(self):
+        pkgs = []
+        for i in range(20):
+            pkgs.append(_pkg(f"DENSE{i}", f"3{i:02d} W 50th St", f"BAGD{i//10}",
+                             lat=40.7613, lng=-73.9906))
+        for i in range(8):
+            pkgs.append(_pkg(f"URG{i}", f"1{i:02d} W 23rd St", "BAGU",
+                             lat=40.7464, lng=-73.9980))
+        return _request(pkgs)
+
+    def test_urgent_block_seeds_before_denser_block(self):
+        req = self._dense_plus_urgent()
+        res = run_sort(req, {}, {}, {}, block_time_urgency={"W_23_St_100": 1.0})
+        assert res.routes[0].block_keys == ["W_23_St_100"], \
+            "an imminent-cutoff block must seed route #1 over a denser no-pressure block"
+
+    def test_no_urgency_is_densest_first(self):
+        req = self._dense_plus_urgent()
+        res = run_sort(req, {}, {}, {})   # no block_time_urgency → cold start
+        assert res.routes[0].block_keys == ["W_50_St_300"], \
+            "without urgency, the densest block seeds first (unchanged cold-start order)"

@@ -403,3 +403,53 @@ class TestMoveFlagGeography:
         src.stops = src.stops + [_stop("W_57_St_400", "440 WEST 57 STREET", ["D2"])]
         _move_flag_geography(flag, src, dest, other_flags=[])
         assert "W_57_St_400" in src.block_keys
+
+
+# ---------------------------------------------------------------------------
+# ADR-195 F4 — _get_block_time_urgency helper (BuildingProfile hours → 0-1)
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta
+
+from app.routers.walker_routes import _get_block_time_urgency
+
+
+def _mock_db_with_profiles(rows):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = rows
+    return db
+
+
+class TestBlockTimeUrgency:
+    def test_imminent_close_is_max_urgency(self):
+        now = datetime.now()
+        rows = [SimpleNamespace(block_key="W_23_St_100", closes_at=now.time(), break_start=None)]
+        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
+                                    date.today(), "America/New_York")
+        assert u.get("W_23_St_100", 0) >= 0.9
+
+    def test_far_close_is_low_urgency(self):
+        now = datetime.now()
+        late = (now + timedelta(hours=7)).time()
+        rows = [SimpleNamespace(block_key="W_50_St_300", closes_at=late, break_start=None)]
+        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
+                                    date.today(), "America/New_York")
+        assert 0.0 < u.get("W_50_St_300", 0) < 0.3
+
+    def test_no_hours_block_absent(self):
+        rows = [SimpleNamespace(block_key="W_40_St_200", closes_at=None, break_start=None)]
+        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
+                                    date.today(), "America/New_York")
+        assert "W_40_St_200" not in u   # absent → contributes 0, preserves cold-start
+
+    def test_earliest_cutoff_across_buildings_wins(self):
+        now = datetime.now()
+        soon = now.time()
+        late = (now + timedelta(hours=7)).time()
+        rows = [
+            SimpleNamespace(block_key="W_30_St_100", closes_at=late, break_start=None),
+            SimpleNamespace(block_key="W_30_St_100", closes_at=soon, break_start=None),
+        ]
+        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
+                                    date.today(), "America/New_York")
+        assert u.get("W_30_St_100", 0) >= 0.9   # the earliest (soon) cutoff drives it
