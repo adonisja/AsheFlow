@@ -1832,6 +1832,8 @@ class SeedManifestResponse(BaseModel):
     ov_count:          int
     out_of_zone_count: int
     misrouted_count:   int
+    misrouted_adjacent: int = 0   # ride silently in the misroute neighborhood
+    misrouted_distant:  int = 0   # true "no covering route" orphans (incl. cross-zone)
     truck_count:       int
     truck_names:       list[str]
     preview_rows:      list[SeedManifestPackagePreview]
@@ -1908,6 +1910,8 @@ def seed_manifest(
         ov_count          = result.ov_count,
         out_of_zone_count = result.out_of_zone_count,
         misrouted_count   = result.misrouted_count,
+        misrouted_adjacent = result.misrouted_adjacent,
+        misrouted_distant  = result.misrouted_distant,
         truck_count       = len(assignment_rows),
         truck_names       = truck_names,
         preview_rows      = preview,

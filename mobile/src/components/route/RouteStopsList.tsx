@@ -32,11 +32,20 @@ export function formatBlockKey(bk: string): string {
 type BlockSection = { block_key: string; stops: RouteStop[] };
 
 function groupByBlock(stops: RouteStop[]): BlockSection[] {
+  // Group by block_key GLOBALLY, not just consecutively: the server sort can
+  // interleave a block_key with others (e.g. 6_Ave_1000 addresses split around
+  // W_46_St_* under the sort), which would otherwise produce two sections with
+  // the same key → a React duplicate-key crash. First appearance sets order.
   const sections: BlockSection[] = [];
+  const byKey = new Map<string, BlockSection>();
   for (const stop of stops) {
-    const last = sections[sections.length - 1];
-    if (last && last.block_key === stop.block_key) last.stops.push(stop);
-    else sections.push({ block_key: stop.block_key, stops: [stop] });
+    let section = byKey.get(stop.block_key);
+    if (!section) {
+      section = { block_key: stop.block_key, stops: [] };
+      byKey.set(stop.block_key, section);
+      sections.push(section);
+    }
+    section.stops.push(stop);
   }
   return sections;
 }
@@ -55,7 +64,7 @@ export default function RouteStopsList({ stops, c }: { stops: RouteStop[]; c: Th
             </Text>
           </View>
           {section.stops.map(stop => (
-            <View key={stop.address} style={{ marginBottom: spacing.xs + 2 }}>
+            <View key={`${section.block_key}:${stop.address}`} style={{ marginBottom: spacing.xs + 2 }}>
               <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.foreground }}>
                 {stop.address}
               </Text>
