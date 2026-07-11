@@ -25,3 +25,4 @@ export const ROUTE_SORT_ROLES         = ['driver', 'trainer'] as const;
 export const MY_ROUTE_TAB_ROLES       = ['trainer'] as const;
 export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
 export const GEAR_ROLES               = ['driver', 'walker', 'trainer', 'trainee'] as const;
+export const REATTEMPT_ROLES          = ['driver', 'trainer'] as const;

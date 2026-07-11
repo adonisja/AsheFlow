@@ -157,6 +157,22 @@ for f in "$PUBLIC_ROOT/docs/"*.md; do
 done
 echo "  ✓ docs/"
 
+# ── Design memory + business docs (gitignored from public, preserved here) ──
+echo ""
+echo "Copying design memory and business docs..."
+if [ -d "$PUBLIC_ROOT/memory" ]; then
+  mkdir -p memory
+  cp -r "$PUBLIC_ROOT/memory/." "memory/"
+  echo "  ✓ memory/"
+fi
+mkdir -p docs/business
+for f in "$PUBLIC_ROOT"/pricing_analysis_*.md; do
+  if [ -f "$f" ]; then
+    cp "$f" "docs/business/$(basename "$f")"
+    echo "  ✓ docs/business/$(basename "$f")"
+  fi
+done
+
 # ── Black-box registration module ───────────────────────────────────────────
 # main.py does: from asheflow_private.register import register_proprietary_routers
 cat > asheflow_private/__init__.py << 'PYEOF'

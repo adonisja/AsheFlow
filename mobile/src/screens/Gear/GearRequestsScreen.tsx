@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
@@ -9,8 +9,8 @@ import { errorText } from '@api/errorText';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
-/** Field-staff gear ordering — mirrors the web /gear page on the
- * /gear-requests API: catalogue (season-aware) → cart → submit; own order
+/** Field-staff gear ordering — catalogue (season-aware) displayed as an
+ * interactive image-card grid → size picker → cart → submit; own order
  * history with per-item status. */
 
 type CatalogueItem = {
@@ -25,7 +25,7 @@ type OrderItem = {
   id: string;
   item: string;
   size: string | null;
-  status: string;    // pending | approved | denied | fulfilled
+  status: string;
   notes: string | null;
 };
 
@@ -34,6 +34,25 @@ type Order = {
   submitted_at: string;
   items: OrderItem[];
 };
+
+// ── Gear icon / visual mapping ────────────────────────────────────────────
+// Each item gets an emoji icon and a descriptive label. The icon doubles as
+// the visual anchor for the card — a real product image URL could replace it
+// once backend serves asset URLs.
+const GEAR_META: Record<string, { icon: string; label: string; color: string }> = {
+  Cap:        { icon: '🧢', label: 'Cap',             color: '#3B82F6' },
+  Gloves:     { icon: '🧤', label: 'Gloves',          color: '#8B5CF6' },
+  Jacket:     { icon: '🧥', label: 'Jacket',          color: '#64748B' },
+  Pants:      { icon: '👖', label: 'Pants',           color: '#334155' },
+  Shirt_Long: { icon: '👔', label: 'Long Sleeve Shirt', color: '#0EA5E9' },
+  Shirt_Short:{ icon: '👕', label: 'Short Sleeve Shirt', color: '#10B981' },
+  Shorts:     { icon: '🩳', label: 'Shorts',          color: '#F59E0B' },
+  Vest:       { icon: '🦺', label: 'Safety Vest',     color: '#EF4444' },
+};
+
+function gearMeta(item: string) {
+  return GEAR_META[item] ?? { icon: '📦', label: item.replace(/_/g, ' '), color: '#6B7280' };
+}
 
 const STATUS_COLORS: Record<string, string> = {
   pending: '#E8820C', approved: '#0EA5D8', fulfilled: '#0FA870', denied: '#E8443A',
@@ -48,7 +67,7 @@ export default function GearRequestsScreen() {
   const [season,     setSeason]     = useState('');
   const [catalogue,  setCatalogue]  = useState<CatalogueItem[]>([]);
   const [orders,     setOrders]     = useState<Order[]>([]);
-  const [cart,       setCart]       = useState<Record<string, string | null>>({});  // item → size
+  const [cart,       setCart]       = useState<Record<string, string | null>>({});
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async (opts?: { refresh?: boolean }) => {
@@ -103,61 +122,67 @@ export default function GearRequestsScreen() {
   const openOrders = orders.filter(o => o.items.some(i => i.status === 'pending' || i.status === 'approved'));
   const pastOrders = orders.filter(o => !openOrders.includes(o));
 
+  // Build grid rows (2 columns)
+  const available   = catalogue.filter(it => it.available);
+  const unavailable = catalogue.filter(it => !it.available);
+
   return (
     <ScreenShell
       edges={[]} noHeader
       title="Gear"
-      subtitle={season ? `Current season: ${season}` : undefined}
+      subtitle={season ? `${season} season` : undefined}
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => load({ refresh: true })}
     >
-      {/* Catalogue */}
+      {/* Catalogue — 2-column card grid */}
       <Text style={s.sectionLabel}>REQUEST GEAR</Text>
-      <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
-        {catalogue.map((it, i) => {
+
+      <View style={s.grid}>
+        {available.map(it => {
           const selected = it.item in cart;
+          const meta = gearMeta(it.item);
           return (
-            <View key={it.item} style={[s.itemRow, i < catalogue.length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-              <TouchableOpacity
-                style={s.itemMain}
-                onPress={() => it.available && toggleItem(it)}
-                disabled={!it.available}
-                activeOpacity={0.7}
-              >
-                <View style={[s.checkbox, { borderColor: selected ? c.primary : c.border }, selected && { backgroundColor: c.primary }]}>
-                  {selected && <Text style={s.checkboxMark}>✓</Text>}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.itemName, { color: it.available ? c.foreground : c.mutedForeground }]}>
-                    {it.item}
-                  </Text>
-                  {!it.available && (
-                    <Text style={[s.itemUnavailable, { color: c.mutedForeground }]}>
-                      {it.season} item — not available this season
-                    </Text>
-                  )}
-                </View>
-              </TouchableOpacity>
-              {/* Size picker appears once selected */}
-              {selected && !it.no_size && (
-                <View style={s.sizeRow}>
-                  {it.sizes.map(size => (
-                    <TouchableOpacity
-                      key={size}
-                      style={[s.sizeChip, { borderColor: c.border }, cart[it.item] === size && { backgroundColor: c.primaryLight, borderColor: c.primary }]}
-                      onPress={() => setCart(prev => ({ ...prev, [it.item]: size }))}
-                    >
-                      <Text style={[s.sizeText, { color: cart[it.item] === size ? c.primary : c.mutedForeground }]}>{size}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
+            <GearCard
+              key={it.item}
+              item={it}
+              meta={meta}
+              selected={selected}
+              size={cart[it.item] ?? null}
+              onToggle={() => toggleItem(it)}
+              onSizeChange={size => setCart(prev => ({ ...prev, [it.item]: size }))}
+              c={c}
+              s={s}
+            />
           );
         })}
       </View>
 
+      {/* Unavailable items — compact row at the bottom of catalogue */}
+      {unavailable.length > 0 && (
+        <>
+          <Text style={[s.sectionLabel, { marginTop: spacing.sm }]}>NOT AVAILABLE THIS SEASON</Text>
+          <View style={[s.unavailableBox, { backgroundColor: c.card, borderColor: c.border }]}>
+            {unavailable.map((it, i) => {
+              const meta = gearMeta(it.item);
+              return (
+                <View
+                  key={it.item}
+                  style={[s.unavailableRow, i < unavailable.length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}
+                >
+                  <Text style={s.unavailableIcon}>{meta.icon}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground }}>{meta.label}</Text>
+                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>{it.season} item</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </>
+      )}
+
+      {/* Cart submit CTA */}
       {cartCount > 0 && (
         <TouchableOpacity style={[s.submitBtn, { backgroundColor: c.primary }]} onPress={submit} disabled={submitting}>
           {submitting
@@ -167,25 +192,29 @@ export default function GearRequestsScreen() {
       )}
 
       {/* My orders */}
-      {orders.length > 0 && <Text style={s.sectionLabel}>MY ORDERS</Text>}
+      {orders.length > 0 && <Text style={[s.sectionLabel, { marginTop: spacing.md }]}>MY ORDERS</Text>}
       {[...openOrders, ...pastOrders].map(o => (
-        <View key={o.id} style={[s.card, { backgroundColor: c.card, borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm }]}>
+        <View key={o.id} style={[s.orderCard, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[s.orderDate, { color: c.mutedForeground }]}>
-            {new Date(o.submitted_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+            {new Date(o.submitted_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
           </Text>
-          {o.items.map(it => (
-            <View key={it.id} style={s.orderItemRow}>
-              <Text style={[s.orderItemName, { color: c.foreground }]}>
-                {it.item}{it.size ? ` · ${it.size}` : ''}
-              </Text>
-              <View style={[s.statusChip, { backgroundColor: (STATUS_COLORS[it.status] ?? c.mutedForeground) + '1E' }]}>
-                <Text style={[s.statusText, { color: STATUS_COLORS[it.status] ?? c.mutedForeground }]}>{it.status}</Text>
+          {o.items.map(it => {
+            const meta = gearMeta(it.item);
+            return (
+              <View key={it.id} style={s.orderItemRow}>
+                <Text style={s.orderItemIcon}>{meta.icon}</Text>
+                <Text style={[s.orderItemName, { color: c.foreground, flex: 1 }]}>
+                  {meta.label}{it.size ? ` · ${it.size}` : ''}
+                </Text>
+                <View style={[s.statusChip, { backgroundColor: (STATUS_COLORS[it.status] ?? c.mutedForeground) + '1E' }]}>
+                  <Text style={[s.statusText, { color: STATUS_COLORS[it.status] ?? c.mutedForeground }]}>{it.status}</Text>
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           {o.items.some(it => it.notes) && (
             <Text style={[s.orderNote, { color: c.mutedForeground }]}>
-              {o.items.filter(it => it.notes).map(it => `${it.item}: ${it.notes}`).join(' · ')}
+              {o.items.filter(it => it.notes).map(it => `${gearMeta(it.item).label}: ${it.notes}`).join(' · ')}
             </Text>
           )}
         </View>
@@ -194,24 +223,103 @@ export default function GearRequestsScreen() {
   );
 }
 
+// ── Gear card ──────────────────────────────────────────────────────────────
+
+function GearCard({ item, meta, selected, size, onToggle, onSizeChange, c, s }: {
+  item: CatalogueItem;
+  meta: { icon: string; label: string; color: string };
+  selected: boolean;
+  size: string | null;
+  onToggle: () => void;
+  onSizeChange: (size: string) => void;
+  c: ThemeColors;
+  s: ReturnType<typeof styles>;
+}) {
+  return (
+    <TouchableOpacity
+      style={[
+        s.gearCard,
+        { backgroundColor: c.card, borderColor: selected ? meta.color : c.border, borderWidth: selected ? 2 : 1 },
+      ]}
+      onPress={onToggle}
+      activeOpacity={0.75}
+    >
+      {/* Selection badge */}
+      {selected && (
+        <View style={[s.selectedBadge, { backgroundColor: meta.color }]}>
+          <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>✓</Text>
+        </View>
+      )}
+
+      {/* Icon / image area */}
+      <View style={[s.iconArea, { backgroundColor: selected ? meta.color + '18' : c.surfaceMuted }]}>
+        <Text style={s.gearIcon}>{meta.icon}</Text>
+      </View>
+
+      {/* Name */}
+      <Text style={[s.gearLabel, { color: selected ? meta.color : c.foreground }]} numberOfLines={2}>
+        {meta.label}
+      </Text>
+
+      {/* Size picker — only visible when selected and sizes exist */}
+      {selected && !item.no_size && item.sizes.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginTop: spacing.xs }}
+          contentContainerStyle={{ gap: 5, paddingBottom: 2 }}
+          onStartShouldSetResponder={() => true}
+        >
+          {item.sizes.map(sz => (
+            <TouchableOpacity
+              key={sz}
+              style={[
+                s.sizeChip,
+                { borderColor: size === sz ? meta.color : c.border },
+                size === sz && { backgroundColor: meta.color + '18' },
+              ]}
+              onPress={e => { e.stopPropagation?.(); onSizeChange(sz); }}
+            >
+              <Text style={[s.sizeText, { color: size === sz ? meta.color : c.mutedForeground }]}>{sz}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+// ── Styles ─────────────────────────────────────────────────────────────────
+
 const styles = (c: ThemeColors) => StyleSheet.create({
-  sectionLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.xs, marginTop: spacing.sm },
-  card:         { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden', marginBottom: spacing.sm },
-  itemRow:      { paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  itemMain:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  checkbox:     { width: 20, height: 20, borderRadius: 6, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  checkboxMark: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  itemName:     { fontSize: fontSize.sm, fontWeight: fontWeight.medium, textTransform: 'capitalize' },
-  itemUnavailable: { fontSize: fontSize.xs, marginTop: 1 },
-  sizeRow:      { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: spacing.xs, marginLeft: 32 },
-  sizeChip:     { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.sm + 2, paddingVertical: 3 },
-  sizeText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
-  submitBtn:    { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.md },
-  submitBtnText:{ color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  orderDate:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, marginBottom: spacing.xs },
-  orderItemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 3 },
-  orderItemName:{ fontSize: fontSize.sm, textTransform: 'capitalize' },
-  statusChip:   { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
-  statusText:   { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
-  orderNote:    { fontSize: fontSize.xs, marginTop: spacing.xs, fontStyle: 'italic' },
+  sectionLabel:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.sm, marginTop: spacing.xs },
+
+  // Grid
+  grid:            { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm },
+  gearCard:        { width: '47%', borderRadius: radius.lg, padding: spacing.sm, position: 'relative', minHeight: 130 },
+  selectedBadge:   { position: 'absolute', top: spacing.xs, right: spacing.xs, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
+  iconArea:        { height: 72, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.xs },
+  gearIcon:        { fontSize: 36 },
+  gearLabel:       { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center', lineHeight: 16 },
+  sizeChip:        { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  sizeText:        { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+
+  // Unavailable
+  unavailableBox:  { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden', marginBottom: spacing.sm },
+  unavailableRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  unavailableIcon: { fontSize: 22, opacity: 0.4 },
+
+  // Submit
+  submitBtn:       { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.md },
+  submitBtnText:   { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+
+  // Orders
+  orderCard:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.sm },
+  orderDate:       { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, marginBottom: spacing.xs },
+  orderItemRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 4 },
+  orderItemIcon:   { fontSize: 18, width: 24, textAlign: 'center' },
+  orderItemName:   { fontSize: fontSize.sm },
+  statusChip:      { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
+  statusText:      { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
+  orderNote:       { fontSize: fontSize.xs, marginTop: spacing.xs, fontStyle: 'italic' },
 });

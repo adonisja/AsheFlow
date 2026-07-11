@@ -1,8 +1,12 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-  Alert, Modal, TextInput, ScrollView,
+  Alert, Modal, TextInput, ScrollView, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
@@ -29,6 +33,7 @@ type RouteResp = {
   effort_class: string;
   package_count: number;
   block_keys: string[];
+  normalised_addresses: string[];
   returned_at: string | null;
   wave_number: number;
   assigned_to: string | null;
@@ -306,6 +311,16 @@ export default function MyRouteScreen() {
             </View>
           )}
 
+          {/* Route territory — block keys + address list so the walker knows
+              what they have before they start, and can reference it en route */}
+          {(route.block_keys?.length > 0 || route.normalised_addresses?.length > 0) && (
+            <RouteTerritorySection
+              blockKeys={route.block_keys ?? []}
+              addresses={route.normalised_addresses ?? []}
+              c={c}
+            />
+          )}
+
           {/* ADR-187 D8 — trainee lifeline, all phases (trainer may not be
               physically present even in 1–3) */}
           {hasRole('trainee') && route.status === 'in_progress' && (
@@ -361,6 +376,59 @@ export default function MyRouteScreen() {
         <BuildingProfileModal stop={bpTarget} c={c} onClose={() => setBpTarget(null)} />
       )}
     </ScreenShell>
+  );
+}
+
+// ── Route territory section — block keys + address list ───────────────────
+
+function RouteTerritorySection({ blockKeys, addresses, c }: {
+  blockKeys: string[]; addresses: string[]; c: ThemeColors;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={{ marginTop: spacing.sm, borderTopWidth: 1, borderTopColor: c.border + '88', paddingTop: spacing.sm }}>
+      <TouchableOpacity
+        onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setExpanded(e => !e); }}
+        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+        activeOpacity={0.7}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap', flex: 1 }}>
+          <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, marginRight: 4 }}>TERRITORY</Text>
+          {blockKeys.slice(0, 3).map(bk => (
+            <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 2 }}>
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
+            </View>
+          ))}
+          {blockKeys.length > 3 && (
+            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>+{blockKeys.length - 3}</Text>
+          )}
+        </View>
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: spacing.sm }}>
+          {expanded ? '▲ Hide' : `▼ ${addresses.length} addr`}
+        </Text>
+      </TouchableOpacity>
+
+      {expanded && (
+        <View style={{ marginTop: spacing.sm, gap: 6 }}>
+          {blockKeys.length > 3 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
+              {blockKeys.slice(3).map(bk => (
+                <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 2 }}>
+                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          {addresses.map((addr, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0, marginTop: 1 }} />
+              <Text style={{ fontSize: fontSize.xs, color: c.foreground }}>{addr}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 

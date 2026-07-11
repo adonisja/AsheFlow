@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-  Alert, Modal, ScrollView,
+  Alert, Modal, ScrollView, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
@@ -10,6 +10,10 @@ import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 /** AP Sort — mobile-first (drivers and trainers run this AT the anchor point).
  *
@@ -45,6 +49,8 @@ type RouteResp = {
   assigned_to_name: string | null;
   returned_at: string | null;
   paired_trainee_id: string | null;
+  block_keys: string[];
+  normalised_addresses: string[];
   misrouted_packages: MisrouteFlag[];
 };
 
@@ -260,7 +266,7 @@ export default function RouteSortScreen() {
   const pairedTrainee = crew.find(m => m.role === 'trainee' && m.paired_trainer_id);
   const rebalanced = routes.some(r => r.paired_trainee_id);
 
-  // Unresolved misroutes across all routes, with source + suggested resolution
+  // Route lookup by id — shared by misroute resolution + wave proposal drill-down
   const routesById = new Map(routes.map(r => [r.id, r]));
   const misroutes = routes.flatMap(r =>
     (r.misrouted_packages ?? [])
@@ -423,21 +429,7 @@ export default function RouteSortScreen() {
           <View key={g.label}>
             <Text style={s.sectionLabel}>{g.label} · {g.data.length}</Text>
             {g.data.map(r => (
-              <View key={r.id} style={[s.routeRow, { backgroundColor: c.card, borderColor: c.border }]}>
-                <View style={[s.routeNum, { backgroundColor: (EFFORT_COLORS[r.effort_class] ?? c.primary) + '1E' }]}>
-                  <Text style={[s.routeNumText, { color: EFFORT_COLORS[r.effort_class] ?? c.primary }]}>{r.route_number}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.routeName, { color: c.foreground }]}>
-                    {r.assigned_to_name ?? 'Unassigned'}
-                  </Text>
-                  <Text style={[s.routeMeta, { color: c.mutedForeground }]}>
-                    {r.package_count} pkgs · {r.effort_class} · wave {r.wave_number}
-                    {r.returned_at ? ' · returned' : ''}
-                  </Text>
-                </View>
-                <Text style={[s.routeStatus, { color: c.mutedForeground }]}>{r.status.replace('_', ' ')}</Text>
-              </View>
+              <RouteRow key={r.id} route={r} c={c} s={s} />
             ))}
           </View>
         ))}
@@ -458,25 +450,26 @@ export default function RouteSortScreen() {
                 </View>
               )}
 
-              <ScrollView style={{ maxHeight: 340 }}>
-                {[...proposal].sort((a, b) => a.route_number - b.route_number).map(p => (
-                  <TouchableOpacity
-                    key={p.route_number}
-                    style={[ms.propRow, { borderBottomColor: c.border }]}
-                    onPress={() => setPickerFor(p.route_number)}
-                  >
-                    <View style={[s.routeNum, { backgroundColor: (EFFORT_COLORS[p.effort_class] ?? c.primary) + '1E' }]}>
-                      <Text style={[s.routeNumText, { color: EFFORT_COLORS[p.effort_class] ?? c.primary }]}>{p.route_number}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[ms.propName, { color: c.foreground }]}>{p.employee_name}</Text>
-                      <Text style={[ms.propMeta, { color: c.mutedForeground }]}>{p.effort_class}</Text>
-                    </View>
-                    <Text style={[ms.propTag, { color: overridden.has(p.route_number) ? '#E8820C' : c.mutedForeground }]}>
-                      {overridden.has(p.route_number) ? 'edited' : 'auto'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              <ScrollView style={{ maxHeight: 420 }}>
+                {[...proposal].sort((a, b) => a.route_number - b.route_number).map(p => {
+                  const routeData = routesById.get(p.route_id);
+                  const blockKeys = routeData?.block_keys ?? [];
+                  const addresses = routeData?.normalised_addresses ?? [];
+                  const pkgCount  = routeData?.package_count ?? null;
+                  return (
+                    <ProposalRow
+                      key={p.route_number}
+                      proposal={p}
+                      blockKeys={blockKeys}
+                      addresses={addresses}
+                      packageCount={pkgCount ?? null}
+                      overridden={overridden.has(p.route_number)}
+                      onAssigneePress={() => setPickerFor(p.route_number)}
+                      c={c}
+                      s={s}
+                    />
+                  );
+                })}
               </ScrollView>
 
               <View style={ms.btnRow}>
@@ -516,6 +509,153 @@ export default function RouteSortScreen() {
     </ScreenShell>
   );
 }
+
+// ── RouteRow — expandable route card showing blocks + addresses ───────────────
+
+function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: ReturnType<typeof styles> }) {
+  const [expanded, setExpanded] = useState(false);
+  const effortColor = EFFORT_COLORS[route.effort_class] ?? c.primary;
+
+  const toggle = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(e => !e);
+  };
+
+  return (
+    <View style={[s.routeRow, { backgroundColor: c.card, borderColor: c.border, flexDirection: 'column', padding: 0 }]}>
+      <TouchableOpacity
+        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.sm }}
+        onPress={toggle}
+        activeOpacity={0.7}
+      >
+        <View style={[s.routeNum, { backgroundColor: effortColor + '1E' }]}>
+          <Text style={[s.routeNumText, { color: effortColor }]}>{route.route_number}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[s.routeName, { color: c.foreground }]}>
+            {route.assigned_to_name ?? 'Unassigned'}
+          </Text>
+          <Text style={[s.routeMeta, { color: c.mutedForeground }]}>
+            {route.package_count} pkgs · {route.effort_class} · wave {route.wave_number}
+            {route.returned_at ? ' · returned' : ''}
+          </Text>
+          {route.block_keys.length > 0 && (
+            <Text style={[s.routeMeta, { color: c.mutedForeground, marginTop: 2 }]} numberOfLines={1}>
+              {route.block_keys.slice(0, 3).join(' · ')}{route.block_keys.length > 3 ? ` +${route.block_keys.length - 3}` : ''}
+            </Text>
+          )}
+        </View>
+        <Text style={[s.routeStatus, { color: c.mutedForeground }]}>{route.status.replace('_', ' ')}</Text>
+        <Text style={{ color: c.mutedForeground, fontSize: 11 }}>{expanded ? '▲' : '▼'}</Text>
+      </TouchableOpacity>
+
+      {expanded && route.normalised_addresses.length > 0 && (
+        <View style={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, paddingLeft: 50, gap: 4 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+            {route.block_keys.map(bk => (
+              <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 2 }}>
+                <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
+              </View>
+            ))}
+          </View>
+          {route.normalised_addresses.map((addr, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0 }} />
+              <Text style={{ fontSize: fontSize.xs, color: c.foreground }} numberOfLines={1}>{addr}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ── ProposalRow — expandable wave-proposal entry with block / address drill-down ─
+
+function ProposalRow({
+  proposal, blockKeys, addresses, packageCount, overridden, onAssigneePress, c, s,
+}: {
+  proposal: Proposal;
+  blockKeys: string[];
+  addresses: string[];
+  packageCount: number | null;
+  overridden: boolean;
+  onAssigneePress: () => void;
+  c: ThemeColors;
+  s: ReturnType<typeof styles>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const toggle = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(e => !e);
+  };
+
+  const effortColor = EFFORT_COLORS[proposal.effort_class] ?? c.primary;
+
+  return (
+    <View style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
+      {/* Header row — tap left to expand, tap right to reassign */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm }}>
+        <TouchableOpacity onPress={toggle} activeOpacity={0.7}>
+          <View style={[s.routeNum, { backgroundColor: effortColor + '1E' }]}>
+            <Text style={[s.routeNumText, { color: effortColor }]}>{proposal.route_number}</Text>
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity style={{ flex: 1 }} onPress={toggle} activeOpacity={0.7}>
+          <Text style={[ms.propName, { color: c.foreground }]}>{proposal.employee_name}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: 1, flexWrap: 'wrap' }}>
+            <Text style={[ms.propMeta, { color: c.mutedForeground }]}>
+              {proposal.effort_class}
+              {packageCount != null ? ` · ${packageCount} pkg${packageCount === 1 ? '' : 's'}` : ''}
+            </Text>
+            {blockKeys.length > 0 && (
+              <Text style={[ms.propMeta, { color: c.mutedForeground }]}>
+                · {blockKeys.slice(0, 2).join(', ')}{blockKeys.length > 2 ? ` +${blockKeys.length - 2}` : ''}
+              </Text>
+            )}
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onAssigneePress} style={{ paddingHorizontal: spacing.xs }}>
+          <Text style={{ fontSize: fontSize.xs, color: overridden ? '#E8820C' : c.mutedForeground, fontWeight: fontWeight.semibold }}>
+            {overridden ? 'edited ✎' : 'auto ✎'}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={toggle} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Text style={{ color: c.mutedForeground, fontSize: 11 }}>{expanded ? '▲' : '▼'}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Expanded drill-down: block keys pill row, then address list */}
+      {expanded && (
+        <View style={{ paddingBottom: spacing.sm, paddingLeft: 42, gap: spacing.xs }}>
+          {blockKeys.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {blockKeys.map(bk => (
+                  <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 3 }}>
+                    <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          )}
+          {addresses.length > 0 ? (
+            addresses.map((addr, i) => (
+              <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0 }} />
+                <Text style={{ fontSize: fontSize.xs, color: c.foreground, flex: 1 }} numberOfLines={1}>{addr}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontStyle: 'italic' }}>No address data yet</Text>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
 
 function Summary({ label, value, color, c }: { label: string; value: number; color: string; c: ThemeColors }) {
   return (
