@@ -90,7 +90,7 @@ export default function WalkerPerformanceScreen() {
 
   if (!profile || profile.total_shifts === 0) {
     return (
-      <ScreenShell edges={[]} noHeader title="Performance" subtitle="">
+      <ScreenShell title="Performance" subtitle="">
         <View style={s.center}>
           <Text style={{ fontSize: 40 }}>📊</Text>
           <Text style={s.emptyTitle}>No shift history yet</Text>

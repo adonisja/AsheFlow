@@ -149,7 +149,7 @@ export default function GraduationQuizScreen() {
 
   if (!quiz) {
     return (
-      <ScreenShell edges={[]} noHeader title="Graduation Quiz" subtitle="">
+      <ScreenShell title="Graduation Quiz" subtitle="">
         <View style={s.center}>
           <Text style={{ fontSize: 48 }}>📝</Text>
           <Text style={s.doneTitle}>No quiz available</Text>

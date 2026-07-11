@@ -298,7 +298,7 @@ export default function RouteSortScreen() {
 
   if (!loading && !taId) {
     return (
-      <ScreenShell edges={[]} noHeader title="AP Sort" subtitle="No truck assignment today."
+      <ScreenShell title="AP Sort" subtitle="No truck assignment today."
         refreshing={refreshing} onRefresh={() => load({ refresh: true })}>
         <View style={s.center}>
           <Text style={{ fontSize: 40 }}>🗺️</Text>
@@ -311,7 +311,6 @@ export default function RouteSortScreen() {
 
   return (
     <ScreenShell
-      edges={[]} noHeader
       title="AP Sort"
       subtitle={truckName ? `${truckName} · ${todayStr()}` : todayStr()}
       loading={loading}

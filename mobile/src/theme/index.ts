@@ -268,6 +268,7 @@ export const fontSize = {
   lg:   20,
   xl:   24,
   '2xl':28,
+  xxl:  28,   // dot-access alias for '2xl' — several screens use fontSize.xxl
   '3xl':34,
 } as const;
 

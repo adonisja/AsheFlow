@@ -93,7 +93,7 @@ export default function Phase4Screen() {
 
   if (!loading && !session) {
     return (
-      <ScreenShell edges={[]} noHeader title="Phase 4 Observation" subtitle="No active Phase 4 session today.">
+      <ScreenShell title="Phase 4 Observation" subtitle="No active Phase 4 session today.">
         <View style={s.emptyCard}>
           <Text style={s.emptyText}>Not applicable today</Text>
           <Text style={s.emptySubtext}>This screen is only active when your trainee is in Phase 4</Text>
@@ -104,7 +104,7 @@ export default function Phase4Screen() {
 
   if (result) {
     return (
-      <ScreenShell edges={[]} noHeader title="Observation Submitted" subtitle={session?.trainee_name}>
+      <ScreenShell title="Observation Submitted" subtitle={session?.trainee_name}>
         <View style={[s.resultCard, { borderColor: result.passed ? c.success : c.danger, backgroundColor: (result.passed ? c.success : c.danger) + '12' }]}>
           <Text style={[s.resultTitle, { color: result.passed ? c.success : c.danger }]}>
             {result.passed ? 'PASSED' : 'DID NOT PASS'}
@@ -119,7 +119,7 @@ export default function Phase4Screen() {
   const optional  = session?.tasks.filter(t => !t.mandatory) ?? [];
 
   return (
-    <ScreenShell edges={[]} noHeader title="Phase 4 Observation" subtitle={session?.trainee_name} loading={loading}>
+    <ScreenShell title="Phase 4 Observation" subtitle={session?.trainee_name} loading={loading}>
       <Text style={s.hint}>Tap each task the trainee demonstrated correctly.</Text>
 
       {mandatory.length > 0 && (

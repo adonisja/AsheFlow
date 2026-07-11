@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Image,
+  type ImageSourcePropType,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
@@ -35,23 +36,27 @@ type Order = {
   items: OrderItem[];
 };
 
-// ── Gear icon / visual mapping ────────────────────────────────────────────
-// Each item gets an emoji icon and a descriptive label. The icon doubles as
-// the visual anchor for the card — a real product image URL could replace it
-// once backend serves asset URLs.
-const GEAR_META: Record<string, { icon: string; label: string; color: string }> = {
-  Cap:        { icon: '🧢', label: 'Cap',             color: '#3B82F6' },
-  Gloves:     { icon: '🧤', label: 'Gloves',          color: '#8B5CF6' },
-  Jacket:     { icon: '🧥', label: 'Jacket',          color: '#64748B' },
-  Pants:      { icon: '👖', label: 'Pants',           color: '#334155' },
-  Shirt_Long: { icon: '👔', label: 'Long Sleeve Shirt', color: '#0EA5E9' },
-  Shirt_Short:{ icon: '👕', label: 'Short Sleeve Shirt', color: '#10B981' },
-  Shorts:     { icon: '🩳', label: 'Shorts',          color: '#F59E0B' },
-  Vest:       { icon: '🦺', label: 'Safety Vest',     color: '#EF4444' },
+// ── Gear visual mapping ────────────────────────────────────────────────────
+// Keys match the backend catalogue item ids (lowercase — see gear_requests.py
+// SIZE_MAP); the previous PascalCase keys never matched, so every card fell
+// through to the 📦 default. Product images are the same assets the web gear
+// page uses (frontend/public/), copied to src/assets/gear as PNG. RN requires
+// static require() calls — dynamic string paths don't bundle.
+const GEAR_META: Record<string, { image: ImageSourcePropType; icon: string; label: string; color: string }> = {
+  cap:         { image: require('@assets/gear/cap.png'),         icon: '🧢', label: 'Cap',                color: '#3B82F6' },
+  gloves:      { image: require('@assets/gear/gloves.png'),      icon: '🧤', label: 'Gloves',             color: '#8B5CF6' },
+  jacket:      { image: require('@assets/gear/jacket.png'),      icon: '🧥', label: 'Jacket',             color: '#64748B' },
+  pants:       { image: require('@assets/gear/pants.png'),       icon: '👖', label: 'Pants',              color: '#334155' },
+  shirt_long:  { image: require('@assets/gear/shirt_long.png'),  icon: '👔', label: 'Long Sleeve Shirt',  color: '#0EA5E9' },
+  shirt_short: { image: require('@assets/gear/shirt_short.png'), icon: '👕', label: 'Short Sleeve Shirt', color: '#10B981' },
+  shorts:      { image: require('@assets/gear/shorts.png'),      icon: '🩳', label: 'Shorts',             color: '#F59E0B' },
+  vest:        { image: require('@assets/gear/vest.png'),        icon: '🦺', label: 'Safety Vest',        color: '#EF4444' },
 };
 
-function gearMeta(item: string) {
-  return GEAR_META[item] ?? { icon: '📦', label: item.replace(/_/g, ' '), color: '#6B7280' };
+type GearMeta = { image: ImageSourcePropType | null; icon: string; label: string; color: string };
+
+function gearMeta(item: string): GearMeta {
+  return GEAR_META[item] ?? { image: null, icon: '📦', label: item.replace(/_/g, ' '), color: '#6B7280' };
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -96,7 +101,9 @@ export default function GearRequestsScreen() {
       if (it.item in next) {
         delete next[it.item];
       } else {
-        next[it.item] = it.no_size ? null : (it.sizes[0] ?? null);
+        // Sized items start unselected so the customer must pick a size (the
+        // submit guard enforces it); no_size items carry null legitimately.
+        next[it.item] = null;
       }
       return next;
     });
@@ -105,6 +112,20 @@ export default function GearRequestsScreen() {
   const submit = async () => {
     const items = Object.entries(cart).map(([item, size]) => ({ item, size }));
     if (items.length === 0) return;
+
+    // A sized item with no size selected must not ship on a silent default.
+    // no_size items (cap) legitimately carry size=null.
+    const sizedItems = new Map(catalogue.map(it => [it.item, it]));
+    const missingSize = items.filter(({ item, size }) => {
+      const cat = sizedItems.get(item);
+      return cat && !cat.no_size && !size;
+    });
+    if (missingSize.length > 0) {
+      const names = missingSize.map(m => gearMeta(m.item).label).join(', ');
+      Alert.alert('Choose a size', `Select a size for: ${names}.`);
+      return;
+    }
+
     setSubmitting(true);
     try {
       await apiClient.post('/gear-requests/', { items });
@@ -122,22 +143,20 @@ export default function GearRequestsScreen() {
   const openOrders = orders.filter(o => o.items.some(i => i.status === 'pending' || i.status === 'approved'));
   const pastOrders = orders.filter(o => !openOrders.includes(o));
 
-  // Build grid rows (2 columns)
+  // Catalogue split into currently-available items (shown as cards) and
+  // out-of-season items (compact rows below).
   const available   = catalogue.filter(it => it.available);
   const unavailable = catalogue.filter(it => !it.available);
 
   return (
     <ScreenShell
-      edges={[]} noHeader
-      title="Gear"
+      title="Request Gear"
       subtitle={season ? `${season} season` : undefined}
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => load({ refresh: true })}
     >
       {/* Catalogue — 2-column card grid */}
-      <Text style={s.sectionLabel}>REQUEST GEAR</Text>
-
       <View style={s.grid}>
         {available.map(it => {
           const selected = it.item in cart;
@@ -170,7 +189,9 @@ export default function GearRequestsScreen() {
                   key={it.item}
                   style={[s.unavailableRow, i < unavailable.length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}
                 >
-                  <Text style={s.unavailableIcon}>{meta.icon}</Text>
+                  {meta.image
+                    ? <Image source={meta.image} style={s.unavailableImage} resizeMode="contain" />
+                    : <Text style={s.unavailableIcon}>{meta.icon}</Text>}
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground }}>{meta.label}</Text>
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>{it.season} item</Text>
@@ -202,7 +223,9 @@ export default function GearRequestsScreen() {
             const meta = gearMeta(it.item);
             return (
               <View key={it.id} style={s.orderItemRow}>
-                <Text style={s.orderItemIcon}>{meta.icon}</Text>
+                {meta.image
+                  ? <Image source={meta.image} style={s.orderItemImage} resizeMode="contain" />
+                  : <Text style={s.orderItemIcon}>{meta.icon}</Text>}
                 <Text style={[s.orderItemName, { color: c.foreground, flex: 1 }]}>
                   {meta.label}{it.size ? ` · ${it.size}` : ''}
                 </Text>
@@ -227,7 +250,7 @@ export default function GearRequestsScreen() {
 
 function GearCard({ item, meta, selected, size, onToggle, onSizeChange, c, s }: {
   item: CatalogueItem;
-  meta: { icon: string; label: string; color: string };
+  meta: GearMeta;
   selected: boolean;
   size: string | null;
   onToggle: () => void;
@@ -251,9 +274,11 @@ function GearCard({ item, meta, selected, size, onToggle, onSizeChange, c, s }: 
         </View>
       )}
 
-      {/* Icon / image area */}
+      {/* Icon / image area — product image, emoji fallback for unmapped items */}
       <View style={[s.iconArea, { backgroundColor: selected ? meta.color + '18' : c.surfaceMuted }]}>
-        <Text style={s.gearIcon}>{meta.icon}</Text>
+        {meta.image
+          ? <Image source={meta.image} style={s.gearImage} resizeMode="contain" />
+          : <Text style={s.gearIcon}>{meta.icon}</Text>}
       </View>
 
       {/* Name */}
@@ -261,29 +286,33 @@ function GearCard({ item, meta, selected, size, onToggle, onSizeChange, c, s }: 
         {meta.label}
       </Text>
 
-      {/* Size picker — only visible when selected and sizes exist */}
+      {/* Size picker — visible when selected. Full-width wrapping chip grid
+          (was a cramped horizontal scroll that hid the size step, so orders
+          went out on the default size without the customer choosing). */}
       {selected && !item.no_size && item.sizes.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginTop: spacing.xs }}
-          contentContainerStyle={{ gap: 5, paddingBottom: 2 }}
-          onStartShouldSetResponder={() => true}
-        >
-          {item.sizes.map(sz => (
-            <TouchableOpacity
-              key={sz}
-              style={[
-                s.sizeChip,
-                { borderColor: size === sz ? meta.color : c.border },
-                size === sz && { backgroundColor: meta.color + '18' },
-              ]}
-              onPress={e => { e.stopPropagation?.(); onSizeChange(sz); }}
-            >
-              <Text style={[s.sizeText, { color: size === sz ? meta.color : c.mutedForeground }]}>{sz}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        <View style={s.sizeArea}>
+          <Text style={[s.sizePrompt, { color: c.mutedForeground }]}>Select a size</Text>
+          <View style={s.sizeRow}>
+            {item.sizes.map(sz => (
+              <TouchableOpacity
+                key={sz}
+                style={[
+                  s.sizeChip,
+                  { borderColor: size === sz ? meta.color : c.border },
+                  size === sz && { backgroundColor: meta.color + '18' },
+                ]}
+                onPress={e => { e.stopPropagation?.(); onSizeChange(sz); }}
+              >
+                <Text style={[s.sizeText, { color: size === sz ? meta.color : c.mutedForeground }]}>{sz}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* One-size items (cap) — make it explicit that no size is needed */}
+      {selected && item.no_size && (
+        <Text style={[s.sizePrompt, { color: c.mutedForeground, marginTop: spacing.xs }]}>One size fits all</Text>
       )}
     </TouchableOpacity>
   );
@@ -294,20 +323,25 @@ function GearCard({ item, meta, selected, size, onToggle, onSizeChange, c, s }: 
 const styles = (c: ThemeColors) => StyleSheet.create({
   sectionLabel:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.sm, marginTop: spacing.xs },
 
-  // Grid
-  grid:            { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm },
-  gearCard:        { width: '47%', borderRadius: radius.lg, padding: spacing.sm, position: 'relative', minHeight: 130 },
-  selectedBadge:   { position: 'absolute', top: spacing.xs, right: spacing.xs, width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
-  iconArea:        { height: 72, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.xs },
-  gearIcon:        { fontSize: 36 },
-  gearLabel:       { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center', lineHeight: 16 },
-  sizeChip:        { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
-  sizeText:        { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  // Grid — one item per row (full-width) so the image and size chips have room
+  grid:            { marginBottom: spacing.sm, gap: spacing.sm },
+  gearCard:        { width: '100%', borderRadius: radius.lg, padding: spacing.md, position: 'relative' },
+  selectedBadge:   { position: 'absolute', top: spacing.sm, right: spacing.sm, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
+  iconArea:        { height: 150, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.sm },
+  gearIcon:        { fontSize: 56 },
+  gearImage:       { width: '70%', height: '90%' },
+  gearLabel:       { fontSize: fontSize.base, fontWeight: fontWeight.semibold, textAlign: 'center', lineHeight: 20 },
+  sizeArea:        { marginTop: spacing.sm },
+  sizePrompt:      { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center', marginBottom: spacing.xs, letterSpacing: 0.4 },
+  sizeRow:         { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: spacing.xs },
+  sizeChip:        { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 1, minWidth: 44, alignItems: 'center' },
+  sizeText:        { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   // Unavailable
   unavailableBox:  { borderRadius: radius.lg, borderWidth: 1, overflow: 'hidden', marginBottom: spacing.sm },
   unavailableRow:  { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   unavailableIcon: { fontSize: 22, opacity: 0.4 },
+  unavailableImage:{ width: 28, height: 28, opacity: 0.5 },
 
   // Submit
   submitBtn:       { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.md },
@@ -318,6 +352,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   orderDate:       { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, marginBottom: spacing.xs },
   orderItemRow:    { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 4 },
   orderItemIcon:   { fontSize: 18, width: 24, textAlign: 'center' },
+  orderItemImage:  { width: 24, height: 24 },
   orderItemName:   { fontSize: fontSize.sm },
   statusChip:      { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
   statusText:      { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },

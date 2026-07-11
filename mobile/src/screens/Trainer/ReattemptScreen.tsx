@@ -196,7 +196,7 @@ export default function ReattemptScreen() {
 
   if (!loading && !taId) {
     return (
-      <ScreenShell edges={[]} noHeader title="Reattempts" subtitle="No truck assignment today."
+      <ScreenShell title="Reattempts" subtitle="No truck assignment today."
         refreshing={refreshing} onRefresh={() => load({ refresh: true })}>
         <View style={s.center}>
           <Text style={{ fontSize: 40 }}>📦</Text>
@@ -209,7 +209,6 @@ export default function ReattemptScreen() {
 
   return (
     <ScreenShell
-      edges={[]} noHeader
       title="Reattempts"
       subtitle={`Same-day redelivery · cutoff ${cutoffTime}`}
       loading={loading}

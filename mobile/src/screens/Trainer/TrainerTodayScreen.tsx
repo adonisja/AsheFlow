@@ -209,7 +209,7 @@ export default function TrainerTodayScreen() {
 
   if (!loading && !session) {
     return (
-      <ScreenShell edges={[]} noHeader title="Today's Session" subtitle="No active session for today.">
+      <ScreenShell title="Today's Session" subtitle="No active session for today.">
         <EmptyState c={c} />
       </ScreenShell>
     );
@@ -223,8 +223,6 @@ export default function TrainerTodayScreen() {
 
   return (
     <ScreenShell
-      edges={[]}
-      noHeader
       title="Today's Session"
       subtitle={session ? `Day ${session.day_number} · Phase ${session.phase}` : undefined}
       loading={loading}

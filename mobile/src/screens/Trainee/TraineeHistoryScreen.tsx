@@ -108,8 +108,6 @@ export default function TraineeHistoryScreen() {
 
   return (
     <ScreenShell
-      edges={[]}
-      noHeader
       title="Training History"
       subtitle="All past sessions"
       loading={loading}

@@ -243,7 +243,7 @@ export default function MyRouteScreen() {
 
   if (!loading && !route) {
     return (
-      <ScreenShell edges={[]} noHeader title="My Route" subtitle="No route assigned yet."
+      <ScreenShell title="My Route" subtitle="No route assigned yet."
         refreshing={refreshing} onRefresh={() => load({ refresh: true })}>
         <View style={s.center}>
           <Text style={{ fontSize: 40 }}>🗺️</Text>
@@ -261,7 +261,6 @@ export default function MyRouteScreen() {
 
   return (
     <ScreenShell
-      edges={[]} noHeader
       title="My Route"
       subtitle={route ? `Route ${route.route_number} · Wave ${route.wave_number}` : undefined}
       loading={loading}

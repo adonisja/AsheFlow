@@ -77,8 +77,6 @@ export default function TrainerPerformanceScreen() {
 
   return (
     <ScreenShell
-      edges={[]}
-      noHeader
       title="My Performance"
       subtitle="Marks and standing"
       loading={loading}
