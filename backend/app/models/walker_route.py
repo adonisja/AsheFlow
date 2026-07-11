@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import Column, Integer, Date, DateTime, String, Boolean, Float, ForeignKey, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.models.base import Base
@@ -29,6 +29,9 @@ class Route(Base):
     tote_ids              = Column(ARRAY(Text()), nullable=False, default=list)
     tba_numbers           = Column(ARRAY(Text()), nullable=False, default=list)
     normalised_addresses  = Column(ARRAY(Text()), nullable=False, default=list)
+    # Delivered-set drill-down: [{block_key, address, tba_numbers}] (ADR-194).
+    # NULL on rows that predate the column — clients fall back to the flat lists.
+    stops                 = Column(JSONB(), nullable=True)
     package_count         = Column(Integer(), nullable=False, default=0)
 
     # Capacity in half-slots (scale ×2: standard=12, heavy=8, paired=18/12)
@@ -130,6 +133,7 @@ class MisroutedPackageFlag(Base):
     tba_number                = Column(String(50), nullable=False)
     current_bag_id            = Column(String(50), nullable=False)
     destination_block_key     = Column(String(100), nullable=True)    # block_key the package actually belongs to
+    normalised_address        = Column(String(255), nullable=True)    # where it belongs — captain locates it; resolve moves it (ADR-194)
     suggested_route_id        = Column(UUID(as_uuid=True), nullable=True)   # null = needs captain review
     resolved                  = Column(Boolean(), nullable=False, default=False)
     resolved_by               = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)

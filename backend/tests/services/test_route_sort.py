@@ -753,3 +753,138 @@ class TestStandaloneOVCost:
         ]
         result = run_sort(_request(pkgs), {}, {}, {})
         assert result.routes[0].slot_cost == TOTE_HALF_SLOTS + OV_HALF_SLOTS["XL"]
+
+
+# ---------------------------------------------------------------------------
+# ADR-194 — structured stops + cross-street range gate
+# ---------------------------------------------------------------------------
+
+class TestStopsOutput:
+    def test_stops_grouped_by_address_and_sorted(self):
+        # Two addresses on the 300 block, one on the 400 block — stops must be
+        # one entry per unique address, blocks ascending, house numbers
+        # ascending within a block, TBAs grouped under their address.
+        pkgs = [
+            _pkg("T1", "310 W 36th St", "Bag1", normalised_address="310 WEST 36 STREET"),
+            _pkg("T2", "310 W 36th St", "Bag1", normalised_address="310 WEST 36 STREET"),
+            _pkg("T3", "302 W 36th St", "Bag1", normalised_address="302 WEST 36 STREET"),
+            _pkg("T4", "410 W 36th St", "Bag2", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE"),
+            _pkg("T5", "410 W 36th St", "Bag2", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        all_stops = [s for r in result.routes for s in r.stops]
+        assert [(s.block_key, s.address) for s in all_stops] == [
+            ("W_36_St_300", "302 WEST 36 STREET"),
+            ("W_36_St_300", "310 WEST 36 STREET"),
+            ("W_36_St_400", "410 WEST 36 STREET"),
+        ]
+        by_addr = {s.address: s.tba_numbers for s in all_stops}
+        assert by_addr["310 WEST 36 STREET"] == ["T1", "T2"]
+        assert by_addr["410 WEST 36 STREET"] == ["T4", "T5"]
+
+    def test_stops_exclude_flagged_riders_but_tba_numbers_keep_them(self):
+        # The W_57 rider is flagged, so it is NOT a stop — but it still rides
+        # physically in the tote, so it stays in tba_numbers until resolved.
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagY", normalised_address="300 WEST 36 STREET"),
+            _pkg("D2", "310 W 36th St", "BagY", normalised_address="310 WEST 36 STREET"),
+            _pkg("FAR", "350 W 57th St", "BagY", normalised_address="350 WEST 57 STREET",
+                 lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        route = result.routes[0]
+        assert "FAR" in route.tba_numbers
+        assert all("FAR" not in s.tba_numbers for s in route.stops)
+        assert all(s.address != "350 WEST 57 STREET" for s in route.stops)
+
+    def test_flagged_rider_carries_normalised_address(self):
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagY", normalised_address="300 WEST 36 STREET"),
+            _pkg("D2", "310 W 36th St", "BagY", normalised_address="310 WEST 36 STREET"),
+            _pkg("FAR", "350 W 57th St", "BagY", normalised_address="350 WEST 57 STREET",
+                 lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flags = [m for r in result.routes for m in r.misrouted_packages]
+        flags += list(result.unassigned_misroutes)
+        far = next(m for m in flags if m.tba_number == "FAR")
+        assert far.normalised_address == "350 WEST 57 STREET"
+
+    def test_package_without_address_is_not_a_stop_but_stays_in_tbas(self):
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagZ", normalised_address="300 WEST 36 STREET"),
+            _pkg("NOADDR", "310 W 36th St", "BagZ", normalised_address=None),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        route = result.routes[0]
+        assert "NOADDR" in route.tba_numbers
+        assert all("NOADDR" not in s.tba_numbers for s in route.stops)
+
+
+class TestCrossStreetRangeGate:
+    """Cost-1 edges match on street IDENTITY ('borders 9th Ave'); without the
+    centroid gate that connects a street block to EVERY 9th-Ave hundred-range
+    in the zone, so a far-avenue rider sat inside the misroute neighborhood
+    and was never flagged (ADR-194)."""
+
+    # W 36th St @ 9th Ave ≈ (40.7544, -73.9931); 9th Ave 800-range (W 53rd)
+    # ≈ (40.7645, -73.9870) — ~1.2 km apart, far beyond the 0.4 km gate.
+    _W36 = (40.7544, -73.9931)
+    _AVE_FAR = (40.7645, -73.9870)
+    _AVE_NEAR = (40.7553, -73.9925)   # 9th Ave 500-range (W 38th) — ~0.11 km
+
+    def test_far_avenue_rider_flagged_despite_shared_avenue(self):
+        pkgs = [
+            _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("D2", "410 W 36th St", "BagA", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("RIDER", "810 9th Ave", "BagA", normalised_address="810 9 AVENUE",
+                 lat=self._AVE_FAR[0], lng=self._AVE_FAR[1]),
+            # The far avenue range is a dominant block of its own tote — the
+            # exact configuration that used to legitimize the rider.
+            _pkg("F1", "800 9th Ave", "BagB", normalised_address="800 9 AVENUE",
+                 lat=self._AVE_FAR[0], lng=self._AVE_FAR[1]),
+            _pkg("F2", "820 9th Ave", "BagB", normalised_address="820 9 AVENUE",
+                 lat=self._AVE_FAR[0], lng=self._AVE_FAR[1]),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "RIDER" in flagged
+
+    def test_adjacent_avenue_rider_not_flagged(self):
+        pkgs = [
+            _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("D2", "410 W 36th St", "BagA", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("NEAR", "510 9th Ave", "BagA", normalised_address="510 9 AVENUE",
+                 lat=self._AVE_NEAR[0], lng=self._AVE_NEAR[1]),
+            _pkg("N1", "500 9th Ave", "BagC", normalised_address="500 9 AVENUE",
+                 lat=self._AVE_NEAR[0], lng=self._AVE_NEAR[1]),
+            _pkg("N2", "520 9th Ave", "BagC", normalised_address="520 9 AVENUE",
+                 lat=self._AVE_NEAR[0], lng=self._AVE_NEAR[1]),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "NEAR" not in flagged
+
+    def test_missing_coordinates_keep_the_edge(self):
+        # Cold-start: no lat/lng anywhere — the gate must not fire, preserving
+        # the pre-ADR-194 edge so the near rider still rides silently.
+        pkgs = [
+            _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=None, lng=None),
+            _pkg("NEAR", "510 9th Ave", "BagA", normalised_address="510 9 AVENUE",
+                 lat=None, lng=None),
+            _pkg("N1", "500 9th Ave", "BagC", normalised_address="500 9 AVENUE",
+                 lat=None, lng=None),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "NEAR" not in flagged

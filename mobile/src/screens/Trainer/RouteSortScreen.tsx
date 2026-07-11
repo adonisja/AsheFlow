@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
+import RouteStopsList, { type RouteStop } from '@components/route/RouteStopsList';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
@@ -34,6 +35,7 @@ type MisrouteFlag = {
   id: string;
   tba_number: string;
   destination_block_key: string | null;
+  normalised_address: string | null;
   suggested_route_id: string | null;
   resolved: boolean;
 };
@@ -51,6 +53,7 @@ type RouteResp = {
   paired_trainee_id: string | null;
   block_keys: string[];
   normalised_addresses: string[];
+  stops: RouteStop[] | null;   // null = route predates ADR-194 → fall back to flat lists
   misrouted_packages: MisrouteFlag[];
 };
 
@@ -398,8 +401,8 @@ export default function RouteSortScreen() {
                 <Text style={{ fontSize: fontSize.xs, color: c.foreground, fontVariant: ['tabular-nums'] }}>
                   …{flag.tba_number.slice(-8)} <Text style={{ color: c.mutedForeground }}>in #{source.route_number}</Text>
                 </Text>
-                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
-                  {flag.destination_block_key ?? 'unknown block'}
+                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }} numberOfLines={1}>
+                  {flag.normalised_address ?? flag.destination_block_key ?? 'unknown block'}
                   {suggested ? ` → #${suggested.route_number} ${suggested.assigned_to_name ?? ''}` : ' → no covering route (captain review)'}
                 </Text>
               </View>
@@ -462,6 +465,7 @@ export default function RouteSortScreen() {
                       proposal={p}
                       blockKeys={blockKeys}
                       addresses={addresses}
+                      stops={routeData?.stops ?? null}
                       packageCount={pkgCount ?? null}
                       overridden={overridden.has(p.route_number)}
                       onAssigneePress={() => setPickerFor(p.route_number)}
@@ -516,6 +520,12 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
   const [expanded, setExpanded] = useState(false);
   const effortColor = EFFORT_COLORS[route.effort_class] ?? c.primary;
 
+  // Delivered stops (ADR-194). Chips and drill-down come from here so flagged
+  // riders (shown in the misroute card instead) don't masquerade as coverage.
+  // Old routes (stops null) fall back to the flat carried lists.
+  const stops = route.stops ?? null;
+  const chipBlocks = stops ? [...new Set(stops.map(st => st.block_key))] : route.block_keys;
+
   const toggle = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpanded(e => !e);
@@ -537,11 +547,12 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
           </Text>
           <Text style={[s.routeMeta, { color: c.mutedForeground }]}>
             {route.package_count} pkgs · {route.effort_class} · wave {route.wave_number}
+            {stops ? ` · ${stops.length} stop${stops.length === 1 ? '' : 's'}` : ''}
             {route.returned_at ? ' · returned' : ''}
           </Text>
-          {route.block_keys.length > 0 && (
+          {chipBlocks.length > 0 && (
             <Text style={[s.routeMeta, { color: c.mutedForeground, marginTop: 2 }]} numberOfLines={1}>
-              {route.block_keys.slice(0, 3).join(' · ')}{route.block_keys.length > 3 ? ` +${route.block_keys.length - 3}` : ''}
+              {chipBlocks.slice(0, 3).join(' · ')}{chipBlocks.length > 3 ? ` +${chipBlocks.length - 3}` : ''}
             </Text>
           )}
         </View>
@@ -549,21 +560,20 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
         <Text style={{ color: c.mutedForeground, fontSize: 11 }}>{expanded ? '▲' : '▼'}</Text>
       </TouchableOpacity>
 
-      {expanded && route.normalised_addresses.length > 0 && (
-        <View style={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, paddingLeft: 50, gap: 4 }}>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-            {route.block_keys.map(bk => (
-              <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 2 }}>
-                <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
-              </View>
-            ))}
-          </View>
-          {route.normalised_addresses.map((addr, i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0 }} />
-              <Text style={{ fontSize: fontSize.xs, color: c.foreground }} numberOfLines={1}>{addr}</Text>
+      {expanded && (
+        <View style={{ paddingHorizontal: spacing.sm, paddingBottom: spacing.sm, paddingLeft: 50 }}>
+          {stops && stops.length > 0 ? (
+            <RouteStopsList stops={stops} c={c} />
+          ) : (
+            <View style={{ gap: 4 }}>
+              {route.normalised_addresses.map((addr, i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0 }} />
+                  <Text style={{ fontSize: fontSize.xs, color: c.foreground }} numberOfLines={1}>{addr}</Text>
+                </View>
+              ))}
             </View>
-          ))}
+          )}
         </View>
       )}
     </View>
@@ -573,11 +583,12 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
 // ── ProposalRow — expandable wave-proposal entry with block / address drill-down ─
 
 function ProposalRow({
-  proposal, blockKeys, addresses, packageCount, overridden, onAssigneePress, c, s,
+  proposal, blockKeys, addresses, stops, packageCount, overridden, onAssigneePress, c, s,
 }: {
   proposal: Proposal;
   blockKeys: string[];
   addresses: string[];
+  stops: RouteStop[] | null;
   packageCount: number | null;
   overridden: boolean;
   onAssigneePress: () => void;
@@ -585,6 +596,7 @@ function ProposalRow({
   s: ReturnType<typeof styles>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const chipBlocks = stops ? [...new Set(stops.map(st => st.block_key))] : blockKeys;
 
   const toggle = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -608,10 +620,11 @@ function ProposalRow({
             <Text style={[ms.propMeta, { color: c.mutedForeground }]}>
               {proposal.effort_class}
               {packageCount != null ? ` · ${packageCount} pkg${packageCount === 1 ? '' : 's'}` : ''}
+              {stops ? ` · ${stops.length} stop${stops.length === 1 ? '' : 's'}` : ''}
             </Text>
-            {blockKeys.length > 0 && (
+            {chipBlocks.length > 0 && (
               <Text style={[ms.propMeta, { color: c.mutedForeground }]}>
-                · {blockKeys.slice(0, 2).join(', ')}{blockKeys.length > 2 ? ` +${blockKeys.length - 2}` : ''}
+                · {chipBlocks.slice(0, 2).join(', ')}{chipBlocks.length > 2 ? ` +${chipBlocks.length - 2}` : ''}
               </Text>
             )}
           </View>
@@ -626,27 +639,21 @@ function ProposalRow({
         </TouchableOpacity>
       </View>
 
-      {/* Expanded drill-down: block keys pill row, then address list */}
+      {/* Expanded drill-down: block section → address → TBA grid (ADR-194);
+          flat address list only for routes that predate the stops column */}
       {expanded && (
-        <View style={{ paddingBottom: spacing.sm, paddingLeft: 42, gap: spacing.xs }}>
-          {blockKeys.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
-              <View style={{ flexDirection: 'row', gap: 6 }}>
-                {blockKeys.map(bk => (
-                  <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 3 }}>
-                    <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-          )}
-          {addresses.length > 0 ? (
-            addresses.map((addr, i) => (
-              <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0 }} />
-                <Text style={{ fontSize: fontSize.xs, color: c.foreground, flex: 1 }} numberOfLines={1}>{addr}</Text>
-              </View>
-            ))
+        <View style={{ paddingBottom: spacing.sm, paddingLeft: 42 }}>
+          {stops && stops.length > 0 ? (
+            <RouteStopsList stops={stops} c={c} />
+          ) : addresses.length > 0 ? (
+            <View style={{ gap: spacing.xs }}>
+              {addresses.map((addr, i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0 }} />
+                  <Text style={{ fontSize: fontSize.xs, color: c.foreground, flex: 1 }} numberOfLines={1}>{addr}</Text>
+                </View>
+              ))}
+            </View>
           ) : (
             <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontStyle: 'italic' }}>No address data yet</Text>
           )}

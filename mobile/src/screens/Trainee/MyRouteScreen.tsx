@@ -9,6 +9,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
+import RouteStopsList, { type RouteStop } from '@components/route/RouteStopsList';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
@@ -34,6 +35,7 @@ type RouteResp = {
   package_count: number;
   block_keys: string[];
   normalised_addresses: string[];
+  stops: RouteStop[] | null;      // null = route predates ADR-194 → fall back to flat lists
   returned_at: string | null;
   wave_number: number;
   assigned_to: string | null;
@@ -313,10 +315,11 @@ export default function MyRouteScreen() {
 
           {/* Route territory — block keys + address list so the walker knows
               what they have before they start, and can reference it en route */}
-          {(route.block_keys?.length > 0 || route.normalised_addresses?.length > 0) && (
+          {(route.block_keys?.length > 0 || route.normalised_addresses?.length > 0 || (route.stops?.length ?? 0) > 0) && (
             <RouteTerritorySection
               blockKeys={route.block_keys ?? []}
               addresses={route.normalised_addresses ?? []}
+              routeStops={route.stops ?? null}
               c={c}
             />
           )}
@@ -381,10 +384,15 @@ export default function MyRouteScreen() {
 
 // ── Route territory section — block keys + address list ───────────────────
 
-function RouteTerritorySection({ blockKeys, addresses, c }: {
-  blockKeys: string[]; addresses: string[]; c: ThemeColors;
+function RouteTerritorySection({ blockKeys, addresses, routeStops, c }: {
+  blockKeys: string[]; addresses: string[]; routeStops: RouteStop[] | null; c: ThemeColors;
 }) {
   const [expanded, setExpanded] = useState(false);
+
+  // Delivered stops (ADR-194) drive the territory; flat lists are the
+  // fallback for routes that predate the stops column.
+  const chipBlocks = routeStops ? [...new Set(routeStops.map(st => st.block_key))] : blockKeys;
+  const stopCount = routeStops ? routeStops.length : addresses.length;
 
   return (
     <View style={{ marginTop: spacing.sm, borderTopWidth: 1, borderTopColor: c.border + '88', paddingTop: spacing.sm }}>
@@ -395,37 +403,34 @@ function RouteTerritorySection({ blockKeys, addresses, c }: {
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap', flex: 1 }}>
           <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, marginRight: 4 }}>TERRITORY</Text>
-          {blockKeys.slice(0, 3).map(bk => (
+          {chipBlocks.slice(0, 3).map(bk => (
             <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 2 }}>
               <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
             </View>
           ))}
-          {blockKeys.length > 3 && (
-            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>+{blockKeys.length - 3}</Text>
+          {chipBlocks.length > 3 && (
+            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>+{chipBlocks.length - 3}</Text>
           )}
         </View>
         <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: spacing.sm }}>
-          {expanded ? '▲ Hide' : `▼ ${addresses.length} addr`}
+          {expanded ? '▲ Hide' : `▼ ${stopCount} stop${stopCount === 1 ? '' : 's'}`}
         </Text>
       </TouchableOpacity>
 
       {expanded && (
-        <View style={{ marginTop: spacing.sm, gap: 6 }}>
-          {blockKeys.length > 3 && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
-              {blockKeys.slice(3).map(bk => (
-                <View key={bk} style={{ backgroundColor: c.primaryLight, borderRadius: radius.xs, paddingHorizontal: 6, paddingVertical: 2 }}>
-                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primary }}>{bk}</Text>
+        <View style={{ marginTop: spacing.sm }}>
+          {routeStops && routeStops.length > 0 ? (
+            <RouteStopsList stops={routeStops} c={c} />
+          ) : (
+            <View style={{ gap: 6 }}>
+              {addresses.map((addr, i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0, marginTop: 1 }} />
+                  <Text style={{ fontSize: fontSize.xs, color: c.foreground }}>{addr}</Text>
                 </View>
               ))}
             </View>
           )}
-          {addresses.map((addr, i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.mutedForeground, flexShrink: 0, marginTop: 1 }} />
-              <Text style={{ fontSize: fontSize.xs, color: c.foreground }}>{addr}</Text>
-            </View>
-          ))}
         </View>
       )}
     </View>

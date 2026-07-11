@@ -257,3 +257,149 @@ class TestPersistRoutesUnassignedMisrouteAnchor:
         assert flag.destination_block_key == "W_36_St_300"
         assert flag.current_bag_id == "BagA"
         assert flag.resolved is False
+
+
+# ---------------------------------------------------------------------------
+# ADR-194 — stops persistence + misroute geography move
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+from app.routers.walker_routes import (
+    _merge_stops,
+    _split_stops_by_tbas,
+    _move_flag_geography,
+)
+from app.schemas.walker_routes import StopOut
+
+
+def _stop(bk: str, addr: str, tbas: list[str]) -> dict:
+    return {"block_key": bk, "address": addr, "tba_numbers": tbas}
+
+
+class TestPersistRoutesStops:
+    def test_stops_persisted_as_plain_dicts(self):
+        route_out = _make_route_out(1, ["W_36_St_300"])
+        route_out.stops = [
+            StopOut(block_key="W_36_St_300", address="302 WEST 36 STREET", tba_numbers=["T1"]),
+            StopOut(block_key="W_36_St_300", address="310 WEST 36 STREET", tba_numbers=["T2", "T3"]),
+        ]
+        db = _make_mock_db()
+        created = _persist_routes(_make_sort_result([route_out]), _make_caller(), _TA_ID, _ROUTE_DATE, db)
+        assert created[0].stops == [
+            _stop("W_36_St_300", "302 WEST 36 STREET", ["T1"]),
+            _stop("W_36_St_300", "310 WEST 36 STREET", ["T2", "T3"]),
+        ]
+
+    def test_flag_normalised_address_persisted(self):
+        m = MisroutedPackageOut(
+            tba_number="FAR", current_bag_id="BagY",
+            destination_block_key="W_57_St_300",
+            normalised_address="350 WEST 57 STREET",
+            suggested_route_number=None,
+        )
+        route_out = _make_route_out(1, ["W_57_St_300"])
+        db = _make_mock_db()
+        _persist_routes(_make_sort_result([route_out], unassigned_misroutes=[m]),
+                        _make_caller(), _TA_ID, _ROUTE_DATE, db)
+        flags = [a.args[0] for a in db.add.call_args_list
+                 if type(a.args[0]).__name__ == "MisroutedPackageFlag"]
+        assert len(flags) == 1
+        assert flags[0].normalised_address == "350 WEST 57 STREET"
+
+
+class TestMergeAndSplitStops:
+    def test_merge_combines_same_address(self):
+        merged = _merge_stops(
+            [_stop("W_36_St_300", "310 WEST 36 STREET", ["T1"])],
+            [_stop("W_36_St_300", "310 WEST 36 STREET", ["T2"]),
+             _stop("W_36_St_400", "410 WEST 36 STREET", ["T3"])],
+        )
+        assert merged == [
+            _stop("W_36_St_300", "310 WEST 36 STREET", ["T1", "T2"]),
+            _stop("W_36_St_400", "410 WEST 36 STREET", ["T3"]),
+        ]
+
+    def test_merge_does_not_mutate_inputs(self):
+        base = [_stop("W_36_St_300", "310 WEST 36 STREET", ["T1"])]
+        _merge_stops(base, [_stop("W_36_St_300", "310 WEST 36 STREET", ["T2"])])
+        assert base == [_stop("W_36_St_300", "310 WEST 36 STREET", ["T1"])]
+
+    def test_merge_deduplicates_tbas(self):
+        merged = _merge_stops(
+            [_stop("W_36_St_300", "310 WEST 36 STREET", ["T1"])],
+            [_stop("W_36_St_300", "310 WEST 36 STREET", ["T1"])],
+        )
+        assert merged[0]["tba_numbers"] == ["T1"]
+
+    def test_split_by_tbas_both_sides(self):
+        taken, remaining = _split_stops_by_tbas(
+            [_stop("W_36_St_300", "310 WEST 36 STREET", ["T1", "T2"]),
+             _stop("W_36_St_400", "410 WEST 36 STREET", ["T3"])],
+            {"T1", "T3"},
+        )
+        assert taken == [
+            _stop("W_36_St_300", "310 WEST 36 STREET", ["T1"]),
+            _stop("W_36_St_400", "410 WEST 36 STREET", ["T3"]),
+        ]
+        assert remaining == [_stop("W_36_St_300", "310 WEST 36 STREET", ["T2"])]
+
+    def test_split_none_is_empty(self):
+        assert _split_stops_by_tbas(None, {"T1"}) == ([], [])
+
+
+class TestMoveFlagGeography:
+    def _routes(self):
+        src = SimpleNamespace(
+            id=uuid.uuid4(),
+            block_keys=["W_44_St_300", "W_57_St_400"],
+            normalised_addresses=["300 WEST 44 STREET", "446 WEST 57 STREET"],
+            stops=[_stop("W_44_St_300", "300 WEST 44 STREET", ["D1"])],
+            tba_numbers=["D1", "FAR"],
+        )
+        dest = SimpleNamespace(
+            id=uuid.uuid4(),
+            block_keys=["W_57_St_300"],
+            normalised_addresses=["350 WEST 57 STREET"],
+            stops=[_stop("W_57_St_300", "350 WEST 57 STREET", ["X1"])],
+            tba_numbers=["X1"],
+        )
+        flag = SimpleNamespace(
+            tba_number="FAR",
+            destination_block_key="W_57_St_400",
+            normalised_address="446 WEST 57 STREET",
+        )
+        return src, dest, flag
+
+    def test_dest_gains_stop_block_and_address(self):
+        src, dest, flag = self._routes()
+        _move_flag_geography(flag, src, dest, other_flags=[])
+        assert _stop("W_57_St_400", "446 WEST 57 STREET", ["FAR"]) in dest.stops
+        assert "W_57_St_400" in dest.block_keys
+        assert "446 WEST 57 STREET" in dest.normalised_addresses
+
+    def test_src_drops_outlier_block_and_address(self):
+        src, dest, flag = self._routes()
+        _move_flag_geography(flag, src, dest, other_flags=[])
+        assert "W_57_St_400" not in src.block_keys
+        assert "446 WEST 57 STREET" not in src.normalised_addresses
+        # the delivered stop is untouched
+        assert src.block_keys == ["W_44_St_300"]
+        assert src.stops == [_stop("W_44_St_300", "300 WEST 44 STREET", ["D1"])]
+
+    def test_src_keeps_block_referenced_by_another_unresolved_flag(self):
+        src, dest, flag = self._routes()
+        other = SimpleNamespace(
+            tba_number="FAR2",
+            destination_block_key="W_57_St_400",
+            normalised_address="450 WEST 57 STREET",
+        )
+        _move_flag_geography(flag, src, dest, other_flags=[other])
+        assert "W_57_St_400" in src.block_keys           # still referenced
+        assert "446 WEST 57 STREET" not in src.normalised_addresses  # address is not
+
+    def test_src_keeps_block_when_a_delivered_stop_shares_it(self):
+        src, dest, flag = self._routes()
+        src.stops = src.stops + [_stop("W_57_St_400", "440 WEST 57 STREET", ["D2"])]
+        _move_flag_geography(flag, src, dest, other_flags=[])
+        assert "W_57_St_400" in src.block_keys

@@ -517,7 +517,16 @@ export interface MisroutedPackageOut {
   tba_number: string;
   current_bag_id: string;
   destination_block_key: string | null;
+  normalised_address?: string | null;
   suggested_route_number: number | null;
+}
+
+/** One delivery stop — a unique address with its packages (ADR-194).
+ *  Server-sorted: blocks ascending, house numbers ascending within a block. */
+export interface RouteStop {
+  block_key: string;
+  address: string;
+  tba_numbers: string[];
 }
 
 export interface RouteOut {
@@ -526,6 +535,7 @@ export interface RouteOut {
   tote_ids: string[];
   tba_numbers: string[];
   normalised_addresses: string[];
+  stops?: RouteStop[];
   slot_cost: number;
   capacity_limit: number;
   effort_class: 'easy' | 'standard' | 'heavy' | 'very_heavy';
@@ -553,6 +563,7 @@ export interface RouteResponse {
   tote_ids: string[];
   tba_numbers: string[];
   normalised_addresses: string[];
+  stops: RouteStop[] | null;   // null = route predates ADR-194 → fall back to flat lists
   slot_cost: number;
   capacity_limit: number;
   package_count: number;

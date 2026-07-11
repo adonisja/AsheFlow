@@ -73,7 +73,20 @@ class MisroutedPackageOut(BaseModel):
     tba_number: Optional[str] = None
     current_bag_id: Optional[str] = None
     destination_block_key: Optional[str] = None        # block_key it belongs to
+    normalised_address: Optional[str] = None           # so the captain can find it, and resolve can move it (ADR-194)
     suggested_route_number: Optional[int] = None       # None = needs captain review
+
+
+class StopOut(BaseModel):
+    """One delivery stop — a unique normalised address with its packages (ADR-194).
+
+    Built from the DELIVERED set (carried minus flagged-out riders): a flagged
+    misroute is not a stop, it gets pulled at the AP. Sorted for presentation:
+    blocks ascending, house numbers ascending within a block.
+    """
+    block_key: str
+    address: str
+    tba_numbers: list[str]
 
 
 class RouteOut(BaseModel):
@@ -90,6 +103,7 @@ class RouteOut(BaseModel):
     package_count: int
     coverage_pct: float = 0.0       # fraction of packages with locked BuildingProfile
     normalised_addresses: list[str] = []
+    stops: list[StopOut] = []       # delivered-set drill-down: block → address → tbas (ADR-194)
     misrouted_packages: list[MisroutedPackageOut] = []
 
 
@@ -179,6 +193,8 @@ class RouteResponse(BaseModel):
     tote_ids: list[str]
     tba_numbers: list[str]
     normalised_addresses: list[str] = []
+    # None = route predates the stops column (ADR-194) — clients fall back to the flat lists
+    stops: Optional[list[StopOut]] = None
     slot_cost: int
     capacity_limit: int
     capacity_limit_paired: Optional[int] = None
@@ -322,6 +338,7 @@ class MisroutedPackageFlagResponse(BaseModel):
     tba_number: str
     current_bag_id: str
     destination_block_key: Optional[str] = None
+    normalised_address: Optional[str] = None
     suggested_route_id: Optional[UUID] = None
     resolved: bool
     resolved_by: Optional[UUID] = None
