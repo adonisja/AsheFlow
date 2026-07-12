@@ -18,7 +18,7 @@ import os
 import threading
 import logging
 import uuid
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timezone
 from uuid import UUID
 
 import requests as http_requests
@@ -282,6 +282,36 @@ def create_transfers(
             note=body.note,
         )
         db.add(transfer)
+
+        # Update the crew rosters to reflect the transfer (ADR-197). Previously a
+        # transfer recorded a TruckTransfer + notified but left AssignmentMember
+        # rows untouched, so /dispatch/{date} assigned_crews (built purely from
+        # AssignmentMember) never reflected transfers — the source over-counted
+        # and the destination under-counted. Now: mark the source 'transferred'
+        # and add/reactivate an active row on the destination, so the live crew
+        # count (F5) is correct on both trucks.
+        from_am.status = "transferred"
+        from_am.departed_at = datetime.now(timezone.utc)
+
+        existing_to = db.query(AssignmentMember).filter(
+            AssignmentMember.assignment_id == to_ta.id,
+            AssignmentMember.employee_id == eid,
+            AssignmentMember.company_id == caller.company_id,
+        ).first()
+        if existing_to is None:
+            db.add(AssignmentMember(
+                company_id        = caller.company_id,
+                assignment_id     = to_ta.id,
+                employee_id       = eid,
+                role              = employee.role,
+                paired_trainer_id = from_am.paired_trainer_id if employee.role == "trainee" else None,
+                is_manual         = True,   # human-initiated placement
+                status            = "active",
+            ))
+        else:
+            # Re-activate if they'd previously departed/transferred off this truck.
+            existing_to.status = "active"
+            existing_to.departed_at = None
 
         # Notification
         db.add(Notification(

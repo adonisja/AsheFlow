@@ -323,3 +323,97 @@ class TestGetMyTransfersScoping:
         filter_strs = [str(f) for f in captured]
         assert any("company_id" in s for s in filter_strs)
         assert any("employee_id" in s for s in filter_strs)
+
+
+# ---------------------------------------------------------------------------
+# ADR-197 — transfer updates AssignmentMember rosters
+# ---------------------------------------------------------------------------
+
+class TestTransferUpdatesRoster:
+    """A successful transfer marks the SOURCE member 'transferred' and adds an
+    active member on the DESTINATION, so /dispatch assigned_crews (built from
+    AssignmentMember) reflects the transfer on both trucks (ADR-197)."""
+
+    @patch("app.routers.truck_transfers._fire_transfer_discord", MagicMock())
+    def test_source_stamped_and_destination_added(self):
+        from app.routers.truck_transfers import create_transfers, TransferOut
+        from app.models.truck_assignment import TruckAssignment
+        from app.models.assignment_member import AssignmentMember
+        from app.models.employee import Employee
+        from app.models.truck import Truck
+        from app.models.truck_transfer import TruckTransfer
+
+        caller = _make_caller()
+        emp_id = uuid.uuid4()
+        from_truck = _make_truck(name="Truck A")
+        to_truck   = _make_truck(name="Truck B")
+        from_ta = _make_ta(truck_id=from_truck.id, status="dispatched")
+        to_ta   = _make_ta(truck_id=to_truck.id,   status="dispatched")
+
+        emp = MagicMock(id=emp_id, company_id=_CID_A, role="walker",
+                        name="Wanda Walker", discord_id=None)
+
+        # A real-ish source member whose attributes we assert after.
+        from_am = MagicMock(assignment_id=from_ta.id, employee_id=emp_id,
+                            company_id=_CID_A, role="walker", paired_trainer_id=None,
+                            status="active", departed_at=None)
+
+        # TruckAssignment.first(): to_ta (initial 'to' lookup), then from_ta (in loop).
+        ta_firsts = [to_ta, from_ta]
+
+        # AssignmentMember lookups that .join(TruckAssignment) are the source/
+        # pre-pass member lookups → return from_am. The destination-existence
+        # check does NOT join (filters assignment_id directly) → return None so a
+        # new member is added.
+        def _query(model):
+            q = MagicMock()
+            q._joined = False
+            def _join(*a, **k):
+                q._joined = True
+                return q
+            q.join = _join
+            def _filter(*args):
+                f = MagicMock()
+                if model is TruckAssignment:
+                    f.first.side_effect = lambda: ta_firsts.pop(0) if ta_firsts else from_ta
+                elif model is Truck:
+                    f.first.return_value = to_truck
+                elif model is Employee:
+                    f.first.return_value = emp
+                elif model is AssignmentMember:
+                    f.first.return_value = from_am if q._joined else None
+                    f.all.return_value = []
+                elif model is TruckTransfer:
+                    f.first.return_value = None
+                else:
+                    f.first.return_value = None
+                return f
+            q.filter = _filter
+            return q
+
+        added = []
+        db = MagicMock()
+        db.query = _query
+        db.add = MagicMock(side_effect=lambda o: added.append(o))
+        db.flush = MagicMock(); db.commit = MagicMock()
+
+        body = MagicMock(to_truck_id=to_truck.id, date=date.today(),
+                         employee_ids=[emp_id], note=None)
+
+        _stub_out = TransferOut(
+            id=uuid.uuid4(), employee_id=emp_id, employee_name="Wanda Walker",
+            from_truck_name="Truck A", to_truck_name="Truck B",
+            transfer_date=date.today(), transferred_at="2026-07-12T00:00:00", note=None,
+        )
+        with patch("app.routers.truck_transfers._build_out", return_value=_stub_out):
+            create_transfers(body=body, _={}, caller=caller, db=db)
+
+        # source stamped transferred
+        assert from_am.status == "transferred"
+        assert from_am.departed_at is not None
+        # an active AssignmentMember added on the destination
+        added_members = [o for o in added if isinstance(o, AssignmentMember)]
+        assert len(added_members) == 1
+        assert added_members[0].assignment_id == to_ta.id
+        assert added_members[0].status == "active"
+        assert added_members[0].employee_id == emp_id
