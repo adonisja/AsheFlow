@@ -461,3 +461,34 @@ class TestBlockTimeUrgency:
             SimpleNamespace(block_key="W_30_St_100", closes_at=soon, break_start=None),
         ]
         assert self._urgency(rows).get("W_30_St_100", 0) >= 0.9   # earliest (soon) drives it
+
+
+# ---------------------------------------------------------------------------
+# ADR-197 Phase 0a — planned delivery-stop pre-seeding
+# ---------------------------------------------------------------------------
+
+class TestPlannedStopPreseed:
+    def test_persist_routes_preseeds_planned_stops(self):
+        route_out = _make_route_out(1, ["W_36_St_300"])
+        route_out.stops = [
+            StopOut(block_key="W_36_St_300", address="302 WEST 36 STREET", tba_numbers=["T1"]),
+            StopOut(block_key="W_36_St_300", address="310 WEST 36 STREET", tba_numbers=["T2", "T3"]),
+        ]
+        db = _make_mock_db()
+        _persist_routes(_make_sort_result([route_out]), _make_caller(), _TA_ID, _ROUTE_DATE, db)
+        stops = [o for o in db._added if type(o).__name__ == "DeliveryStop"]
+        assert len(stops) == 2
+        assert all(s.status == "planned" for s in stops)
+        assert all(s.is_unplanned is False for s in stops)
+        assert all(s.completed_at is None and s.walker_id is None for s in stops)
+        # stop_sequence follows the ADR-194 sort order
+        assert [s.stop_sequence for s in stops] == [1, 2]
+        assert {s.normalised_address for s in stops} == {"302 WEST 36 STREET", "310 WEST 36 STREET"}
+
+    def test_no_stops_preseeds_nothing(self):
+        route_out = _make_route_out(1, ["W_36_St_300"])
+        route_out.stops = []
+        db = _make_mock_db()
+        _persist_routes(_make_sort_result([route_out]), _make_caller(), _TA_ID, _ROUTE_DATE, db)
+        stops = [o for o in db._added if type(o).__name__ == "DeliveryStop"]
+        assert stops == []

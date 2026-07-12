@@ -277,15 +277,26 @@ class DeliveryStopResponse(BaseModel):
     normalised_address: str
     block_key: str
     tba_numbers: list[str]
-    completed_at: datetime
+    # Lifecycle (ADR-197): planned rows carry nulls until completed
+    status: str = "completed"
+    is_unplanned: bool = False
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     stop_sequence: int
-    packages_total: int
-    packages_delivered: int
-    rts_count: int
-    missing_count: int
-    effort_class: str
+    packages_total: Optional[int] = None
+    packages_delivered: Optional[int] = None
+    rts_count: int = 0
+    missing_count: int = 0
+    effort_class: Optional[str] = None
     workload_class: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class StopStartRequest(BaseModel):
+    """Walker starts a stop (planned → in_progress) — ADR-197. Address resolved
+    server-side from any TBA at the stop (same as completion)."""
+    route_id: UUID
+    tba_numbers: list[str] = Field(..., min_length=1)
 
 
 class StopSignal(BaseModel):

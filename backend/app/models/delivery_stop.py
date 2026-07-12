@@ -1,23 +1,32 @@
 import uuid
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.sql import func
 from app.models.base import Base
 
 
+STOP_STATUSES = ("planned", "in_progress", "completed")
+
+
 class DeliveryStop(Base):
-    """One completed address stop recorded by the walker mid-route.
+    """One address stop on a route, tracked through its lifecycle (ADR-197).
 
     The stop identity is (route_id, normalised_address) — one row per building
     entrance per route. tba_numbers lists every package at that address.
 
-    Outcome counts (rts_count, missing_count, packages_delivered) are computed
-    server-side at creation time by joining RTSPackage and MissingPackage rows
-    for the same (route_id, normalised_address). A reconcile endpoint re-runs
-    this computation when RTS is recorded after the stop tap.
+    Lifecycle (ADR-197): rows are PRE-SEEDED as ``planned`` at route creation
+    from Route.stops (ADR-194), transition to ``in_progress`` when the walker
+    starts the stop (powers live walker-location tracking + per-stop duration
+    telemetry), and ``completed`` when they finish. A stop delivered that was
+    never planned (a mid-day misroute resolution, a late add) is created
+    directly as ``completed`` with ``is_unplanned=True`` — a walker is never
+    blocked from recording a real delivery.
 
-    effort_class and workload_class are snapshotted at completion time so
-    analytics queries are not affected by subsequent profile changes.
+    Completion-time fields (completed_at, packages_delivered, counts, snapshots)
+    are nullable because a planned/in_progress row has not been delivered yet;
+    they are populated on the completion transition. Outcome counts are computed
+    server-side from RTS/missing rows; effort/workload are snapshotted at
+    completion so analytics are unaffected by later profile changes.
     """
     __tablename__ = "delivery_stops"
 
@@ -32,15 +41,20 @@ class DeliveryStop(Base):
     block_key            = Column(String(100), nullable=False)
     tba_numbers          = Column(ARRAY(String(50)), nullable=False, default=list)
 
-    completed_at         = Column(DateTime(timezone=True), nullable=False)
+    # Lifecycle (ADR-197)
+    status               = Column(String(20), nullable=False, server_default="completed")  # planned|in_progress|completed
+    is_unplanned         = Column(Boolean(), nullable=False, server_default="false")        # true = not in the seeded plan
+    started_at           = Column(DateTime(timezone=True), nullable=True)                   # planned→in_progress stamp (duration telemetry)
+
+    completed_at         = Column(DateTime(timezone=True), nullable=True)   # set on completion
     stop_sequence        = Column(Integer(), nullable=False)
 
-    packages_total       = Column(Integer(), nullable=False)
-    packages_delivered   = Column(Integer(), nullable=False)
+    packages_total       = Column(Integer(), nullable=True)                 # known at completion
+    packages_delivered   = Column(Integer(), nullable=True)
     rts_count            = Column(Integer(), nullable=False, server_default="0")
     missing_count        = Column(Integer(), nullable=False, server_default="0")
 
-    effort_class         = Column(String(20), nullable=False)
+    effort_class         = Column(String(20), nullable=True)                # snapshot at completion
     workload_class       = Column(String(20), nullable=True)
 
     __table_args__ = (

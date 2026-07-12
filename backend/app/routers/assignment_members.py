@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -7,13 +8,28 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck_assignment import TruckAssignment
-from app.schemas.assignment_member import AssignmentMemberCreate, AssignmentMemberResponse
+from app.models.walker_route import Route
+from app.models.delivery_stop import DeliveryStop
+from app.schemas.assignment_member import (
+    AssignmentMemberCreate,
+    AssignmentMemberResponse,
+    AssignmentMemberStatusUpdate,
+    CrewAvailabilityEntry,
+    CrewAvailabilityResponse,
+)
 from app.services.previous_assignment import check_consecutive_assignment
 from app.services.check_ban import check_ban_relationship
+from app.services.crew_availability import (
+    MemberProgress,
+    derive_availability,
+    DEFAULT_COMPLETION_THRESHOLD,
+)
+from app.services.audit import write_audit
 
 router = APIRouter(prefix="/assignment-members", tags=["assignment-members"])
 
 allow_dispatch_mgmt = RoleChecker(["dispatch", "management", "admin"])
+allow_captain       = RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])
 allow_any_auth      = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
 
 
@@ -98,3 +114,130 @@ def remove_assignment_member(
 
     db.delete(member)
     db.commit()
+
+
+@router.patch("/{member_id}/status", response_model=AssignmentMemberResponse)
+def update_member_status(
+    member_id: UUID,
+    body: AssignmentMemberStatusUpdate,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_captain),
+    db: Session = Depends(get_db),
+):
+    """Mark a crew member departed or transferred (ADR-197 Phase 0b).
+
+    Unlike DELETE (which erases the row and its crew history), this is a SOFT
+    state change that preserves the record — F5's live-crew count and analytics
+    need to know the person WAS on the truck and when they left. Dispatch/captain
+    only. Idempotency: a member already in a terminal (non-active) status → 409.
+    """
+    member = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(AssignmentMember.id == member_id, TruckAssignment.company_id == caller.company_id)
+        .first()
+    )
+    if not member:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    if member.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Member is already {member.status}.",
+        )
+
+    member.status      = body.status
+    member.departed_at = datetime.now(timezone.utc)
+    db.flush()
+    write_audit(
+        db=db, company_id=str(caller.company_id), actor_id=str(caller.id),
+        action_type="assignment_member.status_change",
+        target_table="assignment_members", target_id=str(member.id),
+        detail={"status": body.status, "reason": body.reason, "employee_id": str(member.employee_id)},
+    )
+    db.commit()
+    db.refresh(member)
+    return AssignmentMemberResponse.model_validate(member, from_attributes=True)
+
+
+@router.get("/{assignment_id}/availability", response_model=CrewAvailabilityResponse)
+def get_crew_availability(
+    assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_captain),
+    db: Session = Depends(get_db),
+):
+    """Derived crew availability for a truck (ADR-197 Phase 0b).
+
+    Combines membership status with route-execution progress so F5 route-creation
+    knows how many walkers can take a NEW route this wave (walker count is a
+    CEILING on routes, not a target). A walker >65% through their route counts as
+    'returning' (a route can wait for them); ≤65% is 'on_route_early' (not this
+    wave). Availability = completed DeliveryStops / total stops on their route.
+    """
+    ta = db.query(TruckAssignment).filter(
+        TruckAssignment.id == assignment_id,
+        TruckAssignment.company_id == caller.company_id,
+    ).first()
+    if not ta:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
+
+    members = db.query(AssignmentMember).filter(
+        AssignmentMember.assignment_id == assignment_id,
+        AssignmentMember.company_id == caller.company_id,
+    ).all()
+
+    # Employee names in one query
+    emp_ids = [m.employee_id for m in members]
+    names = {
+        e.id: e.name
+        for e in db.query(Employee).filter(
+            Employee.id.in_(emp_ids), Employee.company_id == caller.company_id
+        ).all()
+    } if emp_ids else {}
+
+    # Each active member's current (assigned/in_progress, not returned) route +
+    # its completion %. A member may own a route via assigned_to or, for a
+    # trainee, paired_trainee_id.
+    progress: list[MemberProgress] = []
+    for m in members:
+        has_route = False
+        pct: float | None = None
+        if m.status == "active":
+            route = db.query(Route).filter(
+                Route.company_id == caller.company_id,
+                Route.truck_assignment_id == assignment_id,
+                Route.returned_at.is_(None),
+                Route.status.in_(("assigned", "in_progress")),
+                (Route.assigned_to == m.employee_id) | (Route.paired_trainee_id == m.employee_id),
+            ).first()
+            if route is not None:
+                has_route = True
+                total = db.query(DeliveryStop).filter(
+                    DeliveryStop.route_id == route.id,
+                    DeliveryStop.company_id == caller.company_id,
+                ).count()
+                done = db.query(DeliveryStop).filter(
+                    DeliveryStop.route_id == route.id,
+                    DeliveryStop.company_id == caller.company_id,
+                    DeliveryStop.status == "completed",
+                ).count()
+                pct = (done / total) if total else 0.0
+        progress.append(MemberProgress(
+            employee_id=m.employee_id, name=names.get(m.employee_id), role=m.role,
+            membership_status=m.status, has_active_route=has_route, route_completion_pct=pct,
+        ))
+
+    entries, active_crew, available = derive_availability(progress)
+    return CrewAvailabilityResponse(
+        entries=[
+            CrewAvailabilityEntry(
+                employee_id=e.employee_id, name=e.name, role=e.role,
+                membership_status=e.membership_status, availability=e.availability,
+                route_completion_pct=e.route_completion_pct,
+            ) for e in entries
+        ],
+        active_crew=active_crew,
+        available_for_route=available,
+        completion_threshold=DEFAULT_COMPLETION_THRESHOLD,
+    )

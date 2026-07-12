@@ -26,6 +26,7 @@ class AssignmentMember(Base):
     __table_args__ = (
         UniqueConstraint("assignment_id", "employee_id", name="uq_assignment_member"),
         CheckConstraint("role IN ('driver', 'trainer', 'trainee', 'walker')", name="ck_assignment_members_role"),
+        CheckConstraint("status IN ('active', 'departed', 'transferred')", name="ck_assignment_members_status"),
     )
 
     id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -43,3 +44,11 @@ class AssignmentMember(Base):
     # from their app (ADR-145 flow: trainee confirms → trainer is notified →
     # trainer runs the paired rebalance). Nullable = not yet confirmed.
     ap_arrived_at     = Column(DateTime(timezone=True), nullable=True)
+    # Live crew membership lifecycle (ADR-197). 'active' = on this truck and
+    # available; 'departed' = left for the day; 'transferred' = moved to another
+    # truck (distinct for analytics; F5 treats both non-active as off-crew).
+    # F5's live-crew count = members with status='active'. departed_at stamps the
+    # transition. Route-execution state stays on Route/DeliveryStop — this is
+    # membership only; availability is derived from both (ADR-197 Phase 0b).
+    status            = Column(String(20), nullable=False, server_default="active")
+    departed_at       = Column(DateTime(timezone=True), nullable=True)
