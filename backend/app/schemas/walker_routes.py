@@ -55,6 +55,13 @@ class PackageInput(BaseModel):
     lng: Optional[float] = None
     first_cross_street: Optional[str] = None   # from GeoClient — used for BFS adjacency
     second_cross_street: Optional[str] = None  # from GeoClient — used for BFS adjacency
+    # LION street-segment graph (ADR-196): two segments are adjacent iff they
+    # share a node. The authoritative NYC adjacency; block_key can't express it
+    # (a block_key spans many segments). Cached by enrichment; None when
+    # GeoClient had no segment match (~1% — falls back to coordinate adjacency).
+    segment_id: Optional[str] = None
+    from_lion_node_id: Optional[str] = None
+    to_lion_node_id: Optional[str] = None
 
 
 class SortRequest(BaseModel):

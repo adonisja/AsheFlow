@@ -421,35 +421,43 @@ def _mock_db_with_profiles(rows):
 
 
 class TestBlockTimeUrgency:
+    """Clock is pinned to a fixed local noon so relative offsets can't wrap past
+    midnight (which would turn a 'far future' close into an already-passed one)."""
+
+    _REF = datetime(2026, 7, 11, 12, 0, 0)   # noon, deterministic
+
+    def _urgency(self, rows):
+        # patch datetime.now in the helper's module so 'now' is _REF
+        import app.routers.walker_routes as wr
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 7, 11, 12, 0, 0, tzinfo=tz)
+
+        with patch.object(wr, "datetime", _FrozenDatetime):
+            return _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
+                                           date(2026, 7, 11), "America/New_York")
+
     def test_imminent_close_is_max_urgency(self):
-        now = datetime.now()
-        rows = [SimpleNamespace(block_key="W_23_St_100", closes_at=now.time(), break_start=None)]
-        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
-                                    date.today(), "America/New_York")
-        assert u.get("W_23_St_100", 0) >= 0.9
+        rows = [SimpleNamespace(block_key="W_23_St_100", closes_at=self._REF.time(), break_start=None)]
+        assert self._urgency(rows).get("W_23_St_100", 0) >= 0.9
 
     def test_far_close_is_low_urgency(self):
-        now = datetime.now()
-        late = (now + timedelta(hours=7)).time()
+        late = (self._REF + timedelta(hours=7)).time()   # 19:00 — same day, no wrap
         rows = [SimpleNamespace(block_key="W_50_St_300", closes_at=late, break_start=None)]
-        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
-                                    date.today(), "America/New_York")
+        u = self._urgency(rows)
         assert 0.0 < u.get("W_50_St_300", 0) < 0.3
 
     def test_no_hours_block_absent(self):
         rows = [SimpleNamespace(block_key="W_40_St_200", closes_at=None, break_start=None)]
-        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
-                                    date.today(), "America/New_York")
-        assert "W_40_St_200" not in u   # absent → contributes 0, preserves cold-start
+        assert "W_40_St_200" not in self._urgency(rows)   # absent → preserves cold-start
 
     def test_earliest_cutoff_across_buildings_wins(self):
-        now = datetime.now()
-        soon = now.time()
-        late = (now + timedelta(hours=7)).time()
+        soon = self._REF.time()
+        late = (self._REF + timedelta(hours=7)).time()
         rows = [
             SimpleNamespace(block_key="W_30_St_100", closes_at=late, break_start=None),
             SimpleNamespace(block_key="W_30_St_100", closes_at=soon, break_start=None),
         ]
-        u = _get_block_time_urgency(_mock_db_with_profiles(rows), uuid.uuid4(),
-                                    date.today(), "America/New_York")
-        assert u.get("W_30_St_100", 0) >= 0.9   # the earliest (soon) cutoff drives it
+        assert self._urgency(rows).get("W_30_St_100", 0) >= 0.9   # earliest (soon) drives it

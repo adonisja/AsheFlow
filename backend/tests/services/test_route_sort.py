@@ -59,6 +59,9 @@ def _pkg(
     first_cross_street: str | None = None,
     second_cross_street: str | None = None,
     normalised_address: str | None = None,
+    segment_id: str | None = None,
+    from_lion_node_id: str | None = None,
+    to_lion_node_id: str | None = None,
 ) -> PackageInput:
     parsed = derive_block_key(address, tba=tba)
     block_key = parsed.block_key if isinstance(parsed, ParsedBlock) else None
@@ -72,6 +75,9 @@ def _pkg(
         first_cross_street=first_cross_street,
         second_cross_street=second_cross_street,
         normalised_address=normalised_address,
+        segment_id=segment_id,
+        from_lion_node_id=from_lion_node_id,
+        to_lion_node_id=to_lion_node_id,
     )
 
 
@@ -824,13 +830,14 @@ class TestStopsOutput:
 
 
 class TestCrossStreetRangeGate:
-    """Cost-1 edges match on street IDENTITY ('borders 9th Ave'); without the
-    centroid gate that connects a street block to EVERY 9th-Ave hundred-range
-    in the zone, so a far-avenue rider sat inside the misroute neighborhood
-    and was never flagged (ADR-194)."""
+    """Detection by physical proximity (ADR-196 Model E supersedes the ADR-194
+    block_key cross-street gate for MISROUTE DETECTION; the gate itself still
+    runs in _build_adjacency_graph for CLUSTERING). A far-avenue rider is flagged
+    (no shared node, far from dominant); an adjacent-avenue rider rides silently.
+    These packages carry no segment_id, so they exercise the coordinate backstop."""
 
     # W 36th St @ 9th Ave ≈ (40.7544, -73.9931); 9th Ave 800-range (W 53rd)
-    # ≈ (40.7645, -73.9870) — ~1.2 km apart, far beyond the 0.4 km gate.
+    # ≈ (40.7645, -73.9870) — ~1.2 km apart.
     _W36 = (40.7544, -73.9931)
     _AVE_FAR = (40.7645, -73.9870)
     _AVE_NEAR = (40.7553, -73.9925)   # 9th Ave 500-range (W 38th) — ~0.11 km
@@ -873,21 +880,22 @@ class TestCrossStreetRangeGate:
         flagged += [m.tba_number for m in result.unassigned_misroutes]
         assert "NEAR" not in flagged
 
-    def test_missing_coordinates_keep_the_edge(self):
-        # Cold-start: no lat/lng anywhere — the gate must not fire, preserving
-        # the pre-ADR-194 edge so the near rider still rides silently.
+    def test_no_geometry_at_all_flags_conservatively(self):
+        # A package with NEITHER coordinates NOR LION data cannot be proven to
+        # belong to its route, so Model E flags it (fail-safe). NOTE: this never
+        # occurs in real enriched data — 100% of GeoClient rows carry lat/lng
+        # (0.9% lack only segment_id, which the coordinate backstop covers). The
+        # old block_key cross-street edge that silenced it is retired (ADR-196).
         pkgs = [
             _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
                  first_cross_street="9 AVENUE", lat=None, lng=None),
-            _pkg("NEAR", "510 9th Ave", "BagA", normalised_address="510 9 AVENUE",
-                 lat=None, lng=None),
-            _pkg("N1", "500 9th Ave", "BagC", normalised_address="500 9 AVENUE",
+            _pkg("NOGEO", "810 9th Ave", "BagA", normalised_address="810 9 AVENUE",
                  lat=None, lng=None),
         ]
         result = run_sort(_request(pkgs), {}, {}, {})
         flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
         flagged += [m.tba_number for m in result.unassigned_misroutes]
-        assert "NEAR" not in flagged
+        assert "NOGEO" in flagged
 
 
 # ---------------------------------------------------------------------------
@@ -901,45 +909,74 @@ class TestMisrouteGeographicFallback:
     route'. The centroid fallback should suggest the nearest route within
     _MISROUTE_SUGGEST_MAX_KM, while a genuinely distant outlier still dead-ends."""
 
-    def test_diagonal_block_gets_a_suggestion_not_orphan(self):
-        # Two dense routes (W_31_St_300 and W_33_St_200) close together, plus a
-        # thin W_32_St_100 rider that is neither same-street ±100 nor parallel
-        # (street ±1 same hundred) of either seed — the real orphan geometry.
+    def test_near_no_node_package_rides_silently_via_backstop(self):
+        # A thin W_32 rider ~112 m from its route's dominant W_31 stops, with NO
+        # LION data (segment_id=None). Under Model E it rides silently via the
+        # coordinate backstop — a package one block from its route is NOT a
+        # misroute. (This case dead-ended under the old block_key detector.)
         pkgs = []
         for i in range(12):
             pkgs.append(_pkg(f"A{i}", f"3{i}0 W 31st St", "BagA", lat=40.7503, lng=-73.9925))
         for i in range(12):
             pkgs.append(_pkg(f"C{i}", f"2{i}0 W 33rd St", "BagC", lat=40.7519, lng=-73.9910))
-        # thin rider physically between them, riding in BagA
         pkgs.append(_pkg("THIN", "110 W 32nd St", "BagA", lat=40.7511, lng=-73.9917))
-
         result = run_sort(_request(pkgs), {}, {}, {})
-        # THIN must be flagged WITH a suggested route (not an orphan).
+        flagged = {m.tba_number for r in result.routes for m in r.misrouted_packages}
+        flagged |= {m.tba_number for m in result.unassigned_misroutes}
+        assert "THIN" not in flagged, "a package ~112 m from its route should ride silently"
+
+    def test_shared_lion_node_rides_silently(self):
+        # A rider whose segment shares a LION node with the route's carried
+        # segments rides silently — the authoritative adjacency, even when the
+        # coordinate backstop would be borderline.
+        pkgs = []
+        for i in range(12):
+            pkgs.append(_pkg(f"A{i}", f"3{i}0 W 31st St", "BagA", lat=40.7503, lng=-73.9925,
+                             segment_id="SEG_A", from_lion_node_id="N1", to_lion_node_id="N2"))
+        # rider on a segment that shares node N2 with the route's SEG_A
+        pkgs.append(_pkg("SHARED", "110 W 32nd St", "BagA", lat=40.7560, lng=-73.9800,
+                         segment_id="SEG_B", from_lion_node_id="N2", to_lion_node_id="N3"))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = {m.tba_number for r in result.routes for m in r.misrouted_packages}
+        flagged |= {m.tba_number for m in result.unassigned_misroutes}
+        assert "SHARED" not in flagged, "shared LION node = adjacent = rides silently"
+
+    def test_distant_outlier_flagged_and_dead_ends(self):
+        # A W_57 rider ~2 km from the only (W_36) route: no shared node, backstop
+        # fails (far from dominant), and beyond _MISROUTE_SUGGEST_MAX_KM → flagged,
+        # captain review (no suggestion).
+        pkgs = [_pkg(f"D{i}", f"3{i}0 W 36th St", "BagX", lat=40.7501, lng=-73.9886,
+                     segment_id="SEG_D", from_lion_node_id="D1", to_lion_node_id="D2")
+                for i in range(12)]
+        pkgs.append(_pkg("FAR", "450 W 57th St", "BagX", lat=40.7680, lng=-73.9850,
+                         segment_id="SEG_F", from_lion_node_id="F1", to_lion_node_id="F2"))
+        result = run_sort(_request(pkgs), {}, {}, {})
         orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
+        assert "FAR" in orphan_tbas, "distant outlier must flag and dead-end to captain review"
+
+    def test_genuine_misroute_gets_nearest_route_suggestion(self):
+        # Two separate routes; a package physically in route 2's territory but
+        # riding in route 1's tote (no shared node, outside backstop of route 1's
+        # dominant) is flagged AND suggested to route 2 (within SUGGEST cap).
+        from app.services.route_sort import _haversine_km, _MISROUTE_SUGGEST_MAX_KM
+        pkgs = []
+        for i in range(12):
+            pkgs.append(_pkg(f"A{i}", f"3{i}0 W 23rd St", "BagA", lat=40.7440, lng=-73.9980,
+                             segment_id="SEG_A", from_lion_node_id="A1", to_lion_node_id="A2"))
+        for i in range(12):
+            pkgs.append(_pkg(f"B{i}", f"3{i}0 W 50th St", "BagB", lat=40.7620, lng=-73.9900,
+                             segment_id="SEG_B", from_lion_node_id="B1", to_lion_node_id="B2"))
+        # rider physically at W_50 (~route 2) but riding in BagA (route 1)
+        pkgs.append(_pkg("STRAY", "355 W 50th St", "BagA", lat=40.7620, lng=-73.9900,
+                         segment_id="SEG_S", from_lion_node_id="S1", to_lion_node_id="S2"))
+        result = run_sort(_request(pkgs), {}, {}, {})
         flagged = {m.tba_number: m.suggested_route_number
                    for r in result.routes for m in r.misrouted_packages}
-        assert "THIN" not in orphan_tbas, "diagonal thin block should not dead-end"
-        assert flagged.get("THIN") is not None, "THIN should get a nearest-route suggestion"
-
-    def test_distant_outlier_still_dead_ends(self):
-        # A W_57 rider ~2 km from the only (W_36) route must NOT be suggested to
-        # it — beyond _MISROUTE_SUGGEST_MAX_KM → captain review.
-        pkgs = [_pkg(f"D{i}", f"3{i}0 W 36th St", "BagX", lat=40.7501, lng=-73.9886)
-                for i in range(12)]
-        pkgs.append(_pkg("FAR", "450 W 57th St", "BagX", lat=40.7680, lng=-73.9850))
-        result = run_sort(_request(pkgs), {}, {}, {})
-        orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
-        assert "FAR" in orphan_tbas, "distant outlier must still dead-end to captain review"
-
-    def test_fallback_requires_coordinates(self):
-        # Without lat/lng the fallback cannot fire — a no-coord orphan dead-ends.
-        pkgs = [_pkg(f"D{i}", f"3{i}0 W 36th St", "BagX", lat=None, lng=None)
-                for i in range(12)]
-        pkgs.append(_pkg("NOGEO", "450 W 57th St", "BagX", lat=None, lng=None))
-        result = run_sort(_request(pkgs), {}, {}, {})
-        # NOGEO has no coords and W_57 isn't block-adjacent to W_36 → orphan.
-        orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
-        assert "NOGEO" in orphan_tbas
+        assert flagged.get("STRAY") is not None, "genuine misroute should get a suggestion"
+        dest = next(r for r in result.routes if r.route_number == flagged["STRAY"])
+        dpk = [p for p in pkgs if p.tba_number in dest.tba_numbers and p.lat is not None]
+        nearest = min(_haversine_km(40.7620, -73.9900, p.lat, p.lng) for p in dpk)
+        assert nearest <= _MISROUTE_SUGGEST_MAX_KM
 
 
 # ---------------------------------------------------------------------------
