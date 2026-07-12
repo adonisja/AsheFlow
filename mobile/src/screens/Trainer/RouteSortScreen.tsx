@@ -31,6 +31,15 @@ type CrewMember = {
   paired_trainer_id: string | null;
 };
 
+// AssignmentMember row (ADR-197) — carries the id + live status the crew-status
+// control needs; assigned_crews from /dispatch only gives employee_id/name/role.
+type AssignmentMemberRow = {
+  id: string;
+  employee_id: string;
+  role: string;
+  status: string;            // active | departed | transferred
+};
+
 type MisrouteFlag = {
   id: string;
   tba_number: string;
@@ -82,6 +91,8 @@ export default function RouteSortScreen() {
   const [zoned,      setZoned]      = useState(false);
   const [zonePkgs,   setZonePkgs]   = useState(0);
   const [crew,       setCrew]       = useState<CrewMember[]>([]);
+  const [members,    setMembers]    = useState<AssignmentMemberRow[]>([]);   // ADR-197 crew-status rows
+  const [departingId, setDepartingId] = useState<string | null>(null);
   const [routes,     setRoutes]     = useState<RouteResp[]>([]);
   const [committing, setCommitting] = useState(false);
   const [proposing,  setProposing]  = useState(false);
@@ -130,16 +141,19 @@ export default function RouteSortScreen() {
       }
       setRoutes(routesRes.status === 'fulfilled' ? (routesRes.value.data ?? []) : []);
 
-      // Paired trainee's AP-arrival stamp (ADR-145 flow) — drives the
-      // rebalance card below.
+      // Assignment members: the AP-arrival stamp (ADR-145) AND the crew-status
+      // rows (ADR-197) come from the same endpoint — fetch once.
       const pairedTrainee = myCrew.find(m => m.role === 'trainee' && m.paired_trainer_id);
-      if (pairedTrainee && assignmentId) {
+      if (assignmentId) {
         try {
-          const members = await apiClient.get(`/assignment-members/${assignmentId}`);
-          const row = (members.data ?? []).find((m: any) => m.employee_id === pairedTrainee.employee_id);
+          const res = await apiClient.get(`/assignment-members/${assignmentId}`);
+          const rows = (res.data ?? []) as any[];
+          setMembers(rows.map(m => ({ id: m.id, employee_id: m.employee_id, role: m.role, status: m.status ?? 'active' })));
+          const row = pairedTrainee ? rows.find(m => m.employee_id === pairedTrainee.employee_id) : null;
           setTraineeArrivedAt(row?.ap_arrived_at ?? null);
-        } catch { setTraineeArrivedAt(null); }
+        } catch { setMembers([]); setTraineeArrivedAt(null); }
       } else {
+        setMembers([]);
         setTraineeArrivedAt(null);
       }
     } catch {
@@ -194,6 +208,31 @@ export default function RouteSortScreen() {
     } finally {
       setProposing(false);
     }
+  };
+
+  const markDeparted = (member: AssignmentMemberRow, name: string) => {
+    Alert.alert(
+      `Mark ${name} departed?`,
+      'They leave this truck\'s crew for the day. This keeps the record (unlike removing them) and updates the live crew count used to build remaining routes.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Mark Departed',
+          style: 'destructive',
+          onPress: async () => {
+            setDepartingId(member.id);
+            try {
+              await apiClient.patch(`/assignment-members/${member.id}/status`, { status: 'departed' });
+              await load();
+            } catch (e) {
+              Alert.alert('Error', errorText(e, 'Could not update crew status.'));
+            } finally {
+              setDepartingId(null);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const overrideAssignee = (routeNumber: number, member: CrewMember) => {
@@ -421,6 +460,44 @@ export default function RouteSortScreen() {
           {misroutes.length > 12 && (
             <Text style={[s.cardSub, { marginTop: spacing.xs, marginBottom: 0 }]}>…and {misroutes.length - 12} more — resolve these first, then refresh.</Text>
           )}
+        </View>
+      )}
+
+      {/* Crew status (ADR-197): mark a walker/trainer/trainee departed when they
+          leave for the day. Preserves the record (unlike removal) and keeps the
+          live crew count accurate for building the remaining routes. */}
+      {members.length > 0 && (
+        <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
+          <Text style={s.cardTitle}>Crew</Text>
+          {members
+            .filter(m => m.role !== 'driver')
+            .map(m => {
+              const name = crew.find(cm => cm.employee_id === m.employee_id)?.name ?? m.role;
+              const off = m.status !== 'active';
+              return (
+                <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: fontSize.sm, color: off ? c.mutedForeground : c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
+                      {name}
+                    </Text>
+                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize' }}>
+                      {m.role}{off ? ` · ${m.status}` : ''}
+                    </Text>
+                  </View>
+                  {!off && (
+                    <TouchableOpacity
+                      style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
+                      onPress={() => markDeparted(m, name)}
+                      disabled={departingId === m.id}
+                    >
+                      {departingId === m.id
+                        ? <ActivityIndicator size="small" color={c.mutedForeground} />
+                        : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Departed</Text>}
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
         </View>
       )}
 

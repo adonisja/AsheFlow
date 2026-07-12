@@ -93,6 +93,7 @@ export default function MyRouteScreen() {
   const [stops,      setStops]      = useState<Stop[]>([]);
   const [acting,     setActing]     = useState(false);
   const [completingStop, setCompletingStop] = useState<string | null>(null);
+  const [startedAddress, setStartedAddress] = useState<string | null>(null);   // ADR-197: stop in progress
   const [rtsTarget,  setRtsTarget]  = useState<{ tba: string; kind: 'rts' | 'missing' } | null>(null);
   const [bpTarget,   setBpTarget]   = useState<Stop | null>(null);
 
@@ -200,6 +201,22 @@ export default function MyRouteScreen() {
 
   // ── Stop-level actions ───────────────────────────────────────────────────
 
+  const startStop = async (stop: Stop) => {
+    if (!route) return;
+    // Optimistically mark started so dispatch/captain tracking lights up and the
+    // walker sees the in-progress state immediately (ADR-197). Server call is
+    // best-effort — a failure just clears the local flag, it never blocks work.
+    setStartedAddress(stop.normalised_address);
+    try {
+      await apiClient.post('/rts/stops/start', {
+        route_id: route.id,
+        tba_numbers: stop.tba_numbers,
+      });
+    } catch {
+      setStartedAddress(null);
+    }
+  };
+
   const completeStop = async (stop: Stop) => {
     if (!route) return;
     setCompletingStop(stop.normalised_address);
@@ -209,6 +226,7 @@ export default function MyRouteScreen() {
         tba_numbers: stop.tba_numbers,
         completed_at: new Date().toISOString(),
       });
+      if (startedAddress === stop.normalised_address) setStartedAddress(null);
       const sug = await apiClient.get(`/rts/stops/${route.id}/next-suggestion`);
       setStops(sug.data ?? []);
     } catch (e) {
@@ -338,6 +356,8 @@ export default function MyRouteScreen() {
         <StopCard
           stop={nextStop} featured c={c}
           completing={completingStop === nextStop.normalised_address}
+          started={startedAddress === nextStop.normalised_address}
+          onStart={() => startStop(nextStop)}
           onComplete={() => completeStop(nextStop)}
           onFlag={(tba, kind) => setRtsTarget({ tba, kind })}
           onBuildingInfo={() => setBpTarget(nextStop)}
@@ -506,8 +526,10 @@ function BuildingProfileModal({ stop, c, onClose }: {
 
 // ── Stop card ──────────────────────────────────────────────────────────────
 
-function StopCard({ stop, featured, completing, onComplete, onFlag, onBuildingInfo, c }: {
+function StopCard({ stop, featured, completing, started, onStart, onComplete, onFlag, onBuildingInfo, c }: {
   stop: Stop; featured?: boolean; completing: boolean;
+  started?: boolean;
+  onStart?: () => void;
   onComplete: () => void;
   onFlag: (tba: string, kind: 'rts' | 'missing') => void;
   onBuildingInfo: () => void;
@@ -523,7 +545,11 @@ function StopCard({ stop, featured, completing, onComplete, onFlag, onBuildingIn
     ]}>
       <TouchableOpacity style={cs.header} onPress={() => setExpanded(e => !e)} activeOpacity={0.7}>
         <View style={{ flex: 1 }}>
-          {featured && <Text style={[cs.nextLabel, { color: c.primary }]}>NEXT STOP</Text>}
+          {featured && (
+            <Text style={[cs.nextLabel, { color: started ? c.success : c.primary }]}>
+              {started ? '● IN PROGRESS' : 'NEXT STOP'}
+            </Text>
+          )}
           <Text style={[cs.address, { color: c.foreground }]}>{stop.normalised_address}</Text>
           <Text style={[cs.meta, { color: c.mutedForeground }]}>
             {stop.packages_total} pkg{stop.packages_total === 1 ? '' : 's'}
@@ -577,6 +603,17 @@ function StopCard({ stop, featured, completing, onComplete, onFlag, onBuildingIn
 
       {expanded && (
         <>
+          {/* Start this stop (ADR-197) — only the featured next stop, and only
+              until it's marked in progress. Lets dispatch/captain see where the
+              walker is; the walker taps it as they arrive at the building. */}
+          {featured && onStart && !started && (
+            <TouchableOpacity
+              style={[cs.startBtn, { borderColor: c.primary }]}
+              onPress={onStart}
+            >
+              <Text style={[cs.startBtnText, { color: c.primary }]}>📍 Start this stop</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             style={[cs.completeBtn, { backgroundColor: c.success }]}
             onPress={onComplete}
@@ -722,6 +759,8 @@ const cs = StyleSheet.create({
   tbaHint:     { fontSize: 10, marginTop: 4, fontStyle: 'italic' },
   completeBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginTop: spacing.sm },
   completeBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  startBtn: { borderRadius: radius.md, borderWidth: 1.5, paddingVertical: spacing.sm + 2, alignItems: 'center', marginTop: spacing.sm },
+  startBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   bpBtn:       { alignItems: 'center', paddingVertical: spacing.xs + 2, marginTop: 2 },
   bpBtnText:   { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 });

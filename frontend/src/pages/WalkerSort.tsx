@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 import ApPullsPanel from '../components/ApPullsPanel';
+import CrewStatusPanel from '../components/CrewStatusPanel';
 import ReportDamagedModal from '../components/ReportDamagedModal';
 import type { RostersResponse } from '../api/types';
 
@@ -1446,6 +1447,12 @@ function TruckSortPanel({
             )}
 
             {/* ── Second-wave pool ── */}
+            {(state.phase === 'distributed' || state.phase === 'arrived') && (
+              <div className="border-t border-border pt-4">
+                <CrewStatusPanel assignmentId={state.ta.id} routes={state.routes} />
+              </div>
+            )}
+
             {(state.phase === 'distributed' || state.phase === 'arrived') && (
               <div className="space-y-3 border-t border-border pt-4">
                 <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Second-wave pool</p>

@@ -803,14 +803,47 @@ export interface DeliveryStopResponse {
   normalised_address: string;
   block_key: string;
   tba_numbers: string[];
-  completed_at: string;
+  // Lifecycle (ADR-197): planned rows carry nulls until completed
+  status: 'planned' | 'in_progress' | 'completed';
+  is_unplanned: boolean;
+  started_at: string | null;
+  completed_at: string | null;
   stop_sequence: number;
-  packages_total: number;
-  packages_delivered: number;
+  packages_total: number | null;
+  packages_delivered: number | null;
   rts_count: number;
   missing_count: number;
-  effort_class: string;
+  effort_class: string | null;
   workload_class: string | null;
+}
+
+// ── Crew status + availability (ADR-197 Phase 0b) ──────────────────────────
+
+export interface AssignmentMemberResponse {
+  id: string;
+  company_id: string;
+  assignment_id: string;
+  employee_id: string;
+  role: string;
+  paired_trainer_id: string | null;
+  status: 'active' | 'departed' | 'transferred';
+  departed_at: string | null;
+}
+
+export interface CrewAvailabilityEntry {
+  employee_id: string;
+  name: string | null;
+  role: string;
+  membership_status: 'active' | 'departed' | 'transferred';
+  availability: 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
+  route_completion_pct: number | null;
+}
+
+export interface CrewAvailabilityResponse {
+  entries: CrewAvailabilityEntry[];
+  active_crew: number;
+  available_for_route: number;
+  completion_threshold: number;
 }
 
 export interface StopSignal {
