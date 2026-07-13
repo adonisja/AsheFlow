@@ -50,6 +50,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
+  { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
   // /dispatch-home has NO tab: it is dispatch's Dashboard landing
   // (homeRouteForGroups), and every role has its own scoped home dashboard —
   // admin lands on /admin and doesn't need dispatch's. Route access is gated

@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, date
 
 
 class AssignmentMemberCreate(BaseModel):
@@ -51,3 +51,44 @@ class CrewAvailabilityResponse(BaseModel):
     active_crew: int                 # members with membership_status = active
     available_for_route: int         # count that can take a NEW route this wave
     completion_threshold: float      # the pct above which an on-route walker counts as returning
+
+
+# ── Crew Status page (ADR-197 Phase B) — enriched, fleet-aware ──────────────────
+
+class CrewStatusMember(BaseModel):
+    """One crew member on the Crew Status page: availability (ADR-197 Phase 0b) +
+    trip count (ADR-199 D3) + pairing (with an orphaned-trainee flag → Phase B
+    reassignment). member_id is the AssignmentMember row id (for the depart/status
+    action); it is None only if the membership row is missing (should not happen)."""
+    member_id: Optional[UUID] = None
+    employee_id: UUID
+    name: Optional[str] = None
+    role: str
+    membership_status: str                    # active | departed | transferred
+    availability: str                         # available|on_route_early|on_route_returning|done|off_crew
+    route_completion_pct: Optional[float] = None
+    trip_count: int = 0
+    # Pairing (ADR-199): trainee → their trainer; trainer → their trainee.
+    paired_trainer_id: Optional[UUID] = None
+    paired_trainer_name: Optional[str] = None
+    paired_trainee_id: Optional[UUID] = None
+    paired_trainee_name: Optional[str] = None
+    # True for a trainee whose paired trainer is not present on the truck (not an
+    # active member, or has not arrived at the AP while the trainee has). Drives
+    # the "Reassign" entry point to the Phase B dispatch reassignment.
+    orphaned: bool = False
+
+
+class CrewStatusTruck(BaseModel):
+    truck_assignment_id: UUID
+    truck_id: UUID
+    truck_name: Optional[str] = None
+    active_crew: int
+    available_for_route: int
+    members: list[CrewStatusMember]
+
+
+class CrewStatusResponse(BaseModel):
+    date: date
+    completion_threshold: float
+    trucks: list[CrewStatusTruck]

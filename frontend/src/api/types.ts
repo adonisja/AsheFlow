@@ -846,6 +846,56 @@ export interface CrewAvailabilityResponse {
   completion_threshold: number;
 }
 
+// Crew Status page (ADR-197 Phase B) — enriched, fleet-aware.
+export interface CrewStatusMember {
+  member_id: string | null;
+  employee_id: string;
+  name: string | null;
+  role: string;
+  membership_status: 'active' | 'departed' | 'transferred';
+  availability: 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
+  route_completion_pct: number | null;
+  trip_count: number;
+  paired_trainer_id: string | null;
+  paired_trainer_name: string | null;
+  paired_trainee_id: string | null;
+  paired_trainee_name: string | null;
+  orphaned: boolean;
+}
+
+export interface CrewStatusTruck {
+  truck_assignment_id: string;
+  truck_id: string;
+  truck_name: string | null;
+  active_crew: number;
+  available_for_route: number;
+  members: CrewStatusMember[];
+}
+
+export interface CrewStatusResponse {
+  date: string;
+  completion_threshold: number;
+  trucks: CrewStatusTruck[];
+}
+
+// ADR-199 Phase B reassignment (available-trainer suggestion + reassign).
+export interface AvailableTrainer {
+  trainer_id: string;
+  trainer_name: string | null;
+  truck_assignment_id: string;
+  truck_id: string;
+  truck_name: string | null;
+  same_truck: boolean;
+  has_route: boolean;
+}
+
+export interface AvailableTrainersResponse {
+  trainee_id: string;
+  trainee_name: string | null;
+  current_trainer_id: string | null;
+  suggestions: AvailableTrainer[];
+}
+
 export interface StopSignal {
   signal: string;
   reason: string;
