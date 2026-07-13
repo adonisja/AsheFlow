@@ -19,6 +19,7 @@ class AssignmentMemberResponse(BaseModel):
     paired_trainer_id: Optional[UUID] = None
     status: str = "active"
     departed_at: Optional[datetime] = None
+    trip_count: int = 0            # ADR-199 D3: completed-and-returned runs today
 
     model_config = {"from_attributes": True}
 

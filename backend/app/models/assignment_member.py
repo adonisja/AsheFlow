@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, ForeignKey, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -52,3 +52,8 @@ class AssignmentMember(Base):
     # membership only; availability is derived from both (ADR-197 Phase 0b).
     status            = Column(String(20), nullable=False, server_default="active")
     departed_at       = Column(DateTime(timezone=True), nullable=True)
+    # Per-employee-per-day trip count (ADR-199 D3). A "trip" = one route run
+    # completed AND returned to the truck (incremented on back-at-truck). This is
+    # the PERSON's run count for the day; distinct from Route.wave_number, which
+    # is the TRUCK's redistribution cycle. Purely additive — starts at 0.
+    trip_count        = Column(Integer, nullable=False, server_default="0", default=0)
