@@ -1010,3 +1010,67 @@ class TestTimeUrgencySeeding:
         res = run_sort(req, {}, {}, {})   # no block_time_urgency → cold start
         assert res.routes[0].block_keys == ["W_50_St_300"], \
             "without urgency, the densest block seeds first (unchanged cold-start order)"
+
+
+# ---------------------------------------------------------------------------
+# ADR-197 Phase 1 (F5) — coordinate-based consolidation of sparse routes
+# ---------------------------------------------------------------------------
+
+class TestF5Consolidation:
+    """Sparse clients (low per-block density) produce blocks with NO block-key
+    adjacency edges → each thin block dead-ends as its own route (fragmentation).
+    F5 consolidates them via nearest-block-by-centroid within a walk radius, up
+    to a load floor, when crew_size is passed. crew_size=None = baseline."""
+
+    def _sparse_zone(self):
+        # 4 thin blocks, 1 tote each, that are PAIRWISE NON-ADJACENT by block-key
+        # (different street >1 apart AND different hundred → no cost-2/3 edge; no
+        # cross-street data → no cost-1 edge) but clustered within ~1km. This is
+        # the sparse case: the block-key graph has zero edges, so baseline
+        # fragments them and only the coord fallback can consolidate.
+        specs = [
+            ("S0", "10 W 20th St",  40.7000, -74.0000),
+            ("S1", "250 W 23rd St", 40.7030, -73.9980),
+            ("S2", "410 W 27th St", 40.7060, -73.9965),
+            ("S3", "120 W 31st St", 40.7090, -73.9950),
+        ]
+        return [_pkg(t, a, f"BAG{i}", lat=lat, lng=lng) for i, (t, a, lat, lng) in enumerate(specs)]
+
+    def test_baseline_fragments_sparse_without_crew(self):
+        # crew_size=None → no consolidation → each thin block is its own route.
+        res = run_sort(_request(self._sparse_zone()), {}, {}, {})
+        assert len(res.routes) == 4
+        assert res.routes_built is None and res.crew_size is None
+
+    def test_consolidates_sparse_with_crew(self):
+        # With crew, coord-fallback merges the thin blocks into fewer routes.
+        res = run_sort(_request(self._sparse_zone()), {}, {}, {}, crew_size=8)
+        assert len(res.routes) < 4, "F5 should consolidate thin scattered blocks"
+        assert res.crew_size == 8
+        assert res.routes_built == len(res.routes)
+
+    def test_surplus_signal(self):
+        # Thin blocks consolidate to fewer routes than crew → surplus reported.
+        res = run_sort(_request(self._sparse_zone()), {}, {}, {}, crew_size=8)
+        surplus = res.crew_size - res.routes_built
+        assert surplus > 0, "fewer routes than crew → walkers can be released"
+
+    def test_walk_radius_respected(self):
+        # Two thin blocks FAR apart (>1.2km) must NOT merge even with crew.
+        pkgs = [
+            _pkg("A", "10 W 20th St", "BAGA", lat=40.700, lng=-74.000),
+            _pkg("B", "10 W 90th St", "BAGB", lat=40.780, lng=-73.960),  # ~10km away
+        ]
+        res = run_sort(_request(pkgs), {}, {}, {}, crew_size=4)
+        assert len(res.routes) == 2, "blocks beyond the walk radius must not consolidate"
+
+    def test_dense_unchanged_by_crew_size(self):
+        # Dense adjacent blocks (graph HAS edges) route identically with/without
+        # crew_size — the coord fallback never fires.
+        pkgs = []
+        for h in (100, 200, 300):
+            for i in range(8):
+                pkgs.append(_pkg(f"D{h}_{i}", f"{h+i} W 36th St", f"BAG{h}", lat=40.7501, lng=-73.9886))
+        base = run_sort(_request(pkgs), {}, {}, {})
+        withcrew = run_sort(_request(pkgs), {}, {}, {}, crew_size=5)
+        assert [sorted(r.block_keys) for r in base.routes] == [sorted(r.block_keys) for r in withcrew.routes]

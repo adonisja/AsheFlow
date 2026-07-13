@@ -119,6 +119,11 @@ class SortResult(BaseModel):
     route_date: date
     routes: list[RouteOut]
     unassigned_misroutes: list[MisroutedPackageOut]   # no destination route found
+    # F5 surplus signal (ADR-197 Phase 1): routes the consolidation built vs the
+    # active crew. routes_built < crew_size → dispatch can release the difference.
+    # None when consolidation was off (no crew_size passed).
+    routes_built: Optional[int] = None
+    crew_size: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
