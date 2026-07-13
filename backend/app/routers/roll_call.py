@@ -150,6 +150,62 @@ def _get_company_cfg(db: Session, company_id):
     return db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
 
 
+def derive_roll_call_status(db: Session, employee_id, target_date, company_id) -> str:
+    """Derive 'early'|'present'|'late'|'ncns' for an on-time arrival right now.
+
+    ADR-198: measure against max(shift_start, AP-established) — a late driver
+    doesn't penalize on-time crew, and an early driver can't make them look late
+    (the shift_start floor). Shared by submit_roll_call and the trainee arrival
+    tap (ADR-199 D1) so both derive attendance identically.
+    """
+    cfg = _get_company_cfg(db, company_id)
+    tz = company_tz(db, company_id)
+    ap_established = _ap_established_time(db, employee_id, target_date, company_id)
+    reference = _attendance_reference(
+        shift_start=cfg.shift_start if cfg else None,
+        ap_established_local=ap_established,
+        tz=tz,
+        on_date=datetime.now(tz).date(),
+    )
+    return _derive_status(
+        reference=reference,
+        late_window_minutes=cfg.late_window_minutes if cfg else None,
+        arrival_local=datetime.now(timezone.utc).astimezone(tz),
+        ncns_cutoff_minutes=cfg.ncns_cutoff_minutes if cfg else None,
+    )
+
+
+def upsert_arrival_roll_call(db: Session, employee_id, target_date, company_id, submitted_by_id):
+    """Record attendance for a crew member's own AP arrival (ADR-199 D1).
+
+    The trainee's "I've arrived" tap IS their roll-call: roll-call happens at the
+    AP (ADR-198), so the arrival event and the roll-call are the same real event.
+    Idempotent — if a record already exists for (employee_id, date) it is left as
+    is (the arrival tap never downgrades a status a driver/dispatch already set).
+    Derives status via the shared ADR-198 attendance logic. Does NOT commit —
+    the caller flushes/audits/commits in its own transaction. Returns the row
+    (existing or newly added), or None if one already existed.
+    """
+    existing = db.query(ShiftRollCall).filter(
+        ShiftRollCall.employee_id == employee_id,
+        ShiftRollCall.date == target_date,
+        ShiftRollCall.company_id == company_id,
+    ).first()
+    if existing is not None:
+        return None
+
+    derived_status = derive_roll_call_status(db, employee_id, target_date, company_id)
+    row = ShiftRollCall(
+        company_id      = company_id,
+        submitted_by_id = submitted_by_id,
+        employee_id     = employee_id,
+        date            = target_date,
+        status          = derived_status,
+    )
+    db.add(row)
+    return row
+
+
 def _get_caller_truck_assignment(db: Session, caller: Employee, target_date: date) -> Optional[TruckAssignment]:
     """Return the TruckAssignment for the caller's truck on the given date, or None."""
     am = (

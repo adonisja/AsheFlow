@@ -4,12 +4,15 @@ Pure-logic tests of _attendance_reference (floor: max(shift_start, AP-establishe
 and _derive_status (early/present/late/ncns vs the reference), including the two
 edge cases that motivated it: an EARLY driver (floored) and a LATE driver (raises).
 """
+import uuid
 from datetime import datetime, time
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 from app.routers.roll_call import (
     _attendance_reference,
     _derive_status,
+    upsert_arrival_roll_call,
     DEFAULT_LATE_WINDOW,
     DEFAULT_NCNS_CUTOFF,
 )
@@ -78,3 +81,57 @@ class TestDeriveStatus:
     def test_defaults(self):
         assert DEFAULT_LATE_WINDOW == 20
         assert DEFAULT_NCNS_CUTOFF == 60
+
+
+# ---------------------------------------------------------------------------
+# ADR-199 D1 — arrival tap IS roll-call (upsert_arrival_roll_call)
+# ---------------------------------------------------------------------------
+
+class TestUpsertArrivalRollCall:
+    """The trainee arrival tap writes a roll-call record in the same action."""
+
+    def _db(self, existing):
+        """Mock Session whose ShiftRollCall query returns `existing`."""
+        db = MagicMock()
+        added: list = []
+        db.add.side_effect = lambda obj: added.append(obj)
+        db._added = added
+
+        def _query(model):
+            q = MagicMock()
+            q.filter.return_value.first.return_value = existing
+            return q
+
+        db.query = _query
+        return db
+
+    def test_creates_record_when_none_exists(self):
+        db = self._db(existing=None)
+        emp_id = uuid.uuid4()
+        cid = uuid.uuid4()
+        # Patch the status derivation so we don't need CompanyConfig/tz wiring.
+        with patch("app.routers.roll_call.derive_roll_call_status", return_value="present"):
+            row = upsert_arrival_roll_call(
+                db=db, employee_id=emp_id, target_date=DAY,
+                company_id=cid, submitted_by_id=emp_id,
+            )
+        assert row is not None
+        assert row.status == "present"
+        assert row.employee_id == emp_id
+        assert row.submitted_by_id == emp_id
+        assert row in db._added
+
+    def test_idempotent_when_record_exists(self):
+        # Driver/dispatch already recorded attendance — the tap does NOT override it.
+        existing = MagicMock()
+        existing.status = "late"
+        db = self._db(existing=existing)
+        with patch("app.routers.roll_call.derive_roll_call_status") as derive:
+            row = upsert_arrival_roll_call(
+                db=db, employee_id=uuid.uuid4(), target_date=DAY,
+                company_id=uuid.uuid4(), submitted_by_id=uuid.uuid4(),
+            )
+        assert row is None
+        derive.assert_not_called()   # never re-derives over an existing record
+        assert existing.status == "late"
+        assert db._added == []
