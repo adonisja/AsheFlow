@@ -40,6 +40,18 @@ type AssignmentMemberRow = {
   status: string;            // active | departed | transferred
 };
 
+// Enriched per-member crew status (ADR-197 Phase B /crew-status): availability
+// + trip count, keyed by employee_id for the Crew card chips.
+type CrewStatusEntry = {
+  employee_id: string;
+  availability: 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
+  route_completion_pct: number | null;
+  trip_count: number;
+};
+
+// The stop a walker is currently on, per route (ADR-197 lifecycle: in_progress).
+type CurrentStop = { stop_sequence: number; normalised_address: string; total: number };
+
 type MisrouteFlag = {
   id: string;
   tba_number: string;
@@ -79,6 +91,22 @@ const EFFORT_COLORS: Record<string, string> = {
   easy: '#0FA870', standard: '#0EA5D8', heavy: '#E8820C', very_heavy: '#E8443A',
 };
 
+// Availability chip (ADR-197). label + {bg,fg} colors per availability state.
+const AVAIL_LABEL: Record<CrewStatusEntry['availability'], string> = {
+  available: 'Available',
+  on_route_early: 'On route',
+  on_route_returning: 'Returning',
+  done: 'Done',
+  off_crew: 'Off crew',
+};
+const AVAIL_CHIP: Record<CrewStatusEntry['availability'], { bg: string; fg: string }> = {
+  available:          { bg: '#D1FAE5', fg: '#047857' },
+  on_route_early:     { bg: '#FEF3C7', fg: '#B45309' },
+  on_route_returning: { bg: '#E0F2FE', fg: '#0369A1' },
+  done:               { bg: '#D1FAE5', fg: '#047857' },
+  off_crew:           { bg: '#E5E7EB', fg: '#6B7280' },
+};
+
 export default function RouteSortScreen() {
   const c = useColors();
   const { fetchId } = useEmployeeId();
@@ -92,6 +120,8 @@ export default function RouteSortScreen() {
   const [zonePkgs,   setZonePkgs]   = useState(0);
   const [crew,       setCrew]       = useState<CrewMember[]>([]);
   const [members,    setMembers]    = useState<AssignmentMemberRow[]>([]);   // ADR-197 crew-status rows
+  const [crewStatus, setCrewStatus] = useState<Record<string, CrewStatusEntry>>({});  // by employee_id
+  const [currentStops, setCurrentStops] = useState<Record<string, CurrentStop>>({});  // by employee_id
   const [departingId, setDepartingId] = useState<string | null>(null);
   const [routes,     setRoutes]     = useState<RouteResp[]>([]);
   const [committing, setCommitting] = useState(false);
@@ -139,7 +169,8 @@ export default function RouteSortScreen() {
         setZonePkgs(mine?.package_count ?? 0);
         setTruckName(mine?.truck_name ?? '');
       }
-      setRoutes(routesRes.status === 'fulfilled' ? (routesRes.value.data ?? []) : []);
+      const myRoutes: RouteResp[] = routesRes.status === 'fulfilled' ? (routesRes.value.data ?? []) : [];
+      setRoutes(myRoutes);
 
       // Assignment members: the AP-arrival stamp (ADR-145) AND the crew-status
       // rows (ADR-197) come from the same endpoint — fetch once.
@@ -156,6 +187,44 @@ export default function RouteSortScreen() {
         setMembers([]);
         setTraineeArrivedAt(null);
       }
+
+      // Crew-status enrichment (ADR-197 Phase B): availability chip + trip count
+      // per member. Scoped to this truck (field caller → own truck). Best-effort.
+      try {
+        const cs = await apiClient.get(`/crew-status/${today}`);
+        const myTruck = (cs.data?.trucks ?? []).find((t: any) => t.truck_assignment_id === assignmentId);
+        const map: Record<string, CrewStatusEntry> = {};
+        for (const mm of (myTruck?.members ?? [])) {
+          map[mm.employee_id] = {
+            employee_id: mm.employee_id,
+            availability: mm.availability,
+            route_completion_pct: mm.route_completion_pct ?? null,
+            trip_count: mm.trip_count ?? 0,
+          };
+        }
+        setCrewStatus(map);
+      } catch { setCrewStatus({}); }
+
+      // In-progress current stop (ADR-197 lifecycle) for each active route, keyed
+      // by the walker on it. Only the OUT-NOW routes need it; best-effort per route.
+      const activeRoutes = myRoutes.filter(r => (r.status === 'assigned' || r.status === 'in_progress') && !r.returned_at);
+      const stopEntries = await Promise.all(activeRoutes.map(async (r) => {
+        try {
+          const sres = await apiClient.get(`/rts/stops/${r.id}`);
+          const stops = (sres.data ?? []) as any[];
+          const inProgress = stops.find(st => st.status === 'in_progress');
+          if (!inProgress || !r.assigned_to) return null;
+          const cur: CurrentStop = {
+            stop_sequence: inProgress.stop_sequence,
+            normalised_address: inProgress.normalised_address,
+            total: stops.length,
+          };
+          return [r.assigned_to, cur] as const;
+        } catch { return null; }
+      }));
+      const stopMap: Record<string, CurrentStop> = {};
+      for (const e of stopEntries) { if (e) stopMap[e[0]] = e[1]; }
+      setCurrentStops(stopMap);
     } catch {
       setTaId(null);
     } finally {
@@ -212,12 +281,12 @@ export default function RouteSortScreen() {
 
   const markDeparted = (member: AssignmentMemberRow, name: string) => {
     Alert.alert(
-      `Mark ${name} departed?`,
-      'They leave this truck\'s crew for the day. This keeps the record (unlike removing them) and updates the live crew count used to build remaining routes.',
+      `Mark ${name} done for the day?`,
+      'They finish their shift and leave this truck\'s crew. This keeps the record (unlike removing them) and updates the live crew count used to build remaining routes.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Mark Departed',
+          text: 'Mark Done for the Day',
           style: 'destructive',
           onPress: async () => {
             setDepartingId(member.id);
@@ -474,26 +543,46 @@ export default function RouteSortScreen() {
             .map(m => {
               const name = crew.find(cm => cm.employee_id === m.employee_id)?.name ?? m.role;
               const off = m.status !== 'active';
+              const cs = crewStatus[m.employee_id];
+              const chip = cs ? AVAIL_CHIP[cs.availability] : null;
+              const pct = cs?.route_completion_pct != null ? ` · ${Math.round(cs.route_completion_pct * 100)}%` : '';
+              const stop = currentStops[m.employee_id];
               return (
-                <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: fontSize.sm, color: off ? c.mutedForeground : c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
-                      {name}
-                    </Text>
-                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize' }}>
-                      {m.role}{off ? ` · ${m.status}` : ''}
-                    </Text>
+                <View key={m.id} style={{ paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: fontSize.sm, color: off ? c.mutedForeground : c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
+                        {name}
+                      </Text>
+                      <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize' }}>
+                        {m.role}
+                        {off ? ` · ${m.status}` : ''}
+                        {cs && cs.trip_count > 0 ? ` · ${cs.trip_count} trip${cs.trip_count === 1 ? '' : 's'}` : ''}
+                      </Text>
+                    </View>
+                    {chip && (
+                      <View style={{ backgroundColor: chip.bg, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2 }}>
+                        <Text style={{ fontSize: fontSize.xs, color: chip.fg, fontWeight: fontWeight.semibold }}>
+                          {AVAIL_LABEL[cs!.availability]}{pct}
+                        </Text>
+                      </View>
+                    )}
+                    {!off && (
+                      <TouchableOpacity
+                        style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
+                        onPress={() => markDeparted(m, name)}
+                        disabled={departingId === m.id}
+                      >
+                        {departingId === m.id
+                          ? <ActivityIndicator size="small" color={c.mutedForeground} />
+                          : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Mark Done</Text>}
+                      </TouchableOpacity>
+                    )}
                   </View>
-                  {!off && (
-                    <TouchableOpacity
-                      style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
-                      onPress={() => markDeparted(m, name)}
-                      disabled={departingId === m.id}
-                    >
-                      {departingId === m.id
-                        ? <ActivityIndicator size="small" color={c.mutedForeground} />
-                        : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Departed</Text>}
-                    </TouchableOpacity>
+                  {stop && (
+                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
+                      📍 On stop {stop.stop_sequence}/{stop.total}: {stop.normalised_address}
+                    </Text>
                   )}
                 </View>
               );
