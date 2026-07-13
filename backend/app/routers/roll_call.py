@@ -43,24 +43,106 @@ _allow_field     = RoleChecker(["driver", "trainer", "dispatch", "management", "
 _allow_dispatch  = RoleChecker(["dispatch", "management", "admin"])
 
 DEFAULT_LATE_WINDOW = 20  # minutes — used when CompanyConfig.late_window_minutes is NULL
+DEFAULT_NCNS_CUTOFF = 60  # minutes past reference — used when ncns_cutoff_minutes is NULL (ADR-198)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _derive_status(shift_start, late_window_minutes: Optional[int], now_utc: datetime, tz: ZoneInfo) -> str:
-    """Compute 'early' | 'present' | 'late' from wall-clock time vs shift_start."""
+def _attendance_reference(
+    shift_start,
+    ap_established_local: Optional[datetime],
+    tz: ZoneInfo,
+    on_date,
+) -> Optional[datetime]:
+    """The attendance clock reference (ADR-198 D2): max(shift_start, AP-established).
+
+    - shift_start is an ABSOLUTE FLOOR: an EARLY driver/AP is ignored (crew judged
+      against the schedule, never earlier).
+    - a LATE AP raises the reference to the actual AP-established time (so a
+      station-delayed driver doesn't mark the on-time crew late/NCNS).
+    - if the AP was never established, fall back to the floor (shift_start).
+    Returns None only when there is no shift_start at all (→ caller treats as
+    always-present, preserving prior no-config behavior).
+
+    Pure/DB-free for testability; caller resolves shift_start, ap_established, tz.
+    """
     if shift_start is None:
+        return None
+    floor_dt = datetime.combine(on_date, shift_start, tzinfo=tz)
+    if ap_established_local is None:
+        return floor_dt
+    ap_dt = ap_established_local.astimezone(tz)
+    return max(floor_dt, ap_dt)
+
+
+def _ap_established_time(db: Session, employee_id, on_date, company_id) -> Optional[datetime]:
+    """When the AP became available for this crew member's truck (ADR-198).
+
+    = the driver's AnchorPoint reaching 'arrived' for the member's truck+date.
+    The driver establishes the AP; everyone else's attendance clock is measured
+    against it (floored at shift_start). Returns None if no arrived AP yet (→
+    reference falls back to the shift_start floor).
+    """
+    from app.models.anchor_point import AnchorPoint
+
+    am = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == employee_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == on_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if am is None:
+        return None
+    ta = db.query(TruckAssignment).filter(TruckAssignment.id == am.assignment_id).first()
+    if ta is None:
+        return None
+    ap = (
+        db.query(AnchorPoint)
+        .filter(
+            AnchorPoint.truck_id == ta.truck_id,
+            AnchorPoint.date == on_date,
+            AnchorPoint.company_id == company_id,
+            AnchorPoint.status == "arrived",
+            AnchorPoint.arrived_at.isnot(None),
+        )
+        .order_by(AnchorPoint.arrived_at.asc())
+        .first()
+    )
+    return ap.arrived_at if ap else None
+
+
+def _derive_status(
+    reference: Optional[datetime],
+    late_window_minutes: Optional[int],
+    arrival_local: datetime,
+    ncns_cutoff_minutes: Optional[int] = None,
+) -> str:
+    """'early'|'present'|'late'|'ncns' from arrival time vs the attendance reference.
+
+    reference = max(shift_start, AP-established) from _attendance_reference. None
+    (no shift_start configured) → 'present'. Arrival past reference + NCNS cutoff
+    with the flow marking absence → 'ncns' (the caller passes arrival=reference+∞
+    semantics via the cutoff; here a positive ncns test is delegated to the
+    caller which knows whether an AP arrival actually happened).
+    """
+    if reference is None:
         return "present"
-    local_now = now_utc.astimezone(tz)
-    start_dt = datetime.combine(local_now.date(), shift_start, tzinfo=tz)
-    delta_minutes = (local_now - start_dt).total_seconds() / 60
+    delta_minutes = (arrival_local - reference).total_seconds() / 60
     window = late_window_minutes if late_window_minutes is not None else DEFAULT_LATE_WINDOW
+    ncns_cut = ncns_cutoff_minutes if ncns_cutoff_minutes is not None else DEFAULT_NCNS_CUTOFF
     if delta_minutes < 0:
         return "early"
     if delta_minutes <= window:
         return "present"
+    if delta_minutes > ncns_cut:
+        return "ncns"
     return "late"
 
 
@@ -137,14 +219,16 @@ def _apply_ncns_side_effects(db: Session, trainee: Employee, target_date: date, 
     if trainee_am:
         trainee_am.paired_trainer_id = None
 
-    # 3. Revert 1.5× capacity if arrival-confirm has already fired.
+    # 3. Revert 1.5× capacity if arrival-confirm has already fired (ADR-198 D4).
+    # NB: this clears the paired CEILING only — ADR-145's structural tote
+    # absorption is not reversed (matches prior intent). Previously imported a
+    # non-existent `WalkerRoute` model → ImportError/500 whenever this fired; now
+    # uses the real `Route` model (assigned_to / route_date).
     if trainee_am:
         ta = db.query(TruckAssignment).filter(TruckAssignment.id == trainee_am.assignment_id).first()
         if ta and ta.paired_arrival_confirmed:
             ta.paired_arrival_confirmed = False
-            # Clear capacity_limit_paired on the trainer's route for this truck.
-            # Import here to avoid circular at module level.
-            from app.models.walker_route import WalkerRoute
+            from app.models.walker_route import Route
             trainer_am = (
                 db.query(AssignmentMember)
                 .filter(
@@ -155,11 +239,11 @@ def _apply_ncns_side_effects(db: Session, trainee: Employee, target_date: date, 
             )
             if trainer_am:
                 route = (
-                    db.query(WalkerRoute)
+                    db.query(Route)
                     .filter(
-                        WalkerRoute.employee_id == trainer_am.employee_id,
-                        WalkerRoute.date == target_date,
-                        WalkerRoute.company_id == company_id,
+                        Route.assigned_to == trainer_am.employee_id,
+                        Route.route_date == target_date,
+                        Route.company_id == company_id,
                     )
                     .first()
                 )
@@ -268,11 +352,21 @@ def submit_roll_call(
     else:
         cfg = _get_company_cfg(db, caller.company_id)
         tz  = company_tz(db, caller.company_id)
-        derived_status = _derive_status(
+        # ADR-198: measure against max(shift_start, AP-established), not shift_start
+        # alone — so a late driver doesn't penalize on-time crew, and an early
+        # driver can't make normal-time crew look late (floor).
+        ap_established = _ap_established_time(db, target_employee_id, target_date, caller.company_id)
+        reference = _attendance_reference(
             shift_start=cfg.shift_start if cfg else None,
-            late_window_minutes=cfg.late_window_minutes if cfg else None,
-            now_utc=datetime.now(timezone.utc),
+            ap_established_local=ap_established,
             tz=tz,
+            on_date=datetime.now(tz).date(),
+        )
+        derived_status = _derive_status(
+            reference=reference,
+            late_window_minutes=cfg.late_window_minutes if cfg else None,
+            arrival_local=datetime.now(timezone.utc).astimezone(tz),
+            ncns_cutoff_minutes=cfg.ncns_cutoff_minutes if cfg else None,
         )
 
     # Upsert — one canonical record per (employee_id, date).

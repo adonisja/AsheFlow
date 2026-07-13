@@ -70,7 +70,10 @@ class CompanyConfig(Base):
     flag_threshold = Column(Float, nullable=True)   # default 1.0
 
     # ── Shift roll call ───────────────────────────────────────────────────────
-    late_window_minutes = Column(Integer, nullable=True)    # default 20; minutes past shift_start before "late"
+    late_window_minutes = Column(Integer, nullable=True)    # default 20; minutes past the attendance reference before "late"
+    # ADR-198: minutes past the attendance reference (max(shift_start, AP-established))
+    # with no AP arrival before a crew member is NCNS. Nullable → default 60 in code.
+    ncns_cutoff_minutes = Column(Integer, nullable=True)    # default 60
 
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
