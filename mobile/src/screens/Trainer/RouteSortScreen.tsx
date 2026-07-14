@@ -44,7 +44,7 @@ type AssignmentMemberRow = {
 // + trip count, keyed by employee_id for the Crew card chips.
 type CrewStatusEntry = {
   employee_id: string;
-  availability: 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
+  availability: 'not_arrived' | 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
   route_completion_pct: number | null;
   trip_count: number;
 };
@@ -93,6 +93,7 @@ const EFFORT_COLORS: Record<string, string> = {
 
 // Availability chip (ADR-197). label + {bg,fg} colors per availability state.
 const AVAIL_LABEL: Record<CrewStatusEntry['availability'], string> = {
+  not_arrived: 'Not arrived',
   available: 'Available',
   on_route_early: 'On route',
   on_route_returning: 'Returning',
@@ -100,6 +101,7 @@ const AVAIL_LABEL: Record<CrewStatusEntry['availability'], string> = {
   off_crew: 'Off crew',
 };
 const AVAIL_CHIP: Record<CrewStatusEntry['availability'], { bg: string; fg: string }> = {
+  not_arrived:        { bg: '#F1F5F9', fg: '#475569' },
   available:          { bg: '#D1FAE5', fg: '#047857' },
   on_route_early:     { bg: '#FEF3C7', fg: '#B45309' },
   on_route_returning: { bg: '#E0F2FE', fg: '#0369A1' },
@@ -123,6 +125,7 @@ export default function RouteSortScreen() {
   const [crewStatus, setCrewStatus] = useState<Record<string, CrewStatusEntry>>({});  // by employee_id
   const [currentStops, setCurrentStops] = useState<Record<string, CurrentStop>>({});  // by employee_id
   const [departingId, setDepartingId] = useState<string | null>(null);
+  const [rollCallId, setRollCallId] = useState<string | null>(null);   // employee_id being roll-called
   const [routes,     setRoutes]     = useState<RouteResp[]>([]);
   const [committing, setCommitting] = useState(false);
   const [proposing,  setProposing]  = useState(false);
@@ -302,6 +305,21 @@ export default function RouteSortScreen() {
         },
       ],
     );
+  };
+
+  // Roll call (ADR-198): mark a not-arrived member in (Present — server derives
+  // early/present/late from the clock) or Absent (ncns). Flips them off Not
+  // Arrived into the working crew status — the soft presence gate for routes.
+  const takeRollCall = async (employeeId: string, absent: boolean) => {
+    setRollCallId(employeeId);
+    try {
+      await apiClient.post('/roll-call', { employee_id: employeeId, date: todayStr(), ncns: absent });
+      await load();
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not record roll call.'));
+    } finally {
+      setRollCallId(null);
+    }
   };
 
   const overrideAssignee = (routeNumber: number, member: CrewMember) => {
@@ -567,7 +585,27 @@ export default function RouteSortScreen() {
                         </Text>
                       </View>
                     )}
-                    {!off && (
+                    {/* Roll call for a not-arrived member; else the done-for-day action. */}
+                    {!off && cs?.availability === 'not_arrived' ? (
+                      rollCallId === m.employee_id ? (
+                        <ActivityIndicator size="small" color={c.mutedForeground} />
+                      ) : (
+                        <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+                          <TouchableOpacity
+                            style={{ backgroundColor: '#047857', borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
+                            onPress={() => takeRollCall(m.employee_id, false)}
+                          >
+                            <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Present</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={{ borderWidth: 1, borderColor: '#FCD34D', borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
+                            onPress={() => takeRollCall(m.employee_id, true)}
+                          >
+                            <Text style={{ fontSize: fontSize.xs, color: '#B45309', fontWeight: fontWeight.semibold }}>Absent</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )
+                    ) : !off ? (
                       <TouchableOpacity
                         style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
                         onPress={() => markDeparted(m, name)}
@@ -577,7 +615,7 @@ export default function RouteSortScreen() {
                           ? <ActivityIndicator size="small" color={c.mutedForeground} />
                           : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Mark Done</Text>}
                       </TouchableOpacity>
-                    )}
+                    ) : null}
                   </View>
                   {stop && (
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>

@@ -48,9 +48,14 @@ def _ta():
     return SimpleNamespace(id=_TA, truck_id=_TRUCK, company_id=_CID, date=_DATE)
 
 
-def _db(members, *, own_member=None, route_first=None):
+def _rc(employee_id, status):
+    return SimpleNamespace(employee_id=employee_id, status=status, date=_DATE, company_id=_CID)
+
+
+def _db(members, *, own_member=None, route_first=None, roll_calls=None):
     """Mock Session. TruckAssignment list → [_ta()]; AssignmentMember list →
-    members; Employee names → simple objects; Route/DeliveryStop → none/empty."""
+    members; Employee names → simple objects; Route/DeliveryStop → none/empty;
+    ShiftRollCall list → roll_calls (default none → everyone 'not_arrived')."""
     db = MagicMock()
 
     def _query(*models):
@@ -60,6 +65,7 @@ def _db(members, *, own_member=None, route_first=None):
         from app.models.truck import Truck
         from app.models.walker_route import Route
         from app.models.delivery_stop import DeliveryStop
+        from app.models.shift_roll_call import ShiftRollCall
         model = models[0]
         q = MagicMock()
 
@@ -73,6 +79,8 @@ def _db(members, *, own_member=None, route_first=None):
             elif model is AssignmentMember:
                 f.all.return_value = members
                 f.first.return_value = own_member
+            elif model is ShiftRollCall:
+                f.all.return_value = roll_calls or []
             elif model is Employee:
                 f.all.return_value = [
                     SimpleNamespace(id=m.employee_id, name=f"emp-{str(m.employee_id)[:4]}")
@@ -157,3 +165,36 @@ class TestCrewStatusEnrichment:
         resp = self._run([trainer, trainee])
         trainee_out = next(mm for mm in resp.trucks[0].members if mm.role == "trainee")
         assert trainee_out.orphaned is True
+
+
+class TestCrewStatusPresenceGate:
+    """Roll-call presence gates availability (crew-roster requirement)."""
+
+    def _run(self, members, **kw):
+        return get_crew_status(target_date=_DATE, caller=_caller("dispatch"), _=None, db=_db(members, **kw))
+
+    def test_no_roll_call_is_not_arrived(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m])                      # no roll_calls → not_arrived
+        walker = resp.trucks[0].members[0]
+        assert walker.availability == "not_arrived"
+        assert resp.trucks[0].available_for_route == 0
+
+    def test_present_roll_call_becomes_available(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m], roll_calls=[_rc(_WALKER, "present")])
+        walker = resp.trucks[0].members[0]
+        assert walker.availability == "available"
+        assert resp.trucks[0].available_for_route == 1
+
+    def test_late_roll_call_counts_present(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m], roll_calls=[_rc(_WALKER, "late")])
+        assert resp.trucks[0].members[0].availability == "available"
+
+    def test_ncns_is_off_crew(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m], roll_calls=[_rc(_WALKER, "ncns")])
+        walker = resp.trucks[0].members[0]
+        assert walker.availability == "off_crew"
+        assert resp.trucks[0].available_for_route == 0

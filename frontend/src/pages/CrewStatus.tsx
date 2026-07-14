@@ -23,6 +23,7 @@ import type {
  */
 
 const AVAIL_LABEL: Record<CrewStatusMember['availability'], string> = {
+  not_arrived: 'Not arrived',
   available: 'Available',
   on_route_early: 'On route (early)',
   on_route_returning: 'On route (returning)',
@@ -30,6 +31,7 @@ const AVAIL_LABEL: Record<CrewStatusMember['availability'], string> = {
   off_crew: 'Off crew',
 };
 const AVAIL_COLOR: Record<CrewStatusMember['availability'], string> = {
+  not_arrived: 'text-slate-600 bg-slate-100',
   available: 'text-emerald-600 bg-emerald-50',
   on_route_early: 'text-amber-600 bg-amber-50',
   on_route_returning: 'text-sky-600 bg-sky-50',
@@ -84,6 +86,21 @@ export default function CrewStatus() {
       await load();
     } catch (e) {
       setError(errorText(e, 'Could not mark departed.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Roll call (ADR-198): mark a not-arrived member in. The server derives
+  // early/present/late from the clock; absent = ncns. Flips them off Not Arrived
+  // into the working crew status (the soft presence gate).
+  const takeRollCall = async (m: CrewStatusMember, absent: boolean) => {
+    setBusy(m.employee_id);
+    try {
+      await axiosClient.post('/roll-call', { employee_id: m.employee_id, date, ncns: absent });
+      await load();
+    } catch (e) {
+      setError(errorText(e, 'Could not record roll call.'));
     } finally {
       setBusy(null);
     }
@@ -159,6 +176,7 @@ export default function CrewStatus() {
                 busy={busy}
                 onDepart={markDeparted}
                 onReassign={() => setReassign(m)}
+                onRollCall={takeRollCall}
               />
             ))}
           </div>
@@ -191,15 +209,18 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
 }
 
 function MemberRow({
-  m, isDispatch, busy, onDepart, onReassign,
+  m, isDispatch, busy, onDepart, onReassign, onRollCall,
 }: {
   m: CrewStatusMember;
   isDispatch: boolean;
   busy: string | null;
   onDepart: (memberId: string) => void;
   onReassign: () => void;
+  onRollCall: (m: CrewStatusMember, absent: boolean) => void;
 }) {
   const off = m.membership_status !== 'active';
+  const notArrived = m.availability === 'not_arrived';
+  const rollBusy = busy === m.employee_id;
   return (
     <div className="flex items-center gap-3 py-2">
       <div className="flex-1 min-w-0">
@@ -230,6 +251,27 @@ function MemberRow({
         </span>
       )}
 
+      {/* Roll call: mark a not-arrived member in (Present) or absent. Dispatch can
+          mark any crew member; the server derives early/present/late from the clock. */}
+      {isDispatch && notArrived && (
+        <div className="flex items-center gap-1">
+          <button
+            className="text-xs text-white bg-emerald-600 rounded px-2 py-1 hover:opacity-90 disabled:opacity-50"
+            disabled={rollBusy}
+            onClick={() => onRollCall(m, false)}
+          >
+            {rollBusy ? '…' : 'Present'}
+          </button>
+          <button
+            className="text-xs text-amber-700 border border-amber-300 rounded px-2 py-1 hover:bg-amber-50 disabled:opacity-50"
+            disabled={rollBusy}
+            onClick={() => onRollCall(m, true)}
+          >
+            Absent
+          </button>
+        </div>
+      )}
+
       {isDispatch && m.orphaned && (
         <button
           onClick={onReassign}
@@ -239,7 +281,7 @@ function MemberRow({
         </button>
       )}
 
-      {isDispatch && !off && m.member_id && m.role !== 'driver' && (
+      {isDispatch && !off && !notArrived && m.member_id && m.role !== 'driver' && (
         <button
           className="text-xs text-muted-foreground border border-border rounded px-2 py-1 hover:bg-accent disabled:opacity-50"
           disabled={busy === m.member_id}

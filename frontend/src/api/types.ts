@@ -835,7 +835,7 @@ export interface CrewAvailabilityEntry {
   name: string | null;
   role: string;
   membership_status: 'active' | 'departed' | 'transferred';
-  availability: 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
+  availability: 'not_arrived' | 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
   route_completion_pct: number | null;
 }
 
@@ -853,7 +853,7 @@ export interface CrewStatusMember {
   name: string | null;
   role: string;
   membership_status: 'active' | 'departed' | 'transferred';
-  availability: 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
+  availability: 'not_arrived' | 'available' | 'on_route_early' | 'on_route_returning' | 'done' | 'off_crew';
   route_completion_pct: number | null;
   trip_count: number;
   paired_trainer_id: string | null;

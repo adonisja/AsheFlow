@@ -14,10 +14,11 @@ from app.services.crew_availability import (
 )
 
 
-def _m(role="walker", status="active", has_route=False, pct=None):
+def _m(role="walker", status="active", has_route=False, pct=None, present=True):
     return MemberProgress(
         employee_id=uuid.uuid4(), name="X", role=role,
         membership_status=status, has_active_route=has_route, route_completion_pct=pct,
+        present=present,
     )
 
 
@@ -40,6 +41,39 @@ class TestClassifyMember:
 
     def test_route_above_threshold_is_returning(self):
         assert classify_member(_m(has_route=True, pct=0.80)).availability == "on_route_returning"
+
+    # Presence gate (roll call) — the crew-roster requirement.
+    def test_not_yet_marked_present_is_not_arrived(self):
+        # present=None → on the crew but roll call not taken → Not Arrived.
+        assert classify_member(_m(present=None)).availability == "not_arrived"
+
+    def test_marked_present_becomes_available(self):
+        # roll call marked them in → falls through to the normal derivation.
+        assert classify_member(_m(present=True)).availability == "available"
+
+    def test_absent_ncns_is_off_crew(self):
+        assert classify_member(_m(present=False)).availability == "off_crew"
+
+    def test_not_arrived_on_route_still_not_arrived(self):
+        # Presence dominates: even with a route, no roll call → Not Arrived.
+        assert classify_member(_m(present=None, has_route=True, pct=0.9)).availability == "not_arrived"
+
+
+class TestPresenceExcludedFromAvailableCount:
+    def test_not_arrived_not_counted_available(self):
+        members = [
+            _m(present=None),   # not arrived → NOT available
+            _m(present=None),   # not arrived → NOT available
+            _m(present=True),   # available
+        ]
+        _entries, active_crew, available = derive_availability(members)
+        assert available == 1          # only the marked-present member
+        assert active_crew == 3        # membership still active for all three
+
+    def test_marking_present_increments_available(self):
+        before = derive_availability([_m(present=None)])[2]
+        after = derive_availability([_m(present=True)])[2]
+        assert before == 0 and after == 1
 
 
 class TestDeriveAvailability:

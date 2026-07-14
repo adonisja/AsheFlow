@@ -65,7 +65,7 @@ class CrewStatusMember(BaseModel):
     name: Optional[str] = None
     role: str
     membership_status: str                    # active | departed | transferred
-    availability: str                         # available|on_route_early|on_route_returning|done|off_crew
+    availability: str                         # not_arrived|available|on_route_early|on_route_returning|done|off_crew
     route_completion_pct: Optional[float] = None
     trip_count: int = 0
     # Pairing (ADR-199): trainee → their trainer; trainer → their trainee.

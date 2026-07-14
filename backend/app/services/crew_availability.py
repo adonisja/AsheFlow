@@ -34,6 +34,13 @@ class MemberProgress:
     membership_status: str          # active | departed | transferred
     has_active_route: bool          # assigned/in_progress route not yet returned
     route_completion_pct: Optional[float]   # completed stops / total, None if no active route
+    # Presence axis (ADR-198/199 roll call). None = on the crew but roll call has
+    # not marked them present yet → 'not_arrived' (NOT available). True once a
+    # ShiftRollCall marks them early/present/late. False = explicitly absent
+    # (ncns) → off_crew. Default True keeps the F5 / route-sizing callers that do
+    # not pass presence unchanged (commit-sort runs pre-arrival, roll call is not
+    # its gate there).
+    present: Optional[bool] = True
 
 
 @dataclass
@@ -42,15 +49,20 @@ class Availability:
     name: Optional[str]
     role: str
     membership_status: str
-    availability: str               # available | on_route_early | on_route_returning | done | off_crew
+    availability: str               # not_arrived | available | on_route_early | on_route_returning | done | off_crew
     route_completion_pct: Optional[float]
 
 
 def classify_member(m: MemberProgress, threshold: float = DEFAULT_COMPLETION_THRESHOLD) -> Availability:
-    if m.membership_status != "active":
+    if m.membership_status != "active" or m.present is False:
+        # Departed/transferred, or explicitly absent (ncns) → not crew today.
         avail = "off_crew"
+    elif m.present is None:
+        # On the crew but roll call has not marked them present yet → Not Arrived.
+        # Excluded from the available-for-route count until they are marked in.
+        avail = "not_arrived"
     elif not m.has_active_route:
-        # active, no route out → free to take one (freshly available, or done & back)
+        # active + present, no route out → free to take one (freshly in, or done & back)
         avail = "available"
     elif m.route_completion_pct is not None and m.route_completion_pct > threshold:
         avail = "on_route_returning"   # near done — a next route can wait for them

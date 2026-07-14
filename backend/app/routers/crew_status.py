@@ -27,6 +27,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.truck import Truck
 from app.models.walker_route import Route
 from app.models.delivery_stop import DeliveryStop
+from app.models.shift_roll_call import ShiftRollCall
 from app.schemas.assignment_member import (
     CrewStatusMember, CrewStatusTruck, CrewStatusResponse,
 )
@@ -86,6 +87,27 @@ def get_crew_status(
         ).all()
     } if emp_ids else {}
 
+    # Roll-call presence for the date (ADR-198/199), one query for the whole set.
+    # present tri-state: True = early/present/late; False = ncns (absent);
+    # None = no record yet → 'not_arrived'. This is the gate that flips a member
+    # from Not Arrived into the working crew status once roll call is taken.
+    roll_calls = {
+        rc.employee_id: rc.status
+        for rc in db.query(ShiftRollCall).filter(
+            ShiftRollCall.employee_id.in_(emp_ids),
+            ShiftRollCall.date == target_date,
+            ShiftRollCall.company_id == cid,
+        ).all()
+    } if emp_ids else {}
+
+    def _present(employee_id):
+        st = roll_calls.get(employee_id)
+        if st is None:
+            return None
+        if st == "ncns":
+            return False
+        return True   # early | present | late
+
     trucks: list[CrewStatusTruck] = []
     for ta in truck_assignments:
         members = [m for m in all_members if m.assignment_id == ta.id]
@@ -119,6 +141,7 @@ def get_crew_status(
             progress.append(MemberProgress(
                 employee_id=m.employee_id, name=names.get(m.employee_id), role=m.role,
                 membership_status=m.status, has_active_route=has_route, route_completion_pct=pct,
+                present=_present(m.employee_id),
             ))
 
         _entries, active_crew, available = derive_availability(progress)
@@ -134,6 +157,7 @@ def get_crew_status(
                     employee_id=m.employee_id, name=names.get(m.employee_id), role=m.role,
                     membership_status=m.status, has_active_route=(pct_by_emp.get(m.employee_id) is not None),
                     route_completion_pct=pct_by_emp.get(m.employee_id),
+                    present=_present(m.employee_id),
                 )
             )
             paired_trainer_id = m.paired_trainer_id if m.role == ROLE_TRAINEE else None

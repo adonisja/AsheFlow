@@ -19,6 +19,7 @@ import type {
  */
 
 const AVAIL_LABEL: Record<CrewAvailabilityEntry['availability'], string> = {
+  not_arrived: 'Not arrived',
   available: 'Available',
   on_route_early: 'On route (early)',
   on_route_returning: 'On route (returning)',
@@ -26,6 +27,7 @@ const AVAIL_LABEL: Record<CrewAvailabilityEntry['availability'], string> = {
   off_crew: 'Off crew',
 };
 const AVAIL_COLOR: Record<CrewAvailabilityEntry['availability'], string> = {
+  not_arrived: 'text-slate-600 bg-slate-100',
   available: 'text-emerald-600 bg-emerald-50',
   on_route_early: 'text-amber-600 bg-amber-50',
   on_route_returning: 'text-sky-600 bg-sky-50',
