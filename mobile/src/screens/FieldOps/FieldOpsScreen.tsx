@@ -35,7 +35,7 @@
  * expanded and highlighted. Locked future steps are hidden entirely.
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
@@ -128,7 +128,11 @@ type AP        = { id: string; location: string; eta: string | null; status: str
 type CheckInRecord = { check_in_number: number; routes_remaining: number; help_requested: boolean; working_crew_count: number; ncns_count: number; submitted_at: string };
 type RTSReport = { id: string; status: string; crew_confirmed: number; total_rts: number; rts_packages: { reason: string; count: number }[]; dispatch_notes: string | null };
 // ADR-181 dock flow (tote check-off + driver load confirmation)
-type RosterTote  = { bag_id: string; package_count: number; ov_count: number; checked: boolean; checked_by_name: string | null };
+type RosterTote  = {
+  bag_id: string; package_count: number; ov_count: number;
+  checked: boolean; checked_by_name: string | null;
+  dock_tags: string[]; pull_tbas: string[]; rider_count: number;
+};
 type TruckRoster = {
   truck_id: string; zone_label: string; totes: RosterTote[];
   tote_count: number; checked_count: number;
@@ -1260,8 +1264,32 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
 function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () => void; c: ThemeColors }) {
   const [togglingBag, setTogglingBag] = useState<string | null>(null);
   const [confirming,  setConfirming]  = useState(false);
+  const [filter,      setFilter]      = useState('');
+  const [hideChecked, setHideChecked] = useState(false);
+  const [collapsed,   setCollapsed]   = useState<Record<string, boolean>>({});
 
   const unchecked = roster.tote_count - roster.checked_count;
+  const pct = roster.tote_count > 0 ? Math.round((roster.checked_count / roster.tote_count) * 100) : 0;
+
+  // Group by dock tag (how totes are physically staged on the dock). A tote may
+  // carry multiple tags; group by its first, fall back to "Unstaged". Filter by
+  // bag or dock tag; optionally hide already-loaded totes.
+  const groups = useMemo(() => {
+    const q = filter.trim().toUpperCase();
+    const matches = (t: RosterTote) =>
+      (!hideChecked || !t.checked) &&
+      (!q || t.bag_id.toUpperCase().includes(q) || (t.dock_tags ?? []).some(d => d.toUpperCase().includes(q)));
+    const by: Record<string, RosterTote[]> = {};
+    for (const t of roster.totes) {
+      if (!matches(t)) continue;
+      const key = (t.dock_tags ?? [])[0] || 'Unstaged';
+      (by[key] ??= []).push(t);
+    }
+    return Object.keys(by).sort().map(label => {
+      const totes = by[label];
+      return { label, totes, loaded: totes.filter(t => t.checked).length };
+    });
+  }, [roster.totes, filter, hideChecked]);
 
   const toggle = async (tote: RosterTote) => {
     if (roster.load_confirmed || togglingBag) return;
@@ -1317,38 +1345,74 @@ function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () 
     );
   }
 
+  const noMatch = groups.length === 0;
+
   return (
     <Card c={c}>
       <SectionHeader num="6" title="Load Truck"
         subtitle="Check each tote off as it goes on the truck, then confirm your load. Dispatch sees this live." c={c} />
-      <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>
-        {roster.checked_count}/{roster.tote_count} totes checked{roster.zone_label ? ` · ${roster.zone_label}` : ''}
-      </Text>
-      {roster.totes.map(t => (
+
+      {/* Progress header */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
+        <View style={{ flex: 1, height: 6, borderRadius: 999, backgroundColor: c.border, overflow: 'hidden' }}>
+          <View style={{ width: `${pct}%`, height: '100%', borderRadius: 999, backgroundColor: pct === 100 ? '#0FA870' : c.primary }} />
+        </View>
+        <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground }}>
+          {roster.checked_count}/{roster.tote_count} loaded
+        </Text>
+      </View>
+
+      {/* Filter + hide-checked */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
+        <TextInput
+          value={filter}
+          onChangeText={setFilter}
+          placeholder="Filter bag or dock…"
+          placeholderTextColor={c.mutedForeground}
+          autoCapitalize="characters"
+          style={{ flex: 1, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
+            borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs + 2 }}
+        />
         <TouchableOpacity
-          key={t.bag_id}
-          onPress={() => toggle(t)}
-          disabled={togglingBag !== null}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-            paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: c.border }}
+          onPress={() => setHideChecked(v => !v)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
         >
-          <View style={{ width: 24, height: 24, borderRadius: 6, borderWidth: 2,
-            borderColor: t.checked ? '#0FA870' : c.border,
-            backgroundColor: t.checked ? '#0FA870' : 'transparent',
-            alignItems: 'center', justifyContent: 'center' }}>
-            {togglingBag === t.bag_id
-              ? <ActivityIndicator size="small" color={t.checked ? '#fff' : c.primary} />
-              : t.checked ? <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>✓</Text> : null}
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>{t.bag_id}</Text>
-            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
-              {t.package_count} pkgs{t.ov_count ? ` · ${t.ov_count} OV` : ''}
-              {t.checked && t.checked_by_name ? ` · ${t.checked_by_name}` : ''}
-            </Text>
-          </View>
+          <Switch value={hideChecked} onValueChange={setHideChecked} />
+          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>Hide loaded</Text>
         </TouchableOpacity>
-      ))}
+      </View>
+
+      {noMatch ? (
+        <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, paddingVertical: spacing.md, textAlign: 'center' }}>
+          {roster.tote_count === 0 ? 'No totes on this roster.' : 'No totes match your filter.'}
+        </Text>
+      ) : groups.map(g => {
+        const isCollapsed = collapsed[g.label];
+        const allLoaded = g.loaded === g.totes.length;
+        return (
+          <View key={g.label} style={{ marginBottom: spacing.xs }}>
+            {/* Section header */}
+            <TouchableOpacity
+              onPress={() => setCollapsed(p => ({ ...p, [g.label]: !p[g.label] }))}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+                paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}
+            >
+              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.foreground, flex: 1 }}>
+                {g.label}
+              </Text>
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: allLoaded ? '#0FA870' : c.mutedForeground }}>
+                {g.loaded}/{g.totes.length}{allLoaded ? ' ✓' : ''}
+              </Text>
+              <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground }}>{isCollapsed ? '▸' : '▾'}</Text>
+            </TouchableOpacity>
+            {!isCollapsed && g.totes.map(t => (
+              <ToteRow key={t.bag_id} tote={t} toggling={togglingBag === t.bag_id}
+                disabled={togglingBag !== null} onPress={() => toggle(t)} c={c} />
+            ))}
+          </View>
+        );
+      })}
+
       <View style={{ marginTop: spacing.md }}>
         <Btn
           label={unchecked > 0 ? `Confirm Load (${unchecked} unchecked)` : 'Confirm Load'}
@@ -1356,6 +1420,48 @@ function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () 
         />
       </View>
     </Card>
+  );
+}
+
+function ToteRow({ tote: t, toggling, disabled, onPress, c }: {
+  tote: RosterTote; toggling: boolean; disabled: boolean; onPress: () => void; c: ThemeColors;
+}) {
+  const pullCount = t.pull_tbas?.length ?? 0;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+        paddingVertical: spacing.sm, paddingLeft: spacing.sm }}
+    >
+      <View style={{ width: 24, height: 24, borderRadius: 6, borderWidth: 2,
+        borderColor: t.checked ? '#0FA870' : c.border,
+        backgroundColor: t.checked ? '#0FA870' : 'transparent',
+        alignItems: 'center', justifyContent: 'center' }}>
+        {toggling
+          ? <ActivityIndicator size="small" color={t.checked ? '#fff' : c.primary} />
+          : t.checked ? <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>✓</Text> : null}
+      </View>
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>{t.bag_id}</Text>
+          {t.ov_count > 0 && (
+            <View style={{ backgroundColor: '#E0F2FE', borderRadius: radius.full, paddingHorizontal: spacing.xs + 2, paddingVertical: 1 }}>
+              <Text style={{ fontSize: fontSize.xs, color: '#0369A1', fontWeight: fontWeight.semibold }}>{t.ov_count} OV</Text>
+            </View>
+          )}
+          {pullCount > 0 && (
+            <View style={{ backgroundColor: '#FEF3C7', borderRadius: radius.full, paddingHorizontal: spacing.xs + 2, paddingVertical: 1 }}>
+              <Text style={{ fontSize: fontSize.xs, color: '#B45309', fontWeight: fontWeight.semibold }}>⚠ pull {pullCount} at AP</Text>
+            </View>
+          )}
+        </View>
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
+          {t.package_count} pkgs
+          {t.checked && t.checked_by_name ? ` · ${t.checked_by_name}` : ''}
+        </Text>
+      </View>
+    </TouchableOpacity>
   );
 }
 
