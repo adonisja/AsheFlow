@@ -149,6 +149,7 @@ backend/app/routers/walker_routes.py
 backend/tests/routers/test_arrival_confirm.py
 backend/tests/routers/test_back_at_truck.py
 backend/tests/routers/test_reassign_trainee.py
+backend/tests/routers/test_peer_ratings.py
 backend/app/routers/rts.py
 backend/app/routers/building_profiles.py
 backend/app/routers/building_profile_library.py

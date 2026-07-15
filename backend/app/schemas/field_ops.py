@@ -51,16 +51,21 @@ class DepartureResponse(DepartureCreate):
 
 
 class WalkerRatingCreate(BaseModel):
-    driver_id: UUID
-    walker_id: UUID
+    """Peer rating (ADR-201). rater is the authenticated caller — never trusted
+    from the body. Attendance is roll call's job now, so a rating is stars+comment."""
+    ratee_id: UUID
     date: date
-    present: bool = True
-    stars: Optional[int] = None   # null for no-shows
+    stars: int = Field(..., ge=1, le=5)
     comment: Optional[str] = Field(None, max_length=500)
 
 
-class WalkerRatingResponse(WalkerRatingCreate):
+class WalkerRatingResponse(BaseModel):
     id: UUID
+    rater_id: UUID
+    ratee_id: UUID
+    date: date
+    stars: int
+    comment: Optional[str] = None
     rated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

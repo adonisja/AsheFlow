@@ -303,6 +303,117 @@ function PreferenceAnalytics() {
 // ---------------------------------------------------------------------------
 // Field staff preference page
 // ---------------------------------------------------------------------------
+// Rate Team (ADR-201) — peer ratings: rate each teammate on your truck today.
+// ---------------------------------------------------------------------------
+function RateTeamSection({ myId }: { myId: string }) {
+  const today = getLocalYMD();
+  const [crew, setCrew] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [given, setGiven] = useState<Record<string, { stars: number; comment: string | null }>>({});
+  const [draft, setDraft] = useState<Record<string, { stars: number; comment: string }>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [notReady, setNotReady] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const [crewRes, mineRes] = await Promise.all([
+        axiosClient.get(`/field-ops/crew/${myId}`),
+        axiosClient.get(`/field-ops/rating/by/${myId}`, { params: { target_date: today } }),
+      ]);
+      setCrew((crewRes.data ?? []).filter((m: any) => m.id !== myId));
+      const g: Record<string, { stars: number; comment: string | null }> = {};
+      for (const r of (mineRes.data ?? [])) g[r.ratee_id] = { stars: r.stars, comment: r.comment };
+      setGiven(g);
+    } catch {
+      setCrew([]);
+    }
+  };
+  useEffect(() => { if (myId) load(); }, [myId]);
+
+  const submit = async (rateeId: string) => {
+    const d = draft[rateeId];
+    if (!d || !d.stars) { setErr('Pick a star rating first.'); return; }
+    setBusy(rateeId); setErr(null); setNotReady(null);
+    try {
+      await axiosClient.post('/field-ops/rating', {
+        ratee_id: rateeId, date: today, stars: d.stars, comment: d.comment || null,
+      });
+      await load();
+    } catch (e: any) {
+      const msg = errorText(e, 'Could not submit rating.');
+      // The window-not-open / not-departed case is informational, not an error.
+      if (/depart|window/i.test(msg)) setNotReady(msg); else setErr(msg);
+    } finally { setBusy(null); }
+  };
+
+  if (!crew.length) {
+    return (
+      <Section icon={Users} title="Rate Team" iconColor="text-primary">
+        <p className="text-sm text-subtle">No teammates on your truck today to rate.</p>
+      </Section>
+    );
+  }
+
+  return (
+    <Section icon={Users} title="Rate Team" iconColor="text-primary">
+      <p className="text-sm text-subtle mb-3">
+        Rate each teammate on your truck for today. One rating per person; ratings open once the
+        truck has departed. Unrated teammates aren't affected.
+      </p>
+      {err && <p className="text-xs text-danger mb-2">{err}</p>}
+      {notReady && <p className="text-xs text-warning mb-2">{notReady}</p>}
+      <div className="divide-y divide-border">
+        {crew.map(m => {
+          const done = given[m.id];
+          const d = draft[m.id] ?? { stars: 0, comment: '' };
+          return (
+            <div key={m.id} className="py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{m.name}</p>
+                  <p className="text-xs text-subtle capitalize">{m.role}</p>
+                </div>
+                {done ? (
+                  <span className="text-xs text-success font-semibold shrink-0">Rated {done.stars}★</span>
+                ) : (
+                  <div className="flex items-center gap-1 shrink-0">
+                    {[1, 2, 3, 4, 5].map(n => (
+                      <button
+                        key={n}
+                        onClick={() => setDraft(p => ({ ...p, [m.id]: { ...d, stars: n } }))}
+                        className={`text-lg leading-none ${n <= d.stars ? 'text-amber-500' : 'text-border'}`}
+                        aria-label={`${n} star`}
+                      >★</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {!done && (
+                <div className="mt-2 flex gap-2">
+                  <input
+                    value={d.comment}
+                    onChange={e => setDraft(p => ({ ...p, [m.id]: { ...d, comment: e.target.value } }))}
+                    placeholder="Optional comment"
+                    className="flex-1 p-2 rounded-lg border border-border bg-background text-xs"
+                  />
+                  <button
+                    onClick={() => submit(m.id)}
+                    disabled={busy === m.id || !d.stars}
+                    className="text-xs font-semibold text-white bg-primary rounded-lg px-3 py-1 disabled:opacity-50"
+                  >
+                    {busy === m.id ? '…' : 'Submit'}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 const Preferences = () => {
   const { groups = [], user } = useAuth();
   const isAdmin = groups.includes('admin');
@@ -460,6 +571,9 @@ const Preferences = () => {
 
       {myId && (
         <div className="space-y-6">
+          {/* Rate Team — peer ratings for today's truck crew (ADR-201) */}
+          <RateTeamSection myId={myId} />
+
           {/* Truck Reassignment — walker/trainer only, today-only */}
           {canReassign && (
             <Section icon={ArrowLeftRight} title="Truck Reassignment Request" iconColor="text-warning">

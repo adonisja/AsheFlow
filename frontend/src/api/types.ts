@@ -309,14 +309,14 @@ export interface AnchorPoint {
 // Walker Performance
 // ---------------------------------------------------------------------------
 
+// Peer-rating leaderboard row (ADR-201). Keyed by employee (any crew role).
 export interface WalkerSummary {
-  walker_id: string;
-  walker_name: string;
-  total_shifts: number;
-  present_shifts: number;
-  no_show_count: number;
+  employee_id: string;
+  employee_name: string;
+  role: string;
+  ratings_received: number;
+  distinct_raters: number;
   avg_stars: number | null;
-  presence_rate: number | null;
   grade: 'A' | 'B' | 'C' | 'D' | 'F' | null;
   grade_eligible: boolean;
 }
@@ -324,15 +324,21 @@ export interface WalkerSummary {
 export interface WalkerRatingDetail {
   id: string;
   date: string;
-  driver_id: string;
-  driver_name: string;
-  present: boolean;
-  stars: number | null;
+  rater_id: string;
+  rater_name: string;
+  stars: number;
   comment: string | null;
   rated_at: string;
 }
 
-export interface WalkerProfile extends WalkerSummary {
+// Profile keeps walker_* keys for the existing page contract (ADR-201).
+export interface WalkerProfile {
+  walker_id: string;
+  walker_name: string;
+  ratings_received: number;
+  distinct_raters: number;
+  avg_stars: number | null;
+  grade: 'A' | 'B' | 'C' | 'D' | 'F' | null;
   ratings: WalkerRatingDetail[];
 }
 
