@@ -11,6 +11,7 @@ import { useColors, useTheme } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } from '@env';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import MyPerformanceCard from '@components/MyPerformanceCard';
 
 const REGION           = (COGNITO_USER_POOL_ID ?? 'us-east-2_').split('_')[0];
 const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
@@ -266,6 +267,10 @@ export default function MyAccountScreen() {
             </View>
           )}
         </View>
+
+        {/* ── My Performance (our live stats; ADR-203). Amazon Scorecard (ADR-204) alongside. ── */}
+        <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>Performance</Text>
+        <MyPerformanceCard />
 
         {/* ── Security section ── */}
         <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>Security</Text>
