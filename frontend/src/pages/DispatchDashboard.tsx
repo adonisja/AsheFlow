@@ -1,5 +1,5 @@
 import { errorText } from '../utils/errorText';
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
@@ -585,6 +585,31 @@ export default function DispatchDashboard() {
     ? 'published'
     : 'dispatched';
 
+  // 0-confirmations guard: once dispatch is published (crew has been notified),
+  // flag trucks where nobody has confirmed yet, and the fleet-wide case where no
+  // truck has any confirmation. Before publish, zero confirmations is expected.
+  const confirmationGaps = useMemo(() => {
+    const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
+    const isLive = workflowStep === 'published' || workflowStep === 'finalized';
+    if (!isLive || Object.keys(crews).length === 0) {
+      return { active: false, emptyTrucks: [] as string[], fleetEmpty: false, totalConfirmed: 0 };
+    }
+    const emptyTrucks: string[] = [];
+    let totalConfirmed = 0;
+    for (const [truckId, crew] of Object.entries(crews)) {
+      if (!crew.length) continue;   // no crew assigned → nothing to confirm
+      const confirmed = crew.filter(m => confirmations[m.employee_id] === 'confirmed').length;
+      totalConfirmed += confirmed;
+      if (confirmed === 0) emptyTrucks.push(trucks[truckId]?.name || 'Unnamed truck');
+    }
+    return {
+      active: emptyTrucks.length > 0,
+      emptyTrucks,
+      fleetEmpty: totalConfirmed === 0,
+      totalConfirmed,
+    };
+  }, [dispatchData, confirmations, trucks, workflowStep]);
+
   // Hub trucks = assignments in 'planned' status while the overall workflow is published/finalized.
   // These were created via "+ Add Hub" and haven't had Publish Hub called yet.
   const hubTruckIds: Set<string> = new Set(
@@ -738,6 +763,32 @@ export default function DispatchDashboard() {
           >
             Retry now
           </button>
+        </div>
+      )}
+
+      {/* 0-confirmations guard (post-publish): no crew has confirmed on some/all trucks */}
+      {confirmationGaps.active && (
+        <div className={`rounded-lg border p-3 flex items-start gap-3 ${
+          confirmationGaps.fleetEmpty
+            ? 'border-danger/50 bg-danger/10 text-danger'
+            : 'border-warning/50 bg-warning/10 text-warning'
+        }`}>
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <div className="text-sm">
+            {confirmationGaps.fleetEmpty ? (
+              <p className="font-semibold">
+                No crew has confirmed on any truck yet. If dispatch was published a while ago, check
+                that notifications went out.
+              </p>
+            ) : (
+              <p className="font-medium">
+                <span className="font-semibold">
+                  {confirmationGaps.emptyTrucks.length} truck{confirmationGaps.emptyTrucks.length === 1 ? '' : 's'}
+                </span>{' '}
+                with no confirmations yet: {confirmationGaps.emptyTrucks.join(', ')}.
+              </p>
+            )}
+          </div>
         </div>
       )}
 

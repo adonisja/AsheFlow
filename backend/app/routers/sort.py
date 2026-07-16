@@ -311,6 +311,31 @@ def upload_manifest(
             detail="No packages could be parsed from the file. Check column headers.",
         )
 
+    # 0 valid packages but rows WERE parsed (all went to pending) → the file has
+    # rows but none carried a readable Tracking ID. The usual cause is uploading
+    # an already-enriched export (headers tba/normalised_address/block_key) instead
+    # of the raw Amazon manifest (needs a "Tracking ID" column). Reject BEFORE the
+    # destructive same-day state clear below, so a wrong file can't wipe a good
+    # manifest's zones/transfers.
+    if not result.packages:
+        logger.warning(
+            "manifest_ingest_no_valid_packages",
+            extra={
+                "company_id": str(caller.company_id),
+                "sort_date":  sort_date.isoformat(),
+                "filename":   file.filename,
+                "pending":    len(result.pending),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Parsed {len(result.pending)} rows but none had a readable 'Tracking ID'. "
+                "This usually means an already-enriched export was uploaded instead of the raw "
+                "Amazon manifest. Upload the raw manifest (with a 'Tracking ID' column)."
+            ),
+        )
+
     # ── ADR-177 decision (b): a new manifest invalidates the day's station
     # state. Bag IDs collide across manifests, so every same-day row derived
     # from the previous manifest (zones, transfers, check-offs, removals,
