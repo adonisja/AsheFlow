@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Literal
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
@@ -49,3 +49,32 @@ class ScorecardOut(BaseModel):
     created_at: datetime
     metrics: List[ScorecardMetricOut] = []
     model_config = ConfigDict(from_attributes=True)
+
+
+# ── Cross-check (ADR-204 Phase D): Amazon vs our data ───────────────────────────
+
+class CrossCheckItem(BaseModel):
+    metric: str                           # 'packages_delivered' | 'delivery_completion_dpmo'
+    amazon_value: Optional[float] = None  # parsed from the scorecard
+    our_value: Optional[float] = None     # computed from DeliveryStop/RTS for that employee+week
+    delta: Optional[float] = None         # amazon - ours
+    contestable: bool = False             # our data materially disagrees → worth appealing
+    note: str = ""
+
+
+class RtsReasonEvidence(BaseModel):
+    rts_type: str
+    count: int
+
+
+class CrossCheckResponse(BaseModel):
+    scorecard_id: UUID
+    week: str
+    week_start: date
+    week_end: date
+    our_delivered: int
+    our_rts: int
+    our_missing: int
+    items: List[CrossCheckItem] = []
+    # RTS reasons we recorded that week — the evidence for a completion-defect appeal.
+    rts_evidence: List[RtsReasonEvidence] = []

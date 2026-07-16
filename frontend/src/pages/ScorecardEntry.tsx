@@ -3,7 +3,7 @@ import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { Award, Plus, Trash2, Save, Upload } from 'lucide-react';
-import type { Employee, ScorecardMetric } from '../api/types';
+import type { Employee, ScorecardMetric, ScorecardCrossCheck } from '../api/types';
 
 /** Management: enter an Amazon weekly scorecard (ADR-204 Phase B, structured entry).
  *  Phase C will add file upload + auto-extract that pre-fills this same form. */
@@ -44,6 +44,7 @@ export default function ScorecardEntry() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [parsing, setParsing] = useState(false);
+  const [crossCheck, setCrossCheck] = useState<ScorecardCrossCheck | null>(null);
 
   // Phase C: upload the Amazon scorecard image → Textract draft pre-fills the form.
   // The manager reviews/edits before Save (a misparse never saves unreviewed).
@@ -91,9 +92,9 @@ export default function ScorecardEntry() {
     if (scope === 'individual' && !employeeId) { setError('Pick an employee for an individual scorecard.'); return; }
     const filled = metrics.filter(m => m.key.trim() && m.label.trim() && m.value.trim());
     if (filled.length === 0) { setError('Fill in at least one metric.'); return; }
-    setSaving(true);
+    setSaving(true); setCrossCheck(null);
     try {
-      await axiosClient.post('/scorecards', {
+      const { data } = await axiosClient.post('/scorecards', {
         week: week.trim(),
         scope,
         employee_id: scope === 'individual' ? employeeId : null,
@@ -101,6 +102,13 @@ export default function ScorecardEntry() {
         metrics: filled,
       });
       setSaved(true);
+      // Individual scorecards: immediately cross-check against our data.
+      if (scope === 'individual' && data?.id) {
+        try {
+          const xc = await axiosClient.get<ScorecardCrossCheck>(`/scorecards/${data.id}/cross-check`);
+          setCrossCheck(xc.data);
+        } catch { /* cross-check is best-effort */ }
+      }
     } catch (e) {
       setError(errorText(e, 'Could not save the scorecard.'));
     } finally { setSaving(false); }
@@ -117,6 +125,46 @@ export default function ScorecardEntry() {
 
       {error && <ErrorBanner message={error} />}
       {saved && <div className="rounded-lg border border-emerald-300/40 bg-emerald-50 p-3 text-sm text-emerald-700">Scorecard saved.</div>}
+
+      {/* Cross-check vs our data (ADR-204 Phase D) — surfaces contestable defects. */}
+      {crossCheck && (
+        <div className="card space-y-3">
+          <h2 className="text-sm font-bold text-foreground">Cross-check vs our records</h2>
+          <p className="text-xs text-muted-foreground">
+            Week {crossCheck.week} · our data: {crossCheck.our_delivered} delivered · {crossCheck.our_rts} RTS · {crossCheck.our_missing} missing
+          </p>
+          <div className="space-y-2">
+            {crossCheck.items.map(it => (
+              <div key={it.metric}
+                   className={`rounded-lg border p-3 ${it.contestable ? 'border-amber-400/50 bg-amber-50' : 'border-border bg-background'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-foreground capitalize">{it.metric.replace(/_/g, ' ')}</span>
+                  {it.contestable && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">CONTESTABLE</span>}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Amazon: <span className="font-medium text-foreground">{it.amazon_value ?? '—'}</span>
+                  {' · '}Ours: <span className="font-medium text-foreground">{it.our_value ?? '—'}</span>
+                  {it.delta != null && ` · Δ ${it.delta}`}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">{it.note}</p>
+              </div>
+            ))}
+          </div>
+          {crossCheck.rts_evidence.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">RTS evidence (appeal support)</p>
+              <ul className="space-y-0.5">
+                {crossCheck.rts_evidence.map(e => (
+                  <li key={e.rts_type} className="flex justify-between text-xs">
+                    <span className="text-foreground capitalize">{e.rts_type.replace(/_/g, ' ')}</span>
+                    <span className="text-muted-foreground">{e.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Upload → auto-extract (Phase C). Pre-fills the form; review before saving. */}
       <label className="card flex items-center gap-3 cursor-pointer hover:border-primary transition-colors">

@@ -1235,3 +1235,24 @@ export interface Scorecard {
   created_at: string;
   metrics: ScorecardMetric[];
 }
+
+// Scorecard cross-check (ADR-204 Phase D) — Amazon vs our data.
+export interface CrossCheckItem {
+  metric: string;
+  amazon_value: number | null;
+  our_value: number | null;
+  delta: number | null;
+  contestable: boolean;
+  note: string;
+}
+export interface ScorecardCrossCheck {
+  scorecard_id: string;
+  week: string;
+  week_start: string;
+  week_end: string;
+  our_delivered: number;
+  our_rts: number;
+  our_missing: number;
+  items: CrossCheckItem[];
+  rts_evidence: { rts_type: string; count: number }[];
+}

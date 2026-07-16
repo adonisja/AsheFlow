@@ -18,7 +18,10 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.scorecard import Scorecard, ScorecardMetric
-from app.schemas.scorecard import ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn
+from app.schemas.scorecard import (
+    ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn,
+    CrossCheckResponse, CrossCheckItem, RtsReasonEvidence,
+)
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/scorecards", tags=["scorecards"])
@@ -171,6 +174,130 @@ def get_week_scorecards(
         ).all()
     } if emp_ids else {}
     return [_serialize(sc, names.get(sc.employee_id)) for sc in rows]
+
+
+def _iso_week_range(week: str):
+    """"2026-W28" → (monday, sunday) dates, or None if unparseable."""
+    import re
+    from datetime import date as _date
+    m = re.match(r"^\s*(\d{4})-W(\d{1,2})\s*$", week)
+    if not m:
+        return None
+    year, wk = int(m.group(1)), int(m.group(2))
+    try:
+        monday = _date.fromisocalendar(year, wk, 1)
+        sunday = _date.fromisocalendar(year, wk, 7)
+        return monday, sunday
+    except ValueError:
+        return None
+
+
+def _num(value: str):
+    """Pull the first number out of a scorecard value string ("203", "14492.7",
+    "100.0%"). Returns None for tier words (PLATINUM)."""
+    import re
+    m = re.search(r"-?\d[\d,]*\.?\d*", (value or "").replace(",", ""))
+    return float(m.group(0)) if m else None
+
+
+@router.get("/{scorecard_id}/cross-check", response_model=CrossCheckResponse)
+def cross_check_scorecard(
+    scorecard_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_mgmt),
+    db: Session = Depends(get_db),
+):
+    """Compare an INDIVIDUAL scorecard's Amazon numbers against our own data for
+    that employee+week (ADR-204 D). Flags contestable defects and surfaces the RTS
+    reasons we recorded as appeal evidence. Only Packages Delivered and Delivery
+    Completion DPMO are cross-checkable — POD/DSB/CDF have no source of ours.
+    """
+    from sqlalchemy import func
+    from app.models.delivery_stop import DeliveryStop
+    from app.models.rts import RTSPackage, MissingPackage
+
+    cid = caller.company_id
+    sc = db.query(Scorecard).filter(
+        Scorecard.id == scorecard_id, Scorecard.company_id == cid,
+    ).first()
+    if not sc:
+        raise HTTPException(status_code=404, detail="Scorecard not found.")
+    if sc.scope != "individual" or sc.employee_id is None:
+        raise HTTPException(status_code=400, detail="Cross-check applies to individual scorecards only.")
+
+    rng = _iso_week_range(sc.week)
+    if rng is None:
+        raise HTTPException(status_code=422, detail=f"Cannot parse week '{sc.week}' into a date range.")
+    week_start, week_end = rng
+    emp = sc.employee_id
+
+    delivered = db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0)).filter(
+        DeliveryStop.walker_id == emp, DeliveryStop.company_id == cid,
+        DeliveryStop.status == "completed", DeliveryStop.completed_at.isnot(None),
+        func.date(DeliveryStop.completed_at) >= week_start,
+        func.date(DeliveryStop.completed_at) <= week_end,
+    ).scalar() or 0
+    our_rts = db.query(func.count(RTSPackage.id)).filter(
+        RTSPackage.walker_id == emp, RTSPackage.company_id == cid,
+        func.date(RTSPackage.recorded_at) >= week_start,
+        func.date(RTSPackage.recorded_at) <= week_end,
+    ).scalar() or 0
+    our_missing = db.query(func.count(MissingPackage.id)).filter(
+        MissingPackage.walker_id == emp, MissingPackage.company_id == cid,
+        func.date(MissingPackage.reported_at) >= week_start,
+        func.date(MissingPackage.reported_at) <= week_end,
+    ).scalar() or 0
+
+    metric_by_key = {m.key: m for m in sc.metrics}
+    items: list[CrossCheckItem] = []
+
+    # 1) Packages Delivered — direct count comparison.
+    az_delivered = _num(metric_by_key["packages_delivered"].value) if "packages_delivered" in metric_by_key else None
+    if az_delivered is not None:
+        delta = round(az_delivered - delivered, 1)
+        # Contestable if they differ by more than 5% (or >5 packages on small counts).
+        thresh = max(5, 0.05 * max(az_delivered, delivered, 1))
+        items.append(CrossCheckItem(
+            metric="packages_delivered", amazon_value=az_delivered, our_value=float(delivered),
+            delta=delta, contestable=abs(delta) > thresh,
+            note=("Our completed-stop total differs from Amazon's — verify scan/completion timing."
+                  if abs(delta) > thresh else "Matches our records."),
+        ))
+
+    # 2) Delivery Completion DPMO — our comparable = (rts+missing)/attempted * 1e6.
+    az_dpmo = _num(metric_by_key["delivery_completion_dpmo"].value) if "delivery_completion_dpmo" in metric_by_key else None
+    if az_dpmo is not None:
+        attempted = delivered + our_rts + our_missing
+        our_dpmo = round((our_rts + our_missing) / attempted * 1_000_000, 1) if attempted > 0 else None
+        delta = round(az_dpmo - our_dpmo, 1) if our_dpmo is not None else None
+        # Contestable if Amazon's DPMO is materially HIGHER than ours (they charged
+        # more defects than our RTS/missing record supports).
+        contestable = our_dpmo is not None and az_dpmo > our_dpmo * 1.25
+        items.append(CrossCheckItem(
+            metric="delivery_completion_dpmo", amazon_value=az_dpmo, our_value=our_dpmo,
+            delta=delta, contestable=contestable,
+            note=("Amazon's completion DPMO exceeds what our RTS/missing record supports — "
+                  "the RTS reasons below are appeal evidence." if contestable
+                  else "Consistent with our RTS/missing record."),
+        ))
+
+    # RTS reasons that week — the evidence for a completion-defect appeal.
+    evidence = [
+        RtsReasonEvidence(rts_type=rt, count=int(c))
+        for rt, c in db.query(RTSPackage.rts_type, func.count(RTSPackage.id))
+        .filter(
+            RTSPackage.walker_id == emp, RTSPackage.company_id == cid,
+            func.date(RTSPackage.recorded_at) >= week_start,
+            func.date(RTSPackage.recorded_at) <= week_end,
+        ).group_by(RTSPackage.rts_type)
+        .order_by(func.count(RTSPackage.id).desc()).all()
+    ]
+
+    return CrossCheckResponse(
+        scorecard_id=sc.id, week=sc.week, week_start=week_start, week_end=week_end,
+        our_delivered=int(delivered), our_rts=int(our_rts), our_missing=int(our_missing),
+        items=items, rts_evidence=evidence,
+    )
 
 
 @router.delete("/{scorecard_id}", status_code=status.HTTP_204_NO_CONTENT)
