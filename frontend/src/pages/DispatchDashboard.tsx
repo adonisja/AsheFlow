@@ -248,11 +248,20 @@ export default function DispatchDashboard() {
 
   const handleFinalize = () => {
     if (!dispatchData) return;
+    // Hard block (also enforced by the backend) — should be unreachable since the
+    // button is disabled, but guard the handler too.
+    if (confirmationGate.block) {
+      setError('Post Final Crews is blocked — under 50% confirmed on at least one truck.');
+      return;
+    }
+    const lowNote = confirmationGate.warn
+      ? `⚠ Low confirmations on ${confirmationGate.below80.map(t => `${t.name} (${t.confirmed}/${t.total})`).join(', ')}. Pending crew will not be posted. `
+      : '';
     openDialog({
       title: 'Post Final Crews',
-      message: `Post confirmed crews to each truck channel and the master list to #drivers-chat for ${selectedDate}?`,
+      message: `${lowNote}Post confirmed crews to each truck channel and the master list to #drivers-chat for ${selectedDate}?`,
       confirmLabel: 'Post Final Crews',
-      variant: 'default',
+      variant: confirmationGate.warn ? 'warning' : 'default',
       onConfirm: async () => {
         closeDialog();
         setIsFinalizing(true);
@@ -589,28 +598,33 @@ export default function DispatchDashboard() {
     ? 'published'
     : 'dispatched';
 
-  // 0-confirmations guard: once dispatch is published (crew has been notified),
-  // flag trucks where nobody has confirmed yet, and the fleet-wide case where no
-  // truck has any confirmation. Before publish, zero confirmations is expected.
-  const confirmationGaps = useMemo(() => {
+  // Finalize gate by per-truck confirmation rate (ADR-205). Rate = confirmed /
+  // crew on each truck. If ANY truck is < 50% → BLOCK Post Final Crews (posting
+  // would push near-empty crews to Discord). If any truck is 50–80% → WARN and
+  // require an explicit confirm. ≥ 80% everywhere → clean. Only relevant once
+  // published (before that, zero confirmations is expected). The backend enforces
+  // the < 50% block too — this is UX, not the safety boundary.
+  const FINALIZE_BLOCK = 0.5;
+  const FINALIZE_WARN = 0.8;
+  const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
-    const isLive = workflowStep === 'published' || workflowStep === 'finalized';
-    if (!isLive || Object.keys(crews).length === 0) {
-      return { active: false, emptyTrucks: [] as string[], fleetEmpty: false, totalConfirmed: 0 };
-    }
-    const emptyTrucks: string[] = [];
-    let totalConfirmed = 0;
-    for (const [truckId, crew] of Object.entries(crews)) {
-      if (!crew.length) continue;   // no crew assigned → nothing to confirm
-      const confirmed = crew.filter(m => confirmations[m.employee_id] === 'confirmed').length;
-      totalConfirmed += confirmed;
-      if (confirmed === 0) emptyTrucks.push(trucks[truckId]?.name || 'Unnamed truck');
-    }
+    const live = workflowStep === 'published';
+    const truckStats = Object.entries(crews)
+      .map(([truckId, crew]) => {
+        const total = crew.length;
+        const confirmed = crew.filter(m => confirmations[m.employee_id] === 'confirmed').length;
+        return { name: trucks[truckId]?.name || 'Unnamed truck', total, confirmed, rate: total ? confirmed / total : 1 };
+      })
+      .filter(t => t.total > 0);   // trucks with no crew don't gate
+
+    const below50 = truckStats.filter(t => t.rate < FINALIZE_BLOCK);
+    const below80 = truckStats.filter(t => t.rate < FINALIZE_WARN);
     return {
-      active: emptyTrucks.length > 0,
-      emptyTrucks,
-      fleetEmpty: totalConfirmed === 0,
-      totalConfirmed,
+      live,
+      truckStats,
+      block: live && below50.length > 0,       // hard gate
+      warn: live && below50.length === 0 && below80.length > 0,  // soft gate
+      below50, below80,
     };
   }, [dispatchData, confirmations, trucks, workflowStep]);
 
@@ -726,9 +740,11 @@ export default function DispatchDashboard() {
           </button>
           <button
             onClick={handleFinalize}
-            disabled={isFinalizing || isLoading || workflowStep !== 'published'}
+            disabled={isFinalizing || isLoading || workflowStep !== 'published' || confirmationGate.block}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Post confirmed crew lists to each truck channel and #drivers-chat"
+            title={confirmationGate.block
+              ? 'Blocked — under 50% confirmed on at least one truck'
+              : 'Post confirmed crew lists to each truck channel and #drivers-chat'}
           >
             {isFinalizing ? (
               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -769,26 +785,27 @@ export default function DispatchDashboard() {
         </div>
       )}
 
-      {/* 0-confirmations guard (post-publish): no crew has confirmed on some/all trucks */}
-      {confirmationGaps.active && (
+      {/* Finalize gate (post-publish): explains why Post Final Crews is blocked or
+          needs confirmation, with the low-confirmation trucks named (ADR-205). */}
+      {(confirmationGate.block || confirmationGate.warn) && (
         <div className={`rounded-lg border p-3 flex items-start gap-3 ${
-          confirmationGaps.fleetEmpty
+          confirmationGate.block
             ? 'border-danger/50 bg-danger/10 text-danger'
             : 'border-warning/50 bg-warning/10 text-warning'
         }`}>
           <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <div className="text-sm">
-            {confirmationGaps.fleetEmpty ? (
-              <p className="font-semibold">
-                No crew has confirmed on any truck yet. If dispatch was published a while ago, check
-                that notifications went out.
+            {confirmationGate.block ? (
+              <p className="font-medium">
+                <span className="font-semibold">Post Final Crews is blocked</span> — under 50% confirmed on{' '}
+                {confirmationGate.below50.map(t => `${t.name} (${t.confirmed}/${t.total})`).join(', ')}.
+                Wait for more confirmations or check that notifications went out.
               </p>
             ) : (
               <p className="font-medium">
-                <span className="font-semibold">
-                  {confirmationGaps.emptyTrucks.length} truck{confirmationGaps.emptyTrucks.length === 1 ? '' : 's'}
-                </span>{' '}
-                with no confirmations yet: {confirmationGaps.emptyTrucks.join(', ')}.
+                <span className="font-semibold">Low confirmations</span> — under 80% on{' '}
+                {confirmationGate.below80.map(t => `${t.name} (${t.confirmed}/${t.total})`).join(', ')}.
+                You can still post final crews, but you'll be asked to confirm.
               </p>
             )}
           </div>
