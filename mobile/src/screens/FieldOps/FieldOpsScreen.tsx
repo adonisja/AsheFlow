@@ -662,20 +662,11 @@ export default function FieldOpsScreen() {
 
   const s = styles(c);
 
-  if (loadingId) {
-    return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <View style={s.center}><ActivityIndicator size="large" color={c.primary} /></View>
-      </SafeAreaView>
-    );
-  }
-  if (!employeeId) {
-    return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <View style={s.center}><Text style={{ color: c.mutedForeground }}>Could not load profile.</Text></View>
-      </SafeAreaView>
-    );
-  }
+  // Wizard hooks — declared unconditionally, BEFORE any early return, per the
+  // Rules of Hooks. cursor starts at 0; the effect below syncs it to the live step.
+  const [cursor, setCursor] = useState(0);
+  const reviewingRef = useRef(false);
+  const fade = useRef(new Animated.Value(1)).current;
 
   // ── Derived gating flags ─────────────────────────────────────────────────
   const {
@@ -805,14 +796,10 @@ export default function FieldOpsScreen() {
     const i = allSteps.findIndex(st => !st.done);
     return i === -1 ? Math.max(0, allSteps.length - 1) : i;
   })();
-  const [cursor, setCursor] = useState(liveIndex);
-  // reviewing = the driver paged BACK to look at a completed step. While true we
-  // don't yank them forward when the live step advances; tapping the → / a later
-  // dot (or reaching the live step) clears it.
-  const reviewingRef = useRef(false);
-  const fade = useRef(new Animated.Value(1)).current;
 
   // Follow the live step forward unless the driver is reviewing a past step.
+  // (cursor / reviewingRef / fade are declared with the other hooks at the top of
+  // the component — BEFORE the early returns — to satisfy the Rules of Hooks.)
   useEffect(() => {
     const clampedLive = Math.max(0, Math.min(liveIndex, allSteps.length - 1));
     setCursor(prev => {
@@ -831,6 +818,23 @@ export default function FieldOpsScreen() {
       Animated.timing(fade, { toValue: 1, duration: 160, useNativeDriver: true }).start();
     });
   };
+
+  // Early-return guards AFTER all hooks/derivations (Rules of Hooks: hooks must
+  // run unconditionally every render).
+  if (loadingId) {
+    return (
+      <SafeAreaView style={s.safe} edges={['top']}>
+        <View style={s.center}><ActivityIndicator size="large" color={c.primary} /></View>
+      </SafeAreaView>
+    );
+  }
+  if (!employeeId) {
+    return (
+      <SafeAreaView style={s.safe} edges={['top']}>
+        <View style={s.center}><Text style={{ color: c.mutedForeground }}>Could not load profile.</Text></View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
