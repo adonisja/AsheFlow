@@ -11,14 +11,14 @@ against our DeliveryStop/RTS data. This router is public — no proprietary algo
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.scorecard import Scorecard, ScorecardMetric
-from app.schemas.scorecard import ScorecardCreate, ScorecardOut
+from app.schemas.scorecard import ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/scorecards", tags=["scorecards"])
@@ -99,6 +99,43 @@ def upsert_scorecard(
     db.commit()
     db.refresh(sc)
     return _serialize(sc, emp_name)
+
+
+@router.post("/parse", response_model=ScorecardDraftOut)
+async def parse_scorecard(
+    file: UploadFile = File(...),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_mgmt),
+):
+    """Auto-extract a scorecard image into a DRAFT (ADR-204 Phase C) using the
+    existing AWS Textract integration. Does NOT save — the manager reviews/edits
+    the draft in the entry form, then POSTs /scorecards. Falls back (503) to
+    manual entry when Textract is unavailable in this environment.
+    """
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(contents) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Scorecard image exceeds the 8 MB limit.")
+
+    from app.services.scorecard_ingestor import ScorecardIngestor
+    try:
+        draft = ScorecardIngestor(contents).parse()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Image parsing (Textract) is not available — enter the scorecard manually.",
+        ) from exc
+
+    return ScorecardDraftOut(
+        week=draft.week,
+        overall_standing=draft.overall_standing,
+        metrics=[
+            ScorecardMetricIn(
+                key=m.key, label=m.label, value=m.value, flag=m.flag, sort_order=m.sort_order,
+            ) for m in draft.metrics
+        ],
+    )
 
 
 @router.get("/me", response_model=List[ScorecardOut])

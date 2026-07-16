@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
-import { Award, Plus, Trash2, Save } from 'lucide-react';
+import { Award, Plus, Trash2, Save, Upload } from 'lucide-react';
 import type { Employee, ScorecardMetric } from '../api/types';
 
 /** Management: enter an Amazon weekly scorecard (ADR-204 Phase B, structured entry).
@@ -43,6 +43,36 @@ export default function ScorecardEntry() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [parsing, setParsing] = useState(false);
+
+  // Phase C: upload the Amazon scorecard image → Textract draft pre-fills the form.
+  // The manager reviews/edits before Save (a misparse never saves unreviewed).
+  const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';   // allow re-selecting the same file
+    if (!f) return;
+    setError(null); setSaved(false); setParsing(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const { data } = await axiosClient.post('/scorecards/parse', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (data.week) setWeek(data.week);
+      if (data.overall_standing) setOverall(data.overall_standing);
+      if (Array.isArray(data.metrics) && data.metrics.length) {
+        setMetrics(data.metrics.map((m: any, i: number) => ({
+          key: m.key, label: m.label, value: m.value ?? '',
+          unit: m.unit ?? null, tier: m.tier ?? null, flag: m.flag ?? null, sort_order: m.sort_order ?? i,
+        })));
+      }
+    } catch (err: any) {
+      const msg = errorText(err, 'Could not parse the scorecard.');
+      setError(err?.response?.status === 503
+        ? 'Auto-parse is unavailable here — enter the scorecard manually below.'
+        : msg);
+    } finally { setParsing(false); }
+  };
 
   useEffect(() => {
     axiosClient.get<Employee[]>('/employees/')
@@ -87,6 +117,18 @@ export default function ScorecardEntry() {
 
       {error && <ErrorBanner message={error} />}
       {saved && <div className="rounded-lg border border-emerald-300/40 bg-emerald-50 p-3 text-sm text-emerald-700">Scorecard saved.</div>}
+
+      {/* Upload → auto-extract (Phase C). Pre-fills the form; review before saving. */}
+      <label className="card flex items-center gap-3 cursor-pointer hover:border-primary transition-colors">
+        <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-accent shrink-0">
+          <Upload className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm font-medium text-foreground">{parsing ? 'Reading scorecard…' : 'Upload scorecard image'}</p>
+          <p className="text-xs text-muted-foreground">Auto-fills the fields below — review, then save. Or fill them manually.</p>
+        </div>
+        <input type="file" accept="image/*,.pdf" onChange={onUpload} disabled={parsing} className="hidden" />
+      </label>
 
       <div className="card space-y-3">
         <div className="flex flex-wrap gap-3">

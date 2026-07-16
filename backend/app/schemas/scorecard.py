@@ -30,6 +30,14 @@ class ScorecardCreate(BaseModel):
     metrics: List[ScorecardMetricIn] = []
 
 
+class ScorecardDraftOut(BaseModel):
+    """Parsed-but-unsaved scorecard (ADR-204 Phase C). The manager reviews/edits
+    this in the entry form, then saves via POST /scorecards."""
+    week: Optional[str] = None
+    overall_standing: Optional[str] = None
+    metrics: List[ScorecardMetricIn] = []
+
+
 class ScorecardOut(BaseModel):
     id: UUID
     week: str
