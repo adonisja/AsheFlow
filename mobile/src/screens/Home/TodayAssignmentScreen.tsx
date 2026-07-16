@@ -25,6 +25,19 @@ type Transfer = {
 
 type ConfirmStatus = 'pending' | 'confirmed' | 'declined';
 
+/** The truck's current active anchor point (where the crew meets the driver). */
+type AnchorPoint = {
+  location: string;
+  eta: string | null;
+  status: string;                 // preliminary | arrived
+  sequence: number;               // > 1 → the AP was relocated from an earlier spot
+  notes: string | null;
+  arrived_at: string | null;
+  confirmed_by_name?: string | null;
+  is_running_late: boolean;
+  expected_departure_at: string | null;
+};
+
 type Assignment = {
   truck_name: string;
   role: string;
@@ -39,6 +52,8 @@ type Assignment = {
   assignmentId: string | null;
   /** My ap_arrived_at stamp (paired trainees confirm arrival from here). */
   apArrivedAt: string | null;
+  /** The truck's current active anchor point (null until the driver sets one). */
+  anchorPoint: AnchorPoint | null;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -102,6 +117,7 @@ export default function TodayAssignmentScreen() {
       const pairedNames: string[] = [];
       let assignmentId: string | null = null;
       let apArrivedAt: string | null = null;
+      let myTruckId: string | null = null;
       if (dispatchRes.status === 'fulfilled') {
         const dispatch = dispatchRes.value.data;
         const assignedCrews: Record<string, CrewMember[] & { employee_id?: string }[]> =
@@ -113,7 +129,8 @@ export default function TodayAssignmentScreen() {
         );
 
         if (myTruckEntry) {
-          const [myTruckId, myCrew] = myTruckEntry as [string, any[]];
+          const [entryTruckId, myCrew] = myTruckEntry as [string, any[]];
+          myTruckId = entryTruckId;
           const ta: any = truckAssignments.find((t) => t.truck_id === myTruckId);
           if (ta?.status === 'completed') dispatchPhase = 'completed';
           else if (ta?.status === 'active') dispatchPhase = 'active';
@@ -141,6 +158,27 @@ export default function TodayAssignmentScreen() {
         }
       }
 
+      // The truck's active anchor point (where the crew meets the driver). All
+      // crew see it — location, ETA, arrival status, notes, relocation. Best-effort.
+      let anchorPoint: AnchorPoint | null = null;
+      if (myTruckId) {
+        try {
+          const apRes = await apiClient.get(`/anchor-points/truck/${myTruckId}/active`);
+          const ap = apRes.data;
+          anchorPoint = ap ? {
+            location: ap.location,
+            eta: ap.eta ?? null,
+            status: ap.status,
+            sequence: ap.sequence ?? 1,
+            notes: ap.notes ?? null,
+            arrived_at: ap.arrived_at ?? null,
+            confirmed_by_name: ap.confirmed_by_name ?? null,
+            is_running_late: !!ap.is_running_late,
+            expected_departure_at: ap.expected_departure_at ?? null,
+          } : null;
+        } catch { /* best-effort — no AP yet */ }
+      }
+
       // Most recent transfer for today (last element — ordered by transferred_at asc)
       const transferList: Transfer[] = transferRes.status === 'fulfilled' ? transferRes.value.data ?? [] : [];
       const transfer = transferList.length > 0 ? transferList[transferList.length - 1] : null;
@@ -158,6 +196,7 @@ export default function TodayAssignmentScreen() {
         confirmations,
         assignmentId,
         apArrivedAt,
+        anchorPoint,
       });
     } catch {
       setAssignment(null);
@@ -312,6 +351,57 @@ export default function TodayAssignmentScreen() {
           )}
         </View>
       )}
+
+      {/* Anchor Point — where the crew meets the driver. Shown to all crew once
+          the driver has set an AP: location + ETA + arrival status + notes, plus
+          relocation ("moved to a new spot") and running-late signals. */}
+      {assignment?.anchorPoint && (() => {
+        const ap = assignment.anchorPoint;
+        const arrived = ap.status === 'arrived';
+        const fmtT = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        return (
+          <View style={[s.apCard, {
+            backgroundColor: c.card, borderColor: ap.is_running_late ? '#E8443A' : c.border,
+          }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={[s.apLabel, { color: c.mutedForeground }]}>ANCHOR POINT</Text>
+              <View style={{
+                backgroundColor: (arrived ? '#0FA870' : ap.is_running_late ? '#E8443A' : '#0EA5D8') + '22',
+                borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2,
+              }}>
+                <Text style={{ fontSize: 11, fontWeight: '700',
+                  color: arrived ? '#0FA870' : ap.is_running_late ? '#E8443A' : '#0EA5D8' }}>
+                  {arrived ? 'Arrived' : ap.is_running_late ? 'Running late' : 'En route'}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={[s.apLocation, { color: c.foreground }]}>📍 {ap.location}</Text>
+
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
+              {ap.eta && !arrived && (
+                <Text style={[s.apMeta, { color: c.mutedForeground }]}>ETA {ap.eta}</Text>
+              )}
+              {arrived && ap.arrived_at && (
+                <Text style={[s.apMeta, { color: c.mutedForeground }]}>Arrived {fmtT(ap.arrived_at)}</Text>
+              )}
+              {arrived && ap.confirmed_by_name && (
+                <Text style={[s.apMeta, { color: c.mutedForeground }]}>Confirmed by {ap.confirmed_by_name}</Text>
+              )}
+              {ap.sequence > 1 && (
+                <Text style={[s.apMeta, { color: '#E8820C' }]}>⇄ Relocated (spot #{ap.sequence})</Text>
+              )}
+              {ap.expected_departure_at && (
+                <Text style={[s.apMeta, { color: c.mutedForeground }]}>Leaving ~{fmtT(ap.expected_departure_at)}</Text>
+              )}
+            </View>
+
+            {ap.notes ? (
+              <Text style={[s.apNotes, { color: c.foreground }]}>“{ap.notes}”</Text>
+            ) : null}
+          </View>
+        );
+      })()}
 
       {/* Pre-publish: make it clear why there's nothing to confirm yet */}
       {assignment?.dispatchPhase === 'planned' && (
@@ -476,6 +566,12 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   transferText:  { fontSize: fontSize.sm, color: c.foreground },
   transferBold:  { fontWeight: fontWeight.bold },
   transferTime:  { fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 },
+
+  apCard:        { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md },
+  apLabel:       { fontSize: fontSize.xs, fontWeight: fontWeight.bold, textTransform: 'uppercase', letterSpacing: 0.8 },
+  apLocation:    { fontSize: fontSize.md, fontWeight: fontWeight.semibold, marginTop: spacing.xs },
+  apMeta:        { fontSize: fontSize.xs },
+  apNotes:       { fontSize: fontSize.sm, fontStyle: 'italic', marginTop: spacing.xs },
 
   emptyCard:     { alignItems: 'center', marginTop: spacing.xxl, gap: spacing.sm },
   emptyIcon:     { fontSize: 48 },

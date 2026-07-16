@@ -40,6 +40,7 @@ class AnchorPointResponse(BaseModel):
     is_running_late: bool = False
     running_late_flagged_at: Optional[datetime] = None
     confirmed_by: Optional[UUID] = None
+    confirmed_by_name: Optional[str] = None
     confirmed_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
