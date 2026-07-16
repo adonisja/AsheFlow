@@ -40,7 +40,7 @@ import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl,
-  TextInput, Alert, Switch, Modal, FlatList,
+  TextInput, Alert, Switch, Modal, FlatList, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -729,6 +729,109 @@ export default function FieldOpsScreen() {
     !!returned,
   ].filter(Boolean).length : 0;
 
+  // ── Wizard step model (one step per page, fade + dots) ──────────────────────
+  // Each entry: reachable (is this step visible per the gates), done, section
+  // label, and the node to render. Only reachable steps become pages; the same
+  // gate booleans that drove the old checklist decide reachability, so the flow
+  // logic is unchanged — only the presentation (paged vs scrolled).
+  type WizStep = { key: string; section: string; reachable: boolean; done: boolean; node: React.ReactNode };
+  const allSteps: WizStep[] = isDriver ? [
+    { key: 'confirm', section: 'Offsite', reachable: true, done: confirmationStatus === 'confirmed',
+      node: <StepDispatchConfirmation employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'checkin', section: 'Offsite', reachable: confirmationStatus === 'confirmed', done: !!checkedIn,
+      node: <StepCheckIn employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'dock', section: 'Offsite', reachable: !!checkedIn, done: !!dockZone,
+      node: <StepDockAssignment dockZone={dockZone} c={c} /> },
+    { key: 'pretrip', section: 'Offsite', reachable: !!checkedIn, done: !!preTripDone,
+      node: <StepInspection employeeId={employeeId} shift={shift} inspType="pre_trip" stepNum="3"
+              title="Pre-Trip Inspection" subtitle="Inspect the truck before leaving the offsite." onDone={reload} c={c} /> },
+    { key: 'odo_start', section: 'Offsite', reachable: !!preTripDone, done: !!fuelLog?.odometer_start,
+      node: <StepStartOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'station_arrive', section: 'Station — Loading', reachable: !!fuelLog, done: !!stationLoadArrived,
+      node: <StepStationArrival employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'load', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived,
+      done: rosterAvailable ? !!roster?.load_confirmed : !!manifest,
+      node: rosterAvailable ? <StepLoadTruck roster={roster!} onDone={reload} c={c} />
+                            : <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} /> },
+    { key: 'depart', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived, done: !!departed,
+      node: <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'ap', section: 'Route', reachable: !!departed, done: !!(activeAP && activeAP.status !== 'preliminary'),
+      node: <StepAnchorPoint employeeId={employeeId} truckId={truckId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'ap_arrive', section: 'Route', reachable: !!departed && !!(activeAP && activeAP.status === 'preliminary'),
+      done: !!(activeAP && activeAP.status === 'arrived'),
+      node: activeAP ? <StepAPArrive ap={activeAP} onDone={reload} c={c} /> : null },
+    { key: 'ci1', section: 'Route', reachable: !!departed && !!(activeAP && activeAP.status === 'arrived'), done: !!checkIn1,
+      node: <StepCheckIn1 employeeId={employeeId} shift={shift} crew={crew} onDone={reload} c={c} /> },
+    { key: 'ratings', section: 'Route', reachable: !!departed && !!checkIn1 && ratableWalkers.length > 0,
+      done: walkers.length === 0 || Object.keys(walkerRatingsSubmitted).length > 0,
+      node: <StepWalkerRatings walkers={ratableWalkers} drafts={walkerDrafts}
+              submitted={walkerRatingsSubmitted} onUpdateDraft={updateDraft} c={c} /> },
+    { key: 'ci2', section: 'Route', reachable: !!departed && !!checkIn1, done: !!checkIn2,
+      node: <StepCheckInN employeeId={employeeId} shift={shift} num={2} time={CI_TIMES[1]}
+              record={checkIn2} prevRecord={checkIn1} crew={crew} onDone={reload} c={c} /> },
+    { key: 'ci3', section: 'Route', reachable: !!departed && !!checkIn2, done: !!checkIn3,
+      node: <StepCheckInN employeeId={employeeId} shift={shift} num={3} time={CI_TIMES[2]}
+              record={checkIn3} prevRecord={checkIn2} crew={crew} onDone={reload} c={c} /> },
+    { key: 'handoffs', section: 'Route',
+      reachable: !!departed && !!checkIn1 && !!rtsSummary && !!rtsSummary.routes.some(r => r.handoff_exists),
+      // Informational (ADR-193 D4) — doesn't gate the RTS step. done=true when all
+      // returned routes are driver-confirmed, so it never traps the live cursor.
+      done: !rtsSummary || rtsSummary.routes.filter(r => r.handoff_exists).every(r => !!r.driver_confirmed_at),
+      node: rtsSummary ? <StepWalkerHandoffs summary={rtsSummary} onDone={reload} c={c} /> : null },
+    { key: 'rts', section: 'Route', reachable: !!departed && !!checkIn3, done: !!rtsReport,
+      node: <StepRTSReport employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'return_arrive', section: 'Station — Return', reachable: !!rtsApproved, done: !!stationReturnArrived,
+      node: <StepStationReturn employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'handoff', section: 'Station — Return', reachable: !!rtsApproved && !!stationReturnArrived, done: !!stationHandoff,
+      node: <StepStationHandoff employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'odo_end', section: 'Offsite — End of Day', reachable: !!stationHandoff, done: !!(fuelLog?.odometer_end != null),
+      node: <StepEndOdometer employeeId={employeeId} shift={shift} walkers={ratableWalkers} drafts={walkerDrafts}
+              submittedRatings={walkerRatingsSubmitted} onDone={reload} c={c} /> },
+    { key: 'eod_insp', section: 'Offsite — End of Day', reachable: !!stationHandoff && fuelLog?.odometer_end != null, done: !!eodDone,
+      node: <StepInspection employeeId={employeeId} shift={shift} inspType="eod" stepNum="18"
+              title="End-of-Day Inspection" subtitle="Inspect the truck before parking. Note any new issues." onDone={reload} c={c} /> },
+    { key: 'signout', section: 'Offsite — End of Day', reachable: !!stationHandoff && !!eodDone, done: !!returned,
+      node: <StepSignOut employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+  ].filter(st => st.reachable) : [];
+
+  // Live step = the furthest-incomplete reachable step (server-derived, as before).
+  // cursor = which page the driver is viewing; clamped so they can review COMPLETED
+  // steps (back) but never skip ahead of the live step.
+  const liveIndex = (() => {
+    const i = allSteps.findIndex(st => !st.done);
+    return i === -1 ? Math.max(0, allSteps.length - 1) : i;
+  })();
+  const [cursor, setCursor] = useState(liveIndex);
+  // reviewing = the driver paged BACK to look at a completed step. While true we
+  // don't yank them forward when the live step advances; tapping the → / a later
+  // dot (or reaching the live step) clears it.
+  const reviewingRef = useRef(false);
+  const fade = useRef(new Animated.Value(1)).current;
+
+  // Follow the live step forward unless the driver is reviewing a past step.
+  useEffect(() => {
+    const clampedLive = Math.max(0, Math.min(liveIndex, allSteps.length - 1));
+    setCursor(prev => {
+      if (reviewingRef.current && prev < clampedLive) return Math.min(prev, allSteps.length - 1);
+      return clampedLive;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveIndex, allSteps.length]);
+
+  // Cross-dissolve on page change. Going to/at the live step clears review mode.
+  const goToStep = (next: number) => {
+    if (next === cursor || next < 0 || next > liveIndex) return;
+    reviewingRef.current = next < liveIndex;
+    Animated.timing(fade, { toValue: 0, duration: 120, useNativeDriver: true }).start(() => {
+      setCursor(next);
+      Animated.timing(fade, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+    });
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView style={s.scroll} contentContainerStyle={s.content}
@@ -754,179 +857,55 @@ export default function FieldOpsScreen() {
           )}
         </View>
 
-        {isDriver && (
+        {isDriver && allSteps.length > 0 && (
           <>
-            {/* ── OFFSITE ─────────────────────────────────────── */}
-            <LocationDivider label="Offsite" c={c} />
+            {/* Progress dots — green = completed, red = pending. Tappable to
+                review a completed step (can't jump ahead of the live step). */}
+            <View style={s.dotRow}>
+              {allSteps.map((st, i) => {
+                const filled = st.done;
+                const isCurrent = i === cursor;
+                const reviewable = i <= liveIndex;
+                return (
+                  <TouchableOpacity
+                    key={st.key}
+                    disabled={!reviewable}
+                    onPress={() => goToStep(i)}
+                    hitSlop={{ top: 8, bottom: 8, left: 3, right: 3 }}
+                  >
+                    <View style={[
+                      s.dot,
+                      { backgroundColor: filled ? '#10B981' : '#E8443A' },
+                      isCurrent && s.dotCurrent,
+                      !filled && !isCurrent && { opacity: 0.45 },
+                    ]} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-            {/* 0 · Dispatch confirmation — must confirm before check-in unlocks */}
-            <StepDispatchConfirmation employeeId={employeeId} shift={shift} onDone={reload} c={c} />
+            {/* Section + back arrow + step count */}
+            <View style={s.wizHeader}>
+              {cursor > 0 ? (
+                <TouchableOpacity onPress={() => goToStep(cursor - 1)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.wizBack}>
+                  <Text style={[s.wizBackArrow, { color: c.primary }]}>←</Text>
+                </TouchableOpacity>
+              ) : <View style={s.wizBack} />}
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={[s.wizSection, { color: c.mutedForeground }]}>{allSteps[cursor]?.section?.toUpperCase()}</Text>
+                <Text style={[s.wizCount, { color: c.foreground }]}>Step {cursor + 1} of {allSteps.length}</Text>
+              </View>
+              {cursor < liveIndex ? (
+                <TouchableOpacity onPress={() => goToStep(liveIndex)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.wizBack}>
+                  <Text style={[s.wizBackArrow, { color: c.primary }]}>→</Text>
+                </TouchableOpacity>
+              ) : <View style={s.wizBack} />}
+            </View>
 
-            {/* 1 · Check-in — only shown after assignment confirmed */}
-            {shift.confirmationStatus === 'confirmed' && (
-              <StepCheckIn employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-            )}
-
-            {/* 2 · Dock assignment (visible once checked in) */}
-            {checkedIn && (
-              <StepDockAssignment dockZone={dockZone} c={c} />
-            )}
-
-            {/* 3 · Pre-trip inspection (after check-in) */}
-            {checkedIn && (
-              <StepInspection
-                employeeId={employeeId} shift={shift}
-                inspType="pre_trip" stepNum="3"
-                title="Pre-Trip Inspection"
-                subtitle="Inspect the truck before leaving the offsite."
-                onDone={reload} c={c}
-              />
-            )}
-
-            {/* 4 · Start odometer (after pre-trip) */}
-            {preTripDone && (
-              <StepStartOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-            )}
-
-            {/* ── STATION (LOADING) ────────────────────────── */}
-            {fuelLog && (
-              <>
-                <LocationDivider label="Station — Loading" c={c} />
-
-                {/* 5 · Station arrival + staging check */}
-                <StepStationArrival employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-
-                {/* 6 · Load truck — tote check-off + confirm (ADR-181); falls
-                    back to the legacy manifest card when no roster exists. */}
-                {stationLoadArrived && (
-                  rosterAvailable
-                    ? <StepLoadTruck roster={roster!} onDone={reload} c={c} />
-                    : <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} />
-                )}
-
-                {/* 7 · Departure (after manifest acknowledged or no manifest) */}
-                {stationLoadArrived && (
-                  <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-              </>
-            )}
-
-            {/* ── ROUTE / AP ───────────────────────────────── */}
-            {departed && (
-              <>
-                <LocationDivider label="Route" c={c} />
-
-                {/* 8 · Post AP + ETA */}
-                <StepAnchorPoint employeeId={employeeId} truckId={truckId} shift={shift} onDone={reload} c={c} />
-
-                {/* 9 · Confirm arrival */}
-                {activeAP && activeAP.status === 'preliminary' && (
-                  <StepAPArrive ap={activeAP} onDone={reload} c={c} />
-                )}
-
-                {/* 10 · Check-in 1 (after AP arrived) */}
-                {activeAP && activeAP.status === 'arrived' && (
-                  <StepCheckIn1 employeeId={employeeId} shift={shift} crew={crew} onDone={reload} c={c} />
-                )}
-
-                {/* 11 · Walker ratings (after CI1, persisted drafts) */}
-                {checkIn1 && ratableWalkers.length > 0 && (
-                  <StepWalkerRatings
-                    walkers={ratableWalkers}
-                    drafts={walkerDrafts}
-                    submitted={walkerRatingsSubmitted}
-                    onUpdateDraft={updateDraft}
-                    c={c}
-                  />
-                )}
-
-                {/* 12 · Check-in 2 */}
-                {checkIn1 && (
-                  <StepCheckInN employeeId={employeeId} shift={shift} num={2} time={CI_TIMES[1]}
-                    record={checkIn2} prevRecord={checkIn1} crew={crew} onDone={reload} c={c} />
-                )}
-
-                {/* 13 · Check-in 3 */}
-                {checkIn2 && (
-                  <StepCheckInN employeeId={employeeId} shift={shift} num={3} time={CI_TIMES[2]}
-                    record={checkIn3} prevRecord={checkIn2} crew={crew} onDone={reload} c={c} />
-                )}
-
-                {/* 13.5 · Walker handoffs — confirm each returned route's RTS
-                    (ADR-193 D4). Informational: doesn't hard-gate Step 14. */}
-                {checkIn1 && rtsSummary && rtsSummary.routes.some(r => r.handoff_exists) && (
-                  <StepWalkerHandoffs summary={rtsSummary} onDone={reload} c={c} />
-                )}
-
-                {/* 14 · Departure request (RTS) */}
-                {checkIn3 && (
-                  <StepRTSReport employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-
-                {/* Waiting for dispatch approval */}
-                {rtsPending && (
-                  <Card c={c}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-                      <ActivityIndicator color={c.warning} size="small" />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
-                          Waiting for dispatch approval
-                        </Text>
-                        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
-                          Pull down to refresh. Dispatch is reviewing your departure request.
-                        </Text>
-                      </View>
-                    </View>
-                  </Card>
-                )}
-              </>
-            )}
-
-            {/* ── STATION (RETURN) ─────────────────────────── */}
-            {rtsApproved && (
-              <>
-                <LocationDivider label="Station — Return" c={c} />
-
-                {/* 15 · Station arrival return */}
-                <StepStationReturn employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-
-                {/* 16 · Station handoff */}
-                {stationReturnArrived && (
-                  <StepStationHandoff employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-              </>
-            )}
-
-            {/* ── OFFSITE (EOD) ────────────────────────────── */}
-            {stationHandoff && (
-              <>
-                <LocationDivider label="Offsite — End of Day" c={c} />
-
-                {/* 17 · End odometer + submit walker ratings */}
-                <StepEndOdometer
-                  employeeId={employeeId} shift={shift}
-                  walkers={ratableWalkers} drafts={walkerDrafts}
-                  submittedRatings={walkerRatingsSubmitted}
-                  onDone={reload} c={c}
-                />
-
-                {/* 18 · EOD inspection */}
-                {fuelLog?.odometer_end != null && (
-                  <StepInspection
-                    employeeId={employeeId} shift={shift}
-                    inspType="eod" stepNum="18"
-                    title="End-of-Day Inspection"
-                    subtitle="Inspect the truck before parking. Note any new issues."
-                    onDone={reload} c={c}
-                  />
-                )}
-
-                {/* 19 · Sign out */}
-                {eodDone && (
-                  <StepSignOut employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-              </>
-            )}
+            {/* The current step, cross-dissolved on change */}
+            <Animated.View style={{ opacity: fade }}>
+              {allSteps[cursor]?.node}
+            </Animated.View>
           </>
         )}
 
@@ -2506,4 +2485,13 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   subtitle:           { fontSize: fontSize.xs, color: c.mutedForeground },
   stepBadge:          { width: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: radius.sm, paddingVertical: 3 },
   stepBadgeText:      { fontSize: 11, fontWeight: fontWeight.bold },
+  // Wizard (paged step flow)
+  dotRow:             { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, paddingVertical: spacing.sm },
+  dot:                { width: 9, height: 9, borderRadius: 999 },
+  dotCurrent:         { width: 22, borderRadius: 5 },
+  wizHeader:          { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.xs, marginBottom: spacing.xs },
+  wizBack:            { width: 40, alignItems: 'center' },
+  wizBackArrow:       { fontSize: 26, fontWeight: fontWeight.bold, lineHeight: 28 },
+  wizSection:         { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.8 },
+  wizCount:           { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, marginTop: 1 },
 });
