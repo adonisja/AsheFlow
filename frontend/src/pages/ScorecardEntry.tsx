@@ -1,0 +1,158 @@
+import { useEffect, useState } from 'react';
+import axiosClient from '../api/axiosClient';
+import { errorText } from '../utils/errorText';
+import ErrorBanner from '../components/ui/ErrorBanner';
+import { Award, Plus, Trash2, Save } from 'lucide-react';
+import type { Employee, ScorecardMetric } from '../api/types';
+
+/** Management: enter an Amazon weekly scorecard (ADR-204 Phase B, structured entry).
+ *  Phase C will add file upload + auto-extract that pre-fills this same form. */
+
+type MetricRow = Omit<ScorecardMetric, 'id'>;
+
+// The canonical NYCD metric rows (from the scorecard layout) as a starting template.
+const TEMPLATE: MetricRow[] = [
+  { key: 'packages_delivered', label: 'Packages Delivered', value: '', unit: null, tier: null, flag: null, sort_order: 0 },
+  { key: 'dsb_dpmo_tier', label: 'DSB DPMO Tier', value: '', unit: null, tier: null, flag: null, sort_order: 1 },
+  { key: 'delivery_success_behavior', label: 'Delivery Success Behavior', value: '', unit: null, tier: null, flag: null, sort_order: 2 },
+  { key: 'delivery_completion_dpmo', label: 'Delivery Completion DPMO', value: '', unit: 'DPMO', tier: null, flag: null, sort_order: 3 },
+  { key: 'cdf', label: 'CDF', value: '', unit: null, tier: null, flag: null, sort_order: 4 },
+  { key: 'pod_tier', label: 'POD Tier', value: '', unit: null, tier: null, flag: null, sort_order: 5 },
+  { key: 'pod_score', label: 'POD Score', value: '', unit: '%', tier: null, flag: null, sort_order: 6 },
+  { key: 'pod_success', label: 'POD Success', value: '', unit: null, tier: null, flag: null, sort_order: 7 },
+  { key: 'pod_rejects', label: 'POD Rejects', value: '', unit: null, tier: null, flag: null, sort_order: 8 },
+];
+
+function isoWeekNow(): string {
+  const d = new Date();
+  const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNr = (d.getUTCDay() + 6) % 7;
+  target.setUTCDate(target.getUTCDate() - dayNr + 3);
+  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((target.getTime() - firstThursday.getTime()) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+  return `${target.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+export default function ScorecardEntry() {
+  const [week, setWeek] = useState(isoWeekNow());
+  const [scope, setScope] = useState<'individual' | 'company'>('individual');
+  const [employeeId, setEmployeeId] = useState('');
+  const [overall, setOverall] = useState('');
+  const [metrics, setMetrics] = useState<MetricRow[]>(TEMPLATE.map(m => ({ ...m })));
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    axiosClient.get<Employee[]>('/employees/')
+      .then(({ data }) => setEmployees((data ?? []).filter(e => e.is_active)))
+      .catch(() => setEmployees([]));
+  }, []);
+
+  const setMetric = (i: number, patch: Partial<MetricRow>) =>
+    setMetrics(ms => ms.map((m, idx) => idx === i ? { ...m, ...patch } : m));
+  const addMetric = () =>
+    setMetrics(ms => [...ms, { key: '', label: '', value: '', unit: null, tier: null, flag: null, sort_order: ms.length }]);
+  const removeMetric = (i: number) => setMetrics(ms => ms.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    setError(null); setSaved(false);
+    if (scope === 'individual' && !employeeId) { setError('Pick an employee for an individual scorecard.'); return; }
+    const filled = metrics.filter(m => m.key.trim() && m.label.trim() && m.value.trim());
+    if (filled.length === 0) { setError('Fill in at least one metric.'); return; }
+    setSaving(true);
+    try {
+      await axiosClient.post('/scorecards', {
+        week: week.trim(),
+        scope,
+        employee_id: scope === 'individual' ? employeeId : null,
+        overall_standing: overall.trim() || null,
+        metrics: filled,
+      });
+      setSaved(true);
+    } catch (e) {
+      setError(errorText(e, 'Could not save the scorecard.'));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-5 animate-slide-up">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
+          <Award className="w-4 h-4 text-primary" />
+        </div>
+        <h1 className="page-title">Enter Amazon Scorecard</h1>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+      {saved && <div className="rounded-lg border border-emerald-300/40 bg-emerald-50 p-3 text-sm text-emerald-700">Scorecard saved.</div>}
+
+      <div className="card space-y-3">
+        <div className="flex flex-wrap gap-3">
+          <label className="text-sm flex flex-col gap-1">
+            <span className="text-xs font-semibold text-muted-foreground uppercase">Week</span>
+            <input value={week} onChange={e => setWeek(e.target.value)} placeholder="2026-W28"
+                   className="rounded-lg border border-border bg-background px-3 py-2 text-sm w-32" />
+          </label>
+          <label className="text-sm flex flex-col gap-1">
+            <span className="text-xs font-semibold text-muted-foreground uppercase">Scope</span>
+            <select value={scope} onChange={e => { setScope(e.target.value as any); setSaved(false); }}
+                    className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              <option value="individual">Individual (DA)</option>
+              <option value="company">Company (station)</option>
+            </select>
+          </label>
+          {scope === 'individual' && (
+            <label className="text-sm flex flex-col gap-1 flex-1 min-w-[180px]">
+              <span className="text-xs font-semibold text-muted-foreground uppercase">Employee</span>
+              <select value={employeeId} onChange={e => setEmployeeId(e.target.value)}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                <option value="">Select…</option>
+                {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="text-sm flex flex-col gap-1">
+            <span className="text-xs font-semibold text-muted-foreground uppercase">Overall Standing</span>
+            <input value={overall} onChange={e => setOverall(e.target.value)} placeholder="PLATINUM"
+                   className="rounded-lg border border-border bg-background px-3 py-2 text-sm w-36" />
+          </label>
+        </div>
+      </div>
+
+      <div className="card space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground">Metrics</h2>
+          <button onClick={addMetric} className="text-xs inline-flex items-center gap-1 text-primary hover:underline">
+            <Plus className="w-3.5 h-3.5" /> Add metric
+          </button>
+        </div>
+        <div className="space-y-2">
+          {metrics.map((m, i) => (
+            <div key={i} className="grid grid-cols-12 gap-2 items-center">
+              <input value={m.label} onChange={e => setMetric(i, { label: e.target.value })} placeholder="Label"
+                     className="col-span-4 rounded border border-border bg-background px-2 py-1.5 text-sm" />
+              <input value={m.value} onChange={e => setMetric(i, { value: e.target.value })} placeholder="Value"
+                     className="col-span-3 rounded border border-border bg-background px-2 py-1.5 text-sm" />
+              <select value={m.flag ?? ''} onChange={e => setMetric(i, { flag: (e.target.value || null) as any })}
+                      className="col-span-4 rounded border border-border bg-background px-2 py-1.5 text-sm">
+                <option value="">No flag</option>
+                <option value="excellent">Excellent</option>
+                <option value="needs_focus">Needs Focus</option>
+              </select>
+              <button onClick={() => removeMetric(i)} className="col-span-1 text-muted-foreground hover:text-danger flex justify-center">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <button onClick={save} disabled={saving}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
+        <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save Scorecard'}
+      </button>
+    </div>
+  );
+}

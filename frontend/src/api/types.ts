@@ -1211,3 +1211,27 @@ export interface MyPerformance {
   rts_reasons_30d: { rts_type: string; count: number }[];
   troublesome_addresses_30d: { normalised_address: string; count: number }[];
 }
+
+// Amazon (NYCD) weekly scorecard (ADR-204).
+export interface ScorecardMetric {
+  id: string;
+  key: string;
+  label: string;
+  value: string;
+  unit?: string | null;
+  tier?: string | null;
+  flag?: 'excellent' | 'needs_focus' | null;
+  sort_order: number;
+}
+
+export interface Scorecard {
+  id: string;
+  week: string;
+  scope: 'individual' | 'company';
+  employee_id?: string | null;
+  employee_name?: string | null;
+  overall_standing?: string | null;
+  source_file_url?: string | null;
+  created_at: string;
+  metrics: ScorecardMetric[];
+}
