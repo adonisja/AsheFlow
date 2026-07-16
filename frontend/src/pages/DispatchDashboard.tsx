@@ -14,7 +14,8 @@ export default function DispatchDashboard() {
   const isAdmin = groups.includes('admin') || groups.includes('Admin');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalYMD());
   const [totalEmployees, setTotalEmployees] = useState<number | ''>('');
-  const [totalTrucks, setTotalTrucks] = useState<number | ''>('');
+  // ADR-202: dispatch selects the exact trucks to send out; the count is derived.
+  const [selectedTruckIds, setSelectedTruckIds] = useState<Set<string>>(new Set());
   const [dispatchData, setDispatchData] = useState<DispatchResult | null>(null);
   const [trucks, setTrucks] = useState<Record<string, any>>({});
   const [employees, setEmployees] = useState<Record<string, any>>({});
@@ -388,13 +389,16 @@ export default function DispatchDashboard() {
   };
 
   const handleRunDispatch = async () => {
+    if (selectedTruckIds.size === 0) {
+      setError('Select at least one truck to dispatch.');
+      return;
+    }
     try {
       setIsLoading(true);
       setError(null);
-      const payload: any = { date: selectedDate };
+      const payload: any = { date: selectedDate, truck_ids: Array.from(selectedTruckIds) };
       if (totalEmployees) payload.total_employees = totalEmployees;
-      if (totalTrucks) payload.total_trucks = totalTrucks;
-      
+
       const response = await axiosClient.post('/dispatch/', payload);
       setDispatchData({
         ...response.data,
@@ -644,18 +648,17 @@ export default function DispatchDashboard() {
 
         {/* Row 2 — inputs + admin clear */}
         <div className="flex flex-wrap items-center gap-3">
-          <input
-            type="number"
-            placeholder="Total Trucks"
-            value={totalTrucks}
-            onChange={(e) => {
-              const val = e.target.value ? Number(e.target.value) : '';
-              if (val === '') setTotalTrucks('');
-              else setTotalTrucks(Math.min(val, Object.keys(trucks).length));
-            }}
-            max={Object.keys(trucks).length || 1}
-            className="w-32 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary outline-none"
-            min="1"
+          {/* ADR-202: pick the exact trucks to dispatch; count is derived. */}
+          <TruckPicker
+            trucks={trucks}
+            selected={selectedTruckIds}
+            onToggle={(id) => setSelectedTruckIds(prev => {
+              const next = new Set(prev);
+              next.has(id) ? next.delete(id) : next.add(id);
+              return next;
+            })}
+            onSelectAll={(ids) => setSelectedTruckIds(new Set(ids))}
+            onClear={() => setSelectedTruckIds(new Set())}
           />
           <input
             type="number"
@@ -1247,6 +1250,62 @@ export default function DispatchDashboard() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ADR-202: multi-select of the trucks to dispatch. The count is derived from the
+// selection (no separate number input). Only active trucks are selectable.
+function TruckPicker({
+  trucks, selected, onToggle, onSelectAll, onClear,
+}: {
+  trucks: Record<string, any>;
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onSelectAll: (ids: string[]) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const active = Object.values(trucks)
+    .filter((t: any) => t.is_active !== false)
+    .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+  const allIds = active.map((t: any) => t.id);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm hover:border-primary outline-none"
+      >
+        <Truck className="w-4 h-4 text-muted-foreground" />
+        {selected.size > 0
+          ? <span className="font-medium">{selected.size} truck{selected.size === 1 ? '' : 's'} selected</span>
+          : <span className="text-muted-foreground">Select trucks…</span>}
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-64 max-h-72 overflow-auto rounded-lg border border-border bg-card shadow-lg">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border text-xs">
+            <button className="font-medium text-primary hover:underline" onClick={() => onSelectAll(allIds)}>Select all</button>
+            <button className="text-muted-foreground hover:underline" onClick={onClear}>Clear</button>
+          </div>
+          {active.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-muted-foreground">No active trucks.</p>
+          ) : active.map((t: any) => (
+            <label key={t.id} className="flex items-center gap-2 px-3 py-2 hover:bg-accent/40 cursor-pointer text-sm">
+              <input
+                type="checkbox"
+                checked={selected.has(t.id)}
+                onChange={() => onToggle(t.id)}
+                className="accent-primary"
+              />
+              <span className="truncate">{t.name}</span>
+            </label>
+          ))}
         </div>
       )}
     </div>

@@ -348,7 +348,7 @@ def submit_roll_call(
 
     Authorization:
     - Driver: can mark any crew member on their truck.
-    - Trainer: can only mark their paired trainee.
+    - Trainer: can mark any member of their truck EXCEPT the driver.
     - Dispatch/mgmt/admin: can mark anyone.
     """
     target_employee_id = payload.employee_id
@@ -368,39 +368,28 @@ def submit_roll_call(
         if caller_ta is None:
             raise HTTPException(status_code=403, detail="You are not assigned to a truck today.")
 
-        if caller.role == ROLE_TRAINER:
-            # Trainer may only mark their paired trainee.
-            paired_am = (
-                db.query(AssignmentMember)
-                .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
-                .filter(
-                    AssignmentMember.paired_trainer_id == caller.id,
-                    AssignmentMember.role == ROLE_TRAINEE,
-                    TruckAssignment.date == target_date,
-                    TruckAssignment.company_id == caller.company_id,
-                )
-                .first()
+        # Driver and trainer may both roll-call any member of their own truck.
+        # The trainer additionally can't mark the driver — the driver self-manages
+        # their own check-in/departure via Field Ops.
+        target_am = (
+            db.query(AssignmentMember)
+            .filter(
+                AssignmentMember.assignment_id == caller_ta.id,
+                AssignmentMember.employee_id == target_employee_id,
+                AssignmentMember.company_id == caller.company_id,
             )
-            if paired_am is None or paired_am.employee_id != target_employee_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Trainers can only submit roll call for their paired trainee.",
-                )
-        else:
-            # Driver: target must be on the same truck.
-            target_am = (
-                db.query(AssignmentMember)
-                .filter(
-                    AssignmentMember.assignment_id == caller_ta.id,
-                    AssignmentMember.employee_id == target_employee_id,
-                )
-                .first()
+            .first()
+        )
+        if target_am is None:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only submit roll call for crew members on your truck.",
             )
-            if target_am is None:
-                raise HTTPException(
-                    status_code=403,
-                    detail="You can only submit roll call for crew members on your truck.",
-                )
+        if caller.role == ROLE_TRAINER and target_am.role == ROLE_DRIVER:
+            raise HTTPException(
+                status_code=403,
+                detail="Trainers can't submit roll call for the driver.",
+            )
 
     # Derive status from time (or explicit NCNS).
     if payload.ncns:

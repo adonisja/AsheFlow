@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 class DispatchConfig(BaseModel):
     date: Optional[datetime.date] = Field(None, description="Date to run dispatch for")
     total_employees: Optional[int] = Field(None, description="Total number of employees to assign across all trucks")
-    total_trucks: Optional[int] = Field(None, description="Total amount of trucks to dispatch")
+    total_trucks: Optional[int] = Field(None, description="DEPRECATED fallback — first-N trucks by name. Prefer truck_ids.")
+    truck_ids: Optional[list[UUID]] = Field(None, description="Explicit trucks to dispatch (ADR-202). Seeds exactly these; count is derived.")
 
 class ManualAssignmentCreate(BaseModel):
     """Schema for manually assigning an employee to a truck for a specific date."""
