@@ -1268,13 +1268,29 @@ function TruckPicker({
   onClear: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const active = Object.values(trucks)
     .filter((t: any) => t.is_active !== false)
     .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
   const allIds = active.map((t: any) => t.id);
 
+  // Close the dropdown on outside click or Escape (it overlays the Run button).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
