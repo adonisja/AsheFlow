@@ -3,6 +3,7 @@ import { updatePassword } from 'aws-amplify/auth';
 import { useAuth } from '../contexts/AuthContext';
 import { Lock, CheckCircle2 } from 'lucide-react';
 import Avatar from '../components/ui/Avatar';
+import MyPerformanceCard from '../components/MyPerformanceCard';
 
 export default function Account() {
   const { user, groups } = useAuth();
@@ -63,6 +64,10 @@ export default function Account() {
           ))}
         </dl>
       </div>
+
+      {/* My Performance (our live stats; ADR-203). The official Amazon Scorecard
+          card (ADR-204) will sit alongside this. */}
+      <MyPerformanceCard />
 
       {/* Change password */}
       <div className="card">

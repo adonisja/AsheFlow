@@ -1194,3 +1194,20 @@ export interface ConfirmationTimesResponse {
     count: number;
   }>;
 }
+
+// My Performance card (ADR-203) — the caller's own field-execution stats.
+export interface MyPerformance {
+  role: string;
+  lifetime_delivered: number;
+  lifetime_rts: number;
+  lifetime_missing: number;
+  success_pct: number | null;
+  avg_stars: number | null;
+  grade: string | null;
+  trips_today: number;
+  trips_this_week: number;
+  daily_last_week: { day: string; delivered: number; rts: number }[];
+  weekly_trend: { week_start: string; delivered: number }[];
+  rts_reasons_30d: { rts_type: string; count: number }[];
+  troublesome_addresses_30d: { normalised_address: string; count: number }[];
+}

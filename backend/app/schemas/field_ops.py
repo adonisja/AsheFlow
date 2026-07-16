@@ -59,6 +59,50 @@ class WalkerRatingCreate(BaseModel):
     comment: Optional[str] = Field(None, max_length=500)
 
 
+class DailyDeliveryCount(BaseModel):
+    day: date
+    delivered: int
+    rts: int
+
+
+class WeeklyDeliveredCount(BaseModel):
+    week_start: date
+    delivered: int
+
+
+class RtsReasonCount(BaseModel):
+    rts_type: str
+    count: int
+
+
+class TroublesomeAddress(BaseModel):
+    normalised_address: str
+    count: int
+
+
+class MyPerformanceResponse(BaseModel):
+    """Self-scoped field-performance card (ADR-203). Role-adaptive on the client."""
+    role: str
+    # Lifetime headline
+    lifetime_delivered: int
+    lifetime_rts: int
+    lifetime_missing: int
+    success_pct: Optional[float] = None          # delivered / (delivered+rts+missing), null if no data
+    # Rating (reused from walker-profile aggregation)
+    avg_stars: Optional[float] = None
+    grade: Optional[str] = None
+    # Trips (ADR-199)
+    trips_today: int = 0
+    trips_this_week: int = 0
+    # Last-7-days delivered vs RTS, per day
+    daily_last_week: List[DailyDeliveryCount] = []
+    # 4-week delivered trend
+    weekly_trend: List[WeeklyDeliveredCount] = []
+    # 30-day diagnostics
+    rts_reasons_30d: List[RtsReasonCount] = []
+    troublesome_addresses_30d: List[TroublesomeAddress] = []
+
+
 class WalkerRatingResponse(BaseModel):
     id: UUID
     rater_id: UUID
