@@ -408,6 +408,24 @@ export default function TodayAssignmentScreen() {
         );
       })()}
 
+      {/* No AP yet — the tab is named "Anchor Point", so say so explicitly rather
+          than render nothing. Shown once dispatch is published (before that, the
+          planned hint below explains the state). */}
+      {assignment && !assignment.anchorPoint && assignment.dispatchPhase !== 'planned' && (
+        <View style={[s.apCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={[s.apLabel, { color: c.mutedForeground }]}>ANCHOR POINT</Text>
+            <View style={{ backgroundColor: c.mutedForeground + '22', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: c.mutedForeground }}>Not set</Text>
+            </View>
+          </View>
+          <Text style={[s.apNotes, { color: c.mutedForeground, fontStyle: 'normal', marginTop: spacing.xs }]}>
+            {assignment.truck_name}'s driver hasn't set an anchor point yet. It appears here with the
+            meet-up location and ETA once they post it — pull down to refresh.
+          </Text>
+        </View>
+      )}
+
       {/* Pre-publish: make it clear why there's nothing to confirm yet */}
       {assignment?.dispatchPhase === 'planned' && (
         <View style={s.plannedHint}>
