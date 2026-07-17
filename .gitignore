@@ -152,6 +152,7 @@ backend/tests/routers/test_reassign_trainee.py
 backend/tests/routers/test_finalize_gate.py
 backend/tests/routers/test_peer_ratings.py
 backend/tests/routers/test_my_performance.py
+backend/tests/routers/test_confirmation_gate.py
 backend/app/routers/rts.py
 backend/app/routers/building_profiles.py
 backend/app/routers/building_profile_library.py
