@@ -32,6 +32,7 @@ type AnchorPoint = {
   status: string;                 // preliminary | arrived
   sequence: number;               // > 1 → the AP was relocated from an earlier spot
   notes: string | null;
+  submitted_at: string;           // when the driver posted this AP
   arrived_at: string | null;
   confirmed_by_name?: string | null;
   is_running_late: boolean;
@@ -171,6 +172,7 @@ export default function TodayAssignmentScreen() {
             status: ap.status,
             sequence: ap.sequence ?? 1,
             notes: ap.notes ?? null,
+            submitted_at: ap.submitted_at,
             arrived_at: ap.arrived_at ?? null,
             confirmed_by_name: ap.confirmed_by_name ?? null,
             is_running_late: !!ap.is_running_late,
@@ -379,6 +381,9 @@ export default function TodayAssignmentScreen() {
             <Text style={[s.apLocation, { color: c.foreground }]}>📍 {ap.location}</Text>
 
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
+              {ap.submitted_at && (
+                <Text style={[s.apMeta, { color: c.mutedForeground }]}>Set {fmtT(ap.submitted_at)}</Text>
+              )}
               {ap.eta && !arrived && (
                 <Text style={[s.apMeta, { color: c.mutedForeground }]}>ETA {ap.eta}</Text>
               )}

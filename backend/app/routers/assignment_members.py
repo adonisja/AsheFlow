@@ -19,9 +19,11 @@ from app.schemas.assignment_member import (
 )
 from app.services.previous_assignment import check_consecutive_assignment
 from app.services.check_ban import check_ban_relationship
+from app.models.shift_roll_call import ShiftRollCall
 from app.services.crew_availability import (
     MemberProgress,
     derive_availability,
+    present_from_roll_call,
     DEFAULT_COMPLETION_THRESHOLD,
 )
 from app.services.audit import write_audit
@@ -196,6 +198,20 @@ def get_crew_availability(
         ).all()
     } if emp_ids else {}
 
+    # Roll-call presence for the assignment's date (ADR-200). Without this every
+    # member defaults to present=True → 'available', so the crew roster shows the
+    # whole crew Available before anyone has been marked in. None (no record) →
+    # 'not_arrived'; this also correctly holds un-arrived members out of the
+    # available-for-route count until roll call marks them in.
+    roll_calls = {
+        rc.employee_id: rc.status
+        for rc in db.query(ShiftRollCall).filter(
+            ShiftRollCall.employee_id.in_(emp_ids),
+            ShiftRollCall.date == ta.date,
+            ShiftRollCall.company_id == caller.company_id,
+        ).all()
+    } if emp_ids else {}
+
     # Each active member's current (assigned/in_progress, not returned) route +
     # its completion %. A member may own a route via assigned_to or, for a
     # trainee, paired_trainee_id.
@@ -226,6 +242,7 @@ def get_crew_availability(
         progress.append(MemberProgress(
             employee_id=m.employee_id, name=names.get(m.employee_id), role=m.role,
             membership_status=m.status, has_active_route=has_route, route_completion_pct=pct,
+            present=present_from_roll_call(roll_calls.get(m.employee_id)),
         ))
 
     entries, active_crew, available = derive_availability(progress)

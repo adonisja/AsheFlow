@@ -25,6 +25,26 @@ from uuid import UUID
 DEFAULT_COMPLETION_THRESHOLD = 0.65
 
 
+def present_from_roll_call(status: Optional[str]) -> Optional[bool]:
+    """Map a ShiftRollCall.status to the presence tri-state (ADR-198/199/200).
+
+    None    → no roll-call record yet   → not marked in → 'not_arrived'
+    'ncns'  → explicitly absent         → False → off_crew
+    else    → early | present | late    → True  → in the working crew
+
+    Every surface that resolves availability must feed this into
+    MemberProgress.present — MemberProgress defaults present=True for pre-arrival
+    route-sizing callers, so a caller that forgets to pass it silently shows the
+    whole crew as 'available' before roll call (the CrewRoster 'everyone Available'
+    bug, ADR-206). Use this to keep the mapping in one place.
+    """
+    if status is None:
+        return None
+    if status == "ncns":
+        return False
+    return True
+
+
 @dataclass
 class MemberProgress:
     """Flattened per-member inputs for availability (router builds these)."""

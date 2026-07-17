@@ -748,7 +748,7 @@ export default function FieldOpsScreen() {
     { key: 'depart', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived, done: !!departed,
       node: <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
 
-    { key: 'ap', section: 'Route', reachable: !!departed, done: !!(activeAP && activeAP.status !== 'preliminary'),
+    { key: 'ap', section: 'Route', reachable: !!departed, done: !!activeAP,
       node: <StepAnchorPoint employeeId={employeeId} truckId={truckId} shift={shift} onDone={reload} c={c} /> },
     { key: 'ap_arrive', section: 'Route', reachable: !!departed && !!(activeAP && activeAP.status === 'preliminary'),
       done: !!(activeAP && activeAP.status === 'arrived'),
@@ -1631,14 +1631,15 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
 
   const submit = async () => {
     if (submitting.current) return;
-    if (!location.trim()) { Alert.alert('Required', 'Enter your anchor point location.'); return; }
+    if (!location.trim()) { Alert.alert('Required', 'Enter a cross street or address for your anchor point.'); return; }
+    if (!etaLabel) { Alert.alert('Required', 'Set your ETA — crew and dispatch need your arrival time.'); return; }
     if (!truckId) { Alert.alert('No truck assigned', 'Your dispatch assignment hasn\'t loaded yet. Pull down to refresh — if this persists, contact dispatch.'); return; }
     submitting.current = true;
     setSaving(true);
     try {
       await apiClient.post('/anchor-points/', {
         truck_id: truckId, date: localToday(),
-        location: location.trim(), eta: etaLabel ?? null,
+        location: location.trim(), eta: etaLabel,
       });
       onDone();
     } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not post anchor point. Try again.')); }
@@ -1655,34 +1656,29 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
   return (
     <Card c={c}>
       <SectionHeader num="8" title="Post Anchor Point + ETA"
-        subtitle="Share your starting location and estimated arrival time with your crew and dispatch."
+        subtitle="Enter a cross street or address — it's geocoded to place your AP. ETA is required."
         c={c} />
       <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
         fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
         value={location} onChangeText={setLocation}
-        placeholder="AP location (street, landmark…)" placeholderTextColor={c.mutedForeground} />
+        placeholder="Cross street or address (e.g. W 28 St & 9 Ave)" placeholderTextColor={c.mutedForeground} />
       <TouchableOpacity onPress={() => { setEtaDate(etaDate ?? new Date()); setShowPicker(true); }}
         style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
           borderWidth: 1, borderColor: etaDate ? c.primary : c.border, borderRadius: radius.md,
           padding: spacing.sm, backgroundColor: c.background, marginBottom: spacing.sm }}>
         <Text style={{ fontSize: fontSize.sm, color: etaDate ? c.foreground : c.mutedForeground }}>
-          {etaLabel ?? 'ETA — optional'}
+          {etaLabel ?? 'ETA — required'}
         </Text>
         <Text style={{ fontSize: fontSize.xs, color: c.primary }}>
           {etaDate ? 'Change' : 'Set time'}
         </Text>
       </TouchableOpacity>
-      {etaDate && (
-        <TouchableOpacity onPress={() => setEtaDate(null)} style={{ alignSelf: 'flex-start', marginBottom: spacing.sm }}>
-          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>Clear ETA</Text>
-        </TouchableOpacity>
-      )}
       {!truckId && (
         <Text style={{ fontSize: fontSize.xs, color: c.warning, marginBottom: spacing.sm }}>
           Truck assignment not loaded — pull down to refresh before posting.
         </Text>
       )}
-      <Btn label="Post Anchor Point" onPress={submit} disabled={!location.trim()} loading={saving} c={c} />
+      <Btn label="Post Anchor Point" onPress={submit} disabled={!location.trim() || !etaLabel} loading={saving} c={c} />
       {showPicker && (
         <TimePickerModal
           visible={showPicker}

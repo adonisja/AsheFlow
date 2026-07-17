@@ -32,7 +32,8 @@ from app.schemas.assignment_member import (
     CrewStatusMember, CrewStatusTruck, CrewStatusResponse,
 )
 from app.services.crew_availability import (
-    MemberProgress, derive_availability, classify_member, DEFAULT_COMPLETION_THRESHOLD,
+    MemberProgress, derive_availability, classify_member, present_from_roll_call,
+    DEFAULT_COMPLETION_THRESHOLD,
 )
 from app.services.constants import ROLE_TRAINEE, OVERSIGHT_ROLES
 
@@ -101,12 +102,7 @@ def get_crew_status(
     } if emp_ids else {}
 
     def _present(employee_id):
-        st = roll_calls.get(employee_id)
-        if st is None:
-            return None
-        if st == "ncns":
-            return False
-        return True   # early | present | late
+        return present_from_roll_call(roll_calls.get(employee_id))
 
     trucks: list[CrewStatusTruck] = []
     for ta in truck_assignments:

@@ -19,6 +19,8 @@ type AP = {
   is_initial: boolean;
   status: 'preliminary' | 'arrived' | 'relocated';
   location: string;
+  lat: number | null;
+  lng: number | null;
   eta: string | null;
   notes: string | null;
   submitted_at: string;
@@ -141,7 +143,8 @@ export default function AnchorPointsScreen() {
 
   // ── Submit new AP ────────────────────────────────────────────────────────────
   const submitAP = useCallback(async () => {
-    if (!apLocation.trim()) { Alert.alert('Required', 'Enter a location.'); return; }
+    if (!apLocation.trim()) { Alert.alert('Required', 'Enter a cross street or address.'); return; }
+    if (!apEta.trim())      { Alert.alert('Required', 'Enter your ETA — crew and dispatch need your arrival time.'); return; }
     if (!crew?.truck_id)    { Alert.alert('No Assignment', 'You are not assigned to a truck today.'); return; }
     setSubmitting(true);
     try {
@@ -149,7 +152,7 @@ export default function AnchorPointsScreen() {
         truck_id: crew.truck_id,
         date: todayISO(),
         location: apLocation.trim(),
-        eta: apEta.trim() || undefined,
+        eta: apEta.trim(),
         notes: apNotes.trim() || undefined,
       });
       Alert.alert(hasActive ? 'AP Relocated' : 'AP Submitted', 'Crew and dispatch have been notified.');
@@ -330,7 +333,7 @@ export default function AnchorPointsScreen() {
                 </View>
               )}
 
-              <Text style={s.fieldLabel}>Location *</Text>
+              <Text style={s.fieldLabel}>Cross street or address *</Text>
               <TextInput
                 style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
                 value={apLocation}
@@ -357,7 +360,7 @@ export default function AnchorPointsScreen() {
                 </>
               )}
 
-              <Text style={s.fieldLabel}>ETA (optional)</Text>
+              <Text style={s.fieldLabel}>ETA *</Text>
               <TextInput
                 style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
                 value={apEta}

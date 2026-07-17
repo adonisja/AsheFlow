@@ -380,7 +380,8 @@ class TestSubmitAnchorPointMissingAudit:
         body.truck_id = uuid.uuid4()
         body.date = date.today()
         body.location = "Main & 5th"
-        body.eta = None
+        body.eta = "9:00 AM"          # ETA is mandatory (ADR-206)
+        body.borough = None
         body.notes = None
         body.expected_departure_at = None
 
@@ -389,10 +390,13 @@ class TestSubmitAnchorPointMissingAudit:
         db.commit = MagicMock()
         db.refresh = MagicMock()
 
+        from app.models.field_ops import Departure
+
         # Mock _get_assignment to not raise
         with patch("app.routers.anchor_points._get_assignment") as mock_ga:
             mock_ga.return_value = MagicMock()
-            # Mock the AnchorPoint query to return empty list (first AP today)
+            # AnchorPoint query → empty (first AP today); Departure query → present
+            # (ADR-206 gate satisfied); anything else → None.
             def _query(model):
                 q = MagicMock()
                 q.join = MagicMock(return_value=q)
@@ -400,7 +404,7 @@ class TestSubmitAnchorPointMissingAudit:
                     f = MagicMock()
                     f.order_by = MagicMock(return_value=f)
                     f.all.return_value = []
-                    f.first.return_value = None
+                    f.first.return_value = MagicMock() if model is Departure else None
                     return f
                 q.filter = _filter
                 return q
@@ -409,13 +413,96 @@ class TestSubmitAnchorPointMissingAudit:
             with patch("app.routers.anchor_points._notify"):
                 with patch("app.routers.anchor_points._crew_employee_ids", return_value=[]):
                     with patch("app.routers.anchor_points._post_embed_to_discord", new_callable=AsyncMock):
-                        with patch("app.routers.anchor_points.write_audit") as mock_audit:
-                            try:
-                                asyncio.get_event_loop().run_until_complete(
-                                    submit_anchor_point(
-                                        payload=body, db=db, caller=caller, _={}
+                        # ADR-206: geocode the location server-side; patch the shared helper.
+                        with patch("app.routers.trucks._resolve_anchor_location",
+                                   return_value=("MAIN ST & 5TH AVE", 40.75, -73.99)):
+                            with patch("app.routers.anchor_points.write_audit") as mock_audit:
+                                try:
+                                    asyncio.get_event_loop().run_until_complete(
+                                        submit_anchor_point(
+                                            payload=body, db=db, caller=caller, _={}
+                                        )
                                     )
+                                except Exception:
+                                    pass
+                                mock_audit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# submit_anchor_point: departure gate + geocode (ADR-206)
+# ---------------------------------------------------------------------------
+
+class TestSubmitAnchorPointGate:
+    """AP submit is gated behind a Departure record and geocodes its location."""
+
+    def _run(self, body, departure_present, geocode_return=("MAIN ST & 5TH AVE", 40.75, -73.99),
+             geocode_raises=None):
+        import asyncio
+        from app.routers.anchor_points import submit_anchor_point
+        from app.models.field_ops import Departure
+
+        caller = _make_caller(role="driver")
+        db = MagicMock()
+
+        def _query(model):
+            q = MagicMock()
+            q.join = MagicMock(return_value=q)
+            def _filter(*args):
+                f = MagicMock()
+                f.order_by = MagicMock(return_value=f)
+                f.all.return_value = []
+                if model is Departure:
+                    f.first.return_value = MagicMock() if departure_present else None
+                else:
+                    f.first.return_value = None
+                return f
+            q.filter = _filter
+            return q
+        db.query = _query
+
+        geo_patch = patch("app.routers.trucks._resolve_anchor_location")
+        with patch("app.routers.anchor_points._get_assignment", return_value=MagicMock()):
+            with patch("app.routers.anchor_points._notify"):
+                with patch("app.routers.anchor_points._crew_employee_ids", return_value=[]):
+                    with patch("app.routers.anchor_points._post_embed_to_discord", new_callable=AsyncMock):
+                        with patch("app.routers.anchor_points.write_audit"):
+                            with geo_patch as mock_geo:
+                                if geocode_raises is not None:
+                                    mock_geo.side_effect = geocode_raises
+                                else:
+                                    mock_geo.return_value = geocode_return
+                                return asyncio.get_event_loop().run_until_complete(
+                                    submit_anchor_point(payload=body, db=db, caller=caller, _={})
                                 )
-                            except Exception:
-                                pass
-                            mock_audit.assert_called_once()
+
+    def _body(self):
+        body = MagicMock()
+        body.truck_id = uuid.uuid4()
+        body.date = date.today()
+        body.location = "Main & 5th"
+        body.eta = "9:00 AM"
+        body.borough = None
+        body.notes = None
+        body.expected_departure_at = None
+        return body
+
+    def test_no_departure_raises_409(self):
+        with pytest.raises(HTTPException) as exc:
+            self._run(self._body(), departure_present=False)
+        assert exc.value.status_code == 409
+
+    def test_geocode_failure_raises_422(self):
+        body = self._body()
+        with pytest.raises(HTTPException) as exc:
+            self._run(
+                body, departure_present=True,
+                geocode_raises=HTTPException(status_code=422, detail="could not geocode"),
+            )
+        assert exc.value.status_code == 422
+
+    def test_departure_present_stores_canonical_and_coords(self):
+        body = self._body()
+        ap = self._run(body, departure_present=True,
+                       geocode_return=("MAIN ST & 5TH AVE", 40.75, -73.99))
+        assert ap.location == "MAIN ST & 5TH AVE"
+        assert ap.lat == 40.75 and ap.lng == -73.99

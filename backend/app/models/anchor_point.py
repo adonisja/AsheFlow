@@ -15,7 +15,7 @@ feeds next-day driver suggestions via GET /anchor-points/truck/{id}.
 """
 
 import uuid
-from sqlalchemy import Column, String, Date, DateTime, ForeignKey, Text, Boolean, Integer, CheckConstraint
+from sqlalchemy import Column, String, Date, DateTime, ForeignKey, Text, Boolean, Integer, Float, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -35,7 +35,9 @@ class AnchorPoint(Base):
     sequence     = Column(Integer,            nullable=False, default=1)   # 1 = first AP of the day
     is_initial   = Column(Boolean,            nullable=False, default=False)  # True only for sequence=1
     status       = Column(String(20),         nullable=False, default="preliminary")
-    location     = Column(String(255),        nullable=False)
+    location     = Column(String(255),        nullable=False)   # canonical geocoded form (ADR-206)
+    lat          = Column(Float,              nullable=True)     # geocoded — null for pre-ADR-206 rows
+    lng          = Column(Float,              nullable=True)
     eta          = Column(String(20),         nullable=True)
     notes        = Column(Text,               nullable=True)
     submitted_at           = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

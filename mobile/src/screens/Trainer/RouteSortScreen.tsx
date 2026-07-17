@@ -93,7 +93,7 @@ const EFFORT_COLORS: Record<string, string> = {
 
 // Availability chip (ADR-197). label + {bg,fg} colors per availability state.
 const AVAIL_LABEL: Record<CrewStatusEntry['availability'], string> = {
-  not_arrived: 'Not arrived',
+  not_arrived: 'Not Present',
   available: 'Available',
   on_route_early: 'On route',
   on_route_returning: 'Returning',

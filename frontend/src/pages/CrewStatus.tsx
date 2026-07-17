@@ -23,7 +23,7 @@ import type {
  */
 
 const AVAIL_LABEL: Record<CrewStatusMember['availability'], string> = {
-  not_arrived: 'Not arrived',
+  not_arrived: 'Not Present',
   available: 'Available',
   on_route_early: 'On route (early)',
   on_route_returning: 'On route (returning)',

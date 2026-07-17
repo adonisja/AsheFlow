@@ -44,6 +44,8 @@ from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.notification import Notification
+from app.models.field_ops import Departure
+from app.models.company import CompanyConfig
 from app.services.audit import write_audit
 from app.schemas.anchor_point import (
     AnchorPointCreate,
@@ -198,6 +200,35 @@ async def submit_anchor_point(
     """
     _get_assignment(db, payload.truck_id, payload.date, caller.id, caller.company_id)
 
+    # Gate (ADR-206): the AP can only be posted once the driver has left the
+    # station — i.e. after check-in, pre-trip, odometer, station arrival and load
+    # (the start-of-day sequence), which is what a Departure record marks. The
+    # mobile wizard already gates the AP step on `departed`; this enforces the
+    # same order server-side so a stale/direct client cannot post out of sequence.
+    departure = db.query(Departure).filter(
+        Departure.employee_id == caller.id,
+        Departure.date == payload.date,
+        Departure.company_id == caller.company_id,
+    ).first()
+    if not departure:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Post your Anchor Point after leaving the station — complete check-in, "
+                "pre-trip, starting odometer, station arrival and load first."
+            ),
+        )
+
+    # Geocode the driver's cross street / address into a canonical point (ADR-206,
+    # shared with the truck-anchor path). Borough: payload override → company
+    # config → manhattan. Failure raises 422 from the helper; the AP is not created.
+    from app.routers.trucks import _resolve_anchor_location
+    borough = payload.borough
+    if not borough:
+        cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+        borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
+    canonical_location, ap_lat, ap_lng = _resolve_anchor_location(payload.location, borough)
+
     todays = (
         db.query(AnchorPoint)
         .filter(
@@ -213,7 +244,7 @@ async def submit_anchor_point(
 
     if is_first:
         existing_preliminary = next(
-            (a for a in todays if a.status == "preliminary" and a.location == payload.location),
+            (a for a in todays if a.status == "preliminary" and a.location == canonical_location),
             None,
         )
         if existing_preliminary:
@@ -236,7 +267,9 @@ async def submit_anchor_point(
         sequence              = sequence,
         is_initial            = is_first,
         status                = "preliminary",
-        location              = payload.location,
+        location              = canonical_location,
+        lat                   = ap_lat,
+        lng                   = ap_lng,
         eta                   = payload.eta,
         notes                 = payload.notes,
         expected_departure_at = payload.expected_departure_at if not is_first else None,
@@ -251,8 +284,8 @@ async def submit_anchor_point(
         color       = 0xF59E0B  # amber
         footer_text = "Awaiting arrival confirmation"
         notif_message = (
-            f"📍 {truck_name} — {caller.name} set preliminary AP: {payload.location}"
-            + (f" ETA {payload.eta}" if payload.eta else "")
+            f"📍 {truck_name} — {caller.name} set preliminary AP: {canonical_location}"
+            + f" ETA {payload.eta}"
         )
     else:
         title       = f"🔀 Anchor Point Relocating — {truck_name} (AP #{sequence})"
@@ -265,17 +298,16 @@ async def submit_anchor_point(
 
         notif_message = (
             f"🔀 {truck_name} — {caller.name} relocating to AP #{sequence}: "
-            f"{payload.location}"
+            f"{canonical_location}"
             + dep_str
-            + (f" ETA {payload.eta}" if payload.eta else "")
+            + f" ETA {payload.eta}"
         )
 
     fields = [{"name": "Driver", "value": caller.name, "inline": True},
-              {"name": "Location", "value": payload.location, "inline": True}]
+              {"name": "Location", "value": canonical_location, "inline": True}]
     if not is_first and payload.expected_departure_at:
         fields.append({"name": "Expected Departure", "value": payload.expected_departure_at.strftime("%I:%M %p"), "inline": True})
-    if payload.eta:
-        fields.append({"name": "ETA", "value": payload.eta, "inline": True})
+    fields.append({"name": "ETA", "value": payload.eta, "inline": True})
     if payload.notes:
         fields.append({"name": "Notes", "value": payload.notes, "inline": False})
 
@@ -296,7 +328,7 @@ async def submit_anchor_point(
         action_type="anchor_point.submitted",
         target_table="anchor_points",
         target_id=str(new_ap.id),
-        after={"sequence": sequence, "is_initial": is_first, "location": payload.location},
+        after={"sequence": sequence, "is_initial": is_first, "location": canonical_location},
     )
     db.commit()
     db.refresh(new_ap)
