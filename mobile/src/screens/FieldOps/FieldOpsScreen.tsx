@@ -678,6 +678,12 @@ export default function FieldOpsScreen() {
     stationHandoff, eodDone, returned, truckId, taId,
   } = shift;
 
+  // A driver only runs the Field Ops flow if actually assigned to a truck today.
+  // truckId comes from the driver's crew for the date; without it there is no
+  // assignment — a stale dispatch notification or same-day confirmation record
+  // must NOT surface the check-in wizard.
+  const hasAssignment = !!truckId;
+
   const walkers      = crew.filter(m => m.role === 'walker');
   // NCNS walkers from check-in 1 — we don't have individual mapping so use submitted rating as proxy
   const presentWalkers = checkIn1
@@ -727,7 +733,7 @@ export default function FieldOpsScreen() {
   // logic is unchanged — only the presentation (paged vs scrolled).
   type WizStep = { key: string; section: string; reachable: boolean; done: boolean; node: React.ReactNode };
   const allSteps: WizStep[] = isDriver ? [
-    { key: 'confirm', section: 'Offsite', reachable: true, done: confirmationStatus === 'confirmed',
+    { key: 'confirm', section: 'Offsite', reachable: hasAssignment, done: confirmationStatus === 'confirmed',
       node: <StepDispatchConfirmation employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
     { key: 'checkin', section: 'Offsite', reachable: confirmationStatus === 'confirmed', done: !!checkedIn,
       node: <StepCheckIn employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
@@ -850,7 +856,7 @@ export default function FieldOpsScreen() {
             <Text style={s.pageTitle}>Field Ops</Text>
             <Text style={s.subtitle}>{localToday()}</Text>
           </View>
-          {isDriver ? (
+          {isDriver && hasAssignment ? (
             <View style={[s.stepBadge, { backgroundColor: completedSteps === TOTAL_STEPS ? '#10B98118' : c.primary + '18', borderColor: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
               <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
                 {completedSteps}/{TOTAL_STEPS}
@@ -911,6 +917,16 @@ export default function FieldOpsScreen() {
               {allSteps[cursor]?.node}
             </Animated.View>
           </>
+        )}
+
+        {isDriver && !hasAssignment && (
+          <View style={s.noAssignCard}>
+            <Text style={s.noAssignEmoji}>🚚</Text>
+            <Text style={[s.noAssignTitle, { color: c.foreground }]}>No assignment today</Text>
+            <Text style={[s.noAssignSub, { color: c.mutedForeground }]}>
+              You're not assigned to a truck for {localToday()}. Check-in opens once dispatch assigns you a truck.
+            </Text>
+          </View>
         )}
 
         {isWalker && (
@@ -2470,6 +2486,10 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   scroll:             { flex: 1 },
   content:            { padding: spacing.lg, paddingBottom: 100 },
   center:             { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  noAssignCard:       { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm },
+  noAssignEmoji:      { fontSize: 44 },
+  noAssignTitle:      { fontSize: fontSize.md, fontWeight: fontWeight.semibold },
+  noAssignSub:        { fontSize: fontSize.sm, textAlign: 'center', paddingHorizontal: spacing.lg },
   screenHeader:       {
     flexDirection: 'row', alignItems: 'center',
     marginBottom: spacing.lg,
