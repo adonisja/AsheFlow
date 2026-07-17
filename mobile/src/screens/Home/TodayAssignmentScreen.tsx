@@ -413,20 +413,21 @@ export default function TodayAssignmentScreen() {
           planned hint below explains the state). */}
       {assignment && !assignment.anchorPoint && assignment.dispatchPhase !== 'planned' && (
         <View style={s.apPendingCard}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+          <View style={s.apPendingHeader}>
             <Text style={[s.apLabel, { color: c.mutedForeground }]}>ANCHOR POINT</Text>
-            <View style={[s.apPendingBadge, { backgroundColor: c.surfaceMuted, borderColor: c.border }]}>
+            <View style={[s.apPendingBadge, { backgroundColor: c.card, borderColor: c.border }]}>
               <View style={[s.apPendingDot, { backgroundColor: c.mutedForeground }]} />
               <Text style={[s.apPendingBadgeText, { color: c.mutedForeground }]}>Not set</Text>
             </View>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
-            <View style={[s.apPendingIconWell, { backgroundColor: c.surfaceMuted, borderColor: c.border }]}>
-              <Text style={{ fontSize: 22, opacity: 0.5 }}>📍</Text>
+          <View style={s.apPendingBody}>
+            <View style={[s.apPendingIconWell, { backgroundColor: c.card, borderColor: c.border }]}>
+              <Text style={{ fontSize: 24, opacity: 0.4 }}>📍</Text>
             </View>
+            <Text style={[s.apPendingTitle, { color: c.foreground }]}>Waiting on the driver</Text>
             <Text style={[s.apPendingText, { color: c.mutedForeground }]}>
-              {assignment.truck_name}'s driver hasn't set an anchor point yet. It appears here with the
-              meet-up location and ETA once they post it — pull down to refresh.
+              {assignment.truck_name}'s meet-up location and ETA will appear here once the driver
+              posts their anchor point. Pull down to refresh.
             </Text>
           </View>
         </View>
@@ -604,11 +605,14 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   // "Not set" placeholder — muted + dashed to read as an intentionally inactive slot
   apPendingCard:     { borderRadius: radius.lg, borderWidth: 1.5, borderStyle: 'dashed', borderColor: c.border, backgroundColor: c.surfaceMuted, padding: spacing.md, marginBottom: spacing.md },
+  apPendingHeader:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   apPendingBadge:    { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   apPendingDot:      { width: 6, height: 6, borderRadius: 3 },
   apPendingBadgeText:{ fontSize: 11, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
-  apPendingIconWell: { width: 44, height: 44, borderRadius: radius.md, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' },
-  apPendingText:     { flex: 1, fontSize: fontSize.sm, lineHeight: 20 },
+  apPendingBody:     { alignItems: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.sm, gap: spacing.xs },
+  apPendingIconWell: { width: 52, height: 52, borderRadius: radius.full, borderWidth: 1.5, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', marginBottom: spacing.xs },
+  apPendingTitle:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  apPendingText:     { fontSize: fontSize.xs, lineHeight: 18, textAlign: 'center' },
 
   emptyCard:     { alignItems: 'center', marginTop: spacing.xxl, gap: spacing.sm },
   emptyIcon:     { fontSize: 48 },
