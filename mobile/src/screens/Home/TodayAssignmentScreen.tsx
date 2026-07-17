@@ -412,17 +412,23 @@ export default function TodayAssignmentScreen() {
           than render nothing. Shown once dispatch is published (before that, the
           planned hint below explains the state). */}
       {assignment && !assignment.anchorPoint && assignment.dispatchPhase !== 'planned' && (
-        <View style={[s.apCard, { backgroundColor: c.card, borderColor: c.border }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={s.apPendingCard}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
             <Text style={[s.apLabel, { color: c.mutedForeground }]}>ANCHOR POINT</Text>
-            <View style={{ backgroundColor: c.mutedForeground + '22', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 }}>
-              <Text style={{ fontSize: 11, fontWeight: '700', color: c.mutedForeground }}>Not set</Text>
+            <View style={[s.apPendingBadge, { backgroundColor: c.surfaceMuted, borderColor: c.border }]}>
+              <View style={[s.apPendingDot, { backgroundColor: c.mutedForeground }]} />
+              <Text style={[s.apPendingBadgeText, { color: c.mutedForeground }]}>Not set</Text>
             </View>
           </View>
-          <Text style={[s.apNotes, { color: c.mutedForeground, fontStyle: 'normal', marginTop: spacing.xs }]}>
-            {assignment.truck_name}'s driver hasn't set an anchor point yet. It appears here with the
-            meet-up location and ETA once they post it — pull down to refresh.
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md }}>
+            <View style={[s.apPendingIconWell, { backgroundColor: c.surfaceMuted, borderColor: c.border }]}>
+              <Text style={{ fontSize: 22, opacity: 0.5 }}>📍</Text>
+            </View>
+            <Text style={[s.apPendingText, { color: c.mutedForeground }]}>
+              {assignment.truck_name}'s driver hasn't set an anchor point yet. It appears here with the
+              meet-up location and ETA once they post it — pull down to refresh.
+            </Text>
+          </View>
         </View>
       )}
 
@@ -595,6 +601,14 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   apLocation:    { fontSize: fontSize.md, fontWeight: fontWeight.semibold, marginTop: spacing.xs },
   apMeta:        { fontSize: fontSize.xs },
   apNotes:       { fontSize: fontSize.sm, fontStyle: 'italic', marginTop: spacing.xs },
+
+  // "Not set" placeholder — muted + dashed to read as an intentionally inactive slot
+  apPendingCard:     { borderRadius: radius.lg, borderWidth: 1.5, borderStyle: 'dashed', borderColor: c.border, backgroundColor: c.surfaceMuted, padding: spacing.md, marginBottom: spacing.md },
+  apPendingBadge:    { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  apPendingDot:      { width: 6, height: 6, borderRadius: 3 },
+  apPendingBadgeText:{ fontSize: 11, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  apPendingIconWell: { width: 44, height: 44, borderRadius: radius.md, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' },
+  apPendingText:     { flex: 1, fontSize: fontSize.sm, lineHeight: 20 },
 
   emptyCard:     { alignItems: 'center', marginTop: spacing.xxl, gap: spacing.sm },
   emptyIcon:     { fontSize: 48 },
