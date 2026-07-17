@@ -696,6 +696,9 @@ export default function FieldOpsScreen() {
   // For simplicity: show all walkers who don't have a no-show rating submitted
   const ratableWalkers = checkIn1 ? walkers : [];
 
+  // Truck loaded: roster-based check-off confirmed (ADR-181), or legacy manifest ack.
+  const loadDone = rosterAvailable ? !!roster?.load_confirmed : !!manifest;
+
   const rtsApproved  = rtsReport?.status === 'rts_approved' || rtsReport?.status === 'approved';
   const rtsPending   = rtsReport?.status === 'pending';
 
@@ -737,21 +740,26 @@ export default function FieldOpsScreen() {
       node: <StepDispatchConfirmation employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
     { key: 'checkin', section: 'Offsite', reachable: confirmationStatus === 'confirmed', done: !!checkedIn,
       node: <StepCheckIn employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
-    { key: 'dock', section: 'Offsite', reachable: !!checkedIn, done: !!dockZone,
-      node: <StepDockAssignment dockZone={dockZone} c={c} /> },
     { key: 'pretrip', section: 'Offsite', reachable: !!checkedIn, done: !!preTripDone,
-      node: <StepInspection employeeId={employeeId} shift={shift} inspType="pre_trip" stepNum="3"
+      node: <StepInspection employeeId={employeeId} shift={shift} inspType="pre_trip" stepNum="2"
               title="Pre-Trip Inspection" subtitle="Inspect the truck before leaving the offsite." onDone={reload} c={c} /> },
     { key: 'odo_start', section: 'Offsite', reachable: !!preTripDone, done: !!fuelLog?.odometer_start,
       node: <StepStartOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
 
     { key: 'station_arrive', section: 'Station — Loading', reachable: !!fuelLog, done: !!stationLoadArrived,
       node: <StepStationArrival employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
-    { key: 'load', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived,
-      done: rosterAvailable ? !!roster?.load_confirmed : !!manifest,
+    // Gate / zone assignment from dispatch (ADR-206). Informational — it does NOT
+    // gate pre-trip/odometer/arrival (those don't need a zone). It gates LOADING,
+    // since the driver needs the zone to know where to load. done=true once reached
+    // so it never traps the cursor when dispatch hasn't assigned yet; the load step
+    // below is what actually waits on dockZone.
+    { key: 'dock', section: 'Station — Loading', reachable: !!stationLoadArrived, done: !!stationLoadArrived,
+      node: <StepDockAssignment dockZone={dockZone} c={c} /> },
+    { key: 'load', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived && !!dockZone,
+      done: loadDone,
       node: rosterAvailable ? <StepLoadTruck roster={roster!} onDone={reload} c={c} />
                             : <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} /> },
-    { key: 'depart', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived, done: !!departed,
+    { key: 'depart', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived && loadDone, done: !!departed,
       node: <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
 
     { key: 'ap', section: 'Route', reachable: !!departed, done: !!activeAP,
@@ -1095,7 +1103,7 @@ function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: Theme
   // keep it visible so the driver can see their gate.
   return (
     <Card c={c}>
-      <SectionHeader num="2" title="Your Gate Assignment" c={c} />
+      <SectionHeader num="5" title="Your Gate Assignment" c={c} />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md,
         backgroundColor: dockZone ? c.primary + '12' : c.surfaceMuted,
         borderRadius: radius.md, padding: spacing.md,
@@ -1155,12 +1163,12 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
     finally { setSaving(false); }
   };
   if (done) {
-    return <CompletedRow num="4" title="Start Odometer" c={c}
+    return <CompletedRow num="3" title="Start Odometer" c={c}
       summary={`${shift.fuelLog ? toDisp(shift.fuelLog.odometer_start, unit) : '—'} ${distU}`} />;
   }
   return (
     <Card c={c}>
-      <SectionHeader num="4" title="Log Start Odometer"
+      <SectionHeader num="3" title="Log Start Odometer"
         subtitle="Record the truck's odometer before leaving the offsite." c={c} />
       <View style={{ flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm }}>
         {(['imperial', 'metric'] as const).map(u => (
@@ -1214,11 +1222,11 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
       : shift.wasStaged === false
         ? `Not staged · ${missingArr.map(k => STAGING_LABELS[k] ?? k).join(', ') || fmtTime(shift.stationLoadAt)}`
         : `Arrived ${fmtTime(shift.stationLoadAt)}`;
-    return <CompletedRow num="5" title="Station Arrival — Loading" summary={summary} c={c} />;
+    return <CompletedRow num="4" title="Station Arrival — Loading" summary={summary} c={c} />;
   }
   return (
     <Card c={c}>
-      <SectionHeader num="5" title="Arrive at Station — Loading"
+      <SectionHeader num="4" title="Arrive at Station — Loading"
         subtitle="Record your arrival and check if your area was staged." c={c} />
       <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground, marginBottom: spacing.sm }}>
         Was your area already staged when you arrived?
