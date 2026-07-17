@@ -155,7 +155,7 @@ export default function AnchorPointsScreen() {
         eta: apEta.trim(),
         notes: apNotes.trim() || undefined,
       });
-      Alert.alert(hasActive ? 'AP Relocated' : 'AP Submitted', 'Crew and dispatch have been notified.');
+      Alert.alert('AP Relocated', 'Crew and dispatch have been notified.');
       setSubmitModal(false);
       setApLocation(''); setApEta(''); setApNotes('');
       fetchAPs();
@@ -204,7 +204,7 @@ export default function AnchorPointsScreen() {
           <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
         </TouchableOpacity>
         <View style={s.headerCenter}>
-          <Text style={s.pageTitle}>Anchor Points</Text>
+          <Text style={s.pageTitle}>Anchor Point</Text>
           {crew?.truck_name ? (
             <Text style={s.subtitle}>{crew.truck_name} · {todayISO()}</Text>
           ) : (
@@ -225,7 +225,7 @@ export default function AnchorPointsScreen() {
             <Text style={[s.lockedBody, { color: c.mutedForeground }]}>
               {!crewPublished
                 ? 'Dispatch has not published today\'s crew list yet. Check back after dispatch runs.'
-                : 'Confirm your attendance in Field Ops first. Anchor Points unlock once your assignment is confirmed.'}
+                : 'Confirm your attendance in Field Ops first. This page unlocks once your assignment is confirmed.'}
             </Text>
           </View>
         </View>
@@ -241,27 +241,29 @@ export default function AnchorPointsScreen() {
           <ActivityIndicator color={c.primary} style={{ marginTop: spacing.xl }} />
         ) : (
           <>
-            {/* Action buttons */}
-            <View style={s.actionRow}>
-              <TouchableOpacity
-                style={[s.actionBtn, { backgroundColor: c.primary, flex: 1 }]}
-                onPress={() => setSubmitModal(true)}
-                disabled={!crew?.truck_id}
-              >
-                <Text style={s.actionBtnText}>
-                  {hasActive ? '🔀 Relocate AP' : '📍 Set Anchor Point'}
-                </Text>
-              </TouchableOpacity>
-
-              {activeAP?.status === 'preliminary' && (
+            {/* Action buttons — the INITIAL anchor point is set in Field Ops (gated
+                behind check-in → departure, ADR-206). This page only relocates an
+                existing AP and confirms arrival. */}
+            {hasActive && (
+              <View style={s.actionRow}>
                 <TouchableOpacity
-                  style={[s.actionBtn, { backgroundColor: c.success, flex: 1 }]}
-                  onPress={() => openArrive(activeAP)}
+                  style={[s.actionBtn, { backgroundColor: c.primary, flex: 1 }]}
+                  onPress={() => setSubmitModal(true)}
+                  disabled={!crew?.truck_id}
                 >
-                  <Text style={s.actionBtnText}>✅ Confirm Arrival</Text>
+                  <Text style={s.actionBtnText}>🔀 Relocate AP</Text>
                 </TouchableOpacity>
-              )}
-            </View>
+
+                {activeAP?.status === 'preliminary' && (
+                  <TouchableOpacity
+                    style={[s.actionBtn, { backgroundColor: c.success, flex: 1 }]}
+                    onPress={() => openArrive(activeAP)}
+                  >
+                    <Text style={s.actionBtnText}>✅ Confirm Arrival</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
             {/* Active AP card */}
             {activeAP && (
@@ -296,9 +298,11 @@ export default function AnchorPointsScreen() {
             {!hasActive && !loading && (
               <View style={s.emptyCard}>
                 <Text style={s.emptyIcon}>📍</Text>
-                <Text style={s.emptyTitle}>No anchor point set</Text>
+                <Text style={s.emptyTitle}>No anchor point yet</Text>
                 <Text style={s.emptyBody}>
-                  Set your preliminary AP before leaving the station so your crew and dispatch know where you're headed.
+                  Set your preliminary anchor point from the Field Ops checklist — it unlocks
+                  after you check in, complete the pre-trip and odometer, arrive at the station
+                  and load. Once it's set, come back here to relocate it or confirm arrival.
                 </Text>
               </View>
             )}
@@ -323,7 +327,7 @@ export default function AnchorPointsScreen() {
           <ScrollView style={{ width: '100%' }} contentContainerStyle={{ alignItems: 'center', paddingVertical: spacing.xl }}>
             <View style={[s.modalCard, { backgroundColor: c.card }]}>
               <Text style={[s.modalTitle, { color: c.foreground }]}>
-                {hasActive ? 'Relocate Anchor Point' : 'Set Anchor Point'}
+                Relocate Anchor Point
               </Text>
               {hasActive && (
                 <View style={[s.warningBox, { backgroundColor: c.warning + '18', borderColor: c.warning + '40' }]}>
@@ -392,9 +396,7 @@ export default function AnchorPointsScreen() {
                 >
                   {submitting
                     ? <ActivityIndicator color="#fff" />
-                    : <Text style={[s.modalBtnText, { color: '#fff' }]}>
-                        {hasActive ? 'Relocate' : 'Submit'}
-                      </Text>
+                    : <Text style={[s.modalBtnText, { color: '#fff' }]}>Relocate</Text>
                   }
                 </TouchableOpacity>
               </View>

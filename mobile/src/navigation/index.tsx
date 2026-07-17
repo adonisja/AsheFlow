@@ -24,7 +24,7 @@ import NotificationsScreen      from '@screens/Notifications/NotificationsScreen
 import IncidentsScreen          from '@screens/Incidents/IncidentsScreen';
 import TrainerDashboard         from '@screens/Trainer/TrainerDashboard';
 import TraineeDashboard         from '@screens/Trainee/TraineeDashboard';
-import AnchorPointsScreen       from '@screens/AnchorPoints/AnchorPointsScreen';
+import AnchorPointTab           from '@screens/AnchorPoints/AnchorPointTab';
 import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
 import ScheduleChangesScreen    from '@screens/ScheduleChanges/ScheduleChangesScreen';
 import WalkerDashboard          from '@screens/Walker/WalkerDashboard';
@@ -87,7 +87,7 @@ type TabDef = {
 const ALL_TABS: TabDef[] = [
   { key: 'Home',            label: 'Home',            icon: '🏠', roles: [],                     component: HomeNavigator },
   { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
-  { key: 'AnchorPoints',    label: 'Anchor Points',    icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointsScreen },
+  { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointTab },
   { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
   { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortScreen },
   { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen },

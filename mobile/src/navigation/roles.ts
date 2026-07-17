@@ -9,7 +9,9 @@
  */
 export const FIELD_ROLES              = ['driver', 'trainer', 'trainee', 'walker'] as const;
 export const FIELD_OPS_ROLES          = ['driver'] as const;
-export const ANCHOR_POINT_ROLES       = ['driver'] as const;
+// Driver runs the AP workflow (relocate/arrival); crew sees the meet-up point +
+// today's assignment. Same "Anchor Point" tab, role-branched component.
+export const ANCHOR_POINT_ROLES       = ['driver', 'trainer', 'trainee', 'walker'] as const;
 export const PREFERENCES_ROLES        = ['driver', 'walker', 'trainer', 'trainee'] as const;
 export const SCHEDULE_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
 export const SCHEDULE_CHANGE_ROLES    = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'] as const;

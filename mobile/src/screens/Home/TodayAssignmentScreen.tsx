@@ -247,7 +247,7 @@ export default function TodayAssignmentScreen() {
 
   if (!loading && !assignment) {
     return (
-      <ScreenShell title="Today's Assignment" subtitle={today} onBack={() => navigation.goBack()}>
+      <ScreenShell title="Today's Assignment" subtitle={today} onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}>
         <View style={s.emptyCard}>
           <Text style={s.emptyIcon}>🚚</Text>
           <Text style={s.emptyText}>No assignment for today</Text>
@@ -286,7 +286,7 @@ export default function TodayAssignmentScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}
-      onBack={() => navigation.goBack()}
+      onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
     >
       {/* Truck + my role + pairing */}
       {assignment && (
