@@ -11,6 +11,7 @@ import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { Badge, Button } from '@components/ui/primitives';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -87,11 +88,20 @@ type Proposal = {
   auto_proposed: boolean;
 };
 
-const EFFORT_COLORS: Record<string, string> = {
-  easy: '#0FA870', standard: '#0EA5D8', heavy: '#E8820C', very_heavy: '#E8443A',
-};
+// Effort class → themed color (ADR-207). Maps to semantic tokens so it tracks
+// light/dark: easy=success, standard=info, heavy=warning, very_heavy=danger.
+function effortColor(effortClass: string, c: ThemeColors): string {
+  switch (effortClass) {
+    case 'easy':       return c.success;
+    case 'standard':   return c.info;
+    case 'heavy':      return c.warning;
+    case 'very_heavy': return c.danger;
+    default:           return c.primary;
+  }
+}
 
-// Availability chip (ADR-197). label + {bg,fg} colors per availability state.
+// Availability chip (ADR-197). label + Badge tone per availability state — tones
+// resolve to themed colors (light/dark) via the Badge primitive (ADR-207).
 const AVAIL_LABEL: Record<CrewStatusEntry['availability'], string> = {
   not_arrived: 'Not Present',
   available: 'Available',
@@ -100,13 +110,14 @@ const AVAIL_LABEL: Record<CrewStatusEntry['availability'], string> = {
   done: 'Done',
   off_crew: 'Off crew',
 };
-const AVAIL_CHIP: Record<CrewStatusEntry['availability'], { bg: string; fg: string }> = {
-  not_arrived:        { bg: '#F1F5F9', fg: '#475569' },
-  available:          { bg: '#D1FAE5', fg: '#047857' },
-  on_route_early:     { bg: '#FEF3C7', fg: '#B45309' },
-  on_route_returning: { bg: '#E0F2FE', fg: '#0369A1' },
-  done:               { bg: '#D1FAE5', fg: '#047857' },
-  off_crew:           { bg: '#E5E7EB', fg: '#6B7280' },
+type BadgeTone = 'success' | 'warning' | 'danger' | 'info' | 'primary' | 'gold' | 'teal' | 'slate' | 'neutral' | 'muted';
+const AVAIL_TONE: Record<CrewStatusEntry['availability'], BadgeTone> = {
+  not_arrived:        'muted',
+  available:          'success',
+  on_route_early:     'warning',
+  on_route_returning: 'info',
+  done:               'success',
+  off_crew:           'neutral',
 };
 
 export default function RouteSortScreen() {
@@ -482,9 +493,9 @@ export default function RouteSortScreen() {
       {routes.length > 0 && (
         <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
           <View style={s.summaryRow}>
-            <Summary label="Unassigned" value={unassigned.length} color={unassigned.length > 0 ? '#E8820C' : c.mutedForeground} c={c} />
-            <Summary label="Out now" value={active.length} color="#0EA5D8" c={c} />
-            <Summary label="Done" value={completed.length} color="#0FA870" c={c} />
+            <Summary label="Unassigned" value={unassigned.length} color={unassigned.length > 0 ? c.warning : c.mutedForeground} c={c} />
+            <Summary label="Out now" value={active.length} color={c.info} c={c} />
+            <Summary label="Done" value={completed.length} color={c.success} c={c} />
           </View>
           {unassigned.length > 0 && (
             <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={propose} disabled={proposing}>
@@ -499,7 +510,7 @@ export default function RouteSortScreen() {
       {/* Paired arrival & rebalance (ADR-145): trainee confirms arrival from
           their app; this card completes the 1.5× route expansion. */}
       {routes.length > 0 && pairedTrainee && (
-        <View style={[s.card, { backgroundColor: c.card, borderColor: rebalanced ? c.border : '#0FA87055' }]}>
+        <View style={[s.card, { backgroundColor: c.card, borderColor: rebalanced ? c.border : c.success + '55' }]}>
           {rebalanced ? (
             <Text style={[s.cardSub, { marginBottom: 0 }]}>
               🤝 Paired route active — {pairedTrainee.name} rides with you at 1.5× capacity.
@@ -512,15 +523,10 @@ export default function RouteSortScreen() {
                   ? `📍 Arrived ${new Date(traineeArrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — run the rebalance to expand your shared route to 1.5×.`
                   : 'Waiting for your trainee to confirm arrival in their app — you can rebalance anyway if they\'re standing next to you.'}
               </Text>
-              <TouchableOpacity
-                style={[s.primaryBtn, { backgroundColor: traineeArrivedAt ? '#0FA870' : c.primary }]}
-                onPress={runRebalance}
-                disabled={rebalancing}
-              >
-                {rebalancing
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={s.primaryBtnText}>🤝 Confirm Arrival & Rebalance (1.5×)</Text>}
-              </TouchableOpacity>
+              <Button variant={traineeArrivedAt ? 'success' : 'primary'} fullWidth
+                loading={rebalancing} onPress={runRebalance}>
+                🤝 Confirm Arrival & Rebalance (1.5×)
+              </Button>
             </>
           )}
         </View>
@@ -530,7 +536,7 @@ export default function RouteSortScreen() {
           sort computed where each belongs; one tap moves the package data
           with it (pull it from the wrong tote as you tap). */}
       {misroutes.length > 0 && (
-        <View style={[s.card, { backgroundColor: c.card, borderColor: '#E8820C55' }]}>
+        <View style={[s.card, { backgroundColor: c.card, borderColor: c.warning + '55' }]}>
           <Text style={s.cardTitle}>⚠ Misrouted packages · {misroutes.length}</Text>
           <Text style={s.cardSub}>Pull each from its current tote and hand it to the right walker.</Text>
           {misroutes.slice(0, 12).map(({ flag, source, suggested }) => (
@@ -575,7 +581,7 @@ export default function RouteSortScreen() {
               const name = crew.find(cm => cm.employee_id === m.employee_id)?.name ?? m.role;
               const off = m.status !== 'active';
               const cs = crewStatus[m.employee_id];
-              const chip = cs ? AVAIL_CHIP[cs.availability] : null;
+              const tone = cs ? AVAIL_TONE[cs.availability] : null;
               const pct = cs?.route_completion_pct != null ? ` · ${Math.round(cs.route_completion_pct * 100)}%` : '';
               const stop = currentStops[m.employee_id];
               return (
@@ -592,12 +598,8 @@ export default function RouteSortScreen() {
                       </Text>
                     </View>
                     {/* Current state tag — always shown, separated from any actions. */}
-                    {chip && (
-                      <View style={{ backgroundColor: chip.bg, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2 }}>
-                        <Text style={{ fontSize: fontSize.xs, color: chip.fg, fontWeight: fontWeight.semibold }}>
-                          {AVAIL_LABEL[cs!.availability]}{pct}
-                        </Text>
-                      </View>
+                    {tone && (
+                      <Badge tone={tone} dot>{AVAIL_LABEL[cs!.availability]}{pct}</Badge>
                     )}
                   </View>
 
@@ -606,39 +608,35 @@ export default function RouteSortScreen() {
                       absent, and someone mid-route isn't done yet. Own row so it
                       reads as a button, not the state. */}
                   {!off && cs?.availability === 'available' && (
-                    <TouchableOpacity
-                      style={{ marginTop: spacing.sm, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
-                      onPress={() => markDeparted(m, name)}
-                      disabled={departingId === m.id}
-                    >
-                      {departingId === m.id
-                        ? <ActivityIndicator size="small" color={c.mutedForeground} />
-                        : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Mark Done for the Day</Text>}
-                    </TouchableOpacity>
+                    <View style={{ marginTop: spacing.sm }}>
+                      <Button variant="outline" size="sm" fullWidth
+                        loading={departingId === m.id}
+                        onPress={() => markDeparted(m, name)}>
+                        Mark Done for the Day
+                      </Button>
+                    </View>
                   )}
 
                   {/* Roll-call actions — a separate row beneath the state tag so the
                       action verbs ("Mark As Present" / "Mark NCNS") read as buttons,
                       not as the current state. Only while the member is Not Present. */}
                   {!off && cs?.availability === 'not_arrived' && (
-                    rollCallId === m.employee_id ? (
-                      <ActivityIndicator size="small" color={c.mutedForeground} style={{ marginTop: spacing.sm, alignSelf: 'flex-start' }} />
-                    ) : (
-                      <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
-                        <TouchableOpacity
-                          style={{ flex: 1, backgroundColor: '#047857', borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
-                          onPress={() => takeRollCall(m.employee_id, false)}
-                        >
-                          <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Mark As Present</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={{ flex: 1, backgroundColor: '#DC2626', borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
-                          onPress={() => confirmNCNS(m.employee_id, name)}
-                        >
-                          <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Mark NCNS</Text>
-                        </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+                      <View style={{ flex: 1 }}>
+                        <Button variant="success" size="sm" fullWidth
+                          loading={rollCallId === m.employee_id}
+                          onPress={() => takeRollCall(m.employee_id, false)}>
+                          Mark As Present
+                        </Button>
                       </View>
-                    )
+                      <View style={{ flex: 1 }}>
+                        <Button variant="danger" size="sm" fullWidth
+                          disabled={rollCallId === m.employee_id}
+                          onPress={() => confirmNCNS(m.employee_id, name)}>
+                          Mark NCNS
+                        </Button>
+                      </View>
+                    </View>
                   )}
                   {stop && (
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
@@ -672,9 +670,9 @@ export default function RouteSortScreen() {
               <Text style={[ms.hint, { color: c.mutedForeground }]}>Tap a row to change who takes it.</Text>
 
               {conflicts.length > 0 && (
-                <View style={[ms.conflictBox, { backgroundColor: '#E8820C15', borderColor: '#E8820C44' }]}>
+                <View style={[ms.conflictBox, { backgroundColor: c.warning + '15', borderColor: c.warning + '44' }]}>
                   {conflicts.map((cf, i) => (
-                    <Text key={i} style={[ms.conflictText, { color: '#B45309' }]}>⚠ {cf}</Text>
+                    <Text key={i} style={[ms.conflictText, { color: c.warning }]}>⚠ {cf}</Text>
                   ))}
                 </View>
               )}
@@ -744,7 +742,7 @@ export default function RouteSortScreen() {
 
 function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: ReturnType<typeof styles> }) {
   const [expanded, setExpanded] = useState(false);
-  const effortColor = EFFORT_COLORS[route.effort_class] ?? c.primary;
+  const effortC = effortColor(route.effort_class, c);
 
   // Delivered stops (ADR-194). Chips and drill-down come from here so flagged
   // riders (shown in the misroute card instead) don't masquerade as coverage.
@@ -764,8 +762,8 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
         onPress={toggle}
         activeOpacity={0.7}
       >
-        <View style={[s.routeNum, { backgroundColor: effortColor + '1E' }]}>
-          <Text style={[s.routeNumText, { color: effortColor }]}>{route.route_number}</Text>
+        <View style={[s.routeNum, { backgroundColor: effortC + '1E' }]}>
+          <Text style={[s.routeNumText, { color: effortC }]}>{route.route_number}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[s.routeName, { color: c.foreground }]}>
@@ -829,15 +827,15 @@ function ProposalRow({
     setExpanded(e => !e);
   };
 
-  const effortColor = EFFORT_COLORS[proposal.effort_class] ?? c.primary;
+  const effortC = effortColor(proposal.effort_class, c);
 
   return (
     <View style={{ borderBottomWidth: 1, borderBottomColor: c.border }}>
       {/* Header row — tap left to expand, tap right to reassign */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.sm }}>
         <TouchableOpacity onPress={toggle} activeOpacity={0.7}>
-          <View style={[s.routeNum, { backgroundColor: effortColor + '1E' }]}>
-            <Text style={[s.routeNumText, { color: effortColor }]}>{proposal.route_number}</Text>
+          <View style={[s.routeNum, { backgroundColor: effortC + '1E' }]}>
+            <Text style={[s.routeNumText, { color: effortC }]}>{proposal.route_number}</Text>
           </View>
         </TouchableOpacity>
         <TouchableOpacity style={{ flex: 1 }} onPress={toggle} activeOpacity={0.7}>
@@ -856,7 +854,7 @@ function ProposalRow({
           </View>
         </TouchableOpacity>
         <TouchableOpacity onPress={onAssigneePress} style={{ paddingHorizontal: spacing.xs }}>
-          <Text style={{ fontSize: fontSize.xs, color: overridden ? '#E8820C' : c.mutedForeground, fontWeight: fontWeight.semibold }}>
+          <Text style={{ fontSize: fontSize.xs, color: overridden ? c.warning : c.mutedForeground, fontWeight: fontWeight.semibold }}>
             {overridden ? 'edited ✎' : 'auto ✎'}
           </Text>
         </TouchableOpacity>
