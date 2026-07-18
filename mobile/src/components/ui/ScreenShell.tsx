@@ -11,7 +11,8 @@ import ThemeToggle from '@components/ui/ThemeToggle';
 type Edge = 'top' | 'bottom' | 'left' | 'right';
 
 type Props = {
-  title: string;
+  /** Optional — not needed when noHeader is set (the header isn't rendered). */
+  title?: string;
   subtitle?: string;
   loading?: boolean;
   refreshing?: boolean;

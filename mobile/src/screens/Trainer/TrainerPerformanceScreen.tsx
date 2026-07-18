@@ -77,8 +77,7 @@ export default function TrainerPerformanceScreen() {
 
   return (
     <ScreenShell
-      title="My Performance"
-      subtitle="Marks and standing"
+      noHeader
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); fetch(); }}

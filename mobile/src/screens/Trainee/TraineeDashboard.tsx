@@ -28,9 +28,19 @@ export default function TraineeDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('today');
   const s = styles(c);
 
+  // Header title transitions with the active tab (ADR-207); child screens render
+  // headerless so there's no duplicate title.
+  const HEADER_TITLE: Record<Tab, string> = {
+    today:       "Today's Training",
+    history:     'Training History',
+    myroute:     'My Route',
+    quiz:        'Graduation Quiz',
+    credentials: 'My Credentials',
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <PageHeader title="My Training" />
+      <PageHeader title={HEADER_TITLE[activeTab] ?? 'My Training'} />
 
       <View style={s.tabBarWrap}>
         <ScrollView

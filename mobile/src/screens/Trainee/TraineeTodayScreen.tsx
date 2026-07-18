@@ -116,7 +116,7 @@ export default function TraineeTodayScreen() {
 
   if (!loading && !data) {
     return (
-      <ScreenShell title="My Training" subtitle="No active training record today.">
+      <ScreenShell noHeader>
         <View style={{ alignItems: 'center', marginTop: 64, gap: spacing.sm }}>
           <Text style={{ fontSize: 48 }}>📚</Text>
           <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground }}>No training session today</Text>
@@ -134,8 +134,7 @@ export default function TraineeTodayScreen() {
 
   return (
     <ScreenShell
-      title="My Training"
-      subtitle={data ? `Day ${data.day_number} · Phase ${data.phase}` : undefined}
+      noHeader
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); fetch(); }}

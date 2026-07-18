@@ -45,9 +45,18 @@ export default function TrainerDashboard() {
 
   const s = styles(c);
 
+  // Header title transitions with the active tab (ADR-207) — the tab's own
+  // in-content title was removed, so this is the single page title.
+  const HEADER_TITLE: Record<Tab, string> = {
+    today:       "Today's Session",
+    history:     'Training History',
+    performance: 'My Performance',
+    phase4:      'Phase 4',
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <PageHeader title="Trainer Dashboard" />
+      <PageHeader title={HEADER_TITLE[activeTab] ?? 'Trainer Dashboard'} />
 
       {/* Tab bar */}
       <View style={s.tabBarWrap}>

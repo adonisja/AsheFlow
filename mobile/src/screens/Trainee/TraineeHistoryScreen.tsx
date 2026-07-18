@@ -108,8 +108,7 @@ export default function TraineeHistoryScreen() {
 
   return (
     <ScreenShell
-      title="Training History"
-      subtitle="All past sessions"
+      noHeader
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); fetch(); }}
