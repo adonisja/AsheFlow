@@ -11,6 +11,7 @@ import { useColors, useTheme } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } from '@env';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 import MyPerformanceCard from '@components/MyPerformanceCard';
 import ScorecardCard from '@components/ScorecardCard';
 
@@ -167,9 +168,8 @@ export default function MyAccountScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>My Account</Text>
-      </View>
+      {/* hideToggle: this screen has its own System/Light/Dark control in the body */}
+      <PageHeader title="My Account" hideToggle />
 
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
 

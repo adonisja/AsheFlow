@@ -9,6 +9,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import { spacing, fontSize, fontWeight, radius, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type RequestType = 'add_day' | 'drop_day' | 'full_rework';
@@ -401,12 +402,10 @@ export default function ScheduleChangesScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>Schedule Changes</Text>
-        <Text style={s.subtitle}>
-          {isPrivileged ? 'Review pending requests' : 'Request a change to your weekly schedule'}
-        </Text>
-      </View>
+      <PageHeader
+        title={isPrivileged ? 'Change Requests' : 'Schedule Changes'}
+        subtitle={isPrivileged ? 'Review pending requests' : 'Request a change to your weekly schedule'}
+      />
       {isPrivileged ? <PrivilegedView c={c} /> : <FieldStaffView c={c} />}
     </SafeAreaView>
   );

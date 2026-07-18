@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 import MyRouteScreen          from '@screens/Trainee/MyRouteScreen';
 import WalkerPerformanceScreen from './WalkerPerformanceScreen';
@@ -23,9 +24,7 @@ export default function WalkerDashboard() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>Walker</Text>
-      </View>
+      <PageHeader title="Walker" />
 
       <View style={s.tabBarWrap}>
         <ScrollView
