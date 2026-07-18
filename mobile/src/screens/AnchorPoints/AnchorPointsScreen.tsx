@@ -10,6 +10,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { Button } from '@components/ui/primitives';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AP = {
@@ -246,21 +247,18 @@ export default function AnchorPointsScreen() {
                 existing AP and confirms arrival. */}
             {hasActive && (
               <View style={s.actionRow}>
-                <TouchableOpacity
-                  style={[s.actionBtn, { backgroundColor: c.primary, flex: 1 }]}
-                  onPress={() => setSubmitModal(true)}
-                  disabled={!crew?.truck_id}
-                >
-                  <Text style={s.actionBtnText}>🔀 Relocate AP</Text>
-                </TouchableOpacity>
-
+                <View style={{ flex: 1 }}>
+                  <Button variant="primary" fullWidth disabled={!crew?.truck_id}
+                    onPress={() => setSubmitModal(true)}>
+                    🔀 Relocate AP
+                  </Button>
+                </View>
                 {activeAP?.status === 'preliminary' && (
-                  <TouchableOpacity
-                    style={[s.actionBtn, { backgroundColor: c.success, flex: 1 }]}
-                    onPress={() => openArrive(activeAP)}
-                  >
-                    <Text style={s.actionBtnText}>✅ Confirm Arrival</Text>
-                  </TouchableOpacity>
+                  <View style={{ flex: 1 }}>
+                    <Button variant="success" fullWidth onPress={() => openArrive(activeAP)}>
+                      ✅ Confirm Arrival
+                    </Button>
+                  </View>
                 )}
               </View>
             )}
@@ -386,19 +384,12 @@ export default function AnchorPointsScreen() {
               />
 
               <View style={s.modalBtns}>
-                <TouchableOpacity style={[s.modalBtn, { borderColor: c.border }]} onPress={() => setSubmitModal(false)}>
-                  <Text style={[s.modalBtnText, { color: c.foreground }]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[s.modalBtn, { backgroundColor: c.primary, borderColor: c.primary, opacity: submitting ? 0.6 : 1 }]}
-                  onPress={submitAP}
-                  disabled={submitting}
-                >
-                  {submitting
-                    ? <ActivityIndicator color="#fff" />
-                    : <Text style={[s.modalBtnText, { color: '#fff' }]}>Relocate</Text>
-                  }
-                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <Button variant="secondary" fullWidth onPress={() => setSubmitModal(false)}>Cancel</Button>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button variant="primary" fullWidth loading={submitting} onPress={submitAP}>Relocate</Button>
+                </View>
               </View>
             </View>
           </ScrollView>
@@ -436,19 +427,12 @@ export default function AnchorPointsScreen() {
             />
 
             <View style={s.modalBtns}>
-              <TouchableOpacity style={[s.modalBtn, { borderColor: c.border }]} onPress={() => setArriveModal(false)}>
-                <Text style={[s.modalBtnText, { color: c.foreground }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.modalBtn, { backgroundColor: c.success, borderColor: c.success, opacity: arriving ? 0.6 : 1 }]}
-                onPress={confirmArrival}
-                disabled={arriving}
-              >
-                {arriving
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={[s.modalBtnText, { color: '#fff' }]}>✅ I'm Here</Text>
-                }
-              </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Button variant="secondary" fullWidth onPress={() => setArriveModal(false)}>Cancel</Button>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button variant="success" fullWidth loading={arriving} onPress={confirmArrival}>✅ I'm Here</Button>
+              </View>
             </View>
           </View>
         </View>
@@ -529,8 +513,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   lockedTitle:     { fontSize: fontSize.lg, fontWeight: fontWeight.bold, textAlign: 'center' },
   lockedBody:      { fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
   actionRow:       { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
-  actionBtn:       { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', paddingHorizontal: spacing.md },
-  actionBtnText:   { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   activeCard:      { borderWidth: 2, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, backgroundColor: c.card },
   activeCardHeader:{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.xs },
   statusDot:       { width: 8, height: 8, borderRadius: 4 },
@@ -558,6 +540,4 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   suggestionChip:  { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, marginRight: spacing.xs, maxWidth: 180 },
   suggestionText:  { fontSize: fontSize.xs },
   modalBtns:       { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  modalBtn:        { flex: 1, borderWidth: 1, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' },
-  modalBtnText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });
