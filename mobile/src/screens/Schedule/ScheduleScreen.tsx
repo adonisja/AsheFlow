@@ -9,7 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type CrewMember = { id: string; name: string; role: string };
@@ -37,9 +37,6 @@ const MONTHS  = ['January','February','March','April','May','June','July','Augus
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
-const ROLE_COLORS: Record<string, string> = {
-  driver: '#5B4FE8', trainer: '#0FA870', trainee: '#0EA5D8', walker: '#E8820C',
-};
 const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
 };
@@ -489,9 +486,9 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
               {roleOrder.map(role => (
                 grouped[role].map((m, i) => (
                   <View key={m.id} style={[s.crewRow, i < grouped[role].length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-                    <View style={[s.crewDot, { backgroundColor: ROLE_COLORS[role] ?? c.primary }]} />
+                    <View style={[s.crewDot, { backgroundColor: getRoleColor(role as FieldRole, c) }]} />
                     <Text style={[s.crewName, { color: c.foreground }]}>{m.name}</Text>
-                    <Text style={[s.crewRole, { color: ROLE_COLORS[role] ?? c.mutedForeground }]}>
+                    <Text style={[s.crewRole, { color: getRoleColor(role as FieldRole, c) }]}>
                       {ROLE_LABELS[role] ?? role}
                     </Text>
                   </View>

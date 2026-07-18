@@ -116,7 +116,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   tabActive:     {},
   tabIcon:       { fontSize: 14 },
-  tabLabel:      { fontSize: fontSize.sm, color: '#9CA3AF', fontWeight: fontWeight.medium },
+  tabLabel:      { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
   tabIndicator:  {
     position: 'absolute',
     bottom: 0,

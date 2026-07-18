@@ -229,7 +229,7 @@ function QuestionBlock({
       <View style={s.questionHeader}>
         <Text style={[s.questionNum, { color: c.mutedForeground }]}>Q{index + 1}</Text>
         {question.is_mandatory && (
-          <Text style={{ color: '#EF4444', fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>Required</Text>
+          <Text style={{ color: c.danger, fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>Required</Text>
         )}
       </View>
       <Text style={[s.questionText, { color: c.foreground }]}>{question.question_text}</Text>
