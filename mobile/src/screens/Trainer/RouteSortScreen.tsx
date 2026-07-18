@@ -10,8 +10,8 @@ import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
-import { Badge, Button } from '@components/ui/primitives';
+import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
+import { Badge, Button, Avatar } from '@components/ui/primitives';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -584,14 +584,16 @@ export default function RouteSortScreen() {
               const tone = cs ? AVAIL_TONE[cs.availability] : null;
               const pct = cs?.route_completion_pct != null ? ` · ${Math.round(cs.route_completion_pct * 100)}%` : '';
               const stop = currentStops[m.employee_id];
+              const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
               return (
-                <View key={m.id} style={{ paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}>
+                <View key={m.id} style={[s.crewRow, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: off ? 0.6 : 1 }]}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                    <Avatar initials={initials} color={getRoleColor(m.role as FieldRole, c)} size={40} />
                     <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: fontSize.sm, color: off ? c.mutedForeground : c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
+                      <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
                         {name}
                       </Text>
-                      <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize' }}>
+                      <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize', marginTop: 1 }}>
                         {m.role}
                         {off ? ` · ${m.status}` : ''}
                         {cs && cs.trip_count > 0 ? ` · ${cs.trip_count} trip${cs.trip_count === 1 ? '' : 's'}` : ''}
@@ -921,6 +923,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   card:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md },
   cardTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground },
+  crewRow:    { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginTop: spacing.sm },
   cardSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.sm },
   primaryBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
   primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
