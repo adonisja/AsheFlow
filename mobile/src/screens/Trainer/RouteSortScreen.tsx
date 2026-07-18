@@ -599,19 +599,22 @@ export default function RouteSortScreen() {
                         </Text>
                       </View>
                     )}
-                    {/* Done-for-day action lives on the name row (not a not_arrived state). */}
-                    {!off && cs?.availability !== 'not_arrived' && (
-                      <TouchableOpacity
-                        style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
-                        onPress={() => markDeparted(m, name)}
-                        disabled={departingId === m.id}
-                      >
-                        {departingId === m.id
-                          ? <ActivityIndicator size="small" color={c.mutedForeground} />
-                          : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Mark Done</Text>}
-                      </TouchableOpacity>
-                    )}
                   </View>
+
+                  {/* Done-for-day action — its own row beneath the state tag so the
+                      action reads as a button, not the state. Sends them home /
+                      off the crew (status → departed), keeping the record. */}
+                  {!off && cs?.availability !== 'not_arrived' && (
+                    <TouchableOpacity
+                      style={{ marginTop: spacing.sm, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
+                      onPress={() => markDeparted(m, name)}
+                      disabled={departingId === m.id}
+                    >
+                      {departingId === m.id
+                        ? <ActivityIndicator size="small" color={c.mutedForeground} />
+                        : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Mark Done for the Day</Text>}
+                    </TouchableOpacity>
+                  )}
 
                   {/* Roll-call actions — a separate row beneath the state tag so the
                       action verbs ("Mark As Present" / "Mark NCNS") read as buttons,
@@ -628,10 +631,10 @@ export default function RouteSortScreen() {
                           <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Mark As Present</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={{ flex: 1, borderWidth: 1, borderColor: '#FCD34D', borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
+                          style={{ flex: 1, backgroundColor: '#DC2626', borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
                           onPress={() => confirmNCNS(m.employee_id, name)}
                         >
-                          <Text style={{ fontSize: fontSize.xs, color: '#B45309', fontWeight: fontWeight.semibold }}>Mark NCNS</Text>
+                          <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Mark NCNS</Text>
                         </TouchableOpacity>
                       </View>
                     )
