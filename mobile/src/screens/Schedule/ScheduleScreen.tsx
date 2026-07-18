@@ -453,13 +453,6 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
   const s = styles(c);
   const isOff     = OFF_STATUSES.has(entry.status);
   const isWorking = !isOff;
-  const crew      = entry.crew ?? [];
-
-  const grouped: Record<string, CrewMember[]> = {};
-  for (const m of crew) {
-    (grouped[m.role] = grouped[m.role] ?? []).push(m);
-  }
-  const roleOrder = ['driver', 'trainer', 'trainee', 'walker'].filter(r => grouped[r]?.length);
 
   return (
     <View style={[s.selectedCard, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -473,30 +466,13 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
         </Text>
       </View>
 
+      {/* Crew roster intentionally omitted here — the live crew + AP status lives
+          on the Anchor Point tab (ADR-207); showing it here duplicated that. */}
       {isWorking && entry.truck_name && (
-        <>
-          <View style={s.truckRow}>
-            <Text style={s.truckIcon}>🚚</Text>
-            <Text style={[s.truckName, { color: c.foreground }]}>Assigned to: {entry.truck_name}</Text>
-          </View>
-
-          {crew.length > 0 && (
-            <View style={s.crewSection}>
-              <Text style={[s.crewLabel, { color: c.mutedForeground }]}>Crew</Text>
-              {roleOrder.map(role => (
-                grouped[role].map((m, i) => (
-                  <View key={m.id} style={[s.crewRow, i < grouped[role].length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-                    <View style={[s.crewDot, { backgroundColor: getRoleColor(role as FieldRole, c) }]} />
-                    <Text style={[s.crewName, { color: c.foreground }]}>{m.name}</Text>
-                    <Text style={[s.crewRole, { color: getRoleColor(role as FieldRole, c) }]}>
-                      {ROLE_LABELS[role] ?? role}
-                    </Text>
-                  </View>
-                ))
-              ))}
-            </View>
-          )}
-        </>
+        <View style={s.truckRow}>
+          <Text style={s.truckIcon}>🚚</Text>
+          <Text style={[s.truckName, { color: c.foreground }]}>Assigned to: {entry.truck_name}</Text>
+        </View>
       )}
 
       {isWorking && !entry.truck_name && (
@@ -639,12 +615,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   truckRow:        { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.sm },
   truckIcon:       { fontSize: 16 },
   truckName:       { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  crewSection:     { backgroundColor: c.surfaceMuted, borderRadius: radius.md, overflow: 'hidden' },
-  crewLabel:       { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
-  crewRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm, paddingVertical: 8 },
-  crewDot:         { width: 7, height: 7, borderRadius: 4 },
-  crewName:        { fontSize: fontSize.sm, flex: 1 },
-  crewRole:        { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   selectedEmpty:   { fontSize: fontSize.sm, marginTop: spacing.xs },
 
   subTabBar:        { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: c.border, marginBottom: spacing.md },

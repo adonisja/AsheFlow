@@ -14,7 +14,10 @@ export const FIELD_OPS_ROLES          = ['driver'] as const;
 export const ANCHOR_POINT_ROLES       = ['driver', 'trainer', 'trainee', 'walker'] as const;
 export const PREFERENCES_ROLES        = ['driver', 'walker', 'trainer', 'trainee'] as const;
 export const SCHEDULE_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const SCHEDULE_CHANGE_ROLES    = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'] as const;
+// Field staff submit + track schedule-change requests from the Schedule tab's
+// "Schedule Changes" sub-tab (ADR-207), so they don't need a separate bottom tab.
+// The standalone tab is now the reviewers' approval queue only.
+export const SCHEDULE_CHANGE_ROLES    = ['dispatch', 'management', 'admin'] as const;
 export const INCIDENT_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
 export const TRAINER_ROLES            = ['trainer'] as const;
 export const TRAINEE_ROLES            = ['trainee'] as const;
