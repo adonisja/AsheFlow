@@ -8,7 +8,8 @@ import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
+import { Badge, Button, Avatar } from '@components/ui/primitives';
 
 type CrewMember = {
   id: string;
@@ -61,19 +62,14 @@ const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
 };
 
-const ROLE_COLORS: Record<string, string> = {
-  driver:  '#5B4FE8',
-  trainer: '#0FA870',
-  trainee: '#0EA5D8',
-  walker:  '#E8820C',
-};
-
 const ROLE_ORDER = ['driver', 'trainer', 'trainee', 'walker'];
 
-const PHASE_BADGE = {
-  planned:   { label: 'Scheduled',  color: '#E8820C', bg: '#E8820C22' },
-  active:    { label: 'Confirming', color: '#0EA5D8', bg: '#0EA5D822' },
-  completed: { label: 'Confirmed',  color: '#0FA870', bg: '#0FA87022' },
+// Dispatch phase → Badge tone + label (ADR-207; themed via the Badge primitive).
+type BadgeTone = 'success' | 'warning' | 'danger' | 'info' | 'primary' | 'gold' | 'teal' | 'slate' | 'neutral' | 'muted';
+const PHASE_BADGE: Record<'planned' | 'active' | 'completed', { label: string; tone: BadgeTone }> = {
+  planned:   { label: 'Scheduled',  tone: 'warning' },
+  active:    { label: 'Confirming', tone: 'info' },
+  completed: { label: 'Confirmed',  tone: 'success' },
 };
 
 /** Sections longer than this start collapsed — a 20+ walker roster shouldn't
@@ -274,8 +270,8 @@ export default function TodayAssignmentScreen() {
   const statusGlyph = (memberId: string) => {
     if (!confirmationsKnown) return null;
     const st = assignment?.confirmations[memberId];
-    if (st === 'confirmed') return <Text style={[s.confirmGlyph, { color: '#0FA870' }]}>✓</Text>;
-    if (st === 'declined')  return <Text style={[s.confirmGlyph, { color: '#E8443A' }]}>✗</Text>;
+    if (st === 'confirmed') return <Text style={[s.confirmGlyph, { color: c.success }]}>✓</Text>;
+    if (st === 'declined')  return <Text style={[s.confirmGlyph, { color: c.danger }]}>✗</Text>;
     return <Text style={[s.confirmGlyph, { color: c.mutedForeground }]}>·</Text>;
   };
 
@@ -299,11 +295,9 @@ export default function TodayAssignmentScreen() {
               <Text style={s.truckName}>{assignment.truck_name}</Text>
               <Text style={s.truckSub}>Today's truck</Text>
             </View>
-            <View style={[s.statusBadge, { backgroundColor: PHASE_BADGE[assignment.dispatchPhase].bg }]}>
-              <Text style={[s.statusText, { color: PHASE_BADGE[assignment.dispatchPhase].color }]}>
-                {PHASE_BADGE[assignment.dispatchPhase].label}
-              </Text>
-            </View>
+            <Badge tone={PHASE_BADGE[assignment.dispatchPhase].tone} dot>
+              {PHASE_BADGE[assignment.dispatchPhase].label}
+            </Badge>
           </View>
 
           <View style={s.divider} />
@@ -311,8 +305,8 @@ export default function TodayAssignmentScreen() {
           <View style={s.roleRow}>
             <View style={{ flex: 1 }}>
               <Text style={s.myRoleLabel}>Your Role</Text>
-              <View style={[s.myRolePill, { backgroundColor: (ROLE_COLORS[assignment.role] ?? c.primary) + '18' }]}>
-                <Text style={[s.myRoleText, { color: ROLE_COLORS[assignment.role] ?? c.primary }]}>
+              <View style={[s.myRolePill, { backgroundColor: getRoleColor(assignment.role as FieldRole, c) + '18' }]}>
+                <Text style={[s.myRoleText, { color: getRoleColor(assignment.role as FieldRole, c) }]}>
                   {ROLE_LABELS[assignment.role] ?? assignment.role}
                 </Text>
               </View>
@@ -340,15 +334,11 @@ export default function TodayAssignmentScreen() {
                 </Text>
               </View>
             ) : (
-              <TouchableOpacity
-                style={[s.arriveBtn, { backgroundColor: c.primary }]}
-                onPress={confirmApArrival}
-                disabled={arriving}
-              >
-                {arriving
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={s.arriveBtnText}>📍 I've arrived at the AP</Text>}
-              </TouchableOpacity>
+              <View style={{ marginTop: spacing.md }}>
+                <Button variant="primary" fullWidth loading={arriving} onPress={confirmApArrival}>
+                  📍 I've arrived at the AP
+                </Button>
+              </View>
             )
           )}
         </View>
@@ -361,21 +351,15 @@ export default function TodayAssignmentScreen() {
         const ap = assignment.anchorPoint;
         const arrived = ap.status === 'arrived';
         const fmtT = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const apTone: BadgeTone = arrived ? 'success' : ap.is_running_late ? 'danger' : 'info';
+        const apStatusLabel = arrived ? 'Arrived' : ap.is_running_late ? 'Running late' : 'En route';
         return (
           <View style={[s.apCard, {
-            backgroundColor: c.card, borderColor: ap.is_running_late ? '#E8443A' : c.border,
+            backgroundColor: c.card, borderColor: ap.is_running_late ? c.danger : c.border,
           }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <Text style={[s.apLabel, { color: c.mutedForeground }]}>ANCHOR POINT</Text>
-              <View style={{
-                backgroundColor: (arrived ? '#0FA870' : ap.is_running_late ? '#E8443A' : '#0EA5D8') + '22',
-                borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2,
-              }}>
-                <Text style={{ fontSize: 11, fontWeight: '700',
-                  color: arrived ? '#0FA870' : ap.is_running_late ? '#E8443A' : '#0EA5D8' }}>
-                  {arrived ? 'Arrived' : ap.is_running_late ? 'Running late' : 'En route'}
-                </Text>
-              </View>
+              <Badge tone={apTone} dot>{apStatusLabel}</Badge>
             </View>
 
             <Text style={[s.apLocation, { color: c.foreground }]}>📍 {ap.location}</Text>
@@ -394,7 +378,7 @@ export default function TodayAssignmentScreen() {
                 <Text style={[s.apMeta, { color: c.mutedForeground }]}>Confirmed by {ap.confirmed_by_name}</Text>
               )}
               {ap.sequence > 1 && (
-                <Text style={[s.apMeta, { color: '#E8820C' }]}>⇄ Relocated (spot #{ap.sequence})</Text>
+                <Text style={[s.apMeta, { color: c.warning }]}>⇄ Relocated (spot #{ap.sequence})</Text>
               )}
               {ap.expected_departure_at && (
                 <Text style={[s.apMeta, { color: c.mutedForeground }]}>Leaving ~{fmtT(ap.expected_departure_at)}</Text>
@@ -449,29 +433,25 @@ export default function TodayAssignmentScreen() {
             <Text style={s.confirmTitle}>Confirm your attendance</Text>
             <Text style={s.confirmSub}>Dispatch is waiting on your response for today.</Text>
             <View style={s.confirmBtnRow}>
-              <TouchableOpacity
-                style={[s.confirmBtn, { backgroundColor: '#0FA870' }]}
-                onPress={() => respond('confirmed')}
-                disabled={responding !== null}
-              >
-                {responding === 'confirmed'
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={s.confirmBtnText}>✓  I'll be there</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.confirmBtn, s.declineBtn]}
-                onPress={() => respond('declined')}
-                disabled={responding !== null}
-              >
-                {responding === 'declined'
-                  ? <ActivityIndicator color="#E8443A" size="small" />
-                  : <Text style={[s.confirmBtnText, { color: '#E8443A' }]}>Can't make it</Text>}
-              </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Button variant="success" fullWidth
+                  loading={responding === 'confirmed'} disabled={responding !== null}
+                  onPress={() => respond('confirmed')}>
+                  ✓  I'll be there
+                </Button>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button variant="outline" fullWidth
+                  loading={responding === 'declined'} disabled={responding !== null}
+                  onPress={() => respond('declined')}>
+                  Can't make it
+                </Button>
+              </View>
             </View>
           </View>
         ) : (
           <View style={[s.respondedCard, myStatus === 'confirmed' ? s.respondedOk : s.respondedNo]}>
-            <Text style={[s.respondedText, { color: myStatus === 'confirmed' ? '#0FA870' : '#E8443A' }]}>
+            <Text style={[s.respondedText, { color: myStatus === 'confirmed' ? c.success : c.danger }]}>
               {myStatus === 'confirmed' ? "✓ You're confirmed for today" : '✗ You declined today'}
             </Text>
           </View>
@@ -506,7 +486,7 @@ export default function TodayAssignmentScreen() {
               onPress={() => setExpanded(prev => ({ ...prev, [role]: !open }))}
               activeOpacity={0.7}
             >
-              <View style={[s.roleDot, { backgroundColor: ROLE_COLORS[role] ?? c.primary }]} />
+              <View style={[s.roleDot, { backgroundColor: getRoleColor(role as FieldRole, c) }]} />
               <Text style={s.sectionTitle}>{ROLE_LABELS[role] ?? role}s</Text>
               <Text style={s.sectionCount}>
                 {confirmedCount !== null ? `${confirmedCount}/${members.length} confirmed` : members.length}
@@ -522,11 +502,9 @@ export default function TodayAssignmentScreen() {
                   m.id === myId && s.memberRowMe,
                 ]}
               >
-                <View style={[s.avatar, { backgroundColor: (ROLE_COLORS[role] ?? c.primary) + '18' }]}>
-                  <Text style={[s.avatarText, { color: ROLE_COLORS[role] ?? c.primary }]}>
-                    {m.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                  </Text>
-                </View>
+                <Avatar
+                  initials={m.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  color={getRoleColor(role as FieldRole, c)} size={32} />
                 <Text style={[s.memberName, m.id === myId && { color: c.primary, fontWeight: fontWeight.semibold }]}>
                   {m.name}{m.id === myId ? ' (you)' : ''}
                 </Text>
@@ -556,24 +534,19 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   myRoleText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   pairedName:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, paddingVertical: 2 },
 
-  arriveBtn:        { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginTop: spacing.md },
-  arriveBtnText:    { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   arrivedBanner:    { borderRadius: radius.md, padding: spacing.sm, alignItems: 'center', marginTop: spacing.md },
   arrivedBannerText:{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center' },
 
   plannedHint:     { backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md },
   plannedHintText: { fontSize: fontSize.xs, color: c.mutedForeground, textAlign: 'center' },
 
-  confirmCard:   { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: '#0EA5D855', padding: spacing.md, marginBottom: spacing.md },
+  confirmCard:   { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.info + '55', padding: spacing.md, marginBottom: spacing.md },
   confirmTitle:  { fontSize: fontSize.md, fontWeight: fontWeight.bold, color: c.foreground },
   confirmSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.md },
   confirmBtnRow: { flexDirection: 'row', gap: spacing.sm },
-  confirmBtn:    { flex: 1, paddingVertical: spacing.sm + 2, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
-  declineBtn:    { backgroundColor: '#E8443A18', borderWidth: 1, borderColor: '#E8443A44' },
-  confirmBtnText:{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: '#fff' },
   respondedCard: { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md, alignItems: 'center' },
-  respondedOk:   { backgroundColor: '#0FA87011', borderColor: '#0FA87044' },
-  respondedNo:   { backgroundColor: '#E8443A11', borderColor: '#E8443A44' },
+  respondedOk:   { backgroundColor: c.success + '11', borderColor: c.success + '44' },
+  respondedNo:   { backgroundColor: c.danger + '11', borderColor: c.danger + '44' },
   respondedText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   section:       { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, marginBottom: spacing.md, overflow: 'hidden' },
@@ -586,13 +559,11 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   memberRow:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   memberRowBorder:{ borderBottomWidth: 1, borderBottomColor: c.border },
   memberRowMe:   { backgroundColor: c.primaryLight + '40' },
-  avatar:        { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  avatarText:    { fontSize: fontSize.xs, fontWeight: fontWeight.bold },
   memberName:    { fontSize: fontSize.sm, color: c.foreground, flex: 1 },
   confirmGlyph:  { fontSize: fontSize.md, fontWeight: fontWeight.bold, width: 20, textAlign: 'center' },
 
-  transferCard:  { backgroundColor: '#E8820C11', borderRadius: radius.lg, borderWidth: 1, borderColor: '#E8820C44', padding: spacing.md, marginBottom: spacing.md },
-  transferLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: '#E8820C', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },
+  transferCard:  { backgroundColor: c.warning + '11', borderRadius: radius.lg, borderWidth: 1, borderColor: c.warning + '44', padding: spacing.md, marginBottom: spacing.md },
+  transferLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.warning, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },
   transferText:  { fontSize: fontSize.sm, color: c.foreground },
   transferBold:  { fontWeight: fontWeight.bold },
   transferTime:  { fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 },
