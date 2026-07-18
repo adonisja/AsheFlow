@@ -50,13 +50,17 @@ type ReattemptAssignment = {
   created_at: string;
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  pending:      '#E8820C',
-  assigned:     '#0EA5D8',
-  attempted:    '#8B5CF6',
-  delivered:    '#0FA870',
-  failed_again: '#E8443A',
-};
+// Reattempt status → themed color (ADR-207).
+function statusColor(status: string, c: ThemeColors): string {
+  switch (status) {
+    case 'pending':      return c.warning;
+    case 'assigned':     return c.info;
+    case 'attempted':    return c.primary;
+    case 'delivered':    return c.success;
+    case 'failed_again': return c.danger;
+    default:             return c.mutedForeground;
+  }
+}
 
 const STATUS_LABELS: Record<string, string> = {
   pending:      'Pending',
@@ -342,7 +346,7 @@ export default function ReattemptScreen() {
                   disabled={patching}
                 >
                   <View style={[
-                    { width: 10, height: 10, borderRadius: 5, backgroundColor: STATUS_COLORS[st] ?? c.mutedForeground, marginRight: spacing.sm },
+                    { width: 10, height: 10, borderRadius: 5, backgroundColor: statusColor(st, c), marginRight: spacing.sm },
                   ]} />
                   <Text style={{ fontSize: fontSize.sm, color: c.foreground, flex: 1 }}>{STATUS_LABELS[st]}</Text>
                   {patching && <ActivityIndicator size="small" color={c.primary} />}
@@ -408,7 +412,7 @@ function BundleCard({ bundle, c, s, onAssign }: {
 function AssignmentCard({ assignment: a, c, s, onPress }: {
   assignment: ReattemptAssignment; c: ThemeColors; s: ReturnType<typeof styles>; onPress: () => void;
 }) {
-  const statusColor = STATUS_COLORS[a.status] ?? c.mutedForeground;
+  const statusCol = statusColor(a.status, c);
   const isCloseable = a.status === 'assigned' || a.status === 'attempted';
 
   return (
@@ -435,8 +439,8 @@ function AssignmentCard({ assignment: a, c, s, onPress }: {
           )}
         </View>
         <View style={{ alignItems: 'flex-end', gap: 4 }}>
-          <View style={{ backgroundColor: statusColor + '1E', borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 }}>
-            <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: statusColor }}>{STATUS_LABELS[a.status] ?? a.status}</Text>
+          <View style={{ backgroundColor: statusCol + '1E', borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 }}>
+            <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: statusCol }}>{STATUS_LABELS[a.status] ?? a.status}</Text>
           </View>
           {isCloseable && (
             <Text style={{ fontSize: 10, color: c.mutedForeground }}>Tap to update</Text>

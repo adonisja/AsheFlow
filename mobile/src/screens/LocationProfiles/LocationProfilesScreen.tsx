@@ -51,11 +51,11 @@ const PROTOCOL: Record<BuildingType, string> = {
   biz_loading_dock: 'Photo at loading dock or get mail clerk\'s name.',
 };
 
-function statusColor(status: string, primary: string): string {
-  if (status === 'locked')   return '#10B981';
-  if (status === 'verified') return primary;
-  if (status === 'nominated') return '#F59E0B';
-  return '#9CA3AF';
+function statusColor(status: string, c: ThemeColors): string {
+  if (status === 'locked')   return c.success;
+  if (status === 'verified') return c.primary;
+  if (status === 'nominated') return c.gold;
+  return c.mutedForeground;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ export default function LocationProfilesScreen() {
               onRefresh={() => loadProfiles(searchKey || undefined, { refresh: true })}
               refreshing={refreshing}
               renderItem={({ item: p }) => {
-                const col = statusColor(p.building_type_status, c.primary);
+                const col = statusColor(p.building_type_status, c);
                 const typeLabel = BUILDING_TYPES.find(b => b.value === p.building_type)?.label ?? p.building_type;
                 return (
                   <View style={[s.profileCard, { backgroundColor: c.surface, borderColor: c.border, borderLeftColor: col }]}>
@@ -221,7 +221,7 @@ export default function LocationProfilesScreen() {
         /* Submit form */
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.md, gap: spacing.md }}>
 
-          <Text style={[s.label, { color: c.foreground }]}>Block Key <Text style={{ color: '#EF4444' }}>*</Text></Text>
+          <Text style={[s.label, { color: c.foreground }]}>Block Key <Text style={{ color: c.danger }}>*</Text></Text>
           <TextInput
             style={[s.input, { borderColor: c.border, color: c.foreground, backgroundColor: c.surface }]}
             placeholder="e.g. W_36_St_410s_odd"
@@ -234,7 +234,7 @@ export default function LocationProfilesScreen() {
             The block key appears on your manifest or dispatch sheet.
           </Text>
 
-          <Text style={[s.label, { color: c.foreground }]}>Building Type <Text style={{ color: '#EF4444' }}>*</Text></Text>
+          <Text style={[s.label, { color: c.foreground }]}>Building Type <Text style={{ color: c.danger }}>*</Text></Text>
           <View style={s.typeGrid}>
             {BUILDING_TYPES.map(bt => {
               const sel = buildingType === bt.value;

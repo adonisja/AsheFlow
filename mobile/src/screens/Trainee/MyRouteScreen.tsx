@@ -76,10 +76,19 @@ const BUILDING_TYPES: { value: string; label: string }[] = [
   { value: 'biz_loading_dock', label: 'Business — loading dock' },
 ];
 
-const SIGNAL_COLORS: Record<string, string> = {
-  closing_soon: '#E8443A', break_approaching: '#E8820C', not_open_yet: '#0EA5D8',
-  closed_today: '#E8443A', high_wait: '#E8820C', rts_history: '#8B5CF6',
-};
+// Building signal → themed color (ADR-207). Urgent-close signals = danger,
+// timing/wait warnings = warning, informational = info/primary.
+function signalColor(signal: string, c: ThemeColors): string {
+  switch (signal) {
+    case 'closing_soon':
+    case 'closed_today':      return c.danger;
+    case 'break_approaching':
+    case 'high_wait':         return c.warning;
+    case 'not_open_yet':      return c.info;
+    case 'rts_history':       return c.primary;
+    default:                  return c.mutedForeground;
+  }
+}
 
 export default function MyRouteScreen() {
   const c = useColors();
@@ -344,7 +353,7 @@ export default function MyRouteScreen() {
           {/* ADR-187 D8 — trainee lifeline, all phases (trainer may not be
               physically present even in 1–3) */}
           {hasRole('trainee') && route.status === 'in_progress' && (
-            <TouchableOpacity style={[s.helpBtn, { borderColor: '#E8443A55' }]} onPress={requestHelp}>
+            <TouchableOpacity style={[s.helpBtn, { borderColor: c.danger + '55' }]} onPress={requestHelp}>
               <Text style={s.helpBtnText}>🆘 Request Help from my Trainer</Text>
             </TouchableOpacity>
           )}
@@ -563,8 +572,8 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
       {stop.signals?.length > 0 && (
         <View style={cs.signalRow}>
           {stop.signals.slice(0, 2).map(sig => (
-            <View key={sig.signal} style={[cs.signalChip, { backgroundColor: (SIGNAL_COLORS[sig.signal] ?? c.mutedForeground) + '1A' }]}>
-              <Text style={[cs.signalText, { color: SIGNAL_COLORS[sig.signal] ?? c.mutedForeground }]}>{sig.reason}</Text>
+            <View key={sig.signal} style={[cs.signalChip, { backgroundColor: signalColor(sig.signal, c) + '1A' }]}>
+              <Text style={[cs.signalText, { color: signalColor(sig.signal, c) }]}>{sig.reason}</Text>
             </View>
           ))}
         </View>
@@ -723,7 +732,7 @@ function FlagModal({ target, c, onClose, onSubmitRts, onSubmitMissing }: {
             <TouchableOpacity style={[ms.cancelBtn, { borderColor: c.border }]} onPress={onClose} disabled={submitting}>
               <Text style={{ color: c.mutedForeground, fontWeight: '600', fontSize: 13 }}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[ms.submitBtn, { backgroundColor: kind === 'missing' ? '#E8820C' : '#E8443A' }]} onPress={submit} disabled={submitting}>
+            <TouchableOpacity style={[ms.submitBtn, { backgroundColor: kind === 'missing' ? c.warning : c.danger }]} onPress={submit} disabled={submitting}>
               {submitting
                 ? <ActivityIndicator color="#fff" size="small" />
                 : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
@@ -800,7 +809,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   doneBanner: { borderRadius: radius.md, padding: spacing.sm, alignItems: 'center' },
   doneBannerText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center' },
   helpBtn:    { borderWidth: 1.5, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center', marginTop: spacing.sm },
-  helpBtnText:{ color: '#E8443A', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  helpBtnText:{ color: c.danger, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
   sectionLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.xs, marginTop: spacing.xs },
 });
