@@ -42,6 +42,8 @@ type Order = {
 // through to the 📦 default. Product images are the same assets the web gear
 // page uses (frontend/public/), copied to src/assets/gear as PNG. RN requires
 // static require() calls — dynamic string paths don't bundle.
+// Per-item identity colors are intentional brand constants (not theme-semantic),
+// so they read the same in light/dark — like the role palette (ADR-207).
 const GEAR_META: Record<string, { image: ImageSourcePropType; icon: string; label: string; color: string }> = {
   cap:         { image: require('@assets/gear/cap.png'),         icon: '🧢', label: 'Cap',                color: '#3B82F6' },
   gloves:      { image: require('@assets/gear/gloves.png'),      icon: '🧤', label: 'Gloves',             color: '#8B5CF6' },
@@ -59,9 +61,17 @@ function gearMeta(item: string): GearMeta {
   return GEAR_META[item] ?? { image: null, icon: '📦', label: item.replace(/_/g, ' '), color: '#6B7280' };
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: '#E8820C', approved: '#0EA5D8', fulfilled: '#0FA870', denied: '#E8443A',
-};
+// Gear-request status → themed color (ADR-207). (GEAR_META item colors above are
+// intentional per-item brand identity, like the role palette — kept as constants.)
+function statusColor(status: string, c: ThemeColors): string {
+  switch (status) {
+    case 'pending':   return c.warning;
+    case 'approved':  return c.info;
+    case 'fulfilled': return c.success;
+    case 'denied':    return c.danger;
+    default:          return c.mutedForeground;
+  }
+}
 
 export default function GearRequestsScreen() {
   const c = useColors();
@@ -229,8 +239,8 @@ export default function GearRequestsScreen() {
                 <Text style={[s.orderItemName, { color: c.foreground, flex: 1 }]}>
                   {meta.label}{it.size ? ` · ${it.size}` : ''}
                 </Text>
-                <View style={[s.statusChip, { backgroundColor: (STATUS_COLORS[it.status] ?? c.mutedForeground) + '1E' }]}>
-                  <Text style={[s.statusText, { color: STATUS_COLORS[it.status] ?? c.mutedForeground }]}>{it.status}</Text>
+                <View style={[s.statusChip, { backgroundColor: statusColor(it.status, c) + '1E' }]}>
+                  <Text style={[s.statusText, { color: statusColor(it.status, c) }]}>{it.status}</Text>
                 </View>
               </View>
             );

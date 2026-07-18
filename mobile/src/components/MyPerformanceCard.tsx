@@ -44,7 +44,7 @@ export default function MyPerformanceCard() {
   const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
     <View style={[s.tile, { backgroundColor: c.background, borderColor: c.border }]}>
       <Text style={[s.tileLabel, { color: c.mutedForeground }]}>{label}</Text>
-      <Text style={[s.tileValue, { color: warn ? '#B45309' : c.foreground }]}>{value}</Text>
+      <Text style={[s.tileValue, { color: warn ? c.warning : c.foreground }]}>{value}</Text>
       {sub ? <Text style={[s.tileSub, { color: c.mutedForeground }]}>{sub}</Text> : null}
     </View>
   );
@@ -78,16 +78,16 @@ export default function MyPerformanceCard() {
             {data.daily_last_week.map(d => (
               <View key={d.day} style={s.barCol}>
                 <View style={s.barStack}>
-                  {d.rts > 0 && <View style={{ width: '100%', height: `${(d.rts / maxDaily) * 100}%`, backgroundColor: '#F59E0B', borderTopLeftRadius: 2, borderTopRightRadius: 2 }} />}
-                  <View style={{ width: '100%', height: `${(d.delivered / maxDaily) * 100}%`, backgroundColor: '#10B981' }} />
+                  {d.rts > 0 && <View style={{ width: '100%', height: `${(d.rts / maxDaily) * 100}%`, backgroundColor: c.gold, borderTopLeftRadius: 2, borderTopRightRadius: 2 }} />}
+                  <View style={{ width: '100%', height: `${(d.delivered / maxDaily) * 100}%`, backgroundColor: c.success }} />
                 </View>
                 <Text style={[s.barLabel, { color: c.mutedForeground }]}>{d.day.slice(5)}</Text>
               </View>
             ))}
           </View>
           <View style={s.legend}>
-            <View style={s.legendItem}><View style={[s.dot, { backgroundColor: '#10B981' }]} /><Text style={[s.legendText, { color: c.mutedForeground }]}>Delivered</Text></View>
-            <View style={s.legendItem}><View style={[s.dot, { backgroundColor: '#F59E0B' }]} /><Text style={[s.legendText, { color: c.mutedForeground }]}>RTS</Text></View>
+            <View style={s.legendItem}><View style={[s.dot, { backgroundColor: c.success }]} /><Text style={[s.legendText, { color: c.mutedForeground }]}>Delivered</Text></View>
+            <View style={s.legendItem}><View style={[s.dot, { backgroundColor: c.gold }]} /><Text style={[s.legendText, { color: c.mutedForeground }]}>RTS</Text></View>
           </View>
 
           {/* 30-day RTS reasons */}

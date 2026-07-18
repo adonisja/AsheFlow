@@ -331,7 +331,7 @@ export default function MyAccountScreen() {
               <View style={s.pwField}>
                 <Text style={[s.editLabel, { color: c.foreground }]}>Confirm new password</Text>
                 <View style={[s.pwInputRow, {
-                  borderColor: confirmPw.length > 0 && confirmPw !== newPw ? '#EF4444' : c.border,
+                  borderColor: confirmPw.length > 0 && confirmPw !== newPw ? c.danger : c.border,
                   backgroundColor: c.surfaceMuted,
                 }]}>
                   <TextInput
@@ -442,7 +442,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   pwInputRow:  { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md },
   pwInput:     { flex: 1, paddingVertical: spacing.sm + 2, fontSize: fontSize.base },
   showHide:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
-  errorText:   { fontSize: fontSize.xs, color: '#EF4444', marginTop: 2 },
+  errorText:   { fontSize: fontSize.xs, color: c.danger, marginTop: 2 },
 
   themeSegment:     { paddingVertical: spacing.sm, borderRadius: radius.md, borderWidth: 1, alignItems: 'center' },
   themeSegmentText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },

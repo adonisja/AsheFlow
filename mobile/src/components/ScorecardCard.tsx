@@ -3,6 +3,7 @@ import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { Badge } from '@components/ui/primitives';
 
 // Official Amazon (NYCD) weekly scorecard (ADR-204), read-only on My Account.
 type Metric = { id: string; label: string; value: string; unit?: string | null; flag?: string | null };
@@ -45,11 +46,9 @@ export default function ScorecardCard() {
             {m.value}{m.unit && !m.value.includes(m.unit) ? ` ${m.unit}` : ''}
           </Text>
           {m.flag ? (
-            <View style={[s.flag, { backgroundColor: (m.flag === 'excellent' ? '#10B981' : '#F59E0B') + '22' }]}>
-              <Text style={[s.flagText, { color: m.flag === 'excellent' ? '#047857' : '#B45309' }]}>
-                {m.flag === 'excellent' ? 'Excellent' : 'Needs Focus'}
-              </Text>
-            </View>
+            <Badge tone={m.flag === 'excellent' ? 'success' : 'warning'} size="sm">
+              {m.flag === 'excellent' ? 'Excellent' : 'Needs Focus'}
+            </Badge>
           ) : null}
         </View>
       ))}
@@ -64,10 +63,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   week:         { fontSize: fontSize.xs },
   overall:      { borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
   overallLabel: { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.5 },
-  overallValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: '#047857' },
+  overallValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: c.success },
   row:          { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs + 2, borderTopWidth: StyleSheet.hairlineWidth },
   rowLabel:     { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, flex: 1 },
   rowValue:     { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  flag:         { paddingHorizontal: spacing.xs + 2, paddingVertical: 1, borderRadius: radius.sm },
-  flagText:     { fontSize: 10, fontWeight: fontWeight.semibold },
 });

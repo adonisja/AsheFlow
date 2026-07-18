@@ -10,16 +10,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
 
 const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
   dispatch: 'Dispatch', management: 'Management', admin: 'Admin',
 };
-const ROLE_COLORS: Record<string, string> = {
-  driver: '#5B4FE8', trainer: '#0FA870', trainee: '#0EA5D8', walker: '#E8820C',
-  dispatch: '#8B5CF6', management: '#0FA870', admin: '#DC2626',
-};
+// Role → themed accent (ADR-207). Field roles use the shared role palette;
+// oversight roles map to semantic tokens.
+function roleAccent(role: string | undefined, c: ThemeColors): string {
+  switch (role) {
+    case 'dispatch':   return c.primary;
+    case 'management': return c.walker;   // teal
+    case 'admin':      return c.danger;
+    default:           return role ? getRoleColor(role as FieldRole, c) : c.primary;
+  }
+}
 
 function getInitials(name: string): string {
   const parts = name.trim().split(' ');
@@ -44,7 +50,7 @@ export default function ProfileScreen() {
   const displayName = user?.firstName ?? user?.email?.split('@')[0] ?? 'Crew Member';
   const primaryRole = ['driver', 'trainer', 'trainee', 'walker', 'dispatch', 'management', 'admin']
     .find(r => user?.groups?.includes(r));
-  const roleColor   = primaryRole ? ROLE_COLORS[primaryRole] : c.primary;
+  const roleColor   = roleAccent(primaryRole, c);
   const initials    = getInitials(displayName);
 
   const requestChange = async () => {

@@ -636,7 +636,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   ghostBtnText:  { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 
   doneCard:      { borderRadius: radius.lg, borderWidth: 1.5, padding: spacing.lg, marginTop: spacing.sm, marginBottom: spacing.lg, alignItems: 'center' },
-  doneCheck:     { fontSize: 40, color: '#0FA870', fontWeight: '700', marginBottom: spacing.xs },
+  doneCheck:     { fontSize: 40, color: c.success, fontWeight: '700', marginBottom: spacing.xs },
   doneTitle:     { fontSize: fontSize.md, fontWeight: fontWeight.bold },
   doneSub:       { fontSize: fontSize.xs, textAlign: 'center', marginTop: 2 },
   p4Banner:      { borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, marginTop: spacing.sm },

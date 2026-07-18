@@ -70,6 +70,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tab:          { alignItems: 'center', flexDirection: 'row', gap: 5, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, position: 'relative' },
   tabActive:    {},
   tabIcon:      { fontSize: 14 },
-  tabLabel:     { fontSize: fontSize.sm, color: '#9CA3AF', fontWeight: fontWeight.medium },
+  tabLabel:     { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
   tabIndicator: { position: 'absolute', bottom: 0, left: spacing.md, right: spacing.md, height: 2, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
 });
