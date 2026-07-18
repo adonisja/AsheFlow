@@ -49,6 +49,7 @@ import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { Button, Badge } from '@components/ui/primitives';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function localToday(): string {
@@ -182,23 +183,19 @@ const EMPTY_SHIFT: ShiftState = {
 };
 
 // ── Shared UI primitives ──────────────────────────────────────────────────────
-function Btn({ label, onPress, disabled, loading: ld, variant = 'primary', c }: {
+// Thin wrapper over the design-system Button (ADR-207) — keeps this screen's
+// existing <Btn label=… c=…/> call sites unchanged while delegating rendering
+// (themed color, spring press, glow, >=44pt target) to the primitive. `c` is
+// accepted but unused (Button reads the theme itself).
+function Btn({ label, onPress, disabled, loading: ld, variant = 'primary' }: {
   label: string; onPress: () => void; disabled?: boolean;
   loading?: boolean; variant?: 'primary' | 'ghost'; c: ThemeColors;
 }) {
-  const bg = variant === 'ghost' ? 'transparent' : c.primary;
-  const border = variant === 'ghost' ? c.border : c.primary;
   return (
-    <TouchableOpacity
-      style={{ backgroundColor: bg, borderWidth: 1, borderColor: border, borderRadius: radius.md,
-        paddingVertical: spacing.sm + 2, alignItems: 'center', opacity: disabled || ld ? 0.4 : 1 }}
-      onPress={onPress} disabled={disabled || ld} activeOpacity={0.8}
-    >
-      {ld
-        ? <ActivityIndicator color={variant === 'ghost' ? c.primary : '#fff'} />
-        : <Text style={{ color: variant === 'ghost' ? c.primary : '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>{label}</Text>
-      }
-    </TouchableOpacity>
+    <Button variant={variant === 'ghost' ? 'outline' : 'primary'} fullWidth
+      onPress={onPress} disabled={disabled} loading={ld}>
+      {label}
+    </Button>
   );
 }
 
@@ -865,8 +862,8 @@ export default function FieldOpsScreen() {
             <Text style={s.subtitle}>{localToday()}</Text>
           </View>
           {isDriver && hasAssignment ? (
-            <View style={[s.stepBadge, { backgroundColor: completedSteps === TOTAL_STEPS ? '#10B98118' : c.primary + '18', borderColor: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
-              <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
+            <View style={[s.stepBadge, { backgroundColor: (completedSteps === TOTAL_STEPS ? c.success : c.primary) + '18', borderColor: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
+              <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
                 {completedSteps}/{TOTAL_STEPS}
               </Text>
             </View>
@@ -893,7 +890,7 @@ export default function FieldOpsScreen() {
                   >
                     <View style={[
                       s.dot,
-                      { backgroundColor: filled ? '#10B981' : '#E8443A' },
+                      { backgroundColor: filled ? c.success : c.danger },
                       isCurrent && s.dotCurrent,
                       !filled && !isCurrent && { opacity: 0.45 },
                     ]} />
@@ -1362,7 +1359,7 @@ function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () 
       {/* Progress header */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
         <View style={{ flex: 1, height: 6, borderRadius: 999, backgroundColor: c.border, overflow: 'hidden' }}>
-          <View style={{ width: `${pct}%`, height: '100%', borderRadius: 999, backgroundColor: pct === 100 ? '#0FA870' : c.primary }} />
+          <View style={{ width: `${pct}%`, height: '100%', borderRadius: 999, backgroundColor: pct === 100 ? c.success : c.primary }} />
         </View>
         <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground }}>
           {roster.checked_count}/{roster.tote_count} loaded
@@ -1407,7 +1404,7 @@ function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () 
               <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.foreground, flex: 1 }}>
                 {g.label}
               </Text>
-              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: allLoaded ? '#0FA870' : c.mutedForeground }}>
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: allLoaded ? c.success : c.mutedForeground }}>
                 {g.loaded}/{g.totes.length}{allLoaded ? ' ✓' : ''}
               </Text>
               <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground }}>{isCollapsed ? '▸' : '▾'}</Text>
@@ -1442,8 +1439,8 @@ function ToteRow({ tote: t, toggling, disabled, onPress, c }: {
         paddingVertical: spacing.sm, paddingLeft: spacing.sm }}
     >
       <View style={{ width: 24, height: 24, borderRadius: 6, borderWidth: 2,
-        borderColor: t.checked ? '#0FA870' : c.border,
-        backgroundColor: t.checked ? '#0FA870' : 'transparent',
+        borderColor: t.checked ? c.success : c.border,
+        backgroundColor: t.checked ? c.success : 'transparent',
         alignItems: 'center', justifyContent: 'center' }}>
         {toggling
           ? <ActivityIndicator size="small" color={t.checked ? '#fff' : c.primary} />
@@ -1453,14 +1450,10 @@ function ToteRow({ tote: t, toggling, disabled, onPress, c }: {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
           <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>{t.bag_id}</Text>
           {t.ov_count > 0 && (
-            <View style={{ backgroundColor: '#E0F2FE', borderRadius: radius.full, paddingHorizontal: spacing.xs + 2, paddingVertical: 1 }}>
-              <Text style={{ fontSize: fontSize.xs, color: '#0369A1', fontWeight: fontWeight.semibold }}>{t.ov_count} OV</Text>
-            </View>
+            <Badge tone="info" size="sm">{t.ov_count} OV</Badge>
           )}
           {pullCount > 0 && (
-            <View style={{ backgroundColor: '#FEF3C7', borderRadius: radius.full, paddingHorizontal: spacing.xs + 2, paddingVertical: 1 }}>
-              <Text style={{ fontSize: fontSize.xs, color: '#B45309', fontWeight: fontWeight.semibold }}>⚠ pull {pullCount} at AP</Text>
-            </View>
+            <Badge tone="warning" size="sm">⚠ pull {pullCount} at AP</Badge>
           )}
         </View>
         <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
@@ -1511,7 +1504,7 @@ function StepWalkerHandoffs({ summary, onDone, c }: { summary: RTSSummary; onDon
               </Text>
             </View>
             {r.driver_confirmed_at ? (
-              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: '#0FA870' }}>
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.success }}>
                 ✓ {fmtTime(r.driver_confirmed_at)}
               </Text>
             ) : (
@@ -1525,7 +1518,7 @@ function StepWalkerHandoffs({ summary, onDone, c }: { summary: RTSSummary; onDon
                 <TouchableOpacity
                   onPress={() => confirm(r)}
                   disabled={confirmingId !== null}
-                  style={{ backgroundColor: '#0FA870', borderRadius: radius.md,
+                  style={{ backgroundColor: c.success, borderRadius: radius.md,
                     paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}>
                   {confirmingId === r.route_id
                     ? <ActivityIndicator size="small" color="#fff" />
