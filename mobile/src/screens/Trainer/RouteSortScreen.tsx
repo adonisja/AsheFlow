@@ -601,10 +601,11 @@ export default function RouteSortScreen() {
                     )}
                   </View>
 
-                  {/* Done-for-day action — its own row beneath the state tag so the
-                      action reads as a button, not the state. Sends them home /
-                      off the crew (status → departed), keeping the record. */}
-                  {!off && cs?.availability !== 'not_arrived' && (
+                  {/* Done-for-day action — only for an AVAILABLE member (arrived, no
+                      active route). You can't send home someone who's Not Present /
+                      absent, and someone mid-route isn't done yet. Own row so it
+                      reads as a button, not the state. */}
+                  {!off && cs?.availability === 'available' && (
                     <TouchableOpacity
                       style={{ marginTop: spacing.sm, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
                       onPress={() => markDeparted(m, name)}

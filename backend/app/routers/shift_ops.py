@@ -414,6 +414,42 @@ def review_rts_report(
             message=driver_message,
         ))
 
+    # On approval (return confirmed), auto-close the day for any crew still on the
+    # truck who were never marked off — the run is over, so still-active members
+    # are done for the day. Scoped to the driver's own assignment for the date,
+    # company-scoped, driver excluded. Idempotent: only flips status='active' rows.
+    if payload.status == "approved":
+        driver_member = db.query(AssignmentMember).join(
+            TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id,
+        ).filter(
+            AssignmentMember.employee_id == driver_id,
+            AssignmentMember.company_id == caller.company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == caller.company_id,
+        ).first()
+        if driver_member:
+            now = datetime.now(timezone.utc)
+            unmarked = db.query(AssignmentMember).filter(
+                AssignmentMember.assignment_id == driver_member.assignment_id,
+                AssignmentMember.company_id == caller.company_id,
+                AssignmentMember.employee_id != driver_id,
+                AssignmentMember.status == "active",
+            ).all()
+            for am in unmarked:
+                am.status = "departed"
+                am.departed_at = now
+            if unmarked:
+                write_audit(
+                    db,
+                    company_id=str(caller.company_id),
+                    actor_id=str(caller.id),
+                    action_type="crew.auto_departed_on_return",
+                    target_table="assignment_members",
+                    target_id=str(driver_member.assignment_id),
+                    detail={"date": str(target_date), "count": len(unmarked),
+                            "trigger": "rts_report.approved"},
+                )
+
     db.commit()
     db.refresh(row)
     return row
