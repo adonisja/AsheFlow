@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 import TraineeTodayScreen    from './TraineeTodayScreen';
 import TraineeHistoryScreen  from './TraineeHistoryScreen';
@@ -29,9 +30,7 @@ export default function TraineeDashboard() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>My Training</Text>
-      </View>
+      <PageHeader title="My Training" />
 
       <View style={s.tabBarWrap}>
         <ScrollView

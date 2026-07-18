@@ -9,6 +9,7 @@ import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 type Incident = {
   id: string;
@@ -126,6 +127,7 @@ export default function IncidentsScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      <PageHeader title="Incidents" subtitle="Report and track incidents" />
       {/* Tab bar */}
       <View style={s.tabBar}>
         {(['report', 'history'] as const).map(t => (

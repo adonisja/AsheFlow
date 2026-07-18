@@ -7,6 +7,7 @@ import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 import TrainerTodayScreen       from './TrainerTodayScreen';
 import TrainerHistoryScreen     from './TrainerHistoryScreen';
@@ -46,10 +47,7 @@ export default function TrainerDashboard() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      {/* Header */}
-      <View style={s.header}>
-        <Text style={s.title}>Trainer Dashboard</Text>
-      </View>
+      <PageHeader title="Trainer Dashboard" />
 
       {/* Tab bar */}
       <View style={s.tabBarWrap}>

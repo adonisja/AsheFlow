@@ -10,6 +10,7 @@ import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type CrewMember = { id: string; name: string; role: string };
@@ -219,10 +220,7 @@ export default function ScheduleScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.pageTitle}>Schedule</Text>
-        <Text style={s.pageSubtitle}>{MONTHS[viewMonth]} {viewYear}</Text>
-      </View>
+      <PageHeader title="Schedule" subtitle={`${MONTHS[viewMonth]} ${viewYear}`} />
 
       <ScrollView
         style={s.scroll}
