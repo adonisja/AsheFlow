@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import ThemeToggle from '@components/ui/ThemeToggle';
 
 type Edge = 'top' | 'bottom' | 'left' | 'right';
 
@@ -22,13 +23,16 @@ type Props = {
   noHeader?: boolean;
   /** Show a back chevron on the left; tapping calls this */
   onBack?: () => void;
-  /** Extra element rendered on the right side of the header (e.g. refresh button) */
+  /** Extra element rendered on the right side of the header (e.g. refresh button).
+   * When omitted, a quick light/dark ThemeToggle is shown by default (ADR-207). */
   headerRight?: React.ReactNode;
+  /** Suppress the default header ThemeToggle (e.g. Account, which has its own control) */
+  hideThemeToggle?: boolean;
 };
 
 export default function ScreenShell({
   title, subtitle, loading, refreshing, onRefresh, children,
-  edges = ['top'], noHeader = false, onBack, headerRight,
+  edges = ['top'], noHeader = false, onBack, headerRight, hideThemeToggle = false,
 }: Props) {
   const c = useColors();
   const s = styles(c);
@@ -60,9 +64,9 @@ export default function ScreenShell({
             {subtitle ? <Text style={s.subtitle}>{subtitle}</Text> : null}
           </View>
 
-          {/* Right — slot for action button or spacer */}
+          {/* Right — custom action, else a quick light/dark toggle by default */}
           <View style={s.headerSide}>
-            {headerRight ?? null}
+            {headerRight ?? (hideThemeToggle ? null : <ThemeToggle />)}
           </View>
         </View>
       )}
