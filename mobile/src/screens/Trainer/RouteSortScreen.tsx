@@ -322,6 +322,19 @@ export default function RouteSortScreen() {
     }
   };
 
+  // Marking someone NCNS (no-call-no-show) removes them from the crew for the
+  // day — confirm before applying, since it's a consequential, hard-to-notice tap.
+  const confirmNCNS = (employeeId: string, name: string) => {
+    Alert.alert(
+      'Mark NCNS?',
+      `Mark ${name} as a no-call-no-show? They'll be removed from today's crew. You can only undo this by contacting dispatch.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Mark NCNS', style: 'destructive', onPress: () => takeRollCall(employeeId, true) },
+      ],
+    );
+  };
+
   const overrideAssignee = (routeNumber: number, member: CrewMember) => {
     setProposal(prev => prev?.map(p =>
       p.route_number === routeNumber
@@ -578,6 +591,7 @@ export default function RouteSortScreen() {
                         {cs && cs.trip_count > 0 ? ` · ${cs.trip_count} trip${cs.trip_count === 1 ? '' : 's'}` : ''}
                       </Text>
                     </View>
+                    {/* Current state tag — always shown, separated from any actions. */}
                     {chip && (
                       <View style={{ backgroundColor: chip.bg, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2 }}>
                         <Text style={{ fontSize: fontSize.xs, color: chip.fg, fontWeight: fontWeight.semibold }}>
@@ -585,27 +599,8 @@ export default function RouteSortScreen() {
                         </Text>
                       </View>
                     )}
-                    {/* Roll call for a not-arrived member; else the done-for-day action. */}
-                    {!off && cs?.availability === 'not_arrived' ? (
-                      rollCallId === m.employee_id ? (
-                        <ActivityIndicator size="small" color={c.mutedForeground} />
-                      ) : (
-                        <View style={{ flexDirection: 'row', gap: spacing.xs }}>
-                          <TouchableOpacity
-                            style={{ backgroundColor: '#047857', borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
-                            onPress={() => takeRollCall(m.employee_id, false)}
-                          >
-                            <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Present</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={{ borderWidth: 1, borderColor: '#FCD34D', borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
-                            onPress={() => takeRollCall(m.employee_id, true)}
-                          >
-                            <Text style={{ fontSize: fontSize.xs, color: '#B45309', fontWeight: fontWeight.semibold }}>Absent</Text>
-                          </TouchableOpacity>
-                        </View>
-                      )
-                    ) : !off ? (
+                    {/* Done-for-day action lives on the name row (not a not_arrived state). */}
+                    {!off && cs?.availability !== 'not_arrived' && (
                       <TouchableOpacity
                         style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
                         onPress={() => markDeparted(m, name)}
@@ -615,8 +610,32 @@ export default function RouteSortScreen() {
                           ? <ActivityIndicator size="small" color={c.mutedForeground} />
                           : <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>Mark Done</Text>}
                       </TouchableOpacity>
-                    ) : null}
+                    )}
                   </View>
+
+                  {/* Roll-call actions — a separate row beneath the state tag so the
+                      action verbs ("Mark As Present" / "Mark NCNS") read as buttons,
+                      not as the current state. Only while the member is Not Present. */}
+                  {!off && cs?.availability === 'not_arrived' && (
+                    rollCallId === m.employee_id ? (
+                      <ActivityIndicator size="small" color={c.mutedForeground} style={{ marginTop: spacing.sm, alignSelf: 'flex-start' }} />
+                    ) : (
+                      <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+                        <TouchableOpacity
+                          style={{ flex: 1, backgroundColor: '#047857', borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
+                          onPress={() => takeRollCall(m.employee_id, false)}
+                        >
+                          <Text style={{ fontSize: fontSize.xs, color: '#fff', fontWeight: fontWeight.semibold }}>Mark As Present</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={{ flex: 1, borderWidth: 1, borderColor: '#FCD34D', borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' }}
+                          onPress={() => confirmNCNS(m.employee_id, name)}
+                        >
+                          <Text style={{ fontSize: fontSize.xs, color: '#B45309', fontWeight: fontWeight.semibold }}>Mark NCNS</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )
+                  )}
                   {stop && (
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
                       📍 On stop {stop.stop_sequence}/{stop.total}: {stop.normalised_address}
