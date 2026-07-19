@@ -215,6 +215,53 @@ function Btn({ label, onPress, disabled, loading: ld, variant = 'primary' }: {
   );
 }
 
+// Shared segmented toggle (ADR-207) — replaces the ad-hoc pill rows scattered
+// through the steps (unit, Pass/Fail, staged Yes/No…). Selected fills with the
+// given tone (defaults to the section accent); pill-shaped, >=44pt row.
+function Segmented<T extends string | boolean>({ options, value, onChange, tone, c }: {
+  options: { value: T; label: string; tone?: string }[];
+  value: T; onChange: (v: T) => void; tone?: string; c: ThemeColors;
+}) {
+  const accent = React.useContext(SectionAccent) ?? c.primary;
+  return (
+    <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+      {options.map(o => {
+        const sel = value === o.value;
+        const fill = o.tone ?? tone ?? accent;
+        return (
+          <TouchableOpacity key={String(o.value)} onPress={() => onChange(o.value)} activeOpacity={0.8}
+            style={{ flex: 1, minHeight: 44, borderRadius: radius.md, borderWidth: 1.5, alignItems: 'center',
+              justifyContent: 'center', paddingVertical: spacing.sm,
+              backgroundColor: sel ? fill : 'transparent', borderColor: sel ? fill : c.border }}>
+            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold,
+              color: sel ? '#fff' : c.mutedForeground }}>{o.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+// Shared labeled input (ADR-207) — consistent field styling across steps.
+function FieldInput({ label, c, style, ...props }: {
+  label?: string; c: ThemeColors;
+} & React.ComponentProps<typeof TextInput>) {
+  return (
+    <View style={{ marginBottom: spacing.md }}>
+      {label ? (
+        <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground,
+          textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>{label}</Text>
+      ) : null}
+      <TextInput
+        placeholderTextColor={c.mutedForeground}
+        style={[{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm + 2,
+          fontSize: fontSize.base, color: c.foreground, backgroundColor: c.background }, style]}
+        {...props}
+      />
+    </View>
+  );
+}
+
 function DonePill({ label, c }: { label: string; c: ThemeColors }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: c.success + '18',
@@ -426,17 +473,19 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
         const val = results[item];
         return (
           <View key={item} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-            paddingVertical: spacing.xs + 1, borderBottomWidth: 1, borderBottomColor: c.border }}>
-            <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium, flex: 1 }}>
+            gap: spacing.sm, backgroundColor: c.surfaceMuted, borderRadius: radius.md,
+            paddingVertical: spacing.sm, paddingHorizontal: spacing.sm + 2, marginBottom: spacing.xs }}>
+            <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.semibold, flex: 1 }}>
               {ITEM_LABELS[item] ?? item}
             </Text>
             <View style={{ flexDirection: 'row', gap: spacing.xs }}>
               {([true, false] as const).map(pass => (
                 <TouchableOpacity key={String(pass)} onPress={() => toggle(item, pass)}
-                  style={{ paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.sm, borderWidth: 1,
+                  style={{ minWidth: 52, minHeight: 34, alignItems: 'center', justifyContent: 'center',
+                    paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1.5,
                     backgroundColor: val === pass ? (pass ? c.success : c.danger) : 'transparent',
                     borderColor: val === pass ? (pass ? c.success : c.danger) : c.border }}>
-                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
+                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold,
                     color: val === pass ? '#fff' : c.mutedForeground }}>{pass ? 'Pass' : 'Fail'}</Text>
                 </TouchableOpacity>
               ))}
@@ -444,13 +493,11 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
           </View>
         );
       })}
-      <TextInput
-        style={{ marginTop: spacing.sm, borderWidth: 1, borderColor: c.border, borderRadius: radius.md,
-          padding: spacing.sm, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
-          minHeight: 60, textAlignVertical: 'top' }}
-        value={notes} onChangeText={setNotes}
-        placeholder="Notes (optional)…" placeholderTextColor={c.mutedForeground} multiline />
       <View style={{ marginTop: spacing.sm }}>
+        <FieldInput value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
+          multiline style={{ minHeight: 64, textAlignVertical: 'top' }} c={c} />
+      </View>
+      <View>
         <Btn label={`Submit ${inspType === 'pre_trip' ? 'Pre-Trip' : 'EOD'} Inspection`}
           onPress={submit} disabled={!allDone} loading={saving} c={c} />
       </View>
@@ -1208,21 +1255,11 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
     <Card c={c}>
       <SectionHeader num="3" title="Log Start Odometer"
         subtitle="Record the truck's odometer before leaving the offsite." c={c} />
-      <View style={{ flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm }}>
-        {(['imperial', 'metric'] as const).map(u => (
-          <TouchableOpacity key={u} onPress={() => setUnit(u)}
-            style={{ flex: 1, paddingVertical: spacing.xs, borderRadius: radius.sm, borderWidth: 1,
-              alignItems: 'center', backgroundColor: unit === u ? c.primary : 'transparent',
-              borderColor: unit === u ? c.primary : c.border }}>
-            <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-              color: unit === u ? '#fff' : c.mutedForeground }}>{u === 'imperial' ? 'mi / gal' : 'km / L'}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={val} onChangeText={setVal} placeholder={`Odometer reading (${distU})`}
-        placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
+      <Segmented
+        options={[{ value: 'imperial', label: 'mi / gal' }, { value: 'metric', label: 'km / L' }]}
+        value={unit} onChange={setUnit} c={c} />
+      <FieldInput label={`Odometer reading (${distU})`} value={val} onChangeText={setVal}
+        placeholder={`e.g. 84213 ${distU}`} keyboardType="numeric" c={c} />
       <Btn label="Log Start Odometer" onPress={submit} disabled={!val} loading={saving} c={c} />
     </Card>
   );
@@ -1269,18 +1306,12 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
       <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground, marginBottom: spacing.sm }}>
         Was your area already staged when you arrived?
       </Text>
-      <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
-        {([true, false] as const).map(v => (
-          <TouchableOpacity key={String(v)} onPress={() => setStaged(v)}
-            style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.md, borderWidth: 1,
-              alignItems: 'center',
-              backgroundColor: staged === v ? (v ? c.success : c.danger) : 'transparent',
-              borderColor: staged === v ? (v ? c.success : c.danger) : c.border }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold,
-              color: staged === v ? '#fff' : c.mutedForeground }}>{v ? 'Yes — Staged' : 'No — Not Ready'}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <Segmented<boolean>
+        options={[
+          { value: true,  label: 'Yes — Staged',   tone: c.success },
+          { value: false, label: 'No — Not Ready', tone: c.danger },
+        ]}
+        value={staged as boolean} onChange={setStaged} c={c} />
       {staged === false && (
         <View style={{ marginBottom: spacing.md }}>
           <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: spacing.sm }}>
