@@ -423,12 +423,22 @@ def submit_roll_call(
     ).first()
 
     if existing:
+        # Conflict rule (ADR-208): field-staff latest-wins on their own truck, but
+        # a dispatch/admin mark locks the record. Determine who last wrote it — the
+        # most recent writer (updated_by_id if set, else submitted_by_id).
         if caller.role not in OVERSIGHT_ROLES:
-            raise HTTPException(
-                status_code=409,
-                detail="A roll call record already exists for this employee today. Contact dispatch to update it.",
-            )
-        # Dispatch/admin override.
+            last_writer_id = existing.updated_by_id or existing.submitted_by_id
+            last_writer = db.query(Employee).filter(
+                Employee.id == last_writer_id,
+                Employee.company_id == caller.company_id,
+            ).first() if last_writer_id else None
+            if last_writer and last_writer.role in OVERSIGHT_ROLES:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Dispatch set this roll call — contact dispatch to change it.",
+                )
+            # else: last written by a field peer → latest-wins, fall through to update.
+        # Update in place — dispatch override OR field-staff latest-wins.
         existing.status       = derived_status
         existing.notes        = payload.notes
         existing.updated_by_id = caller.id

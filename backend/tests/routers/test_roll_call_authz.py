@@ -121,3 +121,96 @@ class TestTrainerRollCallAuthz:
         with patch("app.routers.roll_call._get_company_cfg", side_effect=RuntimeError("passed-gate")):
             with pytest.raises(RuntimeError, match="passed-gate"):
                 _run(db, _caller("driver", _DRIVER), _DRIVER)
+
+
+# ── Conflict rule on existing records (ADR-208) ──────────────────────────────
+# Field staff latest-wins on their own truck, but a dispatch/admin mark locks it.
+# Uses ncns=True so the upsert branch is reached without status derivation.
+
+class TestRollCallConflictRule:
+    def _existing(self, last_writer_id):
+        # A ShiftRollCall row already present for the target/date (all fields the
+        # RollCallResponse serializer needs so the endpoint can return it).
+        from datetime import datetime, timezone
+        return SimpleNamespace(
+            id=uuid.uuid4(), company_id=_CID, employee_id=_WALKER, date=_DATE,
+            status="present", notes=None, submitted_by_id=last_writer_id,
+            submitted_at=datetime(2026, 7, 19, 12, tzinfo=timezone.utc),
+            updated_by_id=None, updated_at=None, confirmed=True, confirmed_at=None,
+        )
+
+    def _db_with_existing(self, *, target, existing, writers):
+        """target Employee + AssignmentMember for the gate; ShiftRollCall.first()
+        → existing; Employee lookups resolved from `writers` {id: employee} for the
+        last-writer check (falls back to target)."""
+        from app.models.employee import Employee
+        from app.models.assignment_member import AssignmentMember
+        from app.models.shift_roll_call import ShiftRollCall
+        db = MagicMock()
+
+        def _query(model):
+            q = MagicMock()
+            def _filter(*a, **k):
+                f = MagicMock()
+                f.join.return_value = f
+                f.filter.return_value = f
+                if model is Employee:
+                    # Resolve by the id in the filter args when possible; the gate
+                    # looks up the target, the conflict check looks up the writer.
+                    f.first.return_value = writers.get('_next', target)
+                elif model is AssignmentMember:
+                    f.first.return_value = _member(target.id, target.role)
+                elif model is ShiftRollCall:
+                    f.first.return_value = existing
+                else:
+                    f.first.return_value = None
+                return f
+            q.filter = _filter
+            q.join.return_value.filter = _filter
+            return q
+        db.query = _query
+        return db
+
+    def _run_ncns(self, db, caller, target_id):
+        body = RollCallCreate(employee_id=target_id, date=_DATE, ncns=True)
+        with patch("app.routers.roll_call._get_caller_truck_assignment",
+                   return_value=SimpleNamespace(id=_TA)), \
+             patch("app.routers.roll_call.write_audit"):
+            return submit_roll_call(payload=body, caller=caller, db=db, _=None)
+
+    def test_field_staff_can_override_field_set_record(self):
+        # Existing record last written by a TRAINER → a driver may update it (latest-wins).
+        target = SimpleNamespace(id=_WALKER, role="walker", company_id=_CID)
+        existing = self._existing(last_writer_id=_TRAINER)
+        writer = SimpleNamespace(id=_TRAINER, role="trainer", company_id=_CID)
+        # Employee lookups: gate wants target; conflict check wants the trainer writer.
+        # Serve target for the gate, then the writer for the conflict lookup.
+        db = self._db_with_existing(target=target, existing=existing,
+                                    writers={'_next': writer})
+        # Gate's Employee lookup also hits this — acceptable since both are same company;
+        # the conflict lookup returns a trainer (field peer) → update allowed, no raise.
+        result = self._run_ncns(db, _caller("driver", _DRIVER), _WALKER)
+        assert existing.status == "ncns"           # updated in place
+        assert existing.updated_by_id == _DRIVER    # latest writer stamped
+        assert result.status == "ncns"              # returned serialized row
+
+    def test_field_staff_blocked_on_dispatch_set_record(self):
+        # Existing record last written by DISPATCH → a driver gets 409 (locked).
+        target = SimpleNamespace(id=_WALKER, role="walker", company_id=_CID)
+        existing = self._existing(last_writer_id=uuid.uuid4())
+        dispatcher = SimpleNamespace(id=existing.submitted_by_id, role="dispatch", company_id=_CID)
+        db = self._db_with_existing(target=target, existing=existing,
+                                    writers={'_next': dispatcher})
+        with pytest.raises(HTTPException) as exc:
+            self._run_ncns(db, _caller("driver", _DRIVER), _WALKER)
+        assert exc.value.status_code == 409
+        assert "dispatch" in exc.value.detail.lower()
+
+    def test_dispatch_always_overrides(self):
+        # Dispatch caller overrides any existing record regardless of last writer.
+        target = SimpleNamespace(id=_WALKER, role="walker", company_id=_CID)
+        existing = self._existing(last_writer_id=uuid.uuid4())
+        db = self._db_with_existing(target=target, existing=existing, writers={})
+        result = self._run_ncns(db, _caller("dispatch", uuid.uuid4()), _WALKER)
+        assert existing.status == "ncns"
+        assert result.status == "ncns"

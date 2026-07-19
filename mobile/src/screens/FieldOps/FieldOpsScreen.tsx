@@ -113,6 +113,7 @@ type ShiftState = {
   rtsReport: RTSReport | null;
   rtsSummary: RTSSummary | null;
   crew: CrewMember[];
+  rollCall: Record<string, string>; // employeeId → trainer roll-call status (seeds CI1)
   walkerRatingsSubmitted: Record<string, boolean>; // walkerId → true once posted
   // station return
   stationReturnArrived: boolean; stationReturnAt: string | null;
@@ -175,6 +176,7 @@ const EMPTY_SHIFT: ShiftState = {
   rtsReport: null,
   rtsSummary: null,
   crew: [],
+  rollCall: {},
   walkerRatingsSubmitted: {},
   stationReturnArrived: false, stationReturnAt: null,
   stationHandoff: false,
@@ -571,7 +573,7 @@ export default function FieldOpsScreen() {
     const today = localToday();
     const [ciRes, dockRes, inspRes, fuelRes, crewRes, arrRes, depRes, apRes,
            ci1Res, ci2Res, ci3Res, rtsRes, handoffRes, notifRes, confRes,
-           rosterRes, dispRes] = await Promise.allSettled([
+           rosterRes, dispRes, rollCallRes] = await Promise.allSettled([
       apiClient.get(`/field-ops/check-in/${empId}`, sig),
       apiClient.get(`/field-ops/dock-assignment/${empId}`, sig),
       apiClient.get(`/field-ops/inspection/${empId}`, sig),
@@ -593,6 +595,9 @@ export default function FieldOpsScreen() {
       apiClient.get(`/sort/${today}/rosters`, sig),
       // TruckAssignment id (for the RTS summary + handoff confirms)
       apiClient.get(`/dispatch/${today}`, sig),
+      // Trainer's roll call for this truck — seeds the CI1 attendance defaults so
+      // the driver's roster reflects who the trainer already marked NCNS/present.
+      apiClient.get(`/roll-call/my-truck/${today}`, sig),
     ]);
     if (ctrl.signal.aborted) return;
 
@@ -603,6 +608,13 @@ export default function FieldOpsScreen() {
     const eodInsp = inspAll.find((r: any) => r.date === today && r.inspection_type === 'eod') ?? null;
     const fuel    = fuelRes.status === 'fulfilled' ? fuelRes.value.data.find((r: any) => r.date === today) ?? null : null;
     const crew: CrewMember[] = crewRes.status === 'fulfilled' ? (crewRes.value.data.crew ?? []) : [];
+
+    // Trainer's roll-call status per employee (early|present|late|ncns|pending) —
+    // used to seed CI1 attendance so the driver sees who's already been marked.
+    const rollCall: Record<string, string> = {};
+    if (rollCallRes.status === 'fulfilled') {
+      for (const r of (rollCallRes.value.data ?? [])) rollCall[r.employee_id] = r.status;
+    }
 
     const arrivals: any[] = arrRes.status === 'fulfilled' ? arrRes.value.data : [];
     const loadArr  = arrivals.find((r: any) => r.arrival_type === 'loading') ?? null;
@@ -691,6 +703,7 @@ export default function FieldOpsScreen() {
       rtsReport: rts,
       rtsSummary,
       crew,
+      rollCall,
       walkerRatingsSubmitted,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
       stationHandoff: !!handoff,
@@ -1817,22 +1830,33 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
   const done = !!shift.checkIn1;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
   type Entry = { present: boolean; uniform: boolean; cartCover: boolean };
+  // Seed presence from the trainer's roll call (ADR-207) — a member the trainer
+  // marked NCNS defaults to NOT present here, so the two views agree. Anyone the
+  // trainer hasn't marked (no record / pending) defaults present, as before.
+  const entryFor = (id: string): Entry =>
+    ({ present: shift.rollCall[id] !== 'ncns', uniform: true, cartCover: true });
   const defaultEntries = (): Record<string, Entry> =>
-    Object.fromEntries(nonDriverCrew.map(m => [m.id, { present: true, uniform: true, cartCover: true }]));
+    Object.fromEntries(nonDriverCrew.map(m => [m.id, entryFor(m.id)]));
   const [entries, setEntries] = useState<Record<string, Entry>>(defaultEntries);
   const [saving, setSaving] = useState(false);
 
-  // Re-initialize if crew list arrives after first render
+  // Re-initialize as the crew list / roll call arrives after first render. New
+  // members get a full default; existing members keep their uniform/cart edits
+  // but their `present` re-syncs to the trainer's roll call (so a trainer NCNS
+  // shows up on the driver's roster). CI1 isn't submitted yet, so re-syncing
+  // presence here is safe and is the whole point of the fix (ADR-207).
   useEffect(() => {
     if (nonDriverCrew.length > 0)
       setEntries(prev => {
         const next = { ...prev };
         for (const m of nonDriverCrew) {
-          if (!next[m.id]) next[m.id] = { present: true, uniform: true, cartCover: true };
+          const present = shift.rollCall[m.id] !== 'ncns';
+          next[m.id] = next[m.id] ? { ...next[m.id], present } : entryFor(m.id);
         }
         return next;
       });
-  }, [nonDriverCrew.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonDriverCrew.length, shift.rollCall]);
 
   const setField = (id: string, field: keyof Entry, val: boolean) =>
     setEntries(p => { const cur = p[id] ?? { present: true, uniform: true, cartCover: true }; return { ...p, [id]: { ...cur, [field]: val } }; });
@@ -1845,6 +1869,17 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
     const ncns = nonDriverCrew.filter(m => !entries[m.id]?.present).length;
     const working = nonDriverCrew.filter(m => entries[m.id]?.present).length;
     try {
+      // Sync attendance to the shared roll call (ADR-208) so the trainer/dispatch
+      // views reflect the driver's marks too. Reuses POST /roll-call (which lets a
+      // driver mark any member of their own truck). Best-effort per member — a 409
+      // means dispatch locked that record (we intentionally don't override it), so
+      // swallow it rather than block CI1.
+      await Promise.all(nonDriverCrew.map(m =>
+        apiClient.post('/roll-call', {
+          employee_id: m.id, date: localToday(), ncns: !entries[m.id]?.present,
+        }).catch(() => { /* already-set / locked — leave as-is */ }),
+      ));
+
       // Submit crew compliance for all present members
       const compEntries = nonDriverCrew
         .filter(m => entries[m.id]?.present)
