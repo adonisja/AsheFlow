@@ -48,7 +48,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, shadow, type ThemeColors } from '@theme/index';
 import { Button, Badge } from '@components/ui/primitives';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -182,6 +182,22 @@ const EMPTY_SHIFT: ShiftState = {
   returned: false, returnedAt: null,
 };
 
+// Current step's section accent, provided at the step-render site so Card /
+// SectionHeader can tint themselves without threading section through every
+// step's props (ADR-207). Null → fall back to primary.
+const SectionAccent = React.createContext<string | null>(null);
+
+// Each wizard section gets an identity color (ADR-207) so the header, progress
+// bar and step cards share a visual "chapter" throughout the driver's day.
+function sectionColor(section: string, c: ThemeColors): string {
+  if (section.startsWith('Offsite — End')) return c.walker;   // teal — winding down
+  if (section.startsWith('Offsite'))       return c.primary;  // indigo — start of day
+  if (section.startsWith('Station — Ret'))  return c.gold;     // amber — return
+  if (section.startsWith('Station'))        return c.info;     // cyan — loading
+  if (section.startsWith('Route'))          return c.success;  // green — on the road
+  return c.primary;
+}
+
 // ── Shared UI primitives ──────────────────────────────────────────────────────
 // Thin wrapper over the design-system Button (ADR-207) — keeps this screen's
 // existing <Btn label=… c=…/> call sites unchanged while delegating rendering
@@ -213,20 +229,24 @@ function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
   num: string; title: string; subtitle?: string;
   done?: boolean; doneLabel?: string; c: ThemeColors;
 }) {
+  const accent = React.useContext(SectionAccent) ?? c.primary;
+  const tokenColor = done ? c.success : accent;
   return (
-    <View style={{ marginBottom: done ? spacing.xs : spacing.sm }}>
+    <View style={{ marginBottom: done ? spacing.xs : spacing.md }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-        <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: done ? c.success : c.primary,
-          alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{ color: '#fff', fontSize: 11, fontWeight: fontWeight.bold }}>{done ? '✓' : num}</Text>
+        <View style={{ width: 34, height: 34, borderRadius: radius.md, backgroundColor: tokenColor + '1F',
+          borderWidth: 1.5, borderColor: tokenColor, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: tokenColor, fontSize: fontSize.base, fontWeight: fontWeight.extrabold }}>
+            {done ? '✓' : num}
+          </Text>
         </View>
-        <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, flex: 1 }}>{title}</Text>
+        <Text style={{ fontSize: fontSize.md, fontWeight: fontWeight.bold, color: c.foreground, flex: 1 }}>{title}</Text>
       </View>
       {subtitle && !done && (
-        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 4, marginLeft: 32 }}>{subtitle}</Text>
+        <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, lineHeight: 20, marginTop: 6, marginLeft: 34 + spacing.sm }}>{subtitle}</Text>
       )}
       {done && doneLabel && (
-        <View style={{ marginLeft: 32, marginTop: 4 }}>
+        <View style={{ marginLeft: 34 + spacing.sm, marginTop: 4 }}>
           <DonePill label={doneLabel} c={c} />
         </View>
       )}
@@ -235,9 +255,11 @@ function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
 }
 
 function Card({ children, c }: { children: React.ReactNode; c: ThemeColors }) {
+  const accent = React.useContext(SectionAccent) ?? c.primary;
   return (
     <View style={{ backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1,
-      borderColor: c.border, padding: spacing.md, marginBottom: spacing.md }}>
+      borderColor: c.border, borderLeftWidth: 4, borderLeftColor: accent,
+      padding: spacing.md, marginBottom: spacing.md, ...shadow.sm }}>
       {children}
     </View>
   );
@@ -872,44 +894,36 @@ export default function FieldOpsScreen() {
           )}
         </View>
 
-        {isDriver && allSteps.length > 0 && (
+        {isDriver && allSteps.length > 0 && (() => {
+          const secColor  = sectionColor(allSteps[cursor]?.section ?? '', c);
+          const doneCount = allSteps.filter(st => st.done).length;
+          const pct       = Math.round((doneCount / allSteps.length) * 100);
+          const allDone   = doneCount === allSteps.length;
+          const barColor  = allDone ? c.success : secColor;
+          return (
           <>
-            {/* Progress dots — green = completed, red = pending. Tappable to
-                review a completed step (can't jump ahead of the live step). */}
-            <View style={s.dotRow}>
-              {allSteps.map((st, i) => {
-                const filled = st.done;
-                const isCurrent = i === cursor;
-                const reviewable = i <= liveIndex;
-                return (
-                  <TouchableOpacity
-                    key={st.key}
-                    disabled={!reviewable}
-                    onPress={() => goToStep(i)}
-                    hitSlop={{ top: 8, bottom: 8, left: 3, right: 3 }}
-                  >
-                    <View style={[
-                      s.dot,
-                      { backgroundColor: filled ? c.success : c.danger },
-                      isCurrent && s.dotCurrent,
-                      !filled && !isCurrent && { opacity: 0.45 },
-                    ]} />
-                  </TouchableOpacity>
-                );
-              })}
+            {/* Section-colored progress bar with % + section eyebrow (ADR-207) */}
+            <View style={s.progWrap}>
+              <View style={s.progTopRow}>
+                <View style={[s.secDot, { backgroundColor: secColor }]} />
+                <Text style={[s.progSection, { color: c.foreground }]} numberOfLines={1}>
+                  {allSteps[cursor]?.section?.toUpperCase()}
+                </Text>
+                <Text style={[s.progPct, { color: barColor }]}>{pct}%</Text>
+              </View>
+              <View style={[s.progTrack, { backgroundColor: c.surfaceMuted }]}>
+                <View style={[s.progFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+              </View>
             </View>
 
-            {/* Section + back arrow + step count */}
+            {/* Nav row — back · Step N of M · jump-to-live */}
             <View style={s.wizHeader}>
               {cursor > 0 ? (
                 <TouchableOpacity onPress={() => goToStep(cursor - 1)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.wizBack}>
                   <Text style={[s.wizBackArrow, { color: c.primary }]}>←</Text>
                 </TouchableOpacity>
               ) : <View style={s.wizBack} />}
-              <View style={{ flex: 1, alignItems: 'center' }}>
-                <Text style={[s.wizSection, { color: c.mutedForeground }]}>{allSteps[cursor]?.section?.toUpperCase()}</Text>
-                <Text style={[s.wizCount, { color: c.foreground }]}>Step {cursor + 1} of {allSteps.length}</Text>
-              </View>
+              <Text style={[s.wizCount, { color: c.mutedForeground }]}>Step {cursor + 1} of {allSteps.length}</Text>
               {cursor < liveIndex ? (
                 <TouchableOpacity onPress={() => goToStep(liveIndex)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.wizBack}>
                   <Text style={[s.wizBackArrow, { color: c.primary }]}>→</Text>
@@ -917,12 +931,39 @@ export default function FieldOpsScreen() {
               ) : <View style={s.wizBack} />}
             </View>
 
-            {/* The current step, cross-dissolved on change */}
-            <Animated.View style={{ opacity: fade }}>
-              {allSteps[cursor]?.node}
-            </Animated.View>
+            {/* Step dots — current widened + section-tinted; done filled, pending faint */}
+            <View style={s.dotRow}>
+              {allSteps.map((st, i) => {
+                const isCurrent = i === cursor;
+                const reviewable = i <= liveIndex;
+                return (
+                  <TouchableOpacity
+                    key={st.key}
+                    disabled={!reviewable}
+                    onPress={() => goToStep(i)}
+                    hitSlop={{ top: 8, bottom: 8, left: 2, right: 2 }}
+                  >
+                    <View style={[
+                      s.dot,
+                      { backgroundColor: st.done ? c.success : c.borderStrong },
+                      isCurrent && [s.dotCurrent, { backgroundColor: secColor }],
+                      !st.done && !isCurrent && { opacity: 0.5 },
+                    ]} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* The current step, cross-dissolved on change; section accent shared
+                with Card/SectionHeader via context */}
+            <SectionAccent.Provider value={secColor}>
+              <Animated.View style={{ opacity: fade }}>
+                {allSteps[cursor]?.node}
+              </Animated.View>
+            </SectionAccent.Provider>
           </>
-        )}
+          );
+        })()}
 
         {isDriver && !hasAssignment && (
           <View style={s.noAssignCard}>
@@ -2507,12 +2548,21 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   stepBadge:          { width: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: radius.sm, paddingVertical: 3 },
   stepBadgeText:      { fontSize: 11, fontWeight: fontWeight.bold },
   // Wizard (paged step flow)
-  dotRow:             { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, paddingVertical: spacing.sm },
-  dot:                { width: 9, height: 9, borderRadius: 999 },
-  dotCurrent:         { width: 22, borderRadius: 5 },
-  wizHeader:          { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.xs, marginBottom: spacing.xs },
+  // Progress header (ADR-207)
+  progWrap:           { marginTop: spacing.sm },
+  progTopRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 6 },
+  secDot:             { width: 8, height: 8, borderRadius: 4 },
+  progSection:        { flex: 1, fontSize: fontSize.xs, fontWeight: fontWeight.bold, letterSpacing: 0.8 },
+  progPct:            { fontSize: fontSize.sm, fontWeight: fontWeight.extrabold },
+  progTrack:          { height: 8, borderRadius: 999, overflow: 'hidden' },
+  progFill:           { height: '100%', borderRadius: 999 },
+
+  dotRow:             { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 6, paddingVertical: spacing.sm },
+  dot:                { width: 8, height: 8, borderRadius: 999 },
+  dotCurrent:         { width: 22, height: 8, borderRadius: 4 },
+  wizHeader:          { flexDirection: 'row', alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.xs },
   wizBack:            { width: 40, alignItems: 'center' },
   wizBackArrow:       { fontSize: 26, fontWeight: fontWeight.bold, lineHeight: 28 },
   wizSection:         { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.8 },
-  wizCount:           { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, marginTop: 1 },
+  wizCount:           { flex: 1, textAlign: 'center', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });
