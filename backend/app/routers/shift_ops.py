@@ -57,7 +57,9 @@ def submit_crew_compliance(
         .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
         .filter(
             AssignmentMember.employee_id == payload.driver_id,
+            AssignmentMember.company_id == caller.company_id,
             TruckAssignment.date == payload.date,
+            TruckAssignment.company_id == caller.company_id,
         )
         .first()
     )
@@ -67,7 +69,10 @@ def submit_crew_compliance(
     crew_member_ids = {
         str(am.employee_id)
         for am in db.query(AssignmentMember)
-        .filter(AssignmentMember.assignment_id == member_row.assignment_id)
+        .filter(
+            AssignmentMember.assignment_id == member_row.assignment_id,
+            AssignmentMember.company_id == caller.company_id,
+        )
         .all()
     }
 
@@ -83,6 +88,7 @@ def submit_crew_compliance(
             CrewCompliance.driver_id == payload.driver_id,
             CrewCompliance.employee_id == entry.employee_id,
             CrewCompliance.date == payload.date,
+            CrewCompliance.company_id == caller.company_id,
         ).first()
         if existing:
             raise HTTPException(
@@ -91,6 +97,7 @@ def submit_crew_compliance(
             )
 
         row = CrewCompliance(
+            company_id=caller.company_id,   # NOT NULL — was omitted (IntegrityError 500)
             driver_id=payload.driver_id,
             employee_id=entry.employee_id,
             date=payload.date,
@@ -182,6 +189,7 @@ def submit_driver_check_in(
     departure = db.query(Departure).filter(
         Departure.employee_id == payload.driver_id,
         Departure.date == payload.date,
+        Departure.company_id == caller.company_id,
     ).first()
     if not departure:
         raise HTTPException(status_code=400, detail="Mid-shift check-ins require a departure record for today.")
@@ -190,6 +198,7 @@ def submit_driver_check_in(
         DriverCheckIn.driver_id == payload.driver_id,
         DriverCheckIn.date == payload.date,
         DriverCheckIn.check_in_number == payload.check_in_number,
+        DriverCheckIn.company_id == caller.company_id,
     ).first()
     if existing:
         raise HTTPException(
@@ -197,7 +206,9 @@ def submit_driver_check_in(
             detail=f"Check-in #{payload.check_in_number} already submitted for today.",
         )
 
-    row = DriverCheckIn(**payload.model_dump())
+    # company_id is NOT NULL on DriverCheckIn but absent from the payload — set it
+    # from the caller (was an IntegrityError 500 on every check-in submit).
+    row = DriverCheckIn(**payload.model_dump(), company_id=caller.company_id)
     db.add(row)
     db.commit()
     db.refresh(row)
