@@ -26,7 +26,7 @@ import os
 from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 
-from app.services.local_date import company_today
+from app.services.local_date import company_today, company_tz
 from uuid import UUID
 
 import aiohttp
@@ -152,10 +152,13 @@ def _maybe_flag_late(db: Session, ap: AnchorPoint, truck_name: str, driver_name:
 
     now = datetime.now(timezone.utc)
     try:
-        # ETA is a local time string e.g. "10:30 AM". Parse against the AP's date.
-        eta_naive = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p")
-        # Treat as UTC for comparison purposes (no timezone config on AP yet)
-        eta_dt = eta_naive.replace(tzinfo=timezone.utc)
+        # ETA is a LOCAL time string e.g. "9:00 AM" — the driver means their own
+        # (company) timezone, not UTC. Parse against the AP date in the company tz
+        # and convert to UTC for comparison. (The old code stamped it as UTC, so a
+        # 9:00 AM EDT ETA was read as 9:00 UTC = 5:00 AM EDT and flagged late hours
+        # early.)
+        tz = company_tz(db, ap.company_id)
+        eta_dt = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p").replace(tzinfo=tz)
     except ValueError:
         return False
 
@@ -628,9 +631,10 @@ async def get_active_anchor_point_for_truck(
         driver = db.query(Employee).filter(Employee.id == ap.driver_id).first()
         driver_name = driver.name if driver else str(ap.driver_id)
 
-        minutes_late = int((datetime.now(timezone.utc) - datetime.strptime(
-            f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p"
-        ).replace(tzinfo=timezone.utc)).total_seconds() / 60)
+        # ETA is local (company tz) — same fix as _maybe_flag_late.
+        _eta_dt = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p").replace(
+            tzinfo=company_tz(db, caller.company_id))
+        minutes_late = int((datetime.now(timezone.utc) - _eta_dt).total_seconds() / 60)
 
         notif_message = (
             f"⏰ {truck_name} — {driver_name} is running late "
