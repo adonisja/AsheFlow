@@ -222,7 +222,8 @@ function Btn({ label, onPress, disabled, loading: ld, variant = 'primary' }: {
 // given tone (defaults to the section accent); pill-shaped, >=44pt row.
 function Segmented<T extends string | boolean>({ options, value, onChange, tone, c }: {
   options: { value: T; label: string; tone?: string }[];
-  value: T; onChange: (v: T) => void; tone?: string; c: ThemeColors;
+  // value may be undefined → no option selected (e.g. an unmarked attendance row).
+  value: T | undefined; onChange: (v: T) => void; tone?: string; c: ThemeColors;
 }) {
   const accent = React.useContext(SectionAccent) ?? c.primary;
   return (
@@ -1829,39 +1830,53 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
 }) {
   const done = !!shift.checkIn1;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
-  type Entry = { present: boolean; uniform: boolean; cartCover: boolean };
-  // Seed presence from the trainer's roll call (ADR-207) — a member the trainer
-  // marked NCNS defaults to NOT present here, so the two views agree. Anyone the
-  // trainer hasn't marked (no record / pending) defaults present, as before.
-  const entryFor = (id: string): Entry =>
-    ({ present: shift.rollCall[id] !== 'ncns', uniform: true, cartCover: true });
+  // `marked` = attendance has actually been decided (by the trainer/dispatch roll
+  // call OR a local tap) — vs. still awaiting a decision. Lets the driver tell who
+  // is done from who isn't, instead of everyone showing a default "Present" (ADR-208).
+  type Entry = { present: boolean; uniform: boolean; cartCover: boolean; marked: boolean };
+  const rollStatus = (id: string) => shift.rollCall[id];
+  const isUpstreamMarked = (id: string) => {
+    const st = rollStatus(id);
+    return !!st && st !== 'pending';
+  };
+  const entryFor = (id: string): Entry => ({
+    present: rollStatus(id) !== 'ncns',
+    uniform: true, cartCover: true,
+    marked: isUpstreamMarked(id),
+  });
   const defaultEntries = (): Record<string, Entry> =>
     Object.fromEntries(nonDriverCrew.map(m => [m.id, entryFor(m.id)]));
   const [entries, setEntries] = useState<Record<string, Entry>>(defaultEntries);
   const [saving, setSaving] = useState(false);
 
-  // Re-initialize as the crew list / roll call arrives after first render. New
-  // members get a full default; existing members keep their uniform/cart edits
-  // but their `present` re-syncs to the trainer's roll call (so a trainer NCNS
-  // shows up on the driver's roster). CI1 isn't submitted yet, so re-syncing
-  // presence here is safe and is the whole point of the fix (ADR-207).
+  // Re-sync as the crew list / roll call arrives. New members get a fresh default;
+  // for existing members, keep the driver's local edits but let an upstream roll
+  // call (trainer/dispatch) mark + set presence — so a trainer's mark shows here.
   useEffect(() => {
     if (nonDriverCrew.length > 0)
       setEntries(prev => {
         const next = { ...prev };
         for (const m of nonDriverCrew) {
-          const present = shift.rollCall[m.id] !== 'ncns';
-          next[m.id] = next[m.id] ? { ...next[m.id], present } : entryFor(m.id);
+          if (!next[m.id]) { next[m.id] = entryFor(m.id); continue; }
+          if (isUpstreamMarked(m.id)) {
+            next[m.id] = { ...next[m.id], present: rollStatus(m.id) !== 'ncns', marked: true };
+          }
         }
         return next;
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nonDriverCrew.length, shift.rollCall]);
 
+  // A present/ncns tap marks the member; uniform/cart edits don't change marked.
   const setField = (id: string, field: keyof Entry, val: boolean) =>
-    setEntries(p => { const cur = p[id] ?? { present: true, uniform: true, cartCover: true }; return { ...p, [id]: { ...cur, [field]: val } }; });
+    setEntries(p => {
+      const cur = p[id] ?? entryFor(id);
+      const marked = field === 'present' ? true : cur.marked;
+      return { ...p, [id]: { ...cur, [field]: val, marked } };
+    });
 
-  const allSet = nonDriverCrew.every(m => entries[m.id] !== undefined);
+  // Everyone must be explicitly marked (present or NCNS) before submit.
+  const allSet = nonDriverCrew.every(m => entries[m.id]?.marked);
 
   const submit = async () => {
     if (!allSet) { Alert.alert('Incomplete', 'Mark attendance for all crew members.'); return; }
@@ -1914,23 +1929,43 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
     <Card c={c}>
       <SectionHeader num="10" title={`Check-in 1 ${CI_TIMES[0]}`}
         subtitle="Routes handed out by captain. Mark attendance and uniform compliance for each crew member." c={c} />
+      {(() => {
+        const markedCount = nonDriverCrew.filter(m => entries[m.id]?.marked).length;
+        return (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>
+              {markedCount}/{nonDriverCrew.length} marked
+            </Text>
+            {markedCount < nonDriverCrew.length && (
+              <Badge tone="warning" size="sm">{nonDriverCrew.length - markedCount} awaiting</Badge>
+            )}
+          </View>
+        );
+      })()}
       {nonDriverCrew.map(m => {
-        const e = entries[m.id] ?? { present: true, uniform: true, cartCover: true };
+        const e = entries[m.id] ?? entryFor(m.id);
         return (
           <View key={m.id} style={{ backgroundColor: c.background, borderRadius: radius.md, borderWidth: 1,
-            borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>
-              {m.name}
-            </Text>
-            <View style={{ marginBottom: e.present ? spacing.xs : 0 }}>
+            borderColor: e.marked ? c.border : c.warning + '55', padding: spacing.md, marginBottom: spacing.sm,
+            opacity: e.marked ? 1 : 0.9 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
+                {m.name}
+              </Text>
+              {e.marked
+                ? <Badge tone={e.present ? 'success' : 'danger'} size="sm" dot>{e.present ? 'Present' : 'NCNS'}</Badge>
+                : <Badge tone="warning" size="sm">Not marked</Badge>}
+            </View>
+            <View style={{ marginBottom: e.marked && e.present ? spacing.xs : 0 }}>
               <Segmented<boolean>
                 options={[
                   { value: true,  label: 'Present', tone: c.success },
                   { value: false, label: 'NCNS',    tone: c.danger },
                 ]}
-                value={e.present} onChange={(v) => setField(m.id, 'present', v)} c={c} />
+                value={e.marked ? e.present : undefined}
+                onChange={(v) => setField(m.id, 'present', v)} c={c} />
             </View>
-            {e.present && (
+            {e.marked && e.present && (
               <View style={{ gap: spacing.xs }}>
                 {[
                   { field: 'uniform' as const,    label: 'Uniform pass' },
@@ -1951,7 +1986,8 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
           </View>
         );
       })}
-      <Btn label="Submit Check-in 1 & Compliance" onPress={submit} disabled={!allSet} loading={saving} c={c} />
+      <Btn label={allSet ? 'Submit Check-in 1 & Compliance' : 'Mark all crew to submit'}
+        onPress={submit} disabled={!allSet} loading={saving} c={c} />
     </Card>
   );
 }
