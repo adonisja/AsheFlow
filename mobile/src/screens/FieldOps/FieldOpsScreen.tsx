@@ -1747,10 +1747,8 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
       <SectionHeader num="8" title="Post Anchor Point + ETA"
         subtitle="Enter a cross street or address — it's geocoded to place your AP. ETA is required."
         c={c} />
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={location} onChangeText={setLocation}
-        placeholder="Cross street or address (e.g. W 28 St & 9 Ave)" placeholderTextColor={c.mutedForeground} />
+      <FieldInput label="Cross street or address" value={location} onChangeText={setLocation}
+        placeholder="e.g. W 28 St & 9 Ave" c={c} />
       <TouchableOpacity onPress={() => { setEtaDate(etaDate ?? new Date()); setShowPicker(true); }}
         style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
           borderWidth: 1, borderColor: etaDate ? c.primary : c.border, borderRadius: radius.md,
@@ -1805,12 +1803,9 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeC
     <Card c={c}>
       <SectionHeader num="9" title="Confirm AP Arrival"
         subtitle="Tap when you arrive. Correct the location if needed." c={c} />
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={location} onChangeText={setLocation} placeholderTextColor={c.mutedForeground} />
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={notes} onChangeText={setNotes} placeholder="Notes (optional)" placeholderTextColor={c.mutedForeground} />
+      <FieldInput label="Location" value={location} onChangeText={setLocation} c={c} />
+      <FieldInput label="Notes (optional)" value={notes} onChangeText={setNotes}
+        placeholder="Anything the crew should know…" c={c} />
       <Btn label="Confirm Arrival at AP" onPress={confirm} loading={acting} c={c} />
     </Card>
   );
@@ -1892,17 +1887,13 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
             <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>
               {m.name}
             </Text>
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: e.present ? spacing.sm : 0 }}>
-              {([true, false] as const).map(v => (
-                <TouchableOpacity key={String(v)} onPress={() => setField(m.id, 'present', v)}
-                  style={{ flex: 1, paddingVertical: spacing.xs + 1, borderRadius: radius.sm, borderWidth: 1,
-                    alignItems: 'center',
-                    backgroundColor: e.present === v ? (v ? c.success : c.danger) : 'transparent',
-                    borderColor: e.present === v ? (v ? c.success : c.danger) : c.border }}>
-                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-                    color: e.present === v ? '#fff' : c.mutedForeground }}>{v ? 'Present' : 'NCNS'}</Text>
-                </TouchableOpacity>
-              ))}
+            <View style={{ marginBottom: e.present ? spacing.xs : 0 }}>
+              <Segmented<boolean>
+                options={[
+                  { value: true,  label: 'Present', tone: c.success },
+                  { value: false, label: 'NCNS',    tone: c.danger },
+                ]}
+                value={e.present} onChange={(v) => setField(m.id, 'present', v)} c={c} />
             </View>
             {e.present && (
               <View style={{ gap: spacing.xs }}>
@@ -2439,43 +2430,28 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
         c={c} />
       {log && (
         <>
-          <View style={{ flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm }}>
-            {(['imperial', 'metric'] as const).map(u => (
-              <TouchableOpacity key={u} onPress={() => setUnit(u)}
-                style={{ flex: 1, paddingVertical: spacing.xs, borderRadius: radius.sm, borderWidth: 1,
-                  alignItems: 'center', backgroundColor: unit === u ? c.primary : 'transparent',
-                  borderColor: unit === u ? c.primary : c.border }}>
-                <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-                  color: unit === u ? '#fff' : c.mutedForeground }}>{u === 'imperial' ? 'mi / gal' : 'km / L'}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm }}>
+          <Segmented
+            options={[{ value: 'imperial', label: 'mi / gal' }, { value: 'metric', label: 'km / L' }]}
+            value={unit} onChange={setUnit} c={c} />
+          <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md }}>
             <Text style={{ fontSize: fontSize.xs, color: c.foreground }}>
               Start: <Text style={{ fontWeight: fontWeight.semibold }}>{displayStart} {distU}</Text>
             </Text>
           </View>
           {pendingRatings.length > 0 && (
             <View style={{ backgroundColor: c.info + '12', borderRadius: radius.md, borderWidth: 1,
-              borderColor: c.info + '40', padding: spacing.sm, marginBottom: spacing.sm }}>
+              borderColor: c.info + '40', padding: spacing.sm, marginBottom: spacing.md }}>
               <Text style={{ fontSize: fontSize.xs, color: c.info, fontWeight: fontWeight.semibold }}>
                 {pendingRatings.length} walker rating{pendingRatings.length !== 1 ? 's' : ''} will be submitted with this
               </Text>
             </View>
           )}
-          <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-            fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.xs }}
-            value={endOdo} onChangeText={setEndOdo} placeholder={`End odometer (${distU})`}
-            placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
-          <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-            fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.xs }}
-            value={fuel} onChangeText={setFuel} placeholder={`Fuel added (${fuelU}) — optional`}
-            placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
-          <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-            fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
-            minHeight: 52, textAlignVertical: 'top', marginBottom: spacing.sm }}
-            value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
-            placeholderTextColor={c.mutedForeground} multiline />
+          <FieldInput label={`End odometer (${distU})`} value={endOdo} onChangeText={setEndOdo}
+            placeholder={`e.g. 84350 ${distU}`} keyboardType="numeric" c={c} />
+          <FieldInput label={`Fuel added (${fuelU}) — optional`} value={fuel} onChangeText={setFuel}
+            placeholder={`e.g. 12 ${fuelU}`} keyboardType="numeric" c={c} />
+          <FieldInput value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
+            multiline style={{ minHeight: 56, textAlignVertical: 'top' }} c={c} />
           <Btn label="Log End Odometer" onPress={submit} disabled={!endOdo} loading={saving} c={c} />
         </>
       )}
