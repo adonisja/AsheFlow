@@ -63,6 +63,40 @@ jobs:
         working-directory: backend
         run: pip install -r requirements.txt
 
+      # Pull proprietary source + tests from AsheFlow-private so the FULL suite runs
+      # in CI (public checkout has neither — proprietary tests otherwise never run and
+      # skip-guarded tests silently skip). Same trust model as deploy: the deploy key
+      # lives in SSM and is read with the CI AWS creds; it never enters a log or arg.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: Pull proprietary source + tests from AsheFlow-private
+        run: |
+          # Private branch mirrors the public branch: staging→staging, else→main.
+          if [ "${GITHUB_REF##*/}" = "staging" ]; then PRIV_BRANCH=staging; else PRIV_BRANCH=main; fi
+          mkdir -p ~/.ssh
+          aws ssm get-parameter \
+            --name /asheflow/staging/PRIVATE_REPO_DEPLOY_KEY \
+            --with-decryption --region us-east-2 \
+            --query Parameter.Value --output text > ~/.ssh/asheflow_private_deploy
+          chmod 600 ~/.ssh/asheflow_private_deploy
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/asheflow_private_deploy -o StrictHostKeyChecking=no" \
+            git clone -b "$PRIV_BRANCH" git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private
+          cp /tmp/asheflow-private/backend/app/routers/*.py backend/app/routers/
+          cp /tmp/asheflow-private/backend/app/services/*.py backend/app/services/
+          cp -r /tmp/asheflow-private/asheflow_private backend/asheflow_private
+          # Proprietary tests (present only in the private repo).
+          if [ -d /tmp/asheflow-private/backend/tests/routers ]; then
+            cp /tmp/asheflow-private/backend/tests/routers/*.py backend/tests/routers/ 2>/dev/null || true
+          fi
+          rm -rf /tmp/asheflow-private ~/.ssh/asheflow_private_deploy
+          echo "Proprietary source + tests pulled from AsheFlow-private ($PRIV_BRANCH)."
+
       - name: Run tests
         working-directory: backend
         run: python -m pytest tests/ -v --tb=short

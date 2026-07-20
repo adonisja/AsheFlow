@@ -145,6 +145,33 @@ for f in "${SERVICES[@]}"; do
   fi
 done
 
+# ── Proprietary tests ────────────────────────────────────────────────────────
+# These import proprietary routers/services, so they're gitignored from the public
+# repo and can't run in public CI. Sync them here so the CI test job (which pulls
+# this repo) can run the FULL suite instead of silently skipping proprietary paths.
+TESTS=(
+  test_arrival_confirm.py
+  test_back_at_truck.py
+  test_confirmation_gate.py
+  test_dispatch_move_pairing.py
+  test_finalize_gate.py
+  test_my_performance.py
+  test_peer_ratings.py
+  test_reassign_trainee.py
+)
+mkdir -p backend/tests/routers
+echo ""
+echo "Copying proprietary tests..."
+for f in "${TESTS[@]}"; do
+  src="$PUBLIC_ROOT/backend/tests/routers/$f"
+  if [ -f "$src" ]; then
+    cp "$src" "backend/tests/routers/$f"
+    echo "  ✓ tests/routers/$f"
+  else
+    echo "  ✗ MISSING: tests/routers/$f (skipped)"
+  fi
+done
+
 # ── Docs (PII-scrubbed ADRs, journals, guides) ───────────────────────────────
 echo ""
 echo "Copying docs..."
