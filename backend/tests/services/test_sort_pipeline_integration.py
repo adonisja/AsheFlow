@@ -598,7 +598,19 @@ def _make_db_with_prev(prev_zones, decided_transfers=None):
     tt_chain.filter.return_value = tt_chain
     tt_chain.all.return_value = decided_transfers or []
     tt_chain.delete.return_value = 0
-    db.query.side_effect = lambda model: tz_chain if model is _TZModel else tt_chain
+    # persist_zones also runs db.query(AssignmentMember.employee_id, _TA.truck_id)
+    # for dock seeding — a 2-arg query. Accept *models and route only the models this
+    # test cares about; anything else (driver rows, DockAssignment) gets a fresh empty
+    # MagicMock chain, matching the base _make_db behaviour.
+    def _query(*models):
+        model = models[0]
+        if model is _TZModel:
+            return tz_chain
+        if model is _TTModel:
+            return tt_chain
+        return MagicMock()
+
+    db.query.side_effect = _query
     return db
 
 
