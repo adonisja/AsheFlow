@@ -77,10 +77,21 @@ jobs:
           # Private branch mirrors the public branch: staging→staging, else→main.
           if [ "${GITHUB_REF##*/}" = "staging" ]; then PRIV_BRANCH=staging; else PRIV_BRANCH=main; fi
           mkdir -p ~/.ssh
-          printf '%s\n' "$PRIVATE_REPO_DEPLOY_KEY" > ~/.ssh/asheflow_private_deploy
-          chmod 600 ~/.ssh/asheflow_private_deploy
+          # Write the key verbatim (preserving its internal newlines) and ensure a
+          # trailing newline — OpenSSH/libcrypto rejects a key that lacks the final LF.
+          KEY_FILE=~/.ssh/asheflow_private_deploy
+          printf '%s\n' "$PRIVATE_REPO_DEPLOY_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          # Fail fast with a clear message if the secret is malformed (bad newlines
+          # produce "error in libcrypto"), instead of a cryptic Permission-denied later.
+          if ! ssh-keygen -y -f "$KEY_FILE" > /dev/null 2>&1; then
+            echo "::error::PRIVATE_REPO_DEPLOY_KEY is not a valid OpenSSH private key."
+            echo "Re-set the secret from the exact key file, preserving line breaks:"
+            echo "  gh secret set PRIVATE_REPO_DEPLOY_KEY < path/to/ci_readonly_deploy"
+            exit 1
+          fi
           ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/asheflow_private_deploy -o StrictHostKeyChecking=no" \
+          GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=no" \
             git clone -b "$PRIV_BRANCH" git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private
           cp /tmp/asheflow-private/backend/app/routers/*.py backend/app/routers/
           cp /tmp/asheflow-private/backend/app/services/*.py backend/app/services/
