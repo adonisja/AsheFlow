@@ -537,34 +537,66 @@ export default function RouteSortScreen() {
           with it (pull it from the wrong tote as you tap). */}
       {misroutes.length > 0 && (
         <View style={[s.card, { backgroundColor: c.card, borderColor: c.warning + '55' }]}>
-          <Text style={s.cardTitle}>⚠ Misrouted packages · {misroutes.length}</Text>
-          <Text style={s.cardSub}>Pull each from its current tote and hand it to the right walker.</Text>
-          {misroutes.slice(0, 12).map(({ flag, source, suggested }) => (
-            <View key={flag.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: fontSize.xs, color: c.foreground, fontVariant: ['tabular-nums'] }}>
-                  …{flag.tba_number.slice(-8)} <Text style={{ color: c.mutedForeground }}>in #{source.route_number}</Text>
-                </Text>
-                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }} numberOfLines={1}>
-                  {flag.normalised_address ?? flag.destination_block_key ?? 'unknown block'}
-                  {suggested ? ` → #${suggested.route_number} ${suggested.assigned_to_name ?? ''}` : ' → no covering route (captain review)'}
-                </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 2 }}>
+            <Text style={{ fontSize: fontSize.md }}>⚠️</Text>
+            <Text style={[s.cardTitle, { flex: 1 }]}>Misrouted packages</Text>
+            <Badge tone="warning">{misroutes.length}</Badge>
+          </View>
+          <Text style={s.cardSub}>Each package is in the wrong tote. Pull it from the FROM walker and hand it to the TO walker.</Text>
+          {misroutes.slice(0, 12).map(({ flag, source, suggested }) => {
+            const routeBadge = (num: number, name: string | null) => (
+              <View style={{ backgroundColor: c.card, borderRadius: radius.sm, borderWidth: 1, borderColor: c.borderStrong,
+                paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, alignItems: 'center', minWidth: 84 }}>
+                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.extrabold, color: c.foreground }}>#{num}</Text>
+                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }} numberOfLines={1}>{name ?? 'Unassigned'}</Text>
               </View>
-              {suggested && (
-                <TouchableOpacity
-                  style={{ backgroundColor: c.primary, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}
-                  onPress={() => resolveMisroute(flag.id, source.id, suggested.id)}
-                  disabled={resolvingFlag === flag.id}
-                >
-                  {resolvingFlag === flag.id
-                    ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={{ color: '#fff', fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Move to #{suggested.route_number}</Text>}
-                </TouchableOpacity>
-              )}
-            </View>
-          ))}
+            );
+            return (
+              <View key={flag.id} style={[s.misrouteRow, { borderColor: c.border, backgroundColor: c.surfaceMuted }]}>
+                {/* Headline: where the package actually belongs */}
+                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }} numberOfLines={2}>
+                  📍 {flag.normalised_address ?? flag.destination_block_key ?? 'Unknown address'}
+                </Text>
+                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontVariant: ['tabular-nums'], marginTop: 1, marginBottom: spacing.sm }}>
+                  TBA ····{flag.tba_number.slice(-6)}
+                </Text>
+                {/* FROM → TO hand-off */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+                  <View style={{ alignItems: 'center', gap: 2 }}>
+                    <Text style={{ fontSize: 9, color: c.mutedForeground, fontWeight: fontWeight.bold, letterSpacing: 0.6 }}>FROM</Text>
+                    {routeBadge(source.route_number, source.assigned_to_name)}
+                  </View>
+                  <Text style={{ fontSize: fontSize.lg, color: c.warning, fontWeight: fontWeight.bold }}>→</Text>
+                  <View style={{ alignItems: 'center', gap: 2 }}>
+                    <Text style={{ fontSize: 9, color: c.mutedForeground, fontWeight: fontWeight.bold, letterSpacing: 0.6 }}>TO</Text>
+                    {suggested
+                      ? routeBadge(suggested.route_number, suggested.assigned_to_name)
+                      : <View style={{ paddingHorizontal: spacing.sm, paddingVertical: spacing.xs }}>
+                          <Text style={{ fontSize: fontSize.xs, color: c.warning, fontWeight: fontWeight.semibold }}>Captain review</Text>
+                        </View>}
+                  </View>
+                </View>
+                {/* Action */}
+                <View style={{ marginTop: spacing.sm }}>
+                  {suggested ? (
+                    <Button variant="primary" fullWidth
+                      loading={resolvingFlag === flag.id}
+                      onPress={() => resolveMisroute(flag.id, source.id, suggested.id)}>
+                      {`Move to #${suggested.route_number}${suggested.assigned_to_name ? ` · ${suggested.assigned_to_name}` : ''}`}
+                    </Button>
+                  ) : (
+                    <View style={{ backgroundColor: c.warning + '15', borderRadius: radius.md, borderWidth: 1, borderColor: c.warning + '40', padding: spacing.sm }}>
+                      <Text style={{ fontSize: fontSize.xs, color: c.warning, fontWeight: fontWeight.semibold, textAlign: 'center' }}>
+                        No covering route — flag for captain to reassign
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            );
+          })}
           {misroutes.length > 12 && (
-            <Text style={[s.cardSub, { marginTop: spacing.xs, marginBottom: 0 }]}>…and {misroutes.length - 12} more — resolve these first, then refresh.</Text>
+            <Text style={[s.cardSub, { marginTop: spacing.sm, marginBottom: 0 }]}>…and {misroutes.length - 12} more — resolve these first, then refresh.</Text>
           )}
         </View>
       )}
@@ -924,6 +956,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   card:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md },
   cardTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground },
   crewRow:    { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginTop: spacing.sm },
+  misrouteRow:{ borderRadius: radius.md, borderWidth: 1, padding: spacing.md, marginTop: spacing.sm },
   cardSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.sm },
   primaryBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
   primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
