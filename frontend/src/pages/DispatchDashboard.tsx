@@ -426,12 +426,11 @@ export default function DispatchDashboard() {
       const payload: any = { date: selectedDate, truck_ids: Array.from(selectedTruckIds) };
       if (totalEmployees) payload.total_employees = totalEmployees;
 
-      const response = await axiosClient.post('/dispatch/', payload);
-      setDispatchData({
-        ...response.data,
-        assigned_crews: response.data.assigned_crews || {}
-      });
-      await fetchAvailablePool();
+      await axiosClient.post('/dispatch/', payload);
+      // Render from the canonical GET payload (not the POST body) so pairings and
+      // any other GET-only fields show immediately — the POST response shape and
+      // the GET shape must not silently drift (ADR-210 follow-up).
+      await Promise.all([fetchDispatchData(), fetchAvailablePool()]);
     } catch (err: any) {
       if (err.response && err.response.data && err.response.data.detail) {
         setError(err.response.data.detail);
