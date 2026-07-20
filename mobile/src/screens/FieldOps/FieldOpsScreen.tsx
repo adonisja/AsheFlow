@@ -16,11 +16,10 @@
  *   8. Post initial anchor point + ETA
  *   9. Confirm arrival at AP
  *  10. Check-in 1 (~11:15am): crew compliance + NCNS
- *  11. Walker ratings — unlocked after check-in 1, present walkers only,
- *      drafts persisted in AsyncStorage, submitted with end odometer
- *  12. Check-in 2 (~2pm): routes remaining + help request
- *  13. Check-in 3 (~4pm): routes remaining update
- *  14. Departure request (RTS report) — dispatch must approve
+ *      (peer/team rating lives on Preferences → Rate Team, not the driver day)
+ *  11. Check-in 2 (~2pm): routes remaining + help request
+ *  12. Check-in 3 (~4pm): routes remaining update
+ *  13. Departure request (RTS report) — dispatch must approve
  *
  * STATION (return)
  *  15. Record station arrival (return)
@@ -43,7 +42,6 @@ import {
   TextInput, Alert, Switch, Modal, FlatList, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
@@ -85,7 +83,6 @@ const RTS_REASONS = [
 
 // ── Full shift state (loaded once, refreshed on actions) ──────────────────────
 type CrewMember  = { id: string; name: string; role: string };
-type WalkerDraft = { stars: number; comment: string };
 
 type ShiftState = {
   // dispatch confirmation (gate before check-in)
@@ -114,7 +111,6 @@ type ShiftState = {
   rtsSummary: RTSSummary | null;
   crew: CrewMember[];
   rollCall: Record<string, string>; // employeeId → trainer roll-call status (seeds CI1)
-  walkerRatingsSubmitted: Record<string, boolean>; // walkerId → true once posted
   // station return
   stationReturnArrived: boolean; stationReturnAt: string | null;
   stationHandoff: boolean;
@@ -177,7 +173,6 @@ const EMPTY_SHIFT: ShiftState = {
   rtsSummary: null,
   crew: [],
   rollCall: {},
-  walkerRatingsSubmitted: {},
   stationReturnArrived: false, stationReturnAt: null,
   stationHandoff: false,
   eodDone: false, eodData: null,
@@ -530,19 +525,6 @@ function InspDoneView({ data, c }: { data: InspData; c: ThemeColors }) {
   );
 }
 
-// ── Walker rating drafts, persisted in AsyncStorage ───────────────────────────
-const DRAFT_KEY = (empId: string) => `asheflow_walker_drafts_${empId}_${localToday()}`;
-
-async function loadDrafts(empId: string): Promise<Record<string, WalkerDraft>> {
-  try {
-    const raw = await AsyncStorage.getItem(DRAFT_KEY(empId));
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-async function saveDrafts(empId: string, drafts: Record<string, WalkerDraft>) {
-  try { await AsyncStorage.setItem(DRAFT_KEY(empId), JSON.stringify(drafts)); } catch {}
-}
-
 // ── Check-in timing context ───────────────────────────────────────────────────
 const CI_TIMES = ['~11:15 AM', '~2:00 PM', '~4:00 PM', '~5:30 PM'];
 
@@ -558,11 +540,6 @@ export default function FieldOpsScreen() {
   const [loadingId,  setLoadingId]  = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [shift,      setShift]      = useState<ShiftState>(EMPTY_SHIFT);
-
-  // Walker rating drafts — loaded from AsyncStorage
-  const [walkerDrafts, setWalkerDrafts] = useState<Record<string, WalkerDraft>>({});
-  const draftsRef = useRef(walkerDrafts);
-  draftsRef.current = walkerDrafts;
   const loadAbortRef = useRef<AbortController | null>(null);
 
   const loadShift = useCallback(async (empId: string) => {
@@ -676,14 +653,6 @@ export default function FieldOpsScreen() {
       rtsSummary = sRes?.data ?? null;
     }
 
-    // Submitted walker ratings
-    let walkerRatingsSubmitted: Record<string, boolean> = {};
-    if (dep) {
-      const rRes = await apiClient.get(`/field-ops/rating/driver/${empId}`, { params: { target_date: today } }).catch(() => null);
-      if (rRes) {
-        for (const r of rRes.data) walkerRatingsSubmitted[r.walker_id] = true;
-      }
-    }
 
     setShift({
       confirmationStatus, dispatchDate, dispatchMessage,
@@ -705,7 +674,6 @@ export default function FieldOpsScreen() {
       rtsSummary,
       crew,
       rollCall,
-      walkerRatingsSubmitted,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
       stationHandoff: !!handoff,
       eodDone: !!eodInsp,
@@ -718,7 +686,7 @@ export default function FieldOpsScreen() {
     apiClient.get('/employees/me').then(async r => {
       const id = r.data.id;
       setEmployeeId(id);
-      await Promise.all([loadShift(id), loadDrafts(id).then(setWalkerDrafts)]);
+      await loadShift(id);
     }).catch(() => {}).finally(() => setLoadingId(false));
     return () => { loadAbortRef.current?.abort(); };
   }, [user, loadShift]);
@@ -730,15 +698,6 @@ export default function FieldOpsScreen() {
     await reload();
     setRefreshing(false);
   }, [reload]);
-
-  const updateDraft = useCallback((walkerId: string, patch: Partial<WalkerDraft>) => {
-    setWalkerDrafts(prev => {
-      const existing = prev[walkerId] ?? { stars: 0, comment: '' };
-      const next = { ...prev, [walkerId]: { ...existing, ...patch } };
-      saveDrafts(employeeId, next);
-      return next;
-    });
-  }, [employeeId]);
 
   const s = styles(c);
 
@@ -754,7 +713,7 @@ export default function FieldOpsScreen() {
     checkedIn, dockZone, preTripDone, fuelLog, stationLoadArrived, wasStaged,
     missingItems, manifest, roster, rosterAvailable, departed, activeAP,
     checkIn1, checkIn2, checkIn3,
-    rtsReport, rtsSummary, crew, walkerRatingsSubmitted, stationReturnArrived,
+    rtsReport, rtsSummary, crew, stationReturnArrived,
     stationHandoff, eodDone, returned, truckId, taId,
   } = shift;
 
@@ -764,17 +723,7 @@ export default function FieldOpsScreen() {
   // must NOT surface the check-in wizard.
   const hasAssignment = !!truckId;
 
-  const walkers      = crew.filter(m => m.role === 'walker');
-  // NCNS walkers from check-in 1 — we don't have individual mapping so use submitted rating as proxy
-  const presentWalkers = checkIn1
-    ? walkers.filter(w => walkerRatingsSubmitted[w.id] !== undefined
-        ? true // already rated means present
-        : true) // before any ratings, show all; absent ones will be filtered after CI1 submitted
-    : [];
-  // After CI1: only walkers not explicitly no-shown
-  // We determine absence from the ratings endpoint (present: false) — stored in walkerRatingsSubmitted
-  // For simplicity: show all walkers who don't have a no-show rating submitted
-  const ratableWalkers = checkIn1 ? walkers : [];
+  const walkers = crew.filter(m => m.role === 'walker');
 
   // Truck loaded: roster-based check-off confirmed (ADR-181), or legacy manifest ack.
   const loadDone = rosterAvailable ? !!roster?.load_confirmed : !!manifest;
@@ -782,8 +731,9 @@ export default function FieldOpsScreen() {
   const rtsApproved  = rtsReport?.status === 'rts_approved' || rtsReport?.status === 'approved';
   const rtsPending   = rtsReport?.status === 'pending';
 
-  // Step progress for driver shift (20 total gated steps 0–19)
-  const TOTAL_STEPS = 20;
+  // Step progress for the driver-day header badge (19 gated steps; the paged
+  // wizard's own bar is the authoritative % — this just feeds the "n/19" pill).
+  const TOTAL_STEPS = 19;
   const completedSteps = isDriver ? [
     confirmationStatus === 'confirmed',
     !!checkedIn,
@@ -791,14 +741,13 @@ export default function FieldOpsScreen() {
     !!preTripDone,
     !!fuelLog?.odometer_start,
     !!stationLoadArrived,
-    // Step 6: tote check-off + confirm-load when a roster exists (ADR-181),
+    // tote check-off + confirm-load when a roster exists (ADR-181),
     // legacy manifest acknowledge otherwise.
     rosterAvailable ? !!roster?.load_confirmed : !!manifest,
     !!departed,
     !!(activeAP && activeAP.status !== 'preliminary'),
     !!(activeAP && activeAP.status === 'arrived'),
     !!checkIn1,
-    walkers.length === 0 || Object.keys(walkerRatingsSubmitted).length > 0,
     !!checkIn2,
     !!checkIn3,
     !!rtsReport,
@@ -849,10 +798,8 @@ export default function FieldOpsScreen() {
       node: activeAP ? <StepAPArrive ap={activeAP} onDone={reload} c={c} /> : null },
     { key: 'ci1', section: 'Route', reachable: !!departed && !!(activeAP && activeAP.status === 'arrived'), done: !!checkIn1,
       node: <StepCheckIn1 employeeId={employeeId} shift={shift} crew={crew} onDone={reload} c={c} /> },
-    { key: 'ratings', section: 'Route', reachable: !!departed && !!checkIn1 && ratableWalkers.length > 0,
-      done: walkers.length === 0 || Object.keys(walkerRatingsSubmitted).length > 0,
-      node: <StepWalkerRatings walkers={ratableWalkers} drafts={walkerDrafts}
-              submitted={walkerRatingsSubmitted} onUpdateDraft={updateDraft} c={c} /> },
+    // Walker Ratings step removed (ADR-201 follow-up) — peer rating now lives on the
+    // Preferences → Rate Team tab (all crew, incl. drivers), not the driver day flow.
     { key: 'ci2', section: 'Route', reachable: !!departed && !!checkIn1, done: !!checkIn2,
       node: <StepCheckInN employeeId={employeeId} shift={shift} num={2} time={CI_TIMES[1]}
               record={checkIn2} prevRecord={checkIn1} crew={crew} onDone={reload} c={c} /> },
@@ -874,8 +821,7 @@ export default function FieldOpsScreen() {
       node: <StepStationHandoff employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
 
     { key: 'odo_end', section: 'Offsite — End of Day', reachable: !!stationHandoff, done: !!(fuelLog?.odometer_end != null),
-      node: <StepEndOdometer employeeId={employeeId} shift={shift} walkers={ratableWalkers} drafts={walkerDrafts}
-              submittedRatings={walkerRatingsSubmitted} onDone={reload} c={c} /> },
+      node: <StepEndOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
     { key: 'eod_insp', section: 'Offsite — End of Day', reachable: !!stationHandoff && fuelLog?.odometer_end != null, done: !!eodDone,
       node: <StepInspection employeeId={employeeId} shift={shift} inspType="eod" stepNum="18"
               title="End-of-Day Inspection" subtitle="Inspect the truck before parking. Note any new issues." onDone={reload} c={c} /> },
@@ -1992,63 +1938,6 @@ function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
   );
 }
 
-function StepWalkerRatings({ walkers, drafts, submitted, onUpdateDraft, c }: {
-  walkers: CrewMember[];
-  drafts: Record<string, WalkerDraft>;
-  submitted: Record<string, boolean>;
-  onUpdateDraft: (id: string, patch: Partial<WalkerDraft>) => void;
-  c: ThemeColors;
-}) {
-  const pending = walkers.filter(w => !submitted[w.id]);
-  const done    = walkers.filter(w => submitted[w.id]);
-  if (walkers.length === 0) return null;
-
-  return (
-    <Card c={c}>
-      <SectionHeader num="11" title="Walker Ratings"
-        subtitle={`Rate each walker during the route. Drafts auto-save. Submitted with end odometer.\nTarget: ${CI_TIMES[3]}`}
-        done={pending.length === 0} doneLabel={`${done.length}/${walkers.length} rated`} c={c} />
-      {done.map(w => (
-        <View key={w.id} style={{ backgroundColor: c.success + '10', borderRadius: radius.md, borderWidth: 1,
-          borderColor: c.success + '30', padding: spacing.sm, marginBottom: spacing.xs,
-          flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-          <Text style={{ color: c.success, fontSize: fontSize.xs }}>✓</Text>
-          <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium }}>{w.name}</Text>
-          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: 'auto' }}>Submitted</Text>
-        </View>
-      ))}
-      {pending.map(w => {
-        const d = drafts[w.id] ?? { stars: 0, comment: '' };
-        return (
-          <View key={w.id} style={{ backgroundColor: c.background, borderRadius: radius.md, borderWidth: 1,
-            borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>{w.name}</Text>
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm }}>
-              {[1,2,3,4,5].map(star => (
-                <TouchableOpacity key={star} onPress={() => onUpdateDraft(w.id, { stars: star })}>
-                  <Text style={{ fontSize: 28, color: star <= d.stars ? c.gold : c.border }}>★</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TextInput
-              style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-                fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.card,
-                minHeight: 52, textAlignVertical: 'top' }}
-              value={d.comment}
-              onChangeText={t => onUpdateDraft(w.id, { comment: t })}
-              placeholder="Comment (optional, private)…" placeholderTextColor={c.mutedForeground} multiline />
-            {d.stars > 0 && (
-              <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: spacing.xs, textAlign: 'right' }}>
-                Draft saved — submits with end odometer
-              </Text>
-            )}
-          </View>
-        );
-      })}
-    </Card>
-  );
-}
-
 function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, onDone, c }: {
   employeeId: string; shift: ShiftState; num: 2 | 3;
   time: string; record: CheckInRecord | null; prevRecord: CheckInRecord | null;
@@ -2439,9 +2328,8 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
   );
 }
 
-function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings, onDone, c }: {
-  employeeId: string; shift: ShiftState; walkers: CrewMember[];
-  drafts: Record<string, WalkerDraft>; submittedRatings: Record<string, boolean>;
+function StepEndOdometer({ employeeId, shift, onDone, c }: {
+  employeeId: string; shift: ShiftState;
   onDone: () => void; c: ThemeColors;
 }) {
   const done = shift.fuelLog?.odometer_end != null;
@@ -2454,8 +2342,6 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
   const distU = unit === 'metric' ? 'km' : 'mi';
   const fuelU = unit === 'metric' ? 'L'  : 'gal';
 
-  const pendingRatings = walkers.filter(w => !submittedRatings[w.id] && (drafts[w.id]?.stars ?? 0) > 0);
-
   const submit = async () => {
     if (!log) return;
     const endMi = toMi(parseFloat(endOdo), unit);
@@ -2464,22 +2350,11 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
     }
     setSaving(true);
     try {
-      // Flush pending walker rating drafts first
-      for (const w of pendingRatings) {
-        const d = drafts[w.id];
-        await apiClient.post('/field-ops/rating', {
-          driver_id: employeeId, walker_id: w.id, date: localToday(),
-          present: true, stars: d.stars, comment: d.comment || null,
-        }).catch(() => {});
-      }
-      // Log end odometer
       await apiClient.patch(`/field-ops/fuel-log/${employeeId}`, {
         odometer_end: endMi,
         fuel_added: fuel ? fToGal(+fuel, unit) : null,
         notes: notes.trim() || null,
       });
-      // Clear drafts from storage
-      await AsyncStorage.removeItem(`asheflow_walker_drafts_${employeeId}_${localToday()}`);
       onDone();
     } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not log end odometer. Try again.')); }
     finally { setSaving(false); }
@@ -2497,8 +2372,7 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
   return (
     <Card c={c}>
       <SectionHeader num="17" title="Log End Odometer"
-        subtitle={`Record truck odometer on return.${pendingRatings.length > 0 ? ` Also submits ${pendingRatings.length} walker rating draft${pendingRatings.length !== 1 ? 's' : ''}.` : ''}`}
-        c={c} />
+        subtitle="Record truck odometer on return." c={c} />
       {log && (
         <>
           <Segmented
@@ -2509,14 +2383,6 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
               Start: <Text style={{ fontWeight: fontWeight.semibold }}>{displayStart} {distU}</Text>
             </Text>
           </View>
-          {pendingRatings.length > 0 && (
-            <View style={{ backgroundColor: c.info + '12', borderRadius: radius.md, borderWidth: 1,
-              borderColor: c.info + '40', padding: spacing.sm, marginBottom: spacing.md }}>
-              <Text style={{ fontSize: fontSize.xs, color: c.info, fontWeight: fontWeight.semibold }}>
-                {pendingRatings.length} walker rating{pendingRatings.length !== 1 ? 's' : ''} will be submitted with this
-              </Text>
-            </View>
-          )}
           <FieldInput label={`End odometer (${distU})`} value={endOdo} onChangeText={setEndOdo}
             placeholder={`e.g. 84350 ${distU}`} keyboardType="numeric" c={c} />
           <FieldInput label={`Fuel added (${fuelU}) — optional`} value={fuel} onChangeText={setFuel}

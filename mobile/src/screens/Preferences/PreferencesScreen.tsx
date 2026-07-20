@@ -194,7 +194,9 @@ export default function PreferencesScreen() {
         apiClient.get(`/field-ops/crew/${employeeId}`),
         apiClient.get(`/field-ops/rating/by/${employeeId}`, { params: { target_date: todayStr } }),
       ]);
-      setMates((crewRes.data ?? []).filter((m: any) => m.id !== employeeId));
+      // /field-ops/crew returns { truck_id, truck_name, crew: [...] } — read .crew,
+      // not the whole object (was silently yielding "no teammates").
+      setMates((crewRes.data?.crew ?? []).filter((m: any) => m.id !== employeeId));
       const g: Record<string, number> = {};
       for (const r of (mineRes.data ?? [])) g[r.ratee_id] = r.stars;
       setGiven(g);
