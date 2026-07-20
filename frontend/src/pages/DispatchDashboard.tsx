@@ -1113,7 +1113,7 @@ export default function DispatchDashboard() {
                                  if (draggedTruck === truckId) return; // same truck, nothing to swap
                                  swapTwo(draggedId, draggedTruck, member.employee_id, truckId);
                                }}
-                               className="flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm"
+                               className={`flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm ${pairingFor === member.employee_id ? 'relative z-40' : ''}`}
                              >
                                <div className="flex items-center gap-2">
                                  <GripVertical className="w-4 h-4 text-muted-foreground opacity-30 group-hover:opacity-100" />
