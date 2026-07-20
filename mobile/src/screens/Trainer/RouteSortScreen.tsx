@@ -553,12 +553,14 @@ export default function RouteSortScreen() {
             );
             return (
               <View key={flag.id} style={[s.misrouteRow, { borderColor: c.border, backgroundColor: c.surfaceMuted }]}>
-                {/* Headline: where the package actually belongs */}
-                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }} numberOfLines={2}>
+                {/* Headline: where the package actually belongs (full GeoClient
+                    address — no line cap; it's building-level, not excessively long) */}
+                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
                   📍 {flag.normalised_address ?? flag.destination_block_key ?? 'Unknown address'}
                 </Text>
-                <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontVariant: ['tabular-nums'], marginTop: 1, marginBottom: spacing.sm }}>
-                  TBA ····{flag.tba_number.slice(-6)}
+                {/* Full tracking number — selectable so it can be matched/scanned exactly */}
+                <Text selectable style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontVariant: ['tabular-nums'], marginTop: 2, marginBottom: spacing.sm }}>
+                  TBA {flag.tba_number}
                 </Text>
                 {/* FROM → TO hand-off */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
