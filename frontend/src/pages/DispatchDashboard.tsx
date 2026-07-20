@@ -54,6 +54,24 @@ export default function DispatchDashboard() {
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
   const [dialog, setDialog] = useState<DialogConfig | null>(null);
+
+  // Trainee→trainer pairing picker (ADR-210): which trainee's picker is open, and pending write.
+  const [pairingFor, setPairingFor] = useState<string | null>(null);
+  const [savingPairing, setSavingPairing] = useState(false);
+
+  // Close the pairing picker on outside-click / Escape.
+  useEffect(() => {
+    if (!pairingFor) return;
+    const onDown = () => setPairingFor(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPairingFor(null); };
+    // pointerdown fires before the button's onClick toggle; delay attach a tick so
+    // opening the picker doesn't immediately close it.
+    const t = setTimeout(() => {
+      window.addEventListener('pointerdown', onDown);
+      window.addEventListener('keydown', onKey);
+    }, 0);
+    return () => { clearTimeout(t); window.removeEventListener('pointerdown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [pairingFor]);
   const openDialog = (cfg: DialogConfig) => setDialog(cfg);
   const closeDialog = () => setDialog(null);
 
@@ -463,6 +481,38 @@ export default function DispatchDashboard() {
     } catch (err: any) {
       console.error(err);
       setError(errorText(err, 'Failed to move employee.'));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Set (or clear, trainerId=null) a trainee's paired trainer on their truck (ADR-210).
+  const setPairing = async (traineeId: string, trainerId: string | null) => {
+    setSavingPairing(true);
+    try {
+      await axiosClient.patch(`/dispatch/assign/${selectedDate}/${traineeId}/pairing`, {
+        trainer_id: trainerId,
+      });
+      setPairingFor(null);
+      await fetchDispatchData();
+    } catch (err: any) {
+      setError(errorText(err, 'Failed to update trainer pairing.'));
+    } finally {
+      setSavingPairing(false);
+    }
+  };
+
+  // True swap (ADR-210): exchange two employees' trucks in one gesture (drop A onto B).
+  const swapTwo = async (empA: string, truckA: string, empB: string, truckB: string) => {
+    if (truckA === truckB) return;
+    setIsLoading(true);
+    try {
+      // Move A to B's truck, then B to A's — sequential so the second sees A gone.
+      await axiosClient.patch('/dispatch/assign', { employee_id: empA, date: selectedDate, new_truck_id: truckB });
+      await axiosClient.patch('/dispatch/assign', { employee_id: empB, date: selectedDate, new_truck_id: truckA });
+      await fetchDispatchData();
+    } catch (err: any) {
+      setError(errorText(err, 'Failed to swap the two employees.'));
     } finally {
       setIsLoading(false);
     }
@@ -1025,6 +1075,10 @@ export default function DispatchDashboard() {
                    <div className="space-y-2 flex-1 relative">
                      {(() => {
                        const sortedCrew = [...crew].sort(sortCrewMembers);
+                       // Trainers on THIS truck — the candidate list for a trainee's pairing picker (ADR-210).
+                       const truckTrainers = sortedCrew.filter(
+                         (m: any) => (employees[m.employee_id]?.role || m.role || '').toLowerCase() === 'trainer',
+                       );
                        return sortedCrew.map((member: any, index: number) => {
                          const currentRole = (employees[member.employee_id]?.role || member.role || 'walker').toLowerCase();
                          const prevMember = index > 0 ? sortedCrew[index - 1] : null;
@@ -1043,6 +1097,22 @@ export default function DispatchDashboard() {
                              <div
                                draggable={!isLoading}
                                onDragStart={(e) => handleDragStart(e, member.employee_id, truckId)}
+                               onDragOver={(e) => { e.preventDefault(); }}
+                               onDrop={(e) => {
+                                 // Drop one person onto another → swap their trucks (ADR-210).
+                                 e.preventDefault();
+                                 e.stopPropagation();
+                                 const draggedId = e.dataTransfer.getData('employeeId');
+                                 const draggedTruck = e.dataTransfer.getData('sourceTruckId');
+                                 if (!draggedId || draggedId === member.employee_id) return;
+                                 if (!draggedTruck) {
+                                   // From the unassigned panel → treat as a plain add to this truck.
+                                   handleDropToTruck(e, truckId);
+                                   return;
+                                 }
+                                 if (draggedTruck === truckId) return; // same truck, nothing to swap
+                                 swapTwo(draggedId, draggedTruck, member.employee_id, truckId);
+                               }}
                                className="flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm"
                              >
                                <div className="flex items-center gap-2">
@@ -1051,10 +1121,62 @@ export default function DispatchDashboard() {
                                    <p className="text-sm font-medium text-foreground leading-tight">{member.name || member.employee_id}</p>
                                    <div className="flex items-center gap-1.5">
                                      <p className="text-[10px] text-subtle uppercase tracking-wider">{employees[member.employee_id]?.role || member.role}</p>
-                                     {member.paired_trainer_id && (
+                                     {currentRole === 'trainee' ? (() => {
+                                       // Trainee pairing control (ADR-210): click to pick/switch/clear the trainer.
+                                       const pairedName = member.paired_trainer_id
+                                         ? (employees[member.paired_trainer_id]?.name
+                                            || sortedCrew.find((m: any) => m.employee_id === member.paired_trainer_id)?.name
+                                            || 'trainer')
+                                         : null;
+                                       const open = pairingFor === member.employee_id;
+                                       return (
+                                         <span className="relative">
+                                           <button
+                                             onPointerDown={(e) => e.stopPropagation()}
+                                             onClick={() => setPairingFor(open ? null : member.employee_id)}
+                                             className={`text-[9px] font-bold px-1 py-0.5 rounded tracking-wide ${
+                                               pairedName ? 'bg-info/15 text-info hover:bg-info/30' : 'bg-warning/20 text-warning hover:bg-warning/40'
+                                             } transition-colors`}
+                                             title={pairedName ? 'Paired trainer — click to switch' : 'No trainer — click to assign'}
+                                           >
+                                             {pairedName ? `⇄ ${pairedName}` : '⚠ No trainer'}
+                                           </button>
+                                           {open && (
+                                             <div onPointerDown={(e) => e.stopPropagation()}
+                                               className="absolute z-30 top-full left-0 mt-1 w-44 bg-card border border-border rounded-md shadow-lg py-1 text-left">
+                                               <p className="text-[9px] uppercase tracking-wider text-subtle px-2 pb-1">Assign trainer</p>
+                                               {truckTrainers.length === 0 && (
+                                                 <p className="text-[10px] text-muted-foreground px-2 py-1">No trainers on this truck</p>
+                                               )}
+                                               {truckTrainers.map((t: any) => (
+                                                 <button
+                                                   key={t.employee_id}
+                                                   disabled={savingPairing}
+                                                   onClick={() => setPairing(member.employee_id, t.employee_id)}
+                                                   className={`w-full text-left text-[11px] px-2 py-1 hover:bg-accent transition-colors ${
+                                                     member.paired_trainer_id === t.employee_id ? 'text-info font-semibold' : 'text-foreground'
+                                                   }`}
+                                                 >
+                                                   {member.paired_trainer_id === t.employee_id ? '✓ ' : ''}{t.name || t.employee_id}
+                                                 </button>
+                                               ))}
+                                               {member.paired_trainer_id && (
+                                                 <button
+                                                   disabled={savingPairing}
+                                                   onClick={() => setPairing(member.employee_id, null)}
+                                                   className="w-full text-left text-[11px] px-2 py-1 text-danger hover:bg-danger/10 transition-colors border-t border-border mt-1"
+                                                 >
+                                                   Clear pairing
+                                                 </button>
+                                               )}
+                                             </div>
+                                           )}
+                                         </span>
+                                       );
+                                     })() : member.paired_trainer_id && (
                                        <span
                                          className="text-[9px] font-bold bg-info/15 text-info px-1 py-0.5 rounded tracking-wide"
-                                         title="Paired trainer for today"
+                                         title="Paired trainee for today"
                                        >
                                          ⇄ {employees[member.paired_trainer_id]?.name
                                            || sortedCrew.find((m: any) => m.employee_id === member.paired_trainer_id)?.name

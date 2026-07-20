@@ -25,6 +25,11 @@ class ManualAssignmentUpdate(BaseModel):
     new_role: Optional[Literal["driver", "trainer", "trainee", "walker"]] = Field(None, description="Optional new role for the assignment")
 
 
+class TraineePairingUpdate(BaseModel):
+    """Set (or clear) a trainee's paired trainer on their own truck (ADR-210)."""
+    trainer_id: Optional[UUID] = Field(None, description="Trainer to pair with; null to clear (orphan)")
+
+
 # ── ADR-199 Phase B: trainer-absent day-of reassignment (dispatch only) ─────────
 
 class AvailableTrainer(BaseModel):
