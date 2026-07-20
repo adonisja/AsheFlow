@@ -109,6 +109,7 @@ type ShiftState = {
   checkIn3: CheckInRecord | null;
   rtsReport: RTSReport | null;
   rtsSummary: RTSSummary | null;
+  routesRemaining: number; // truck routes not yet completed — auto-fills check-ins
   crew: CrewMember[];
   rollCall: Record<string, string>; // employeeId → trainer roll-call status (seeds CI1)
   // station return
@@ -171,6 +172,7 @@ const EMPTY_SHIFT: ShiftState = {
   checkIn1: null, checkIn2: null, checkIn3: null,
   rtsReport: null,
   rtsSummary: null,
+  routesRemaining: 0,
   crew: [],
   rollCall: {},
   stationReturnArrived: false, stationReturnAt: null,
@@ -653,6 +655,14 @@ export default function FieldOpsScreen() {
       rtsSummary = sRes?.data ?? null;
     }
 
+    // Routes still out (status != completed) — auto-fills the check-in routes-remaining.
+    let routesRemaining = 0;
+    if (taId) {
+      const rrRes = await apiClient.get(`/walker-routes/${taId}/routes`).catch(() => null);
+      const routeList: any[] = rrRes?.data ?? [];
+      routesRemaining = routeList.filter(r => r.status !== 'completed').length;
+    }
+
 
     setShift({
       confirmationStatus, dispatchDate, dispatchMessage,
@@ -672,6 +682,7 @@ export default function FieldOpsScreen() {
       checkIn1: ci1, checkIn2: ci2, checkIn3: ci3,
       rtsReport: rts,
       rtsSummary,
+      routesRemaining,
       crew,
       rollCall,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
@@ -1943,9 +1954,17 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
   time: string; record: CheckInRecord | null; prevRecord: CheckInRecord | null;
   crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
-  const maxWorking = prevRecord?.working_crew_count ?? shift.checkIn1?.working_crew_count ?? 0;
-  const nonDriverCrew = crew.filter(m => m.role !== 'driver');
-  const [routes,       setRoutes]       = useState('');
+  // Working crew excludes anyone the roll call marked NCNS — a no-show can't be a
+  // "left early" leaver at a later check-in, and shouldn't inflate the count.
+  const nonDriverCrew = crew.filter(m => m.role !== 'driver' && shift.rollCall[m.id] !== 'ncns');
+  // Ceiling for this check-in: never above the present (non-NCNS) crew size, so a
+  // no-show is auto-excluded even if the previous check-in's stored count was set
+  // before the NCNS mark. If a prior working count exists, take the lower of the two.
+  const maxWorking = prevRecord
+    ? Math.min(prevRecord.working_crew_count, nonDriverCrew.length)
+    : nonDriverCrew.length;
+  // Routes remaining auto-fills from the truck's not-yet-completed routes; editable.
+  const [routes,       setRoutes]       = useState(String(shift.routesRemaining || ''));
   const [working,      setWorking]      = useState(maxWorking);
   const [help,         setHelp]         = useState(false);
   const [saving,       setSaving]       = useState(false);
@@ -1954,6 +1973,8 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
   const [pendingSubmit, setPending]     = useState<{ r: number } | null>(null);
 
   useEffect(() => { setWorking(maxWorking); }, [maxWorking]);
+  // Re-seed routes if the computed remaining changes on reload (driver can still edit).
+  useEffect(() => { setRoutes(String(shift.routesRemaining || '')); }, [shift.routesRemaining]);
 
   const leftCount = maxWorking - working;
 
@@ -2015,11 +2036,10 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
         c={c}
       />
 
-      {/* Routes remaining */}
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.md }}
-        value={routes} onChangeText={setRoutes} placeholder="Routes remaining" keyboardType="numeric"
-        placeholderTextColor={c.mutedForeground} />
+      {/* Routes remaining — auto-filled from routes not yet completed; editable */}
+      <FieldInput label="Routes remaining (auto-filled — adjust if needed)"
+        value={routes} onChangeText={setRoutes} placeholder="Routes remaining"
+        keyboardType="numeric" c={c} />
 
       {/* Working crew stepper */}
       <View style={{ marginBottom: spacing.md }}>

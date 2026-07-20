@@ -190,13 +190,19 @@ export default function PreferencesScreen() {
   const fetchRateTeam = useCallback(async () => {
     if (!employeeId || !isCrew) return;
     try {
-      const [crewRes, mineRes] = await Promise.all([
+      const [crewRes, mineRes, rollRes] = await Promise.all([
         apiClient.get(`/field-ops/crew/${employeeId}`),
         apiClient.get(`/field-ops/rating/by/${employeeId}`, { params: { target_date: todayStr } }),
+        // Roll call for the truck — used to drop NCNS teammates from the rateable list.
+        apiClient.get(`/roll-call/my-truck/${todayStr}`).catch(() => ({ data: [] })),
       ]);
       // /field-ops/crew returns { truck_id, truck_name, crew: [...] } — read .crew,
       // not the whole object (was silently yielding "no teammates").
-      setMates((crewRes.data?.crew ?? []).filter((m: any) => m.id !== employeeId));
+      const ncns = new Set(
+        (rollRes.data ?? []).filter((r: any) => r.status === 'ncns').map((r: any) => r.employee_id),
+      );
+      setMates((crewRes.data?.crew ?? [])
+        .filter((m: any) => m.id !== employeeId && !ncns.has(m.id)));
       const g: Record<string, number> = {};
       for (const r of (mineRes.data ?? [])) g[r.ratee_id] = r.stars;
       setGiven(g);
