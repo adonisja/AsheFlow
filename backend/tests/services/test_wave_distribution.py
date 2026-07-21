@@ -42,6 +42,7 @@ class _Route:
     status: str = "unassigned"
     id: uuid.UUID = field(default_factory=uuid.uuid4)
     block_keys: list = field(default_factory=list)
+    capacity_limit_paired: Optional[int] = None   # set → paired-capacity route (ADR-213)
 
 
 def _crew(*specs):
@@ -288,6 +289,33 @@ class TestMatchAssignees:
         counts = {x.employee_id: 3, y.employee_id: 1}
         pairs, _ = match_assignees(routes, [x, y], completed_counts=counts, rng=rng)
         assert len(pairs) == 1 and pairs[0][1].employee_id == y.employee_id
+
+    def test_pair_steered_onto_paired_capacity_route(self):
+        # ADR-213: a pair claims the paired-capacity route (capacity_limit_paired
+        # set) before a solo can draw it, regardless of RNG.
+        import random
+        rng = random.Random(42)
+        paired_route = _Route(1, "standard", capacity_limit_paired=18)
+        normal_route = _Route(2, "standard")
+        pair = Assignee(uuid.uuid4(), "Pair", "pair", paired_trainer_id=uuid.uuid4())
+        solo = Assignee(uuid.uuid4(), "Solo", "walker")
+        pairs, _ = match_assignees([paired_route, normal_route], [pair, solo], rng=rng)
+        by_assignee = {a.employee_id: r for r, a in pairs}
+        assert by_assignee[pair.employee_id] is paired_route
+        assert by_assignee[solo.employee_id] is normal_route
+
+    def test_pair_falls_back_to_normal_route_when_no_paired_left(self):
+        # More pairs than paired-capacity routes → the extra pair uses the draw.
+        import random
+        rng = random.Random(7)
+        paired_route = _Route(1, "standard", capacity_limit_paired=18)
+        normal_route = _Route(2, "standard")
+        p1 = Assignee(uuid.uuid4(), "P1", "pair", paired_trainer_id=uuid.uuid4())
+        p2 = Assignee(uuid.uuid4(), "P2", "pair", paired_trainer_id=uuid.uuid4())
+        pairs, _ = match_assignees([paired_route, normal_route], [p1, p2], rng=rng)
+        assigned = {r.route_number for r, _ in pairs}
+        assert assigned == {1, 2}          # both routes used, no crash
+        assert len(pairs) == 2
 
 # ── build_block_urgency — BuildingProfile rows → per-block facts ─────────────
 

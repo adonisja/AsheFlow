@@ -156,6 +156,7 @@ TESTS=(
   test_dispatch_move_pairing.py
   test_finalize_gate.py
   test_my_performance.py
+  test_pair_split.py
   test_peer_ratings.py
   test_reassign_trainee.py
 )

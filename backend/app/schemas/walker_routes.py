@@ -256,6 +256,14 @@ class RouteStatusPatch(BaseModel):
     status: Literal["assigned", "in_progress", "completed"]
 
 
+class PairSplitResponse(BaseModel):
+    """Result of splitting a pair (ADR-213): the trainee's now-solo route and the
+    trainer's newly-assigned route, plus how many overflow totes moved across."""
+    trainee_route: "RouteResponse"
+    trainer_route: "RouteResponse"
+    overflow_totes_moved: int
+
+
 # ---------------------------------------------------------------------------
 # Wave pool — second-wave return mechanic
 # ---------------------------------------------------------------------------
