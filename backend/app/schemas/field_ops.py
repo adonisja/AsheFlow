@@ -76,8 +76,10 @@ class RtsReasonCount(BaseModel):
 
 
 class TroublesomeAddress(BaseModel):
+    # ADR-218: company-wide troublesome BUILDING (read off BuildingProfile's
+    # decaying score), not a per-walker RTS count. score replaces count.
     normalised_address: str
-    count: int
+    score: float
 
 
 class MyPerformanceResponse(BaseModel):

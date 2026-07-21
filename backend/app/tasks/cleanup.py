@@ -150,3 +150,26 @@ def purge_expired_operational_records() -> dict:
         db.close()
 
     return counts
+
+
+@celery_app.task(name="app.tasks.cleanup.decay_troublesome_scores")
+def decay_troublesome_scores() -> dict:
+    """Nightly decay of BuildingProfile.troublesome_score (ADR-218).
+
+    ~30-day half-life; scores below the floor snap to 0. Global (all companies),
+    like the other cleanup tasks. Lets the troublesome signal fade as buildings
+    improve, with no delivery-row retention needed to recompute it.
+    """
+    from app.services.building_troublesome import decay_all
+    db = SessionLocal()
+    try:
+        n = decay_all(db)
+        db.commit()
+        logger.info("decay_troublesome_scores: decayed %d building(s).", n)
+        return {"decayed": n}
+    except Exception as e:
+        db.rollback()
+        logger.error("decay_troublesome_scores failed: %s", e)
+        raise
+    finally:
+        db.close()

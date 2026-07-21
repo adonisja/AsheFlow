@@ -66,6 +66,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.purge_expired_operational_records",
         "schedule": crontab(hour=3, minute=30, day_of_month=1),
     },
+    # 02:30 AM Eastern — decay BuildingProfile troublesome scores (~30d half-life, ADR-218).
+    "decay-troublesome-scores-nightly": {
+        "task": "app.tasks.cleanup.decay_troublesome_scores",
+        "schedule": crontab(hour=2, minute=30),
+    },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",

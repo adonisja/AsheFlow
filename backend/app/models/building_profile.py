@@ -56,6 +56,13 @@ class BuildingProfile(Base):
     operational_note    = Column(Text, nullable=True)           # captain-structured version
     note_verified       = Column(Boolean, server_default="false", nullable=False)
 
+    # Troublesome decaying score (ADR-218). Bumped per RTS (weighted by type),
+    # decayed nightly (~30-day half-life). Lets the company-wide "troublesome
+    # buildings" list be read off the building instead of retaining delivery rows.
+    troublesome_score            = Column(Float, server_default="0", nullable=False)
+    troublesome_last_incident_at = Column(DateTime(timezone=True), nullable=True)
+    troublesome_resolved_at      = Column(DateTime(timezone=True), nullable=True)
+
     # Building type verification lifecycle
     building_type_status          = Column(String(20), server_default="pending", nullable=False)
     building_type_agreement_count = Column(Integer,    server_default="0",       nullable=False)
