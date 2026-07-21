@@ -54,6 +54,9 @@ class Employee(Base):
     phone_number         = Column(String(20),         nullable=True)
     account_status       = Column(String(30),         nullable=False, default="pending_verification", index=True)
     invited_at           = Column(DateTime(timezone=True), nullable=True)
+    # ADR-221: stamped on deactivation. The tombstone survives so the 6-month
+    # name-redaction clock has a departure time to measure against.
+    deactivated_at       = Column(DateTime(timezone=True), nullable=True)
     reset_on_graduation  = Column(Boolean,            nullable=False, default=False)
 
     # ── External HR system IDs ────────────────────────────────────────────────

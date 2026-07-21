@@ -241,6 +241,45 @@ def null_expired_delivery_addresses() -> dict:
         db.close()
 
 
+@celery_app.task(name="app.tasks.cleanup.redact_departed_employee_names")
+def redact_departed_employee_names() -> dict:
+    """Redact denormalized name copies for employees deactivated > retention window
+    ago (ADR-221). Runs on the still-linked tombstone (FK intact) so the paired-FK
+    match works; scrubs the employee row's own PII too. 0 disables.
+    """
+    days = settings.employee_name_retention_days
+    if days <= 0:
+        logger.info("redact_departed_employee_names: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    from app.services.employee_redaction import redact_employee_names, REDACTED_NAME
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        departed = (
+            db.query(Employee)
+            .filter(
+                Employee.deactivated_at.isnot(None),
+                Employee.deactivated_at < cutoff,
+                Employee.name != REDACTED_NAME,   # not already redacted
+            )
+            .all()
+        )
+        total = 0
+        for emp in departed:
+            redact_employee_names(db, emp.id)
+            total += 1
+        db.commit()
+        logger.info("redact_departed_employee_names: redacted %d departed employee(s).", total)
+        return {"redacted_employees": total}
+    except Exception as e:
+        db.rollback()
+        logger.error("redact_departed_employee_names failed: %s", e)
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.cleanup.decay_troublesome_scores")
 def decay_troublesome_scores() -> dict:
     """Nightly decay of BuildingProfile.troublesome_score (ADR-218).

@@ -247,7 +247,7 @@ def bulk_import_employees(
             db.flush()
         except Exception as e:
             db.rollback()
-            logger.error("bulk import flush failed for row %d (%s): %s", i, row.name, e)
+            logger.error("bulk import flush failed for row %d: %s", i, e)   # ADR-221: no name in logs
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
                 reason="Database error saving employee.",
@@ -267,7 +267,7 @@ def bulk_import_employees(
             db.commit()
         except Exception as e:
             db.rollback()
-            logger.error("bulk import commit failed for row %d (%s): %s", i, row.name, e)
+            logger.error("bulk import commit failed for row %d: %s", i, e)   # ADR-221: no name in logs
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
                 reason="Database error saving employee.",
@@ -543,7 +543,12 @@ def deactivate_employee(
     caller_groups = set(current_user.get("cognito_groups", []))
     _assert_not_protected(caller_groups, db_employee.role)
 
+    from datetime import datetime, timezone
     db_employee.is_active = False
+    # ADR-221: stamp departure so the 6-month name-redaction clock has a
+    # reference. The row survives as a tombstone (name still resolvable during
+    # the grace window); the nightly job redacts once deactivated_at + 6mo passes.
+    db_employee.deactivated_at = datetime.now(timezone.utc)
     write_audit(
         db,
         actor_id=str(caller.id),
@@ -664,6 +669,14 @@ def delete_employee(
         "Employee %s (%s) deleted by admin %s",
         db_employee.name, employee_id, current_user.get("username") or current_user.get("id"),
     )
+    # ADR-221: hard delete = on-demand erasure. Redact all denormalized _by_name
+    # copies NOW, while the paired FK still resolves (SET NULL fires on delete,
+    # after which the copies can't be matched back). The audit `before` records
+    # role/status only — not the raw name/email (which would re-persist the PII
+    # we're erasing).
+    from app.services.employee_redaction import redact_employee_names
+    redact_employee_names(db, employee_id)
+
     write_audit(
         db,
         actor_id=str(caller.id),
@@ -672,10 +685,7 @@ def delete_employee(
         target_table="employees",
         target_id=str(employee_id),
         before={
-            "name":           db_employee.name,
-            "email":          db_employee.email,
             "role":           db_employee.role,
-            "username":       db_employee.username,
             "account_status": db_employee.account_status,
             "is_active":      db_employee.is_active,
             "company_id":     str(db_employee.company_id),

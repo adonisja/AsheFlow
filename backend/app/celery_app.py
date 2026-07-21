@@ -77,6 +77,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.null_expired_delivery_addresses",
         "schedule": crontab(hour=4, minute=0),
     },
+    # 04:30 AM Eastern — redact departed employees' denormalized name copies
+    # past employee_name_retention_days (default 180, ADR-221).
+    "redact-departed-employee-names-nightly": {
+        "task": "app.tasks.cleanup.redact_departed_employee_names",
+        "schedule": crontab(hour=4, minute=30),
+    },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",

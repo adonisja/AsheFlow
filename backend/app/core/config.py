@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     # troublesome signal is distilled to BuildingProfile (ADR-218). 0 disables.
     delivery_address_retention_hours: int = 48
 
+    # ADR-221: redact a departed employee's denormalized name copies this many days
+    # after deactivation (covers post-departure disputes/references). 0 disables.
+    employee_name_retention_days: int = 180
+
     # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
     # Register at https://api.nyc.gov/ (free, requires NYC account).
     # v2 auth: subscription-key query param only — no app_id needed.
