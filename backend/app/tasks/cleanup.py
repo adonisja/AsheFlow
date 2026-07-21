@@ -152,6 +152,95 @@ def purge_expired_operational_records() -> dict:
     return counts
 
 
+@celery_app.task(name="app.tasks.cleanup.null_expired_delivery_addresses")
+def null_expired_delivery_addresses() -> dict:
+    """Null the customer delivery address on delivery rows older than
+    delivery_address_retention_hours (ADR-219).
+
+    Keeps block_key + counts + TBA — only the personal identifier is erased.
+    Covers delivery_stops, routes (normalised_addresses ARRAY + the stops JSONB),
+    misrouted_package_flags, rts_packages, missing_packages, reattempt_assignments.
+    Prerequisite ADR-218 removed the last post-shift reader of the RTS address.
+    Global maintenance (all companies). 0 disables.
+    """
+    hours = settings.delivery_address_retention_hours
+    if hours <= 0:
+        logger.info("null_expired_delivery_addresses: disabled (retention_hours=0).")
+        return {"skipped": True}
+
+    from app.models.walker_route import Route, MisroutedPackageFlag
+    from app.models.delivery_stop import DeliveryStop
+    from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
+
+    now = datetime.now(timezone.utc)
+    cutoff_dt = now - timedelta(hours=hours)
+    cutoff_date = cutoff_dt.date()
+    db = SessionLocal()
+    counts: dict[str, int] = {}
+    try:
+        # Routes older than the window: null the ARRAY + scrub the stops JSONB.
+        old_routes = (
+            db.query(Route)
+            .filter(Route.route_date < cutoff_date, Route.normalised_addresses != [])
+            .all()
+        )
+        n_routes = 0
+        for r in old_routes:
+            r.normalised_addresses = []
+            if r.stops:
+                # keep block_key + tba_numbers per stop; drop the address (ADR-194 double-storage)
+                r.stops = [{k: v for k, v in (s or {}).items() if k != "address"} for s in r.stops]
+            n_routes += 1
+        counts["routes"] = n_routes
+
+        # DeliveryStop: no own date → join Route.route_date.
+        old_route_ids = [r.id for r in db.query(Route.id).filter(Route.route_date < cutoff_date).all()]
+        counts["delivery_stops"] = (
+            db.query(DeliveryStop)
+            .filter(DeliveryStop.route_id.in_(old_route_ids),
+                    DeliveryStop.normalised_address.isnot(None))
+            .update({DeliveryStop.normalised_address: None}, synchronize_session=False)
+            if old_route_ids else 0
+        )
+
+        # MisroutedPackageFlag has no own timestamp — key on the parent Route's date.
+        counts["misroute_flags"] = (
+            db.query(MisroutedPackageFlag)
+            .filter(MisroutedPackageFlag.route_id.in_(old_route_ids),
+                    MisroutedPackageFlag.normalised_address.isnot(None))
+            .update({MisroutedPackageFlag.normalised_address: None}, synchronize_session=False)
+            if old_route_ids else 0
+        )
+        counts["rts_packages"] = (
+            db.query(RTSPackage)
+            .filter(RTSPackage.recorded_at < cutoff_dt,
+                    RTSPackage.normalised_address.isnot(None))
+            .update({RTSPackage.normalised_address: None}, synchronize_session=False)
+        )
+        counts["missing_packages"] = (
+            db.query(MissingPackage)
+            .filter(MissingPackage.reported_at < cutoff_dt,
+                    MissingPackage.normalised_address.isnot(None))
+            .update({MissingPackage.normalised_address: None}, synchronize_session=False)
+        )
+        counts["damaged_packages"] = (
+            db.query(DamagedPackage)
+            .filter(DamagedPackage.route_date < cutoff_date,
+                    DamagedPackage.normalised_address.isnot(None))
+            .update({DamagedPackage.normalised_address: None}, synchronize_session=False)
+        )
+
+        db.commit()
+        logger.info("null_expired_delivery_addresses: %s", counts)
+        return counts
+    except Exception as e:
+        db.rollback()
+        logger.error("null_expired_delivery_addresses failed: %s", e)
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.cleanup.decay_troublesome_scores")
 def decay_troublesome_scores() -> dict:
     """Nightly decay of BuildingProfile.troublesome_score (ADR-218).

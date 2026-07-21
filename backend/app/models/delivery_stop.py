@@ -37,7 +37,7 @@ class DeliveryStop(Base):
     walker_id            = Column(UUID(as_uuid=True), ForeignKey("employees.id",         ondelete="SET NULL"), nullable=True)
     walker_name          = Column(String(100), nullable=True)
 
-    normalised_address   = Column(String(200), nullable=False)
+    normalised_address   = Column(String(200), nullable=True)   # ADR-219: nulled 48h post-route (block_key kept)
     block_key            = Column(String(100), nullable=False)
     tba_numbers          = Column(ARRAY(String(50)), nullable=False, default=list)
 

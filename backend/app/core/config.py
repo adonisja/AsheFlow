@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # Default is 1095 (3 years); set to 0 to disable automatic purge.
     operational_record_retention_days: int = 1095
 
+    # ADR-219: null the customer delivery address on delivery rows this many hours
+    # after the route date (block_key + counts kept). Disputes are same-shift; the
+    # troublesome signal is distilled to BuildingProfile (ADR-218). 0 disables.
+    delivery_address_retention_hours: int = 48
+
     # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
     # Register at https://api.nyc.gov/ (free, requires NYC account).
     # v2 auth: subscription-key query param only — no app_id needed.

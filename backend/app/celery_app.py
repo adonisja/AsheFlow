@@ -71,6 +71,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.decay_troublesome_scores",
         "schedule": crontab(hour=2, minute=30),
     },
+    # 04:00 AM Eastern — null delivery-row customer addresses older than
+    # delivery_address_retention_hours (default 48h, ADR-219). Keeps block_key + counts.
+    "null-expired-delivery-addresses-nightly": {
+        "task": "app.tasks.cleanup.null_expired_delivery_addresses",
+        "schedule": crontab(hour=4, minute=0),
+    },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {
         "task": "app.tasks.adp_timecard_sync.sync_adp_timecards",
