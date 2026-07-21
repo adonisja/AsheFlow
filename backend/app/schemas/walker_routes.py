@@ -96,6 +96,23 @@ class StopOut(BaseModel):
     tba_numbers: list[str]
 
 
+class StopDetailOut(BaseModel):
+    """A stop enriched for the per-employee detail page (ADR-216).
+
+    Adds per-stop classification + building type + package count on top of StopOut.
+    workload_class / building_type are resolved on read from BuildingProfile /
+    Library (fresh — a captain's re-classification shows immediately); None when the
+    stop's address has no profile yet.
+    """
+    block_key: str
+    address: str
+    tba_numbers: list[str]
+    package_count: int
+    workload_class: Optional[str] = None    # bulk_drop | standard | high_touch | high_wait
+    building_type: Optional[str] = None     # doorman | elevator | walkup | biz_freight | …
+    lifecycle: str = "remaining"            # current | remaining | completed (ADR-216 phase 2 refines)
+
+
 class RouteOut(BaseModel):
     """One cart trip — the output unit of the sort algorithm."""
     route_number: int
@@ -258,6 +275,26 @@ class RouteResponse(BaseModel):
 
 class RouteStatusPatch(BaseModel):
     status: Literal["assigned", "in_progress", "completed"]
+
+
+class RouteDetailResponse(BaseModel):
+    """Per-employee route detail for the crew drill-down (ADR-216).
+
+    The route's identity + executor/supervisors + effort, plus stops enriched with
+    classification / building type / package count and grouped by block_key (the
+    "segment" label). Stops are ordered current → remaining → completed via the
+    `lifecycle` field on each StopDetailOut.
+    """
+    id: UUID
+    route_number: int
+    route_date: date
+    status: str
+    effort_class: str
+    executor: Optional[ParticipantOut] = None
+    supervisors: list[ParticipantOut] = []
+    package_count: int
+    stops: list[StopDetailOut] = []
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PairSplitResponse(BaseModel):
