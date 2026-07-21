@@ -32,6 +32,7 @@ import LocationProfilesScreen   from '@screens/LocationProfiles/LocationProfiles
 import DriverSurveyScreen       from '@screens/DriverSurvey/DriverSurveyScreen';
 import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
 import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
+import CrewMemberDetailScreen   from '@screens/Trainer/CrewMemberDetailScreen';
 import ReattemptScreen          from '@screens/Trainer/ReattemptScreen';
 
 // ── Role constants ────────────────────────────────────────────────────────────
@@ -70,10 +71,17 @@ export type TraineeStackParamList = {
   TraineeDashboard: undefined;
 };
 
-const RootStack    = createNativeStackNavigator<RootStackParamList>();
-const HomeStack    = createNativeStackNavigator<HomeStackParamList>();
-const TrainerStack = createNativeStackNavigator<TrainerStackParamList>();
-const TraineeStack = createNativeStackNavigator<TraineeStackParamList>();
+// ADR-216 phase 2: AP Sort list + per-employee route detail (crew drill-down).
+export type RouteSortStackParamList = {
+  RouteSortMain: undefined;
+  CrewMemberDetail: { routeId: string; memberName: string };
+};
+
+const RootStack      = createNativeStackNavigator<RootStackParamList>();
+const HomeStack      = createNativeStackNavigator<HomeStackParamList>();
+const TrainerStack   = createNativeStackNavigator<TrainerStackParamList>();
+const TraineeStack   = createNativeStackNavigator<TraineeStackParamList>();
+const RouteSortStack = createNativeStackNavigator<RouteSortStackParamList>();
 
 // ── Tab definition ────────────────────────────────────────────────────────────
 type TabDef = {
@@ -89,7 +97,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
   { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointTab },
   { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
-  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortScreen },
+  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator },
   { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen },
   { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
@@ -139,6 +147,18 @@ function TraineeNavigator() {
     <TraineeStack.Navigator screenOptions={{ headerShown: false }}>
       <TraineeStack.Screen name="TraineeDashboard" component={TraineeDashboard} />
     </TraineeStack.Navigator>
+  );
+}
+
+// ── Route Sort nested navigator (ADR-216 phase 2) ─────────────────────────────
+// The AP Sort tab is a stack so a crew card can push the per-employee route
+// detail (current → remaining → completed stops).
+function RouteSortNavigator() {
+  return (
+    <RouteSortStack.Navigator screenOptions={{ headerShown: false }}>
+      <RouteSortStack.Screen name="RouteSortMain"    component={RouteSortScreen} />
+      <RouteSortStack.Screen name="CrewMemberDetail" component={CrewMemberDetailScreen} />
+    </RouteSortStack.Navigator>
   );
 }
 

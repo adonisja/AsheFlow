@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
   Alert, Modal, ScrollView, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import RouteStopsList, { type RouteStop } from '@components/route/RouteStopsList';
 import apiClient from '@api/client';
@@ -136,6 +136,7 @@ export default function RouteSortScreen() {
   const c = useColors();
   const { fetchId } = useEmployeeId();
   const s = styles(c);
+  const nav = useNavigation<any>();   // ADR-216 phase 2: push CrewMemberDetail
 
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -482,6 +483,9 @@ export default function RouteSortScreen() {
 
   // Route lookup by id — shared by misroute resolution + wave proposal drill-down
   const routesById = new Map(routes.map(r => [r.id, r]));
+  // ADR-216 phase 2: a crew member's route = the one they execute. Lets a crew
+  // card open that route's detail.
+  const routeByExecutor = new Map(routes.filter(r => r.executor).map(r => [r.executor!.id, r]));
   const misroutes = routes.flatMap(r =>
     (r.misrouted_packages ?? [])
       .filter(f => !f.resolved)
@@ -718,9 +722,17 @@ export default function RouteSortScreen() {
               const pct = cs?.route_completion_pct != null ? ` · ${Math.round(cs.route_completion_pct * 100)}%` : '';
               const stop = currentStops[m.employee_id];
               const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+              // ADR-216 phase 2: tapping a crew member with a route opens their
+              // per-employee detail (current → remaining → completed stops).
+              const memberRoute = routeByExecutor.get(m.employee_id);
               return (
                 <View key={m.id} style={[s.crewRow, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: off ? 0.6 : 1 }]}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                  <TouchableOpacity
+                    activeOpacity={memberRoute ? 0.6 : 1}
+                    disabled={!memberRoute}
+                    onPress={() => memberRoute && nav.navigate('CrewMemberDetail', { routeId: memberRoute.id, memberName: name })}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
+                  >
                     <Avatar initials={initials} color={getRoleColor(m.role as FieldRole, c)} size={40} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
@@ -729,6 +741,7 @@ export default function RouteSortScreen() {
                       <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize', marginTop: 1 }}>
                         {m.role}
                         {off ? ` · ${m.status}` : ''}
+                        {memberRoute ? ` · route #${memberRoute.route_number}` : ''}
                         {cs && cs.trip_count > 0 ? ` · ${cs.trip_count} trip${cs.trip_count === 1 ? '' : 's'}` : ''}
                       </Text>
                     </View>
@@ -736,7 +749,10 @@ export default function RouteSortScreen() {
                     {tone && (
                       <Badge tone={tone} dot>{AVAIL_LABEL[cs!.availability]}{pct}</Badge>
                     )}
-                  </View>
+                    {memberRoute && (
+                      <Text style={{ fontSize: fontSize.lg, color: c.mutedForeground, marginLeft: 2 }}>›</Text>
+                    )}
+                  </TouchableOpacity>
 
                   {/* Done-for-day action — only for an AVAILABLE member (arrived, no
                       active route). You can't send home someone who's Not Present /
@@ -785,7 +801,10 @@ export default function RouteSortScreen() {
       )}
 
       {/* Route lists */}
-      {[{ label: 'OUT NOW', data: active }, { label: 'UNASSIGNED', data: unassigned }, { label: 'COMPLETED', data: completed }]
+      {/* ADR-216 phase 2: OUT NOW folded into the Crew card (each assigned member's
+          route opens from their card). Only UNASSIGNED (no crew member yet) and
+          COMPLETED remain as standalone lists. */}
+      {[{ label: 'UNASSIGNED', data: unassigned }, { label: 'COMPLETED', data: completed }]
         .filter(g => g.data.length > 0)
         .map(g => (
           <View key={g.label}>
