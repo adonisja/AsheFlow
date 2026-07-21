@@ -126,6 +126,10 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
         first_street = addr.get("firstStreetNameNormalized") or addr.get("firstStreetName")
         if not first_street:
             return None
+        # GeoClient space-pads normalized street names ("WEST  44 STREET"), which
+        # surfaced as a double space in the displayed normalised_address. Collapse
+        # any internal whitespace run to a single space.
+        first_street = " ".join(first_street.split())
 
         lat_raw = addr.get("latitude")
         lng_raw = addr.get("longitude")
@@ -175,7 +179,7 @@ def _geoclient_normalise(address: str, borough: str = "manhattan") -> GeoClientR
             y_high_address_end = None
 
         return GeoClientResult(
-            normalised_address=f"{house} {first_street}",
+            normalised_address=" ".join(f"{house} {first_street}".split()),
             lat=lat,
             lng=lng,
             # GeoClient v2 uses lowCrossStreetName1/highCrossStreetName1 for
