@@ -505,7 +505,6 @@ class TestAssignDrivers:
         inspect them. After the test, random.choices is restored automatically.
         """
         truck_a = make_truck(db, "Truck A")
-        truck_b = make_truck(db, "Truck B")
         driver = make_employee(db, role="driver", name="Driver")
 
         # Give the driver a history on truck_a
@@ -513,8 +512,12 @@ class TestAssignDrivers:
         assignment = make_assignment(db, truck_a, yesterday)
         make_member(db, assignment, driver, role="driver")
 
-        assigned_crews = {truck_a.id: [], truck_b.id: []}
-        base_weights   = {truck_a.id: 1.0, truck_b.id: 1.0}
+        # Single truck + single driver: assign_drivers shuffles the truck order and
+        # consumes the driver on the first loop, so with two trucks only the first-
+        # shuffled truck's weight was ever captured — a ~1-in-2 flake, NOT RNG noise.
+        # One truck makes the shuffle a no-op, so the captured weight is deterministic.
+        assigned_crews = {truck_a.id: []}
+        base_weights   = {truck_a.id: 1.0}
 
         captured_weights = []
 
@@ -531,8 +534,9 @@ class TestAssignDrivers:
                 db=db,
             )
 
-        # The first (and only) call to random.choices should have passed weight=0.05
-        # for this driver because truck_a is their consecutive truck
-        assert captured_weights[0] == pytest.approx(0.05), (
-            "Consecutive truck should get weight 0.05 in the driver weight list"
+        # Exactly one random.choices call, one weight: the driver's consecutive
+        # truck must carry the 0.05 penalty.
+        assert captured_weights == [pytest.approx(0.05)], (
+            "Consecutive truck should get weight 0.05 in the driver weight list; "
+            f"captured={captured_weights}"
         )
