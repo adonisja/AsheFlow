@@ -924,6 +924,7 @@ function AdminFieldOpsView() {
   const [inspections, setInspections]   = useState<any[]>([]);
   const [fuelLogs, setFuelLogs]         = useState<any[]>([]);
   const [noShows, setNoShows]           = useState<any[]>([]);
+  const [midShiftCheckIns, setMidShiftCheckIns] = useState<any[]>([]);   // ADR-215
   const [loading, setLoading]           = useState(true);
   const [sessions, setSessions]         = useState<ActiveSession[]>([]);
   const [wipingId, setWipingId]         = useState<string | null>(null);
@@ -937,6 +938,10 @@ function AdminFieldOpsView() {
       axiosClient.get('/field-ops/fuel-logs/summary').then(r => setFuelLogs(r.data)),
       axiosClient.get('/field-ops/no-shows').then(r => setNoShows(r.data)),
       axiosClient.get<ActiveSession[]>('/shift-sessions/active').then(r => setSessions(r.data)),
+      // ADR-215: mid-shift check-ins carry the "Request help" flag (DriverCheckIn).
+      // This is the ops page a dispatcher watches — surface help here, not just on
+      // the compact dashboard widget.
+      axiosClient.get('/shift-ops/check-ins/summary').then(r => setMidShiftCheckIns(r.data)),
     ]).finally(() => setLoading(false));
   };
 
@@ -1006,6 +1011,44 @@ function AdminFieldOpsView() {
           </div>
         ))}
       </div>
+
+      {/* Mid-shift check-ins (ADR-215) — help requests surface here, help-first. */}
+      {midShiftCheckIns.length > 0 && (
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <AlertTriangle className="w-5 h-5 text-primary" />
+            <h2 className="text-base font-semibold text-foreground">Mid-shift check-ins</h2>
+            {midShiftCheckIns.some((c: any) => c.help_requested) && (
+              <span className="text-xs font-semibold text-danger bg-danger/10 rounded-full px-2 py-0.5">
+                {midShiftCheckIns.filter((c: any) => c.help_requested).length} need help
+              </span>
+            )}
+            <span className="ml-auto text-xs text-subtle">{midShiftCheckIns.length} driver{midShiftCheckIns.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="space-y-2">
+            {midShiftCheckIns.map((ci: any) => (
+              <div
+                key={ci.driver_id}
+                className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border ${
+                  ci.help_requested ? 'border-danger/40 bg-danger/5' : 'border-border'
+                }`}
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{ci.driver_name}</p>
+                  <p className="text-xs text-subtle">
+                    Check-in #{ci.latest_check_in} · {ci.routes_remaining} routes left · {ci.working_crew_count} working
+                  </p>
+                </div>
+                {ci.help_requested && (
+                  <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-danger">
+                    🆘 Needs help
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Departures & Returns */}
       <div className="card">

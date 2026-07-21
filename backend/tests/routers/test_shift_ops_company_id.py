@@ -22,7 +22,7 @@ _DATE = date(2026, 7, 19)
 
 
 def _caller():
-    return SimpleNamespace(id=_DRIVER, company_id=_CID, role="driver")
+    return SimpleNamespace(id=_DRIVER, company_id=_CID, role="driver", name="Test Driver")
 
 
 def test_check_in_sets_company_id():
@@ -46,6 +46,65 @@ def test_check_in_sets_company_id():
     )
     submit_driver_check_in(payload=payload, db=db, _=None, caller=_caller())
     assert added["row"].company_id == _CID
+
+
+def test_help_requested_notifies_dispatch():
+    # ADR-215: help_requested=true → a Notification per active dispatch/mgmt/admin.
+    from app.models.field_ops import Departure
+    from app.models.employee import Employee
+    from app.models.notification import Notification
+    added: list = []
+    db = MagicMock()
+    db.add = lambda row: added.append(row)
+    dispatchers = [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
+
+    def _query(model):
+        q = MagicMock(); f = MagicMock(); f.filter.return_value = f
+        if model is Departure:
+            f.first.return_value = SimpleNamespace()
+            f.all.return_value = []
+        elif model is Employee:
+            f.all.return_value = dispatchers      # dispatch recipients
+            f.first.return_value = None
+        else:
+            f.first.return_value = None
+            f.all.return_value = []
+        q.filter.return_value = f
+        return q
+    db.query = _query
+
+    payload = DriverCheckInCreate(
+        driver_id=_DRIVER, date=_DATE, check_in_number=3, routes_remaining=44,
+        help_requested=True, working_crew_count=29, ncns_count=0,
+    )
+    submit_driver_check_in(payload=payload, db=db, _=None, caller=_caller())
+    notifs = [r for r in added if isinstance(r, Notification)]
+    assert len(notifs) == 2
+    assert all(n.type == "driver_help_requested" and n.company_id == _CID for n in notifs)
+
+
+def test_no_help_no_notification():
+    from app.models.field_ops import Departure
+    from app.models.employee import Employee
+    from app.models.notification import Notification
+    added: list = []
+    db = MagicMock()
+    db.add = lambda row: added.append(row)
+
+    def _query(model):
+        q = MagicMock(); f = MagicMock(); f.filter.return_value = f
+        f.first.return_value = SimpleNamespace() if model is Departure else None
+        f.all.return_value = [SimpleNamespace(id=uuid.uuid4())] if model is Employee else []
+        q.filter.return_value = f
+        return q
+    db.query = _query
+
+    payload = DriverCheckInCreate(
+        driver_id=_DRIVER, date=_DATE, check_in_number=2, routes_remaining=10,
+        help_requested=False, working_crew_count=5, ncns_count=0,
+    )
+    submit_driver_check_in(payload=payload, db=db, _=None, caller=_caller())
+    assert not [r for r in added if isinstance(r, Notification)]
 
 
 def test_crew_compliance_sets_company_id():

@@ -210,6 +210,29 @@ def submit_driver_check_in(
     # from the caller (was an IntegrityError 500 on every check-in submit).
     row = DriverCheckIn(**payload.model_dump(), company_id=caller.company_id)
     db.add(row)
+
+    # ADR-215: push a "Request help" to dispatch on submit (the badge on the
+    # dashboard only surfaced if someone was looking). Fire on every submitted
+    # check-in with help_requested=true — each is a genuine ask. Same recipient
+    # pattern as the RTS-report notification.
+    if payload.help_requested:
+        dispatch_recipients = db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(["dispatch", "management", "admin"]),
+            Employee.is_active == True,
+        ).all()
+        for recipient in dispatch_recipients:
+            db.add(Notification(
+                company_id=caller.company_id,
+                employee_id=recipient.id,
+                type="driver_help_requested",
+                message=(
+                    f"🆘 {caller.name} requested help at check-in #{payload.check_in_number} "
+                    f"for {payload.date} — {payload.routes_remaining} route(s) remaining."
+                ),
+                dispatch_date=payload.date,
+            ))
+
     db.commit()
     db.refresh(row)
     return row
