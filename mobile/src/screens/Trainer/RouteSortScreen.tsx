@@ -147,6 +147,7 @@ export default function RouteSortScreen() {
   const [pickerFor,  setPickerFor]  = useState<number | null>(null);   // route_number being reassigned
   const [traineeArrivedAt, setTraineeArrivedAt] = useState<string | null>(null);
   const [rebalancing, setRebalancing] = useState(false);
+  const [splitting, setSplitting] = useState(false);
 
   const todayStr = () => {
     const now = new Date();
@@ -410,6 +411,44 @@ export default function RouteSortScreen() {
     }
   };
 
+  // ADR-213: split the pair — the trainee keeps their route (reverts to solo);
+  // the trainer takes the nearest unassigned route. Confirm first (irreversible-ish
+  // rebalance of totes) then POST /split with the trainee's (paired) route id.
+  const runSplit = () => {
+    const paired = routes.find(r => r.supervisors.length > 0);
+    if (!paired) return;
+    Alert.alert(
+      'Split the pair?',
+      `${pairedTrainee?.name ?? 'Your trainee'} will keep their route on their own, and you'll `
+      + 'take the nearest open route. Overflow packages move to your route.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Split',
+          style: 'destructive',
+          onPress: async () => {
+            setSplitting(true);
+            try {
+              const res = await apiClient.post(`/walker-routes/routes/${paired.id}/split`, {});
+              const moved = res.data?.overflow_totes_moved ?? 0;
+              const trNum = res.data?.trainer_route?.route_number;
+              Alert.alert(
+                'Split complete',
+                `You're now on route #${trNum ?? '?'}`
+                + (moved ? ` — ${moved} overflow tote${moved === 1 ? '' : 's'} moved to your route.` : '.'),
+              );
+              await load();
+            } catch (e) {
+              Alert.alert('Error', errorText(e, 'Could not split the pair.'));
+            } finally {
+              setSplitting(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   // ── Derived ──────────────────────────────────────────────────────────────
 
   const unassigned = routes.filter(r => r.status === 'unassigned');
@@ -515,9 +554,16 @@ export default function RouteSortScreen() {
       {routes.length > 0 && pairedTrainee && (
         <View style={[s.card, { backgroundColor: c.card, borderColor: rebalanced ? c.border : c.success + '55' }]}>
           {rebalanced ? (
-            <Text style={[s.cardSub, { marginBottom: 0 }]}>
-              🤝 Paired route active — {pairedTrainee.name} rides with you at 1.5× capacity.
-            </Text>
+            <>
+              <Text style={s.cardSub}>
+                🤝 Paired route active — {pairedTrainee.name} rides with you at 1.5× capacity.
+              </Text>
+              {/* ADR-213: split off if the pair is strong enough to run two solo
+                  routes. Trainee keeps theirs; you take the nearest open route. */}
+              <Button variant="secondary" fullWidth loading={splitting} onPress={runSplit}>
+                ✂️ Split — take my own route
+              </Button>
+            </>
           ) : (
             <>
               <Text style={s.cardTitle}>Paired arrival — {pairedTrainee.name}</Text>
