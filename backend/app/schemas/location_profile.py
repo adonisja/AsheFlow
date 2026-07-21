@@ -153,3 +153,19 @@ class BuildingProfileLibraryStatusPatch(BaseModel):
     """Super admin resolves a conflict or deprecates a library record."""
     library_status:   str = Field(...)   # "active" | "deprecated"
     operational_note: Optional[str] = Field(None, max_length=2000)
+
+
+class PromoteToLibraryRequest(BaseModel):
+    """ADR-220 forced note-scrub confirm. On promotion the note is PII-scrubbed;
+    if anything was flagged the super admin must review and re-submit with
+    confirmed_note (their reviewed/edited text) before it enters the retained
+    library."""
+    confirmed_note: Optional[str] = Field(None, max_length=2000)
+
+
+class NoteScrubReview(BaseModel):
+    """Returned (409) when a promotion's note needs super-admin review before it
+    can enter the library (ADR-220)."""
+    review_required: bool = True
+    scrubbed_note: Optional[str] = None
+    flags: list[str] = []
