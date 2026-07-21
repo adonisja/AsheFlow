@@ -46,15 +46,27 @@ def _resolve_anchor_location(address: str, borough: str) -> tuple[str, float, fl
     crossing = _parse_intersection_input(address)
     if crossing is not None:
         one, two = crossing
-        result = _geoclient_intersection(one, two, borough=borough)
+        reason: dict = {}
+        result = _geoclient_intersection(one, two, borough=borough, reason_out=reason)
         if result is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
+            # GeoClient's Geosupport return code 62 = the two streets don't share a
+            # node in the city street file (common for real corners near irregular
+            # grid, e.g. by Penn Station / rail yards). Name-form doesn't help — the
+            # fix is to enter a nearby street address instead, which geocodes fine.
+            code = reason.get("return_code")
+            if code == "62":
+                detail = (
+                    f"'{one} & {two}' isn't a registered corner in the city street file, "
+                    "so it can't be placed by intersection — even though the streets meet. "
+                    "Enter a nearby street address instead (e.g. a building number on "
+                    f"{two} near {one})."
+                )
+            else:
+                detail = (
                     f"Intersection '{one} & {two}' could not be geocoded in {borough}. "
-                    "Check both street names (they must actually cross) and the borough."
-                ),
-            )
+                    "Check both street names and the borough, or enter a nearby street address instead."
+                )
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
         lat, lng = result
         return f"{one.upper()} & {two.upper()}", lat, lng
 

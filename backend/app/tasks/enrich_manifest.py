@@ -216,6 +216,7 @@ def _geoclient_intersection(
     cross_street_one: str,
     cross_street_two: str,
     borough: str = "manhattan",
+    reason_out: dict | None = None,
 ) -> tuple[float, float] | None:
     """Call GeoClient v2 intersection endpoint and return (lat, lng) or None.
 
@@ -264,9 +265,17 @@ def _geoclient_intersection(
             lng_raw = inner.get("longitude")
 
             if lat_raw is None or lng_raw is None:
+                # GeoClient returns 200 with a Geosupport message + return code even
+                # when it can't place the intersection (e.g. code 62 "DO NOT
+                # INTERSECT" for a real-but-unregistered corner near irregular grid).
+                # Surface that to the caller so the user sees the real reason.
+                if reason_out is not None:
+                    reason_out["message"] = inner.get("message")
+                    reason_out["return_code"] = inner.get("geosupportReturnCode")
                 logger.warning(
-                    "geoclient_intersection no lat/lng on %s for '%s & %s' — inner keys: %s",
-                    path, cross_street_one, cross_street_two, list(inner.keys()),
+                    "geoclient_intersection no lat/lng on %s for '%s & %s' — code %s msg %r",
+                    path, cross_street_one, cross_street_two,
+                    inner.get("geosupportReturnCode"), inner.get("message"),
                 )
                 continue
 
