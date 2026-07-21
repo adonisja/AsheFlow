@@ -145,7 +145,7 @@ function ReassignModal({ route, walkers, onClose, onReassigned }: ReassignModalP
           <h3 className="font-semibold text-foreground">Reassign route #{route.route_number}</h3>
         </div>
         <div className="text-xs text-muted-foreground space-y-0.5">
-          <p>Current: <span className="text-foreground font-medium">{route.assigned_to_name ?? 'Unassigned'}</span></p>
+          <p>Current: <span className="text-foreground font-medium">{route.executor?.name ?? 'Unassigned'}</span></p>
           <p>Effort: <EffortBadge effort={route.effort_class} /></p>
           {route.effort_class === 'heavy' && (
             <p className="text-warning flex items-center gap-1">
@@ -231,7 +231,7 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
           <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 flex items-center justify-between gap-2">
             <div className="text-xs">
               <span className="font-semibold text-foreground">Belongs on #{suggested.route_number}</span>
-              <span className="text-muted-foreground"> · {suggested.assigned_to_name ?? 'unassigned'} — covers this block</span>
+              <span className="text-muted-foreground"> · {suggested.executor?.name ?? 'unassigned'} — covers this block</span>
             </div>
             {destRouteId !== suggested.id ? (
               <button
@@ -262,7 +262,7 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
               || a.route_number - b.route_number,
             ).map(r => (
               <option key={r.id} value={r.id}>
-                {r.route_number === suggestedRouteNumber ? '★ ' : ''}#{r.route_number} — {r.assigned_to_name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested' : ''}
+                {r.route_number === suggestedRouteNumber ? '★ ' : ''}#{r.route_number} — {r.executor?.name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested' : ''}
               </option>
             ))}
           </select>
@@ -462,7 +462,7 @@ function RouteCard({
   // (wasted cart trip); otherwise the fill just reads as fill.
   const overCap  = route.slot_cost > route.capacity_limit;
   const barColor = overCap ? 'bg-danger' : slotPct < 60 ? 'bg-warning' : 'bg-primary';
-  const assignee     = walkers.find(w => w.id === route.assigned_to);
+  const assignee     = walkers.find(w => w.id === route.executor?.id);
   const injuryStatus = assignee?.injury_status ?? null;
   const isOperational = phase === 'distributed' || phase === 'arrived';
 
@@ -488,9 +488,9 @@ function RouteCard({
         <span className="text-xs text-muted-foreground shrink-0 w-12 text-right">
           {route.slot_cost}/{route.capacity_limit}
         </span>
-        {isOperational && route.assigned_to_name && (
+        {isOperational && route.executor?.name && (
           <span className="text-xs text-foreground font-medium shrink-0 max-w-[120px] truncate hidden sm:block">
-            {route.assigned_to_name}
+            {route.executor?.name}
           </span>
         )}
         {injuryStatus && (
@@ -509,7 +509,7 @@ function RouteCard({
           <AssignCombobox
             walkers={walkers}
             takenBy={takenBy}
-            currentId={waveMap?.[route.route_number] ?? route.assigned_to ?? ''}
+            currentId={waveMap?.[route.route_number] ?? route.executor?.id ?? ''}
             onSelect={eid => onAssign(route.route_number, eid)}
           />
         </div>
@@ -550,10 +550,10 @@ function RouteCard({
           </div>
 
           {/* Operational-phase extras: assignee detail, trainee pairing, injury warning */}
-          {isOperational && route.assigned_to_name && (
+          {isOperational && route.executor?.name && (
             <div className="flex items-start gap-3 text-xs text-muted-foreground flex-wrap">
-              <span>Assigned: <span className="text-foreground font-medium">{route.assigned_to_name}</span></span>
-              {route.paired_trainee_id && (
+              <span>Assigned: <span className="text-foreground font-medium">{route.executor.name}</span></span>
+              {route.supervisors.length > 0 && (
                 <span>Trainee paired (Phase {route.trainee_phase})</span>
               )}
               {injuryStatus && route.effort_class === 'heavy' && (
@@ -592,7 +592,7 @@ function RouteCard({
                         {suggested && (
                           <span className="text-primary font-medium">
                             → belongs on #{suggested.route_number}
-                            {suggested.assigned_to_name ? ` · ${suggested.assigned_to_name}` : ' (unassigned)'}
+                            {suggested.executor?.name ? ` · ${suggested.executor?.name}` : ' (unassigned)'}
                           </span>
                         )}
                       </div>
@@ -1002,7 +1002,7 @@ function TruckSortPanel({
     setWaveMap(prev => {
       const next = { ...prev };
       state.routes.forEach(r => {
-        if (r.assigned_to && !next[r.route_number]) next[r.route_number] = r.assigned_to;
+        if (r.executor?.id && !next[r.route_number]) next[r.route_number] = r.executor?.id;
       });
       return next;
     });

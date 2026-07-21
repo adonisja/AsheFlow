@@ -559,6 +559,12 @@ export interface SortResult {
   unassigned_misroutes: MisroutedPackageOut[];
 }
 
+// ADR-212: a route participant (executor or supervisor), name resolved server-side.
+export interface RouteParticipant {
+  id: string;   // employee_id
+  name: string;
+}
+
 export interface RouteResponse {
   id: string;
   truck_assignment_id: string;
@@ -578,9 +584,10 @@ export interface RouteResponse {
   effort_score: number | null;
   workload_source: 'address_profile' | 'block_profile' | 'flag' | 'default';
   coverage_pct: number | null;
-  assigned_to: string | null;
-  assigned_to_name: string | null;
-  paired_trainee_id: string | null;
+  // ADR-212: membership. executor = assignee-of-record (null until assigned);
+  // supervisors = trainers overseeing the route ([] when solo).
+  executor: RouteParticipant | null;
+  supervisors: RouteParticipant[];
   trainee_phase: number | null;
   phase4_solo_opted_in: boolean;
   status: 'unassigned' | 'assigned' | 'in_progress' | 'completed';

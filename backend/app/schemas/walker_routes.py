@@ -104,6 +104,7 @@ class RouteOut(BaseModel):
     tba_numbers: list[str]
     slot_cost: int                  # half-slots
     capacity_limit: int             # half-slots
+    capacity_limit_paired: Optional[int] = None  # ADR-212: ~1.5× ceiling on paired-capacity routes
     effort_class: str               # easy|standard|heavy|very_heavy
     effort_score: float = 0.0       # weighted normalized score snapshot
     workload_source: str            # address_profile|block_profile|flag|default
@@ -195,6 +196,12 @@ class ArrivalConfirmResponse(BaseModel):
 # DB response schemas
 # ---------------------------------------------------------------------------
 
+class ParticipantOut(BaseModel):
+    """A route participant with the employee name resolved (ADR-212)."""
+    id: UUID          # employee_id
+    name: str
+
+
 class RouteResponse(BaseModel):
     id: UUID
     truck_assignment_id: UUID
@@ -215,9 +222,10 @@ class RouteResponse(BaseModel):
     effort_score: Optional[float] = None
     workload_source: str
     coverage_pct: Optional[float] = None
-    assigned_to: Optional[UUID] = None
-    assigned_to_name: Optional[str] = None
-    paired_trainee_id: Optional[UUID] = None
+    # ADR-212: membership. executor = assignee-of-record (nullable until wave
+    # distribution); supervisors = trainers overseeing the route ([] when solo).
+    executor: Optional[ParticipantOut] = None
+    supervisors: list[ParticipantOut] = []
     trainee_phase: Optional[int] = None
     phase4_solo_opted_in: bool
     status: str
@@ -226,6 +234,22 @@ class RouteResponse(BaseModel):
     created_at: datetime
     misrouted_packages: list["MisroutedPackageFlagResponse"] = []
     model_config = ConfigDict(from_attributes=True)
+
+    @classmethod
+    def from_route(cls, route, name_by_id: dict) -> "RouteResponse":
+        """Build from a Route ORM object + an {employee_id: name} map.
+
+        Names live on Employee, not on RouteParticipant (ADR-212 §1 — no
+        denormalised name), so the router supplies a resolved name map.
+        """
+        def _part(employee_id):
+            return ParticipantOut(id=employee_id, name=name_by_id.get(employee_id, ""))
+
+        executor_id = route.executor_id
+        obj = cls.model_validate(route, from_attributes=True)
+        obj.executor = _part(executor_id) if executor_id else None
+        obj.supervisors = [_part(sid) for sid in route.supervisor_ids]
+        return obj
 
 
 class RouteStatusPatch(BaseModel):

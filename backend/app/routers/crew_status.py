@@ -25,7 +25,7 @@ from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck_assignment import TruckAssignment
 from app.models.truck import Truck
-from app.models.walker_route import Route
+from app.models.walker_route import Route, RouteParticipant
 from app.models.delivery_stop import DeliveryStop
 from app.models.shift_roll_call import ShiftRollCall
 from app.schemas.assignment_member import (
@@ -116,12 +116,21 @@ def get_crew_status(
             has_route = False
             pct = None
             if m.status == "active":
+                # ADR-212: the route this member is on = any route they participate
+                # in (executor or supervisor).
+                member_route_ids = (
+                    db.query(RouteParticipant.route_id)
+                    .filter(
+                        RouteParticipant.employee_id == m.employee_id,
+                        RouteParticipant.company_id == cid,
+                    )
+                )
                 route = db.query(Route).filter(
                     Route.company_id == cid,
                     Route.truck_assignment_id == ta.id,
                     Route.returned_at.is_(None),
                     Route.status.in_(("assigned", "in_progress")),
-                    (Route.assigned_to == m.employee_id) | (Route.paired_trainee_id == m.employee_id),
+                    Route.id.in_(member_route_ids),
                 ).first()
                 if route is not None:
                     has_route = True

@@ -153,7 +153,7 @@ export default function CrewStatusPanel({
             <option value="">Select a route…</option>
             {activeRoutes.map(r => (
               <option key={r.id} value={r.id}>
-                #{r.route_number} · {r.assigned_to_name ?? 'unassigned'}
+                #{r.route_number} · {r.executor?.name ?? 'unassigned'}
               </option>
             ))}
           </select>

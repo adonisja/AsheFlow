@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, Integer, Date, DateTime, String, Boolean, Float, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, Date, DateTime, String, Boolean, Float, ForeignKey, Text, UniqueConstraint, Index, text
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -45,12 +45,14 @@ class Route(Base):
     workload_source       = Column(String(20), nullable=False, default="default")    # profile|flag|default
     coverage_pct          = Column(Float(), nullable=True)                           # profiled_packages / total_packages
 
-    # Person assignment — nullable until wave distribution
-    assigned_to           = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
-    assigned_to_name      = Column(String(100), nullable=True)
+    # Person membership is modelled by RouteParticipant (ADR-212): exactly one
+    # 'executor' (assignee-of-record) + zero-or-more 'supervisor' (trainer).
+    # The old single-owner columns (assigned_to / assigned_to_name /
+    # paired_trainee_id) were removed — resolve the executor/supervisors via the
+    # `participants` relationship, and names by joining Employee (no denormalised
+    # name; assigned_to_name drifted precisely because it was denormalised).
 
-    # Trainer+trainee pairing
-    paired_trainee_id     = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    # Training state of the executor (not membership — stays on Route)
     trainee_phase         = Column(Integer(), nullable=True)           # 1–5
     phase4_solo_opted_in  = Column(Boolean(), nullable=False, default=False)
 
@@ -67,9 +69,73 @@ class Route(Base):
     misrouted_packages = relationship(
         "MisroutedPackageFlag", back_populates="route", lazy="joined", cascade="all, delete-orphan"
     )
+    participants = relationship(
+        "RouteParticipant", back_populates="route", lazy="joined", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint("truck_assignment_id", "route_number", name="uq_routes_assignment_number"),
+    )
+
+    # ── Membership helpers (ADR-212) ──────────────────────────────────────────
+    @property
+    def executor_id(self):
+        """The single executor (assignee-of-record) employee_id, or None."""
+        p = next((p for p in self.participants if p.role == "executor"), None)
+        return p.employee_id if p else None
+
+    @property
+    def supervisor_ids(self) -> list:
+        """Employee ids of all supervisor participants (trainers). [] if solo."""
+        return [p.employee_id for p in self.participants if p.role == "supervisor"]
+
+    @property
+    def is_paired(self) -> bool:
+        """True when a supervisor participant is attached (training/retraining)."""
+        return any(p.role == "supervisor" for p in self.participants)
+
+
+ROUTE_PARTICIPANT_EXECUTOR = "executor"
+ROUTE_PARTICIPANT_SUPERVISOR = "supervisor"
+
+
+class RouteParticipant(Base):
+    """A person's membership in a route with a role (ADR-212).
+
+    Single source of truth for route ownership. Exactly one ``executor`` per
+    route (the assignee-of-record who physically runs it — a walker, or the
+    trainee in a training pair); zero-or-more ``supervisor`` (a trainer
+    overseeing it). Replaces Route.assigned_to / assigned_to_name /
+    paired_trainee_id. Names are resolved by joining Employee, never stored here.
+
+    The same shape serves the future retraining case (ADR-212 §context): a
+    trainer supervising an underperforming walker is just a ``supervisor`` row
+    on that walker's existing route.
+    """
+    __tablename__ = "route_participants"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    route_id    = Column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), nullable=False, index=True)
+    employee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    role        = Column(String(20), nullable=False)   # 'executor' | 'supervisor'
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+    route = relationship("Route", back_populates="participants")
+
+    __table_args__ = (
+        # A person appears at most once per route.
+        UniqueConstraint("route_id", "employee_id", name="uq_route_participant_route_employee"),
+        # Exactly one executor per route — partial unique index. Supported by both
+        # Postgres (prod) and SQLite (test create_all); sqlite_where/postgresql_where
+        # both point at the same predicate so the constraint is enforced in tests too.
+        Index(
+            "uq_route_participant_one_executor",
+            "route_id",
+            unique=True,
+            postgresql_where=text("role = 'executor'"),
+            sqlite_where=text("role = 'executor'"),
+        ),
     )
 
 

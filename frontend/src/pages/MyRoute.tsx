@@ -573,8 +573,11 @@ export default function MyRoute() {
     );
   }
 
-  const pairedRoute = routes.find(r => r.assigned_to !== employeeId && r.paired_trainee_id === employeeId);
-  const myRoutes    = routes.filter(r => r.assigned_to === employeeId);
+  // ADR-212: the trainee IS the executor of the paired route; it's "paired" when a
+  // supervisor (trainer) is attached. (Old model had the trainee shadowing the
+  // trainer's route via paired_trainee_id — now they share the trainee's route.)
+  const pairedRoute = routes.find(r => r.executor?.id === employeeId && r.supervisors.length > 0);
+  const myRoutes    = routes.filter(r => r.executor?.id === employeeId);
   const displayRoutes = myRoutes.length > 0 ? myRoutes : routes;
 
   return (
@@ -672,7 +675,7 @@ export default function MyRoute() {
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {activeRoute.package_count} packages · {activeRoute.slot_cost}/{activeRoute.capacity_limit} slots
-                {activeRoute.assigned_to_name && ` · ${activeRoute.assigned_to_name}`}
+                {activeRoute.executor?.name && ` · ${activeRoute.executor?.name}`}
               </p>
             </div>
             <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${
@@ -736,7 +739,7 @@ export default function MyRoute() {
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Trainer route (shadowed)</p>
           <p className="text-sm text-foreground">
             Route #{pairedRoute.route_number} · {pairedRoute.package_count} packages ·{' '}
-            <span className="text-muted-foreground">{pairedRoute.assigned_to_name}</span>
+            <span className="text-muted-foreground">{pairedRoute.executor?.name}</span>
           </p>
           {pairedRoute.status && (
             <span className={`text-xs font-medium capitalize ${pairedRoute.status === 'in_progress' ? 'text-success' : 'text-muted-foreground'}`}>

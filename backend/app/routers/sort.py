@@ -3137,10 +3137,20 @@ def _bag_owner_map(db: Session, company_id, sort_date: date) -> dict:
         .filter(Route.company_id == company_id, Route.route_date == sort_date)
         .all()
     )
+    # ADR-212: the tote's owning walker = the route's executor participant.
+    executor_ids = {r.executor_id for r in routes if r.executor_id}
+    name_by_id = {}
+    if executor_ids:
+        name_by_id = {
+            eid: nm for eid, nm in db.query(Employee.id, Employee.name).filter(
+                Employee.id.in_(executor_ids),
+                Employee.company_id == company_id,
+            ).all()
+        }
     owner: dict = {}
     for r in routes:
         for bag in (r.tote_ids or []):
-            owner[bag] = (r.assigned_to_name, r.route_number)
+            owner[bag] = (name_by_id.get(r.executor_id), r.route_number)
     return owner
 
 
@@ -3378,7 +3388,7 @@ def handover_ap_removal(
 ):
     """Walker declares an out-of-zone package is being handed to the driver (ADR-178).
 
-    The owning walker (route.assigned_to or its paired trainee) declares the
+    The owning walker (a route participant — executor or supervisor) declares the
     handover; captain/dispatch may also declare on their behalf. Two-party:
     the driver then confirms receipt via .../receive, which completes the pull.
     """
@@ -3392,9 +3402,13 @@ def handover_ap_removal(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Handover already declared.")
 
     # Ownership: walkers/trainees may only hand over packages on their own route.
+    # ADR-212: "own route" = a route they participate in (executor or supervisor).
     if caller.role in ("walker", "trainee"):
         route = _removal_owner_walker(db, caller.company_id, removal)
-        if route is None or (route.assigned_to != caller.id and route.paired_trainee_id != caller.id):
+        is_participant = route is not None and any(
+            p.employee_id == caller.id for p in route.participants
+        )
+        if not is_participant:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only hand over packages from your own route.",

@@ -8,7 +8,7 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck_assignment import TruckAssignment
-from app.models.walker_route import Route
+from app.models.walker_route import Route, RouteParticipant
 from app.models.delivery_stop import DeliveryStop
 from app.schemas.assignment_member import (
     AssignmentMemberCreate,
@@ -213,19 +213,26 @@ def get_crew_availability(
     } if emp_ids else {}
 
     # Each active member's current (assigned/in_progress, not returned) route +
-    # its completion %. A member may own a route via assigned_to or, for a
-    # trainee, paired_trainee_id.
+    # its completion %. ADR-212: a member is "on" a route if they are a
+    # participant (executor or supervisor).
     progress: list[MemberProgress] = []
     for m in members:
         has_route = False
         pct: float | None = None
         if m.status == "active":
+            member_route_ids = (
+                db.query(RouteParticipant.route_id)
+                .filter(
+                    RouteParticipant.employee_id == m.employee_id,
+                    RouteParticipant.company_id == caller.company_id,
+                )
+            )
             route = db.query(Route).filter(
                 Route.company_id == caller.company_id,
                 Route.truck_assignment_id == assignment_id,
                 Route.returned_at.is_(None),
                 Route.status.in_(("assigned", "in_progress")),
-                (Route.assigned_to == m.employee_id) | (Route.paired_trainee_id == m.employee_id),
+                Route.id.in_(member_route_ids),
             ).first()
             if route is not None:
                 has_route = True

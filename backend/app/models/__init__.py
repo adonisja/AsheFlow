@@ -28,7 +28,7 @@ from app.models.rts_clearance import RTSReport, StationHandoff
 from app.models.company import Company, CompanyConfig, CompanyZone
 from app.models.invite_token import InviteToken
 from app.models.shift_session import ShiftSession
-from app.models.walker_route import Route, RouteClusterCentroid, LocationDifficultyFlag, MisroutedPackageFlag
+from app.models.walker_route import Route, RouteParticipant, RouteClusterCentroid, LocationDifficultyFlag, MisroutedPackageFlag
 from app.models.truck_zone import TruckZone
 from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
 from app.models.building_profile import BuildingProfile

@@ -284,27 +284,29 @@ def _apply_ncns_side_effects(db: Session, trainee: Employee, target_date: date, 
         ta = db.query(TruckAssignment).filter(TruckAssignment.id == trainee_am.assignment_id).first()
         if ta and ta.paired_arrival_confirmed:
             ta.paired_arrival_confirmed = False
-            from app.models.walker_route import Route
-            trainer_am = (
-                db.query(AssignmentMember)
+            # ADR-212: the paired route is the TRAINEE's (executor) route — the old
+            # code looked it up by the trainer's assigned_to, which never matched
+            # (trainer never owned it) so this revert silently no-op'd. Find the
+            # route via the trainee's executor participant, drop any supervisor
+            # participant, and clear the 1.5× ceiling.
+            from app.models.walker_route import Route, RouteParticipant
+            route = (
+                db.query(Route)
+                .join(RouteParticipant, RouteParticipant.route_id == Route.id)
                 .filter(
-                    AssignmentMember.assignment_id == ta.id,
-                    AssignmentMember.role == ROLE_TRAINER,
+                    RouteParticipant.employee_id == trainee_am.employee_id,
+                    RouteParticipant.role == "executor",
+                    RouteParticipant.company_id == company_id,
+                    Route.route_date == target_date,
+                    Route.company_id == company_id,
                 )
                 .first()
             )
-            if trainer_am:
-                route = (
-                    db.query(Route)
-                    .filter(
-                        Route.assigned_to == trainer_am.employee_id,
-                        Route.route_date == target_date,
-                        Route.company_id == company_id,
-                    )
-                    .first()
-                )
-                if route:
-                    route.capacity_limit_paired = None
+            if route:
+                route.capacity_limit_paired = None
+                route.participants = [
+                    p for p in route.participants if p.role != "supervisor"
+                ]
 
     # 4. Notify all dispatch/management/admin employees.
     oversight = (

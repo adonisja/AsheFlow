@@ -69,10 +69,10 @@ type RouteResp = {
   effort_class: string;
   package_count: number;
   wave_number: number;
-  assigned_to: string | null;
-  assigned_to_name: string | null;
+  // ADR-212: membership. executor = assignee-of-record; supervisors = trainers.
+  executor: { id: string; name: string } | null;
+  supervisors: { id: string; name: string }[];
   returned_at: string | null;
-  paired_trainee_id: string | null;
   block_keys: string[];
   normalised_addresses: string[];
   stops: RouteStop[] | null;   // null = route predates ADR-194 → fall back to flat lists
@@ -227,13 +227,13 @@ export default function RouteSortScreen() {
           const sres = await apiClient.get(`/rts/stops/${r.id}`);
           const stops = (sres.data ?? []) as any[];
           const inProgress = stops.find(st => st.status === 'in_progress');
-          if (!inProgress || !r.assigned_to) return null;
+          if (!inProgress || !r.executor?.id) return null;
           const cur: CurrentStop = {
             stop_sequence: inProgress.stop_sequence,
             normalised_address: inProgress.normalised_address,
             total: stops.length,
           };
-          return [r.assigned_to, cur] as const;
+          return [r.executor?.id, cur] as const;
         } catch { return null; }
       }));
       const stopMap: Record<string, CurrentStop> = {};
@@ -417,7 +417,8 @@ export default function RouteSortScreen() {
   const completed  = routes.filter(r => r.status === 'completed');
   const pickerOptions = crew.filter(m => m.role !== 'driver');
   const pairedTrainee = crew.find(m => m.role === 'trainee' && m.paired_trainer_id);
-  const rebalanced = routes.some(r => r.paired_trainee_id);
+  // ADR-212: a route is "rebalanced"/paired-active when a supervisor is attached.
+  const rebalanced = routes.some(r => r.supervisors.length > 0);
 
   // Route lookup by id — shared by misroute resolution + wave proposal drill-down
   const routesById = new Map(routes.map(r => [r.id, r]));
@@ -507,8 +508,10 @@ export default function RouteSortScreen() {
         </View>
       )}
 
-      {/* Paired arrival & rebalance (ADR-145): trainee confirms arrival from
-          their app; this card completes the 1.5× route expansion. */}
+      {/* Paired arrival & rebalance (ADR-212): the trainer confirms the pair is
+          present; the backend finds the TRAINEE's (executor) route and attaches
+          the trainer as a supervisor, lifting the 1.5× ceiling. (Pre-ADR-212 this
+          looked the route up by the trainer and 404'd — the reported bug.) */}
       {routes.length > 0 && pairedTrainee && (
         <View style={[s.card, { backgroundColor: c.card, borderColor: rebalanced ? c.border : c.success + '55' }]}>
           {rebalanced ? (
@@ -566,13 +569,13 @@ export default function RouteSortScreen() {
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
                   <View style={{ alignItems: 'center', gap: 2 }}>
                     <Text style={{ fontSize: 9, color: c.mutedForeground, fontWeight: fontWeight.bold, letterSpacing: 0.6 }}>FROM</Text>
-                    {routeBadge(source.route_number, source.assigned_to_name)}
+                    {routeBadge(source.route_number, source.executor?.name ?? null)}
                   </View>
                   <Text style={{ fontSize: fontSize.lg, color: c.warning, fontWeight: fontWeight.bold }}>→</Text>
                   <View style={{ alignItems: 'center', gap: 2 }}>
                     <Text style={{ fontSize: 9, color: c.mutedForeground, fontWeight: fontWeight.bold, letterSpacing: 0.6 }}>TO</Text>
                     {suggested
-                      ? routeBadge(suggested.route_number, suggested.assigned_to_name)
+                      ? routeBadge(suggested.route_number, suggested.executor?.name ?? null)
                       : <View style={{ paddingHorizontal: spacing.sm, paddingVertical: spacing.xs }}>
                           <Text style={{ fontSize: fontSize.xs, color: c.warning, fontWeight: fontWeight.semibold }}>Captain review</Text>
                         </View>}
@@ -584,7 +587,7 @@ export default function RouteSortScreen() {
                     <Button variant="primary" fullWidth
                       loading={resolvingFlag === flag.id}
                       onPress={() => resolveMisroute(flag.id, source.id, suggested.id)}>
-                      {`Move to #${suggested.route_number}${suggested.assigned_to_name ? ` · ${suggested.assigned_to_name}` : ''}`}
+                      {`Move to #${suggested.route_number}${suggested.executor?.name ? ` · ${suggested.executor?.name}` : ''}`}
                     </Button>
                   ) : (
                     <View style={{ backgroundColor: c.warning + '15', borderRadius: radius.md, borderWidth: 1, borderColor: c.warning + '40', padding: spacing.sm }}>
@@ -803,7 +806,7 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[s.routeName, { color: c.foreground }]}>
-            {route.assigned_to_name ?? 'Unassigned'}
+            {route.executor?.name ?? 'Unassigned'}
           </Text>
           <Text style={[s.routeMeta, { color: c.mutedForeground }]}>
             {route.package_count} pkgs · {route.effort_class} · wave {route.wave_number}

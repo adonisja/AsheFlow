@@ -38,8 +38,9 @@ type RouteResp = {
   stops: RouteStop[] | null;      // null = route predates ADR-194 → fall back to flat lists
   returned_at: string | null;
   wave_number: number;
-  assigned_to: string | null;
-  paired_trainee_id: string | null;
+  // ADR-212: membership. executor = assignee-of-record; supervisors = trainers.
+  executor: { id: string; name: string } | null;
+  supervisors: { id: string; name: string }[];
 };
 
 type StopSignal = { signal: string; reason: string; urgency: number };
@@ -115,25 +116,14 @@ export default function MyRouteScreen() {
       const res = await apiClient.get(`/walker-routes/me/routes?route_date=${today}`);
       const routes: RouteResp[] = res.data ?? [];
 
-      // "Mine": assigned to me, or (trainer) the paired route I'm working —
-      // me/routes returns the whole TRUCK for trainers, so filter first.
-      let mine = routes.filter(r =>
-        r.assigned_to === eid || r.paired_trainee_id === eid,
+      // ADR-212: "Mine" = every route I participate in (executor or supervisor).
+      // me/routes returns the whole TRUCK for trainers; a trainer on a pair is now
+      // a SUPERVISOR participant on the trainee's route, so this single filter
+      // covers both the solo and the paired-trainer case (no dispatch-pairing
+      // fallback needed).
+      const mine = routes.filter(r =>
+        r.executor?.id === eid || r.supervisors.some(s => s.id === eid),
       );
-      if (mine.length === 0 && routes.length > 0 && eid) {
-        // Trainer on a pair: the route is assigned to the TRAINEE. Find my
-        // trainee via today's dispatch pairing, then their route.
-        try {
-          const disp = await apiClient.get(`/dispatch/${today}`);
-          const crews: Record<string, any[]> = disp.data?.assigned_crews ?? {};
-          const myTraineeIds = new Set(
-            Object.values(crews).flat()
-              .filter((m: any) => m.role === 'trainee' && m.paired_trainer_id === eid)
-              .map((m: any) => m.employee_id),
-          );
-          mine = routes.filter(r => r.assigned_to && myTraineeIds.has(r.assigned_to));
-        } catch { /* fall through to empty */ }
-      }
 
       const active =
         mine.find(r => r.status === 'in_progress')
