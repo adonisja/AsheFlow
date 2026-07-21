@@ -1074,3 +1074,46 @@ class TestF5Consolidation:
         base = run_sort(_request(pkgs), {}, {}, {})
         withcrew = run_sort(_request(pkgs), {}, {}, {}, crew_size=5)
         assert [sorted(r.block_keys) for r in base.routes] == [sorted(r.block_keys) for r in withcrew.routes]
+
+
+# ── ADR-214: out-of-zone packages become removals, not captain-review misroutes ──
+
+class TestOutOfZoneRemovals:
+    # A small square boundary around the in-zone cluster (~40.750, -73.990).
+    _BOUNDARY = [
+        {"lat": 40.740, "lng": -74.000},
+        {"lat": 40.760, "lng": -74.000},
+        {"lat": 40.760, "lng": -73.980},
+        {"lat": 40.740, "lng": -73.980},
+    ]
+
+    def _in_zone_pkgs(self):
+        # A cohesive in-zone route on W 36th St.
+        return [_pkg(f"IZ{i}", f"{400+i} W 36th St", "BAGZ", lat=40.7501, lng=-73.9886)
+                for i in range(6)]
+
+    def test_out_of_zone_package_becomes_removal(self):
+        pkgs = self._in_zone_pkgs()
+        # An Astoria package riding in the same bag — far outside the boundary.
+        pkgs.append(_pkg("OOZ1", "31-15 Steinway St", "BAGZ", lat=40.770, lng=-73.920))
+        result = run_sort(_request(pkgs), {}, {}, {}, boundary=self._BOUNDARY)
+        ooz_tbas = {m.tba_number for m in result.out_of_zone_removals}
+        assert "OOZ1" in ooz_tbas
+        # It must NOT be a captain-review misroute anymore.
+        assert "OOZ1" not in {m.tba_number for m in result.unassigned_misroutes}
+
+    def test_no_boundary_keeps_old_behaviour(self):
+        pkgs = self._in_zone_pkgs()
+        pkgs.append(_pkg("FAR1", "31-15 Steinway St", "BAGZ", lat=40.770, lng=-73.920))
+        result = run_sort(_request(pkgs), {}, {}, {})   # boundary=None
+        # With no boundary, nothing is classified out-of-zone.
+        assert result.out_of_zone_removals == []
+
+    def test_in_zone_outlier_stays_misroute_not_removal(self):
+        # A package inside the boundary but with no covering route stays a
+        # (captain-review) misroute — it is NOT out of zone.
+        pkgs = self._in_zone_pkgs()
+        # Far from W 36th but still inside the square (e.g. near the SE corner).
+        pkgs.append(_pkg("INZ_OUT", "100 W 24th St", "BAGZ", lat=40.7415, lng=-73.9815))
+        result = run_sort(_request(pkgs), {}, {}, {}, boundary=self._BOUNDARY)
+        assert "INZ_OUT" not in {m.tba_number for m in result.out_of_zone_removals}

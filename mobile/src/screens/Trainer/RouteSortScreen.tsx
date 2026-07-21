@@ -62,6 +62,18 @@ type MisrouteFlag = {
   resolved: boolean;
 };
 
+// ADR-214: an out-of-zone package flagged for return to station.
+type Removal = {
+  id: string;
+  bag_id: string;
+  tba: string | null;
+  package_count: number;
+  reason: string;                 // 'out_of_zone'
+  status: string;                 // flagged | removed
+  locator: string | null;
+  owner_route_number: number | null;
+};
+
 type RouteResp = {
   id: string;
   route_number: number;
@@ -148,6 +160,7 @@ export default function RouteSortScreen() {
   const [traineeArrivedAt, setTraineeArrivedAt] = useState<string | null>(null);
   const [rebalancing, setRebalancing] = useState(false);
   const [splitting, setSplitting] = useState(false);
+  const [removals, setRemovals] = useState<Removal[]>([]);   // ADR-214 out-of-zone
 
   const todayStr = () => {
     const now = new Date();
@@ -174,9 +187,10 @@ export default function RouteSortScreen() {
       if (!assignmentId) { setTaId(null); return; }
       setTaId(assignmentId);
 
-      const [zoneRes, routesRes] = await Promise.allSettled([
+      const [zoneRes, routesRes, removalsRes] = await Promise.allSettled([
         apiClient.get(`/sort/${today}/zone-status`),
         apiClient.get(`/walker-routes/${assignmentId}/routes`),
+        apiClient.get(`/sort/${today}/removals`),
       ]);
       if (zoneRes.status === 'fulfilled') {
         const mine = (zoneRes.value.data?.trucks ?? []).find((t: any) => t.truck_id === myTruckId);
@@ -186,6 +200,13 @@ export default function RouteSortScreen() {
       }
       const myRoutes: RouteResp[] = routesRes.status === 'fulfilled' ? (routesRes.value.data ?? []) : [];
       setRoutes(myRoutes);
+
+      // ADR-214: out-of-zone removals — packages to pull at the AP and return to
+      // station (NOT misroutes). Scoped to this truck by the endpoint.
+      const rem = removalsRes.status === 'fulfilled'
+        ? ((removalsRes.value.data?.removals ?? []) as Removal[]).filter(r => r.reason === 'out_of_zone')
+        : [];
+      setRemovals(rem);
 
       // Assignment members: the AP-arrival stamp (ADR-145) AND the crew-status
       // rows (ADR-197) come from the same endpoint — fetch once.
@@ -578,6 +599,35 @@ export default function RouteSortScreen() {
               </Button>
             </>
           )}
+        </View>
+      )}
+
+      {/* Out-of-zone removals (ADR-214) — packages outside the company zone.
+          These are NOT misroutes; pull them and return to station (they were
+          flagged at the sort, not something a route should cover). */}
+      {removals.length > 0 && (
+        <View style={[s.card, { backgroundColor: c.card, borderColor: c.danger + '55' }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 2 }}>
+            <Text style={{ fontSize: fontSize.md }}>📤</Text>
+            <Text style={[s.cardTitle, { flex: 1 }]}>Return to station — out of zone</Text>
+            <Badge tone="danger">{removals.length}</Badge>
+          </View>
+          <Text style={s.cardSub}>
+            These packages are outside the delivery zone. Pull them from their tote and hand
+            them to the driver for return — they are not on any route.
+          </Text>
+          {removals.slice(0, 20).map(r => (
+            <View key={r.id} style={{ paddingVertical: spacing.xs, borderTopWidth: 1, borderTopColor: c.border }}>
+              <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.semibold }}>
+                {r.tba ?? r.bag_id}{r.package_count > 1 ? ` · ${r.package_count} pkgs` : ''}
+              </Text>
+              <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
+                {r.status === 'removed' ? '✓ pulled' : 'flagged — pull & return'}
+                {r.owner_route_number != null ? ` · from #${r.owner_route_number}` : ''}
+                {r.locator ? ` · ${r.locator}` : ''}
+              </Text>
+            </View>
+          ))}
         </View>
       )}
 

@@ -119,7 +119,11 @@ class SortResult(BaseModel):
     truck_assignment_id: UUID
     route_date: date
     routes: list[RouteOut]
-    unassigned_misroutes: list[MisroutedPackageOut]   # no destination route found
+    unassigned_misroutes: list[MisroutedPackageOut]   # no destination route found (genuine captain review)
+    # ADR-214: no-covering-route packages that fall OUTSIDE the company boundary —
+    # not misroutes, they are out-of-zone removals (pulled at the AP, returned to
+    # station). commit_sort writes these as PackageRemoval(reason=out_of_zone).
+    out_of_zone_removals: list[MisroutedPackageOut] = []
     # F5 surplus signal (ADR-197 Phase 1): routes the consolidation built vs the
     # active crew. routes_built < crew_size → dispatch can release the difference.
     # None when consolidation was off (no crew_size passed).
