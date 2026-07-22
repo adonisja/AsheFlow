@@ -151,6 +151,11 @@ export default function RouteSortScreen() {
   const [currentStops, setCurrentStops] = useState<Record<string, CurrentStop>>({});  // by employee_id
   const [departingId, setDepartingId] = useState<string | null>(null);
   const [rollCallId, setRollCallId] = useState<string | null>(null);   // employee_id being roll-called
+  const [viewerId, setViewerId] = useState<string | null>(null);       // this device's employee id
+  // ADR-228: per-member uniform/cart-cover draft compliance, by employee_id. Only
+  // the DRIVER captures it (it's their crew record); saved live as the roster fills.
+  const [compliance, setCompliance] = useState<Record<string, { uniform_pass: boolean; cart_cover_pass: boolean; status: string }>>({});
+  const [savingCompliance, setSavingCompliance] = useState<string | null>(null);
   const [routes,     setRoutes]     = useState<RouteResp[]>([]);
   const [committing, setCommitting] = useState(false);
   const [proposing,  setProposing]  = useState(false);
@@ -189,6 +194,21 @@ export default function RouteSortScreen() {
       if (!myTruckEntry) { setTaId(null); return; }
       const [myTruckId, myCrew] = myTruckEntry;
       setCrew(myCrew);
+      setViewerId(eid);
+
+      // ADR-228: if the viewer is this truck's DRIVER, load any existing draft
+      // compliance so the roster toggles reflect what's already recorded.
+      const driverMember = myCrew.find(m => m.role === 'driver');
+      if (eid && driverMember && driverMember.employee_id === eid) {
+        try {
+          const compRes = await apiClient.get(`/shift-ops/crew-compliance/${eid}`, { params: { target_date: today } });
+          const map: Record<string, { uniform_pass: boolean; cart_cover_pass: boolean; status: string }> = {};
+          for (const r of (compRes.data ?? [])) {
+            map[r.employee_id] = { uniform_pass: r.uniform_pass, cart_cover_pass: r.cart_cover_pass, status: r.status };
+          }
+          setCompliance(map);
+        } catch { /* best-effort */ }
+      }
 
       const ta: any = truckAssignments.find(t => t.truck_id === myTruckId);
       const assignmentId = ta?.id ?? ta?.assignment_id ?? null;
@@ -341,6 +361,26 @@ export default function RouteSortScreen() {
   // Roll call (ADR-198): mark a not-arrived member in (Present — server derives
   // early/present/late from the clock) or Absent (ncns). Flips them off Not
   // Arrived into the working crew status — the soft presence gate for routes.
+  // ADR-228: save one member's uniform/cart-cover as a draft, live. Optimistic —
+  // update local state immediately, PUT the draft, roll back on failure.
+  const setComplianceField = async (employeeId: string, field: 'uniform_pass' | 'cart_cover_pass', value: boolean) => {
+    const prev = compliance[employeeId] ?? { uniform_pass: true, cart_cover_pass: true, status: 'draft' };
+    const next = { ...prev, [field]: value };
+    setCompliance(m => ({ ...m, [employeeId]: next }));
+    setSavingCompliance(employeeId);
+    try {
+      await apiClient.put('/shift-ops/crew-compliance/draft', {
+        driver_id: viewerId, date: todayStr(), employee_id: employeeId,
+        uniform_pass: next.uniform_pass, cart_cover_pass: next.cart_cover_pass,
+      });
+    } catch (e) {
+      setCompliance(m => ({ ...m, [employeeId]: prev }));   // roll back
+      Alert.alert('Error', errorText(e, 'Could not save compliance.'));
+    } finally {
+      setSavingCompliance(null);
+    }
+  };
+
   const takeRollCall = async (employeeId: string, absent: boolean) => {
     setRollCallId(employeeId);
     try {
@@ -515,6 +555,9 @@ export default function RouteSortScreen() {
   const unassigned = routes.filter(r => r.status === 'unassigned');
   const active     = routes.filter(r => r.status === 'assigned' || r.status === 'in_progress');
   const completed  = routes.filter(r => r.status === 'completed');
+  // ADR-228: the viewer is the truck's driver → they capture uniform/cart-cover.
+  const isDriver = !!viewerId && crew.some(m => m.role === 'driver' && m.employee_id === viewerId);
+
   // Reassign candidates: non-driver crew who are PRESENT — you can't hand a route
   // to someone who hasn't arrived (matches the backend presence gate). Present =
   // crew-status availability is anything but not_arrived / off_crew. If a member
@@ -802,6 +845,9 @@ export default function RouteSortScreen() {
               const tone = cs ? AVAIL_TONE[cs.availability] : null;
               const pct = cs?.route_completion_pct != null ? ` · ${Math.round(cs.route_completion_pct * 100)}%` : '';
               const stop = currentStops[m.employee_id];
+              // ADR-228: compliance is captured for PRESENT crew (arrived), by the driver.
+              const present = !off && !!cs && cs.availability !== 'not_arrived' && cs.availability !== 'off_crew';
+              const comp = compliance[m.employee_id] ?? { uniform_pass: true, cart_cover_pass: true, status: 'draft' };
               const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
               // ADR-216 phase 2: tapping a crew member with a route opens their
               // per-employee detail. Executor → their own route; a paired trainer
@@ -897,6 +943,33 @@ export default function RouteSortScreen() {
                           Drop
                         </Button>
                       </View>
+                    </View>
+                  )}
+                  {/* ADR-228: driver records uniform + cart-cover for each present
+                      member, live. Saved as draft; Check-In #1 finalizes + ships it
+                      to Dispatch. Tap a pill to flip pass/fail. */}
+                  {isDriver && present && (
+                    <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+                      {([['uniform_pass', 'Uniform'], ['cart_cover_pass', 'Cart cover']] as const).map(([field, label]) => {
+                        const pass = comp[field];
+                        return (
+                          <TouchableOpacity
+                            key={field}
+                            disabled={savingCompliance === m.employee_id}
+                            onPress={() => setComplianceField(m.employee_id, field, !pass)}
+                            style={{
+                              flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                              gap: spacing.xs, paddingVertical: spacing.xs + 2, borderRadius: radius.md, borderWidth: 1,
+                              borderColor: pass ? c.success : c.danger,
+                              backgroundColor: (pass ? c.success : c.danger) + '15',
+                            }}
+                          >
+                            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: pass ? c.success : c.danger }}>
+                              {pass ? '✓' : '✗'} {label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
                   )}
                   {stop && (

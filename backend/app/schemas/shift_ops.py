@@ -29,8 +29,21 @@ class CrewComplianceResponse(BaseModel):
     arrival_time: Optional[time] = None
     uniform_pass: bool
     cart_cover_pass: bool
+    status: str = "submitted"   # draft | submitted (ADR-228)
     submitted_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class CrewComplianceDraftUpsert(BaseModel):
+    """One member's uniform/cart-cover, saved live on the Crew Roster page as a
+    DRAFT (ADR-228). Upserts by (driver, employee, date) so the driver can edit
+    freely before Check-In #1 finalizes."""
+    driver_id: UUID
+    date: date
+    employee_id: UUID
+    uniform_pass: bool
+    cart_cover_pass: bool
+    arrival_time: Optional[time] = None
 
 
 # ---------------------------------------------------------------------------

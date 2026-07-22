@@ -19,7 +19,7 @@ from app.models.rts_clearance import RTSReport, StationHandoff, RTS_REPORT_STATU
 from app.models.rts import MissingPackage
 from app.services.audit import write_audit
 from app.schemas.shift_ops import (
-    CrewComplianceCreate, CrewComplianceResponse,
+    CrewComplianceCreate, CrewComplianceResponse, CrewComplianceDraftUpsert,
     DriverCheckInCreate, DriverCheckInResponse,
     RTSReportCreate, RTSReportReview, RTSReportResponse,
     StationHandoffCreate, StationHandoffResponse,
@@ -112,6 +112,86 @@ def submit_crew_compliance(
     for row in created:
         db.refresh(row)
     return created
+
+
+def _driver_crew_ids(db: Session, driver_id: UUID, target_date: date, company_id: UUID) -> set[str]:
+    """employee_ids on the driver's truck for the date (raises 400 if the driver
+    has no assignment). Shared by the batch submit + the draft upsert."""
+    member_row = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == driver_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if not member_row:
+        raise HTTPException(status_code=400, detail="No truck assignment found for this driver on this date.")
+    return {
+        str(am.employee_id)
+        for am in db.query(AssignmentMember).filter(
+            AssignmentMember.assignment_id == member_row.assignment_id,
+            AssignmentMember.company_id == company_id,
+        ).all()
+    }
+
+
+@router.put("/crew-compliance/draft", response_model=CrewComplianceResponse)
+def upsert_crew_compliance_draft(
+    payload: CrewComplianceDraftUpsert,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_driver),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Save ONE crew member's uniform/cart-cover as a DRAFT, live on the Crew
+    Roster page (ADR-228). Upserts by (driver, employee, date) so the driver can
+    edit freely; Check-In #1 later finalizes all drafts (draft → submitted).
+
+    A row already finalized (status='submitted') is not downgraded — once Check-In
+    #1 has shipped it, corrections go through the batch submit/override path.
+    """
+    if payload.driver_id != caller.id:
+        raise HTTPException(status_code=403, detail="You can only record compliance for your own crew.")
+
+    crew_ids = _driver_crew_ids(db, payload.driver_id, payload.date, caller.company_id)
+    if str(payload.employee_id) not in crew_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="That employee is not on your truck assignment for this date.",
+        )
+
+    row = db.query(CrewCompliance).filter(
+        CrewCompliance.driver_id == payload.driver_id,
+        CrewCompliance.employee_id == payload.employee_id,
+        CrewCompliance.date == payload.date,
+        CrewCompliance.company_id == caller.company_id,
+    ).first()
+
+    if row is None:
+        row = CrewCompliance(
+            company_id=caller.company_id,
+            driver_id=payload.driver_id,
+            employee_id=payload.employee_id,
+            date=payload.date,
+            arrival_time=payload.arrival_time,
+            uniform_pass=payload.uniform_pass,
+            cart_cover_pass=payload.cart_cover_pass,
+            status="draft",
+        )
+        db.add(row)
+    elif row.status == "draft":
+        row.uniform_pass = payload.uniform_pass
+        row.cart_cover_pass = payload.cart_cover_pass
+        if payload.arrival_time is not None:
+            row.arrival_time = payload.arrival_time
+    # status == 'submitted' → already finalized; leave as-is (return current state).
+
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get("/crew-compliance/summary/{target_date}")
