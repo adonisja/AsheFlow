@@ -678,7 +678,9 @@ export default function RouteSortScreen() {
                     on the left; the tote it's currently in as a pill on the right
                     (future: pill tinted by the bag's color). */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, marginTop: 2, marginBottom: spacing.sm }}>
-                  <Text selectable style={{ flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.foreground, fontVariant: ['tabular-nums'] }} numberOfLines={1}>
+                  {/* Secondary reference id — muted mono so it doesn't compete with
+                      the bold address headline above it. */}
+                  <Text selectable style={{ flex: 1, fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: c.mutedForeground, fontVariant: ['tabular-nums'], letterSpacing: 0.3 }} numberOfLines={1}>
                     {flag.tba_number}
                   </Text>
                   {flag.current_bag_id ? (
@@ -687,14 +689,15 @@ export default function RouteSortScreen() {
                     </View>
                   ) : null}
                 </View>
-                {/* FROM → TO hand-off */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
-                  <View style={{ alignItems: 'center', gap: 2 }}>
+                {/* FROM → TO hand-off — balanced tri-column: FROM and TO share the
+                    width around a fixed centered arrow, so it fills the row cleanly. */}
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={{ flex: 1, alignItems: 'center', gap: 2 }}>
                     <Text style={{ fontSize: 9, color: c.mutedForeground, fontWeight: fontWeight.bold, letterSpacing: 0.6 }}>FROM</Text>
                     {routeBadge(source.route_number, source.executor?.name ?? null)}
                   </View>
-                  <Text style={{ fontSize: fontSize.lg, color: c.warning, fontWeight: fontWeight.bold }}>→</Text>
-                  <View style={{ alignItems: 'center', gap: 2 }}>
+                  <Text style={{ width: 40, textAlign: 'center', fontSize: fontSize.xxl, color: c.warning, fontWeight: fontWeight.bold }}>→</Text>
+                  <View style={{ flex: 1, alignItems: 'center', gap: 2 }}>
                     <Text style={{ fontSize: 9, color: c.mutedForeground, fontWeight: fontWeight.bold, letterSpacing: 0.6 }}>TO</Text>
                     {suggested
                       ? routeBadge(suggested.route_number, suggested.executor?.name ?? null)
