@@ -164,6 +164,11 @@ export default function RouteSortScreen() {
   const [splitting, setSplitting] = useState(false);
   const [removals, setRemovals] = useState<Removal[]>([]);   // ADR-214 out-of-zone
   const [apView, setApView] = useState<'sort' | 'crew'>('sort');   // segmented sub-view
+  // Live route actions on an ALREADY-assigned route (ADR-226): reassign picker
+  // targets a route.id (distinct from pickerFor, which edits the pre-send wave
+  // proposal); dropId tracks the in-flight unassign.
+  const [reassignRoute, setReassignRoute] = useState<{ id: string; number: number } | null>(null);
+  const [routeActionId, setRouteActionId] = useState<string | null>(null);
 
   const todayStr = () => {
     const now = new Date();
@@ -361,6 +366,48 @@ export default function RouteSortScreen() {
     );
   };
 
+  // Live reassign of an ALREADY-assigned route to another present crew member
+  // (PATCH /reassign). Distinct from overrideAssignee (which edits the pre-send
+  // wave proposal). Backend enforces the present-only gate too.
+  const liveReassign = async (routeId: string, member: CrewMember) => {
+    setRouteActionId(routeId);
+    try {
+      await apiClient.patch(`/walker-routes/routes/${routeId}/reassign`, { new_employee_id: member.employee_id });
+      setReassignRoute(null);
+      await load();
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not reassign the route.'));
+    } finally {
+      setRouteActionId(null);
+    }
+  };
+
+  // Drop an assigned route back into the pool (PATCH /unassign). Confirm first —
+  // it pulls the route off the crew member and re-opens it for the next wave.
+  const dropRoute = (routeId: string, routeNumber: number, holderName: string) => {
+    Alert.alert(
+      'Drop route?',
+      `Take route #${routeNumber} off ${holderName} and return it to the pool? It becomes unassigned and can be re-distributed.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Drop', style: 'destructive',
+          onPress: async () => {
+            setRouteActionId(routeId);
+            try {
+              await apiClient.patch(`/walker-routes/routes/${routeId}/unassign`);
+              await load();
+            } catch (e) {
+              Alert.alert('Error', errorText(e, 'Could not drop the route.'));
+            } finally {
+              setRouteActionId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const overrideAssignee = (routeNumber: number, member: CrewMember) => {
     setProposal(prev => prev?.map(p =>
       p.route_number === routeNumber
@@ -468,7 +515,15 @@ export default function RouteSortScreen() {
   const unassigned = routes.filter(r => r.status === 'unassigned');
   const active     = routes.filter(r => r.status === 'assigned' || r.status === 'in_progress');
   const completed  = routes.filter(r => r.status === 'completed');
-  const pickerOptions = crew.filter(m => m.role !== 'driver');
+  // Reassign candidates: non-driver crew who are PRESENT — you can't hand a route
+  // to someone who hasn't arrived (matches the backend presence gate). Present =
+  // crew-status availability is anything but not_arrived / off_crew. If a member
+  // has no crew-status entry yet, treat as not-present (conservative).
+  const pickerOptions = crew.filter(m => {
+    if (m.role === 'driver') return false;
+    const av = crewStatus[m.employee_id]?.availability;
+    return av != null && av !== 'not_arrived' && av !== 'off_crew';
+  });
   const pairedTrainee = crew.find(m => m.role === 'trainee' && m.paired_trainer_id);
   // ADR-212: a route is "rebalanced"/paired-active when a supervisor is attached.
   const rebalanced = routes.some(r => r.supervisors.length > 0);
@@ -821,6 +876,29 @@ export default function RouteSortScreen() {
                       </View>
                     </View>
                   )}
+                  {/* Reassign / Drop — only on an executor route that hasn't started
+                      yet (assigned). Once the walker's out (in_progress), the route
+                      can't be dropped; reassign is still handled via back-at-truck.
+                      Makes "pass a route" / "drop a route" discoverable (was a hidden
+                      tap-the-name gesture only in the wave proposal). */}
+                  {execRoute && execRoute.status === 'assigned' && (
+                    <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+                      <View style={{ flex: 1 }}>
+                        <Button variant="outline" size="sm" fullWidth
+                          disabled={routeActionId === execRoute.id}
+                          onPress={() => setReassignRoute({ id: execRoute.id, number: execRoute.route_number })}>
+                          Reassign
+                        </Button>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Button variant="outline" size="sm" fullWidth
+                          loading={routeActionId === execRoute.id}
+                          onPress={() => dropRoute(execRoute.id, execRoute.route_number, name)}>
+                          Drop
+                        </Button>
+                      </View>
+                    </View>
+                  )}
                   {stop && (
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
                       📍 On stop {stop.stop_sequence}/{stop.total}{stop.normalised_address ? `: ${stop.normalised_address}` : ''}
@@ -830,6 +908,34 @@ export default function RouteSortScreen() {
               );
             })}
         </View>
+      )}
+
+      {/* Live reassign picker (ADR-226) — pass an already-assigned route to another
+          PRESENT crew member. pickerOptions is already present-gated. */}
+      {reassignRoute !== null && (
+        <Modal transparent animationType="fade" onRequestClose={() => setReassignRoute(null)}>
+          <TouchableOpacity style={ms.backdrop} activeOpacity={1} onPress={() => setReassignRoute(null)}>
+            <View style={[ms.picker, { backgroundColor: c.card }]}>
+              <Text style={[ms.title, { color: c.foreground }]}>Route {reassignRoute.number} → who takes it?</Text>
+              {pickerOptions.length === 0 ? (
+                <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, padding: spacing.sm }}>
+                  No other present crew to take this route.
+                </Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 320 }}>
+                  {pickerOptions.map(m => (
+                    <TouchableOpacity key={m.employee_id} style={[ms.propRow, { borderBottomColor: c.border }]}
+                      disabled={routeActionId === reassignRoute.id}
+                      onPress={() => liveReassign(reassignRoute.id, m)}>
+                      <Text style={[ms.propName, { color: c.foreground, flex: 1 }]}>{m.name}</Text>
+                      <Text style={[ms.propMeta, { color: c.mutedForeground, textTransform: 'capitalize' }]}>{m.role}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          </TouchableOpacity>
+        </Modal>
       )}
 
       {apView === 'sort' && (<>
