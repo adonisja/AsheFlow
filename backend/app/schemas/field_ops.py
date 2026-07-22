@@ -184,6 +184,7 @@ class VehicleInspectionSummaryItem(BaseModel):
     has_failures: bool
     submitted_at: datetime
     failed_items: List[str]
+    notes: Optional[str] = None
 
 
 class StationArrivalCreate(BaseModel):

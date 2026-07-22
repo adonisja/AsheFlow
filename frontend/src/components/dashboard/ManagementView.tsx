@@ -310,12 +310,21 @@ export default function ManagementView() {
                         </span>
                       )}
                     </td>
-                    <td className="py-2 text-xs text-danger">
-                      {insp.has_failures && insp.failed_items?.length > 0
-                        ? insp.failed_items.map((item: string) =>
+                    <td className="py-2 text-xs">
+                      {insp.has_failures && insp.failed_items?.length > 0 ? (
+                        <span className="text-danger">
+                          {insp.failed_items.map((item: string) =>
                             item.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
-                          ).join(', ')
-                        : <span className="text-subtle">—</span>}
+                          ).join(', ')}
+                        </span>
+                      ) : (
+                        !insp.notes && <span className="text-subtle">—</span>
+                      )}
+                      {insp.notes && (
+                        <p className="mt-0.5 text-muted-foreground italic whitespace-normal">
+                          “{insp.notes}”
+                        </p>
+                      )}
                     </td>
                   </tr>
                 ))}

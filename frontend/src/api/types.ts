@@ -270,6 +270,7 @@ export interface InspectionSummaryRow {
   submitted_at: string;
   has_failures: boolean;
   failed_items: string[];
+  notes?: string | null;
 }
 
 export interface FuelLogSummaryRow {
