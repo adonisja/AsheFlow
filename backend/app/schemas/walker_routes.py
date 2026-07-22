@@ -97,12 +97,17 @@ class StopOut(BaseModel):
 
 
 class StopDetailOut(BaseModel):
-    """A stop enriched for the per-employee detail page (ADR-216).
+    """A stop enriched for the per-employee detail page (ADR-216 Phase 1 + 3).
 
     Adds per-stop classification + building type + package count on top of StopOut.
     workload_class / building_type are resolved on read from BuildingProfile /
     Library (fresh — a captain's re-classification shows immediately); None when the
     stop's address has no profile yet.
+
+    Phase 3 adds the operating hours, operational_note, troublesome_score, and the
+    server-computed cutoff FACTS. The urgency gradient COLOUR is derived client-side
+    from `cutoff_state` + `minutes_to_cutoff` against live `now` (a now-relative colour
+    would be stale seconds after the server computed it).
     """
     block_key: str
     address: str
@@ -111,6 +116,21 @@ class StopDetailOut(BaseModel):
     workload_class: Optional[str] = None    # bulk_drop | standard | high_touch | high_wait
     building_type: Optional[str] = None     # doorman | elevator | walkup | biz_freight | …
     lifecycle: str = "remaining"            # current | remaining | completed (ADR-216 phase 2 refines)
+
+    # Phase 3 — operating hours (wall-clock "HH:MM"), note, troublesome signal.
+    opens_at: Optional[str] = None
+    closes_at: Optional[str] = None
+    break_start: Optional[str] = None
+    break_end: Optional[str] = None
+    days_open: Optional[list[str]] = None
+    operational_note: Optional[str] = None
+    troublesome_score: Optional[float] = None
+
+    # Phase 3 — cutoff facts (colour computed client-side from these).
+    cutoff_state: str = "none"              # none | future | on_break | closed
+    cutoff_at: Optional[str] = None         # "HH:MM" of the relevant closing / break-start
+    reopens_at: Optional[str] = None        # "HH:MM" break_end, when cutoff_state == on_break
+    minutes_to_cutoff: Optional[int] = None # signed: >0 future, <=0 overdue (future/closed only)
 
 
 class RouteOut(BaseModel):
@@ -294,6 +314,11 @@ class RouteDetailResponse(BaseModel):
     supervisors: list[ParticipantOut] = []
     package_count: int
     stops: list[StopDetailOut] = []
+    # Phase 3 — urgency-gradient windows (minutes), so the client colours match
+    # the operator's tuning: red within `urgent_window`, yellow the `caution_window`
+    # immediately before it, green/blue beyond.
+    urgent_window_minutes: int = 60
+    caution_window_minutes: int = 60
     model_config = ConfigDict(from_attributes=True)
 
 

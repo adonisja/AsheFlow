@@ -156,6 +156,7 @@ backend/tests/routers/test_confirmation_gate.py
 backend/tests/routers/test_dispatch_move_pairing.py
 backend/tests/routers/test_pair_split.py
 backend/tests/routers/test_route_detail.py
+backend/tests/services/test_stop_cutoff.py
 backend/app/routers/rts.py
 backend/app/routers/building_profiles.py
 backend/app/routers/building_profile_library.py
@@ -174,3 +175,4 @@ cognito_keys.json
 *.pfx
 
 backend/app/services/wave_distribution.py
+backend/app/services/stop_cutoff.py

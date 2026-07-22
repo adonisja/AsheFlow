@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     # after deactivation (covers post-departure disputes/references). 0 disables.
     employee_name_retention_days: int = 180
 
+    # ADR-216 Phase 3: per-stop cutoff-urgency gradient windows (minutes before a
+    # building's closing/break cutoff). A stop is RED (urgent) within
+    # stop_urgent_window_minutes of its cutoff, YELLOW (caution) the
+    # stop_caution_window_minutes immediately before that, else green/blue.
+    # Surfaced on the route-detail response so client colours match this tuning.
+    stop_urgent_window_minutes: int = 60
+    stop_caution_window_minutes: int = 60
+
     # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
     # Register at https://api.nyc.gov/ (free, requires NYC account).
     # v2 auth: subscription-key query param only — no app_id needed.

@@ -119,6 +119,7 @@ SERVICES=(
   persist_zones.py
   assign_totes.py
   wave_distribution.py
+  stop_cutoff.py
 )
 
 echo ""
@@ -149,28 +150,30 @@ done
 # These import proprietary routers/services, so they're gitignored from the public
 # repo and can't run in public CI. Sync them here so the CI test job (which pulls
 # this repo) can run the FULL suite instead of silently skipping proprietary paths.
+# Relative paths under backend/tests/ so services tests sync too, not just routers.
 TESTS=(
-  test_arrival_confirm.py
-  test_back_at_truck.py
-  test_confirmation_gate.py
-  test_dispatch_move_pairing.py
-  test_finalize_gate.py
-  test_my_performance.py
-  test_pair_split.py
-  test_route_detail.py
-  test_peer_ratings.py
-  test_reassign_trainee.py
+  routers/test_arrival_confirm.py
+  routers/test_back_at_truck.py
+  routers/test_confirmation_gate.py
+  routers/test_dispatch_move_pairing.py
+  routers/test_finalize_gate.py
+  routers/test_my_performance.py
+  routers/test_pair_split.py
+  routers/test_route_detail.py
+  routers/test_peer_ratings.py
+  routers/test_reassign_trainee.py
+  services/test_stop_cutoff.py
 )
-mkdir -p backend/tests/routers
 echo ""
 echo "Copying proprietary tests..."
 for f in "${TESTS[@]}"; do
-  src="$PUBLIC_ROOT/backend/tests/routers/$f"
+  src="$PUBLIC_ROOT/backend/tests/$f"
   if [ -f "$src" ]; then
-    cp "$src" "backend/tests/routers/$f"
-    echo "  ✓ tests/routers/$f"
+    mkdir -p "backend/tests/$(dirname "$f")"
+    cp "$src" "backend/tests/$f"
+    echo "  ✓ tests/$f"
   else
-    echo "  ✗ MISSING: tests/routers/$f (skipped)"
+    echo "  ✗ MISSING: tests/$f (skipped)"
   fi
 done
 
@@ -276,6 +279,7 @@ CI clones the branch that matches the environment it is deploying to.
 - `backend/app/services/tier1_verify.py`
 - `backend/app/services/run_sort.py`
 - `backend/app/services/persist_zones.py`
+- `backend/app/services/stop_cutoff.py`
 EOF
 
   cat > .gitignore << 'EOF'

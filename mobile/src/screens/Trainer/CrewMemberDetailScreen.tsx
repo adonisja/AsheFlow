@@ -24,6 +24,8 @@ type RouteDetail = {
   supervisors: { id: string; name: string }[];
   package_count: number;
   stops: DetailedStop[];
+  urgent_window_minutes?: number;
+  caution_window_minutes?: number;
 };
 
 const SECTIONS: { key: DetailedStop['lifecycle']; label: string }[] = [
@@ -95,7 +97,12 @@ export default function CrewMemberDetailScreen() {
                   </Text>
                   <Badge tone={tone as any}>{stops.length}</Badge>
                 </View>
-                <RouteStopsDetailed stops={stops} c={c} />
+                <RouteStopsDetailed
+                  stops={stops}
+                  c={c}
+                  urgentWindow={detail.urgent_window_minutes ?? 60}
+                  cautionWindow={detail.caution_window_minutes ?? 60}
+                />
               </View>
             );
           })}
