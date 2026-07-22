@@ -56,6 +56,7 @@ type CurrentStop = { stop_sequence: number; normalised_address: string; total: n
 type MisrouteFlag = {
   id: string;
   tba_number: string;
+  current_bag_id: string;          // the tote the package is wrongly in — helps locate it
   destination_block_key: string | null;
   normalised_address: string | null;
   suggested_route_id: string | null;
@@ -477,6 +478,11 @@ export default function RouteSortScreen() {
   // ADR-216 phase 2: a crew member's route = the one they execute. Lets a crew
   // card open that route's detail.
   const routeByExecutor = new Map(routes.filter(r => r.executor).map(r => [r.executor!.id, r]));
+  // A paired trainer isn't an executor (ADR-212) — they SUPERVISE the trainee's
+  // route. Map trainer employee_id → the route they supervise, so their crew row
+  // shows "Supervising #N" instead of looking route-less/confusing.
+  const routeBySupervisor = new Map<string, RouteResp>();
+  for (const r of routes) for (const s of (r.supervisors ?? [])) routeBySupervisor.set(s.id, r);
   const misroutes = routes.flatMap(r =>
     (r.misrouted_packages ?? [])
       .filter(f => !f.resolved)
@@ -669,9 +675,15 @@ export default function RouteSortScreen() {
                   📍 {flag.normalised_address ?? flag.destination_block_key ?? 'Unknown address'}
                 </Text>
                 {/* Full tracking number — selectable so it can be matched/scanned exactly */}
-                <Text selectable style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontVariant: ['tabular-nums'], marginTop: 2, marginBottom: spacing.sm }}>
+                <Text selectable style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontVariant: ['tabular-nums'], marginTop: 2 }}>
                   TBA {flag.tba_number}
                 </Text>
+                {/* Bag/tote the package is currently IN — the walker pulls it from here. */}
+                {flag.current_bag_id ? (
+                  <Text selectable style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 1, marginBottom: spacing.sm }}>
+                    🧺 In tote {flag.current_bag_id}
+                  </Text>
+                ) : <View style={{ marginBottom: spacing.sm }} />}
                 {/* FROM → TO hand-off */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
                   <View style={{ alignItems: 'center', gap: 2 }}>
@@ -731,8 +743,14 @@ export default function RouteSortScreen() {
               const stop = currentStops[m.employee_id];
               const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
               // ADR-216 phase 2: tapping a crew member with a route opens their
-              // per-employee detail (current → remaining → completed stops).
-              const memberRoute = routeByExecutor.get(m.employee_id);
+              // per-employee detail. Executor → their own route; a paired trainer
+              // (no executor route) → the route they SUPERVISE (so they read as
+              // "supervising #N", not route-less).
+              const execRoute = routeByExecutor.get(m.employee_id);
+              const supRoute = execRoute ? undefined : routeBySupervisor.get(m.employee_id);
+              const memberRoute = execRoute ?? supRoute;
+              const routeLabel = execRoute ? ` · route #${execRoute.route_number}`
+                : supRoute ? ` · supervising #${supRoute.route_number}` : '';
               return (
                 <View key={m.id} style={[s.crewRow, { borderColor: c.border, backgroundColor: c.surfaceMuted, opacity: off ? 0.6 : 1 }]}>
                   <TouchableOpacity
@@ -749,7 +767,7 @@ export default function RouteSortScreen() {
                       <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize', marginTop: 1 }}>
                         {m.role}
                         {off ? ` · ${m.status}` : ''}
-                        {memberRoute ? ` · route #${memberRoute.route_number}` : ''}
+                        {routeLabel}
                         {cs && cs.trip_count > 0 ? ` · ${cs.trip_count} trip${cs.trip_count === 1 ? '' : 's'}` : ''}
                       </Text>
                     </View>
