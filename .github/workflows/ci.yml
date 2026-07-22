@@ -100,6 +100,9 @@ jobs:
           if [ -d /tmp/asheflow-private/backend/tests/routers ]; then
             cp /tmp/asheflow-private/backend/tests/routers/*.py backend/tests/routers/ 2>/dev/null || true
           fi
+          if [ -d /tmp/asheflow-private/backend/tests/services ]; then
+            cp /tmp/asheflow-private/backend/tests/services/*.py backend/tests/services/ 2>/dev/null || true
+          fi
           rm -rf /tmp/asheflow-private ~/.ssh/asheflow_private_deploy
           echo "Proprietary source + tests pulled from AsheFlow-private ($PRIV_BRANCH)."
 
