@@ -52,6 +52,29 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: '"09:00" — employees must confirm or reject before 9 AM. Unresponded assignments are flagged.',
     note: 'Leave blank to disable the cutoff — assignments will remain "pending" indefinitely.',
   },
+  late_window_minutes: {
+    title: 'Late Window',
+    summary: 'Grace minutes past shift start before a crew arrival is marked “late.”',
+    detail:
+      'Attendance is measured against max(shift start, when the AP was established) — so a station-caused late start (a late AP) shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
+    example: '"20" — arrivals up to 20 min past the reference are on-time; later is late.',
+  },
+  ncns_cutoff_minutes: {
+    title: 'NCNS Cutoff',
+    summary: 'Minutes past shift start before an unaccounted crew member is a no-call-no-show.',
+    detail:
+      'Measured from the same reference as the late window — max(shift start, AP established) — so it AUTO-EXTENDS on a late station AP (the rare Amazon/station-fault allowance; a captain can roll-call at the AP even before the driver "arrived"). Dispatch/admin can still override an individual with a manual roll-call. IMPORTANT: the NCNS cutoff must be set BEFORE any check-in deadline is accepted, and Check-In #1 can never be earlier than it — you can\'t require a check-in before crew attendance is even decided.',
+    example: '"60" — unaccounted crew are NCNS 60 min after shift start (later if the AP was late).',
+    note: 'Set this first. The Check-in Deadlines editor is disabled until it exists.',
+  },
+  check_in_deadlines: {
+    title: 'Check-in Deadlines',
+    summary: 'Ordered mid-shift check-ins, each with its own deadline.',
+    detail:
+      'Add check-ins one at a time; each is the next in sequence and its deadline must be LATER than the previous. Deadlines are minutes past shift start (shown as a clock time), anchored the same way as the NCNS cutoff — so Check-In #1 auto-extends on a late station AP too. Check-In #1 also carries the completed Crew Roster + uniform/cart-cover compliance to Dispatch, so its deadline must be at or after the NCNS cutoff (crew must be decided first). Remove from the end so the earlier deadlines keep their order.',
+    example: 'NCNS 60 → Check-In #1 at 75 min, #2 at 180 min, #3 at 300 min.',
+    note: 'Requires the NCNS cutoff to be set and saved first.',
+  },
   rating_window_hours: {
     title: 'Walker Rating Window',
     summary: 'How long after a driver departs can walker ratings still be submitted.',

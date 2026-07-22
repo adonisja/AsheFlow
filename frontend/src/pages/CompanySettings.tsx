@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import {
   Settings, Clock, BookOpen, Truck, Star, CheckSquare,
   Save, RefreshCw, CheckCircle2, AlertTriangle, RotateCcw,
-  MessageSquare, MapPin, Package, HelpCircle,
+  MessageSquare, MapPin, Package, HelpCircle, Plus, Trash2,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -41,6 +41,8 @@ interface CompanyConfig {
   dispatch_weight_cap: number | null;
   flag_threshold: number | null;
   driver_checkin_count: number | null;
+  late_window_minutes: number | null;
+  ncns_cutoff_minutes: number | null;
   effort_time_factor: number | null;
   effort_physical_factor: number | null;
   ingestion_mode: string | null;
@@ -112,8 +114,12 @@ const WALKER_RATING: FieldMeta[] = [
   { key: 'flag_threshold', label: 'Rating Flag Threshold', type: 'float', required: true, description: 'Deviation from average that triggers an anomaly flag.', placeholder: '1.0', min: 0, max: 10, step: 0.1 },
 ];
 
-const DRIVER_CHECKINS: FieldMeta[] = [
-  { key: 'driver_checkin_count', label: 'Mid-Shift Check-ins', type: 'int', description: 'Structured check-in photos expected per shift.', placeholder: '4', min: 0, max: 10 },
+// ADR-198/228: attendance windows drive NCNS + the check-in-deadline ordering
+// guard. NCNS cutoff must be set before check-in deadlines are accepted, and
+// Check-In #1 can't be earlier than it (both minutes past shift start).
+const ATTENDANCE: FieldMeta[] = [
+  { key: 'late_window_minutes', label: 'Late Window (min)', type: 'int', description: 'Minutes past shift start before a crew arrival counts as “late” (not yet NCNS).', placeholder: '20', min: 0, max: 240 },
+  { key: 'ncns_cutoff_minutes', label: 'NCNS Cutoff (min)', type: 'int', description: 'Minutes past shift start (auto-extends on a late station AP) before an unaccounted crew member is NCNS. Set this BEFORE adding check-in deadlines.', placeholder: '60', min: 1, max: 480 },
 ];
 
 const EFFORT_SCORING: FieldMeta[] = [
@@ -163,6 +169,7 @@ const CONFIG_KEYS: string[] = [
   'dispatch_weight_driver', 'dispatch_weight_trainer', 'dispatch_weight_walker',
   'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus', 'dispatch_consecutive_penalty',
   'dispatch_weight_cap', 'flag_threshold', 'driver_checkin_count',
+  'late_window_minutes', 'ncns_cutoff_minutes',
   'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
 ];
 
@@ -178,6 +185,7 @@ const TIME_FIELDS = new Set(['shift_start', 'shift_end', 'checkin_open', 'checki
 const INT_FIELDS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'underperforming_trainer_threshold', 'max_training_phase', 'driver_checkin_count',
+  'late_window_minutes', 'ncns_cutoff_minutes',
 ]);
 const FLOAT_FIELDS = new Set([
   'phase4_pass_score', 'dispatch_weight_driver', 'dispatch_weight_trainer',
@@ -320,6 +328,153 @@ function ConfigSection({ title, icon: Icon, fields, values, onChange, onHelp, is
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Check-in deadline editor (ADR-228)
+// ---------------------------------------------------------------------------
+
+interface CheckInDeadline { id: string; sequence: number; offset_minutes: number; }
+
+// shift_start "HH:MM" + offset minutes → clock-time helper label "8:30 AM".
+function offsetToClock(shiftStart: string | undefined, offset: number): string | null {
+  if (!shiftStart || !/^\d{1,2}:\d{2}$/.test(shiftStart)) return null;
+  const [h, m] = shiftStart.split(':').map(Number);
+  const total = h * 60 + m + offset;
+  const hh = Math.floor((total % 1440) / 60);
+  const mm = total % 60;
+  const ampm = hh < 12 ? 'AM' : 'PM';
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${h12}:${String(mm).padStart(2, '0')} ${ampm}`;
+}
+
+function CheckInDeadlineEditor({ shiftStart, ncnsCutoff, onHelp }: {
+  shiftStart: string | undefined; ncnsCutoff: string | undefined; onHelp: () => void;
+}) {
+  const [rows, setRows] = useState<CheckInDeadline[]>([]);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await axiosClient.get<CheckInDeadline[]>('/companies/my-config/check-in-deadlines');
+      setRows(res.data ?? []);
+    } catch { /* best-effort */ }
+    finally { setLoaded(true); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const ncnsNum = ncnsCutoff ? parseInt(ncnsCutoff, 10) : null;
+  const lastOffset = rows.length ? rows[rows.length - 1].offset_minutes : null;
+  const nextSeq = rows.length + 1;
+  // The floor the next deadline must clear: NCNS for #1, the previous for the rest.
+  const floor = nextSeq === 1 ? ncnsNum : lastOffset;
+
+  const add = async () => {
+    const offset = parseInt(draft, 10);
+    if (Number.isNaN(offset)) { setError('Enter the deadline in minutes past shift start.'); return; }
+    setBusy(true); setError(null);
+    try {
+      await axiosClient.post('/companies/my-config/check-in-deadlines', { offset_minutes: offset });
+      setDraft('');
+      await load();
+    } catch (e: any) {
+      setError(errorText(e, 'Could not add the check-in.'));
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (sequence: number) => {
+    setBusy(true); setError(null);
+    try {
+      await axiosClient.delete(`/companies/my-config/check-in-deadlines/${sequence}`);
+      await load();
+    } catch (e: any) {
+      setError(errorText(e, 'Could not remove the check-in.'));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+          <CheckSquare className="w-4 h-4 text-primary" />
+        </div>
+        <h3 className="font-semibold text-sm">Check-in Deadlines</h3>
+        <button type="button" onClick={onHelp} tabIndex={-1}
+          className="text-muted-foreground hover:text-primary transition-colors" aria-label="Help for check-in deadlines">
+          <HelpCircle className="w-3 h-3" />
+        </button>
+      </div>
+
+      {ncnsNum === null && (
+        <div className="p-2.5 rounded-lg bg-warning/10 border border-warning/20 text-xs text-warning">
+          Set the <strong>NCNS Cutoff</strong> (Attendance section) and save before adding check-ins — Check-In&nbsp;#1 can’t be earlier than it.
+        </div>
+      )}
+
+      {loaded && rows.length === 0 && ncnsNum !== null && (
+        <p className="text-xs text-muted-foreground">No check-ins configured yet. Add the first below.</p>
+      )}
+
+      {rows.length > 0 && (
+        <div className="space-y-1.5">
+          {rows.map(r => {
+            const clock = offsetToClock(shiftStart, r.offset_minutes);
+            const isLast = r.sequence === rows[rows.length - 1].sequence;
+            return (
+              <div key={r.id} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-border bg-surface text-sm">
+                <span className="font-semibold text-foreground w-16">#{r.sequence}</span>
+                <span className="flex-1 tabular-nums">
+                  {r.offset_minutes} min after shift start
+                  {clock && <span className="text-muted-foreground"> · {clock}</span>}
+                </span>
+                {isLast && (
+                  <button type="button" disabled={busy} onClick={() => remove(r.sequence)}
+                    className="text-muted-foreground hover:text-danger transition-colors disabled:opacity-40"
+                    aria-label={`Remove check-in #${r.sequence}`}>
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {ncnsNum !== null && (
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-foreground mb-1">
+              Add Check-in #{nextSeq} — minutes after shift start
+            </label>
+            <input
+              className="input-field"
+              type="number"
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              placeholder={floor != null ? `> ${floor}` : '90'}
+              min={floor != null ? floor + (nextSeq === 1 ? 0 : 1) : 1}
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              {nextSeq === 1
+                ? `Must be at or after the NCNS cutoff (${ncnsNum} min${offsetToClock(shiftStart, ncnsNum) ? ` · ${offsetToClock(shiftStart, ncnsNum)}` : ''}).`
+                : `Must be later than Check-in #${nextSeq - 1} (${lastOffset} min).`}
+              {draft && !Number.isNaN(parseInt(draft, 10)) && offsetToClock(shiftStart, parseInt(draft, 10)) &&
+                ` → ${offsetToClock(shiftStart, parseInt(draft, 10))}`}
+            </p>
+          </div>
+          <button type="button" disabled={busy || !draft} onClick={add}
+            className="btn-secondary flex items-center gap-1.5 mb-6 disabled:opacity-40">
+            <Plus className="w-3.5 h-3.5" /> Add
+          </button>
+        </div>
+      )}
+
+      {error && <p className="text-xs text-danger">{error}</p>}
     </div>
   );
 }
@@ -468,7 +623,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     { title: 'Training Rules', icon: BookOpen, fields: TRAINING_RULES },
     { title: 'Dispatch Weights', icon: Truck, fields: DISPATCH_WEIGHTS },
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
-    { title: 'Driver Check-ins', icon: CheckSquare, fields: DRIVER_CHECKINS },
+    { title: 'Attendance', icon: CheckSquare, fields: ATTENDANCE },
     { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },
     { title: 'Manifest Ingestion', icon: Settings, fields: INGESTION },
   ];
@@ -536,6 +691,17 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
                 />
               </motion.div>
             ))}
+
+            {/* Check-in deadlines editor (ADR-228) — its own CRUD, not part of the
+                config PATCH. Hidden during first-run onboarding (needs a saved
+                config + NCNS cutoff first). */}
+            {!isOnboarding && (
+              <CheckInDeadlineEditor
+                shiftStart={formValues.shift_start}
+                ncnsCutoff={formValues.ncns_cutoff_minutes}
+                onHelp={() => setHelpKey('check_in_deadlines')}
+              />
+            )}
 
             <div className="flex items-center justify-between gap-3 pt-2">
               {isOnboarding ? (

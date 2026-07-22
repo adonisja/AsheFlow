@@ -130,6 +130,8 @@ class CompanyConfigResponse(BaseModel):
     dispatch_weight_cap:              Optional[float]
     flag_threshold:                   Optional[float]
     driver_checkin_count:             Optional[int]
+    late_window_minutes:              Optional[int]
+    ncns_cutoff_minutes:              Optional[int]
     effort_time_factor:               Optional[float]
     effort_physical_factor:           Optional[float]
     ingestion_mode:                   Optional[str]
@@ -167,6 +169,8 @@ class CompanyConfigResponse(BaseModel):
             dispatch_weight_cap=obj.dispatch_weight_cap,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
+            late_window_minutes=obj.late_window_minutes,
+            ncns_cutoff_minutes=obj.ncns_cutoff_minutes,
             effort_time_factor=obj.effort_time_factor,
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
@@ -586,6 +590,10 @@ class CompanyConfigUpdate(BaseModel):
 
     # Driver check-ins
     driver_checkin_count:            Optional[int]   = Field(None, ge=0, le=10)
+
+    # Attendance (ADR-198/228)
+    late_window_minutes:             Optional[int]   = Field(None, ge=0, le=240)
+    ncns_cutoff_minutes:             Optional[int]   = Field(None, ge=1, le=480)
 
     # Effort scoring
     effort_time_factor:              Optional[float] = Field(None, ge=0.0, le=1.0)
