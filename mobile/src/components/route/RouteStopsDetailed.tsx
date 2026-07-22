@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { formatBlockKey } from './RouteStopsList';
 
@@ -90,40 +90,65 @@ export default function RouteStopsDetailed({ stops, c }: { stops: DetailedStop[]
             </Text>
           </View>
 
-          {section.stops.map(stop => {
+          {section.stops.map((stop, i) => {
             const wl = stop.workload_class ? WORKLOAD_META[stop.workload_class] : null;
             const wlColor = wl ? toneColor(wl.tone, c) : null;
             const bt = stop.building_type ? (BUILDING_LABEL[stop.building_type] ?? stop.building_type) : null;
+            // House number leads (the scan target — the street repeats down a
+            // block and is already in the segment label). The accent bar is tinted
+            // by classification when profiled, neutral otherwise.
+            const m = /^\s*(\d+[A-Za-z-]*)\s+(.*)$/.exec(stop.address || '');
+            const houseNo = m ? m[1] : (stop.address || '');
+            const street = m ? m[2] : '';
+            const accent = wlColor ? wlColor.fg : c.border;
             return (
-              <View key={`${section.block_key}:${stop.address}`} style={{ marginBottom: spacing.sm }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
-                  <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
-                    {stop.address}
-                  </Text>
-                  <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
-                    · {stop.package_count} pkg{stop.package_count === 1 ? '' : 's'}
-                  </Text>
-                </View>
-                {(wl || bt) && (
-                  <View style={{ flexDirection: 'row', gap: spacing.xs, marginTop: 3, flexWrap: 'wrap' }}>
-                    {wl && wlColor && <Chip label={wl.label} bg={wlColor.bg} fg={wlColor.fg} />}
-                    {bt && <Chip label={bt} bg={c.surfaceMuted} fg={c.foreground} />}
-                  </View>
-                )}
-                {/* Double-column TBAs (falls to single naturally on narrow width). */}
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 3 }}>
-                  {stop.tba_numbers.map(tba => (
-                    <Text
-                      key={tba}
-                      style={{
-                        width: '50%', fontSize: fontSize.xs, color: c.mutedForeground,
-                        fontVariant: ['tabular-nums'], lineHeight: 17,
-                      }}
-                      numberOfLines={1}
-                    >
-                      …{tba.slice(-8)}
+              <View
+                key={`${section.block_key}:${stop.address}`}
+                style={{
+                  flexDirection: 'row',
+                  borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth,
+                  borderTopColor: c.border,
+                  paddingVertical: spacing.sm,
+                }}
+              >
+                {/* Left accent bar (classification tint or neutral) */}
+                <View style={{ width: 3, borderRadius: 2, backgroundColor: accent, marginRight: spacing.sm }} />
+                <View style={{ flex: 1 }}>
+                  {/* Header: house# bold inline, street muted, pkg count; chips right */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground, fontVariant: ['tabular-nums'] }}>
+                      {houseNo}
                     </Text>
-                  ))}
+                    {street ? (
+                      <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: spacing.xs, flexShrink: 1 }} numberOfLines={1}>
+                        {street}
+                      </Text>
+                    ) : null}
+                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: 'auto', paddingLeft: spacing.xs }}>
+                      {stop.package_count} pkg{stop.package_count === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  {(wl || bt) && (
+                    <View style={{ flexDirection: 'row', gap: spacing.xs, marginTop: 4, flexWrap: 'wrap' }}>
+                      {wl && wlColor && <Chip label={wl.label} bg={wlColor.bg} fg={wlColor.fg} />}
+                      {bt && <Chip label={bt} bg={c.surfaceMuted} fg={c.foreground} />}
+                    </View>
+                  )}
+                  {/* TBAs — de-emphasized reference, 2-column, monospaced */}
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
+                    {stop.tba_numbers.map(tba => (
+                      <Text
+                        key={tba}
+                        style={{
+                          width: '50%', fontSize: fontSize.xs, color: c.mutedForeground,
+                          fontVariant: ['tabular-nums'], lineHeight: 18,
+                        }}
+                        numberOfLines={1}
+                      >
+                        ··{tba.slice(-8)}
+                      </Text>
+                    ))}
+                  </View>
                 </View>
               </View>
             );
