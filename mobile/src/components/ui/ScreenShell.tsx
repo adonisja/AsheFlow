@@ -29,11 +29,14 @@ type Props = {
   headerRight?: React.ReactNode;
   /** Suppress the default header ThemeToggle (e.g. Account, which has its own control) */
   hideThemeToggle?: boolean;
+  /** Pinned element between the header and the scroll (e.g. a segmented tab bar). */
+  belowHeader?: React.ReactNode;
 };
 
 export default function ScreenShell({
   title, subtitle, loading, refreshing, onRefresh, children,
   edges = ['top'], noHeader = false, onBack, headerRight, hideThemeToggle = false,
+  belowHeader,
 }: Props) {
   const c = useColors();
   const s = styles(c);
@@ -71,6 +74,7 @@ export default function ScreenShell({
           </View>
         </View>
       )}
+      {belowHeader}
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.content}

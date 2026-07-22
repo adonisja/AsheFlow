@@ -162,6 +162,7 @@ export default function RouteSortScreen() {
   const [rebalancing, setRebalancing] = useState(false);
   const [splitting, setSplitting] = useState(false);
   const [removals, setRemovals] = useState<Removal[]>([]);   // ADR-214 out-of-zone
+  const [apView, setApView] = useState<'sort' | 'crew'>('sort');   // segmented sub-view
 
   const todayStr = () => {
     const now = new Date();
@@ -514,6 +515,8 @@ export default function RouteSortScreen() {
     );
   }
 
+  const crewCount = members.filter(m => m.role !== 'driver').length;
+
   return (
     <ScreenShell
       title="AP Sort"
@@ -521,7 +524,21 @@ export default function RouteSortScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => load({ refresh: true })}
+      belowHeader={members.length > 0 ? (
+        // Segmented sub-view (mirrors the Incident tab's Report/History bar):
+        // fold the Crew Roster off the main sort scroll into its own view.
+        <View style={s.subTabBar}>
+          {(['sort', 'crew'] as const).map(v => (
+            <TouchableOpacity key={v} style={[s.subTab, apView === v && s.subTabActive]} onPress={() => setApView(v)}>
+              <Text style={[s.subTabText, apView === v && s.subTabTextActive]}>
+                {v === 'sort' ? 'Sort' : `Crew Roster${crewCount ? ` (${crewCount})` : ''}`}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : undefined}
     >
+      {apView === 'sort' && (<>
       {/* Phase: not yet committed */}
       {routes.length === 0 && (
         <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -695,11 +712,12 @@ export default function RouteSortScreen() {
           )}
         </View>
       )}
+      </>)}
 
-      {/* Crew status (ADR-197): mark a walker/trainer/trainee departed when they
-          leave for the day. Preserves the record (unlike removal) and keeps the
-          live crew count accurate for building the remaining routes. */}
-      {members.length > 0 && (
+      {/* Crew Roster — folded into its own sub-view (segmented bar above). Mark a
+          walker/trainer/trainee departed when they leave; roll call; open a
+          member's route detail. */}
+      {apView === 'crew' && members.length > 0 && (
         <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={s.cardTitle}>Crew</Text>
           {members
@@ -790,6 +808,7 @@ export default function RouteSortScreen() {
         </View>
       )}
 
+      {apView === 'sort' && (<>
       {/* Route lists */}
       {/* ADR-216 phase 2: OUT NOW folded into the Crew card (each assigned member's
           route opens from their card). Only UNASSIGNED (no crew member yet) and
@@ -878,6 +897,7 @@ export default function RouteSortScreen() {
           )}
         </Modal>
       )}
+      </>)}
     </ScreenShell>
   );
 }
@@ -1065,6 +1085,12 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   card:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.md },
   cardTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground },
+  // Segmented sub-view bar (mirrors the Incident tab's Report/History bar).
+  subTabBar:      { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: c.border, backgroundColor: c.surface },
+  subTab:         { flex: 1, paddingVertical: spacing.sm + 2, alignItems: 'center' },
+  subTabActive:   { borderBottomWidth: 2, borderBottomColor: c.primary },
+  subTabText:     { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
+  subTabTextActive: { color: c.primary, fontWeight: fontWeight.semibold },
   crewRow:    { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginTop: spacing.sm },
   misrouteRow:{ borderRadius: radius.md, borderWidth: 1, padding: spacing.md, marginTop: spacing.sm },
   cardSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.sm },
