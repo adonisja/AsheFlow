@@ -695,10 +695,163 @@ def update_my_company_config(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
+    # ADR-228 reverse guard: raising the NCNS cutoff above an already-configured
+    # Check-In #1 would break "Check-In #1 >= NCNS". Catch it here (the add-deadline
+    # path enforces the forward direction).
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("ncns_cutoff_minutes") is not None:
+        first = (
+            db.query(CheckInDeadline)
+            .filter(CheckInDeadline.company_id == caller.company_id, CheckInDeadline.sequence == 1)
+            .first()
+        )
+        if first is not None and data["ncns_cutoff_minutes"] > first.offset_minutes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"NCNS cutoff ({data['ncns_cutoff_minutes']} min) can't be later than "
+                    f"Check-In #1 ({first.offset_minutes} min). Lower it, or move Check-In #1 later first."
+                ),
+            )
+
     _apply_config_update(config, payload, allow_super_admin_fields=False)
     db.commit()
     db.refresh(config)
     return CompanyConfigResponse.from_orm_obj(config)
+
+
+# ── Check-in deadlines (ADR-228) ──────────────────────────────────────────────
+# Ordered per-check-in deadlines, each expressed as minutes past the attendance
+# reference max(shift_start, AP-established) — same anchor as ncns_cutoff_minutes,
+# so Check-In #1 inherits the same late-AP allowance and the ordering guard is a
+# direct offset comparison. Replaces the flat CompanyConfig.driver_checkin_count.
+
+from app.models.check_in_deadline import CheckInDeadline
+
+
+class CheckInDeadlineOut(BaseModel):
+    id: UUID
+    sequence: int
+    offset_minutes: int
+    model_config = {"from_attributes": True}
+
+
+class CheckInDeadlineCreate(BaseModel):
+    # Only the deadline is supplied; sequence is assigned server-side (append).
+    offset_minutes: int = Field(..., ge=1, le=1440)
+
+
+def _company_ncns_cutoff(db: Session, company_id: UUID) -> Optional[int]:
+    cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
+    return cfg.ncns_cutoff_minutes if cfg else None
+
+
+def _list_deadlines(db: Session, company_id: UUID) -> list[CheckInDeadline]:
+    return (
+        db.query(CheckInDeadline)
+        .filter(CheckInDeadline.company_id == company_id)
+        .order_by(CheckInDeadline.sequence.asc())
+        .all()
+    )
+
+
+@company_admin_router.get("/my-config/check-in-deadlines", response_model=list[CheckInDeadlineOut])
+def list_check_in_deadlines(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Ordered check-in deadlines for the caller's company (ADR-228)."""
+    return _list_deadlines(db, caller.company_id)
+
+
+@company_admin_router.post(
+    "/my-config/check-in-deadlines", response_model=CheckInDeadlineOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_check_in_deadline(
+    payload: CheckInDeadlineCreate,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Append the next check-in with its deadline (ADR-228).
+
+    Ordering guards, surfaced to the admin:
+      - NCNS cutoff must be set FIRST — you can't schedule a check-in before crew
+        are even NCNS-decided.
+      - Check-In #1's offset must be >= the NCNS cutoff.
+      - each subsequent offset must be strictly greater than the previous.
+    """
+    ncns = _company_ncns_cutoff(db, caller.company_id)
+    if ncns is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Set the NCNS cutoff before adding check-in deadlines — a check-in "
+                "can't be scheduled before crew attendance is decided."
+            ),
+        )
+
+    existing = _list_deadlines(db, caller.company_id)
+    next_seq = (existing[-1].sequence + 1) if existing else 1
+
+    if next_seq == 1:
+        if payload.offset_minutes < ncns:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Check-In #1 must be at or after the NCNS cutoff ({ncns} min) — "
+                    f"got {payload.offset_minutes} min. Crew NCNS must be decided first."
+                ),
+            )
+    else:
+        prev = existing[-1].offset_minutes
+        if payload.offset_minutes <= prev:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Check-In #{next_seq} ({payload.offset_minutes} min) must be later than "
+                    f"Check-In #{next_seq - 1} ({prev} min)."
+                ),
+            )
+
+    row = CheckInDeadline(
+        company_id=caller.company_id, sequence=next_seq, offset_minutes=payload.offset_minutes,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@company_admin_router.delete("/my-config/check-in-deadlines/{sequence}", status_code=status.HTTP_200_OK)
+def delete_check_in_deadline(
+    sequence: int,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove a check-in and renumber the rest so sequences stay contiguous (ADR-228).
+
+    Only the LAST check-in may be removed directly — removing a middle one would
+    reorder deadlines under the driver mid-schedule. Renumbering after deleting the
+    tail is a no-op; this keeps 'each later than previous' trivially intact.
+    """
+    existing = _list_deadlines(db, caller.company_id)
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No check-in deadlines configured.")
+    if sequence != existing[-1].sequence:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Only the last check-in (#{existing[-1].sequence}) can be removed — "
+                "remove from the end so the earlier deadlines keep their order."
+            ),
+        )
+    db.delete(existing[-1])
+    db.commit()
+    return {"deleted_sequence": sequence, "remaining": len(existing) - 1}
 
 
 # ---------------------------------------------------------------------------

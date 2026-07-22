@@ -23,6 +23,7 @@ from app.models.dock_assignment import DockAssignment
 from app.models.station_arrival import StationArrival
 from app.models.package_manifest import PackageManifest
 from app.models.crew_compliance import CrewCompliance
+from app.models.check_in_deadline import CheckInDeadline
 from app.models.driver_check_in import DriverCheckIn
 from app.models.rts_clearance import RTSReport, StationHandoff
 from app.models.company import Company, CompanyConfig, CompanyZone
