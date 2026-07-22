@@ -46,6 +46,7 @@ from app.models.assignment_member import AssignmentMember
 from app.models.notification import Notification
 from app.models.field_ops import Departure
 from app.models.company import CompanyConfig
+from app.models.dispatch_confirmation import DispatchConfirmation
 from app.services.audit import write_audit
 from app.schemas.anchor_point import (
     AnchorPointCreate,
@@ -607,6 +608,26 @@ async def get_active_anchor_point_for_truck(
     Returns null when no AP has been submitted yet today.
     """
     today = company_today(db, caller.company_id)
+
+    # Gate: field staff (walker/trainer/trainee) see the AP only once THEY are
+    # confirmed onto the crew. The AP is posted the moment the driver submits,
+    # which can precede dispatch finalizing the crew — showing it to an
+    # unconfirmed member on their AP page implies they're locked onto this truck
+    # before that's true. Driver/dispatch/management/admin are unaffected (the
+    # driver reads their own AP via /driver/today; oversight always sees it).
+    if caller.role in ("walker", "trainer", "trainee"):
+        confirmed = (
+            db.query(DispatchConfirmation)
+            .filter(
+                DispatchConfirmation.employee_id == caller.id,
+                DispatchConfirmation.company_id == caller.company_id,
+                DispatchConfirmation.date == today,
+                DispatchConfirmation.status == "confirmed",
+            )
+            .first()
+        )
+        if confirmed is None:
+            return None
 
     ap = (
         db.query(AnchorPoint)

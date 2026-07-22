@@ -506,3 +506,63 @@ class TestSubmitAnchorPointGate:
                        geocode_return=("MAIN ST & 5TH AVE", 40.75, -73.99))
         assert ap.location == "MAIN ST & 5TH AVE"
         assert ap.lat == 40.75 and ap.lng == -73.99
+
+
+# ---------------------------------------------------------------------------
+# get_active_anchor_point_for_truck: crew see the AP only once THEY are confirmed
+# ---------------------------------------------------------------------------
+
+class TestActiveAPCrewVisibilityGate:
+    """Field staff (walker/trainer/trainee) get null until they're confirmed onto
+    the crew; the driver posting an AP must not surface it to unconfirmed members.
+    Driver/dispatch/oversight are unaffected."""
+
+    def _run(self, caller_role, *, confirmed, ap_exists=True):
+        import asyncio
+        from app.routers.anchor_points import get_active_anchor_point_for_truck
+        from app.models.anchor_point import AnchorPoint
+        from app.models.dispatch_confirmation import DispatchConfirmation
+
+        caller = _make_caller(role=caller_role)
+        truck_id = uuid.uuid4()
+        ap = _make_ap(company_id=caller.company_id, status="preliminary", truck_id=truck_id) if ap_exists else None
+
+        db = MagicMock()
+
+        def _query(model):
+            q = MagicMock()
+            def _filter(*args):
+                f = MagicMock()
+                f.order_by = MagicMock(return_value=f)
+                if model is DispatchConfirmation:
+                    f.first.return_value = MagicMock() if confirmed else None
+                elif model is AnchorPoint:
+                    f.first.return_value = ap
+                else:
+                    f.first.return_value = None
+                return f
+            q.filter = _filter
+            return q
+        db.query = _query
+
+        with patch("app.routers.anchor_points.company_today", return_value=date.today()):
+            with patch("app.routers.anchor_points._maybe_flag_late", return_value=False):
+                return asyncio.get_event_loop().run_until_complete(
+                    get_active_anchor_point_for_truck(truck_id=truck_id, db=db, caller=caller, _={})
+                )
+
+    def test_unconfirmed_walker_gets_null(self):
+        assert self._run("walker", confirmed=False) is None
+
+    def test_confirmed_walker_sees_ap(self):
+        assert self._run("walker", confirmed=True) is not None
+
+    def test_unconfirmed_trainee_gets_null(self):
+        assert self._run("trainee", confirmed=False) is None
+
+    def test_driver_sees_ap_without_confirmation_gate(self):
+        # Driver is not field staff — no confirmation lookup applies.
+        assert self._run("driver", confirmed=False) is not None
+
+    def test_dispatch_sees_ap_without_confirmation_gate(self):
+        assert self._run("dispatch", confirmed=False) is not None
