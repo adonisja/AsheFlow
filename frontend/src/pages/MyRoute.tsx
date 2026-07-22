@@ -115,34 +115,36 @@ function StopCard({ stop, onComplete, onRts, onMissing, onBuildingProfile, isFir
             </div>
           )}
 
-          {/* Packages grouped by bag */}
-          <div className="space-y-2">
-            {(stop.bags.length > 0 ? stop.bags : [{ bag_id: 'unknown', tba_numbers: stop.tba_numbers }]).map(bag => (
-              <div key={bag.bag_id} className="space-y-1">
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
-                  Bag {bag.bag_id}
-                </p>
-                {bag.tba_numbers.map(tba => (
-                  <div key={tba} className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-mono text-foreground">{tba}</span>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => onRts(tba)}
-                        className="text-xs text-warning hover:text-warning/80 px-2 py-0.5 rounded border border-warning/30 hover:bg-warning/10 transition-colors"
-                      >
-                        Can't deliver
-                      </button>
-                      <button
-                        onClick={() => onMissing(tba)}
-                        className="text-xs text-destructive hover:text-destructive/80 px-2 py-0.5 rounded border border-destructive/30 hover:bg-destructive/10 transition-colors"
-                      >
-                        Missing
-                      </button>
-                    </div>
+          {/* Packages, one row per TBA: bold tracking number on the left, the
+              bag/tote as a pill on the right (future: pill tinted by bag color),
+              then the row actions. No 'TBA' tag — the id already begins with it. */}
+          <div className="space-y-1.5">
+            {(stop.bags.length > 0 ? stop.bags : [{ bag_id: 'unknown', tba_numbers: stop.tba_numbers }]).flatMap(bag =>
+              bag.tba_numbers.map(tba => (
+                <div key={tba} className="flex items-center gap-2">
+                  <span className="text-sm font-mono font-bold text-foreground tabular-nums">{tba}</span>
+                  {bag.bag_id && bag.bag_id !== 'unknown' && (
+                    <span className="text-[10px] font-bold tracking-wide text-foreground bg-muted border border-border rounded-full px-2 py-0.5 shrink-0">
+                      {bag.bag_id}
+                    </span>
+                  )}
+                  <div className="flex gap-1 ml-auto shrink-0">
+                    <button
+                      onClick={() => onRts(tba)}
+                      className="text-xs text-warning hover:text-warning/80 px-2 py-0.5 rounded border border-warning/30 hover:bg-warning/10 transition-colors"
+                    >
+                      Can't deliver
+                    </button>
+                    <button
+                      onClick={() => onMissing(tba)}
+                      className="text-xs text-destructive hover:text-destructive/80 px-2 py-0.5 rounded border border-destructive/30 hover:bg-destructive/10 transition-colors"
+                    >
+                      Missing
+                    </button>
                   </div>
-                ))}
-              </div>
-            ))}
+                </div>
+              ))
+            )}
           </div>
 
           {/* Signal pills */}

@@ -674,16 +674,19 @@ export default function RouteSortScreen() {
                 <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
                   📍 {flag.normalised_address ?? flag.destination_block_key ?? 'Unknown address'}
                 </Text>
-                {/* Full tracking number — selectable so it can be matched/scanned exactly */}
-                <Text selectable style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontVariant: ['tabular-nums'], marginTop: 2 }}>
-                  TBA {flag.tba_number}
-                </Text>
-                {/* Bag/tote the package is currently IN — the walker pulls it from here. */}
-                {flag.current_bag_id ? (
-                  <Text selectable style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 1, marginBottom: spacing.sm }}>
-                    🧺 In tote {flag.current_bag_id}
+                {/* TBA (bold — the value already begins with 'TBA', no separate tag)
+                    on the left; the tote it's currently in as a pill on the right
+                    (future: pill tinted by the bag's color). */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, marginTop: 2, marginBottom: spacing.sm }}>
+                  <Text selectable style={{ flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.foreground, fontVariant: ['tabular-nums'] }} numberOfLines={1}>
+                    {flag.tba_number}
                   </Text>
-                ) : <View style={{ marginBottom: spacing.sm }} />}
+                  {flag.current_bag_id ? (
+                    <View style={s.bagPill}>
+                      <Text selectable style={s.bagPillText}>{flag.current_bag_id}</Text>
+                    </View>
+                  ) : null}
+                </View>
                 {/* FROM → TO hand-off */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
                   <View style={{ alignItems: 'center', gap: 2 }}>
@@ -1109,6 +1112,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   subTabActive:   { borderBottomWidth: 2, borderBottomColor: c.primary },
   subTabText:     { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
   subTabTextActive: { color: c.primary, fontWeight: fontWeight.semibold },
+  // bag_id pill on a misroute row (future: bg tinted by the bag's color).
+  bagPill:        { backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, borderRadius: radius.full ?? 999, paddingHorizontal: spacing.sm, paddingVertical: 2 },
+  bagPillText:    { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.foreground, letterSpacing: 0.3 },
   crewRow:    { borderRadius: radius.md, borderWidth: 1, padding: spacing.sm + 2, marginTop: spacing.sm },
   misrouteRow:{ borderRadius: radius.md, borderWidth: 1, padding: spacing.md, marginTop: spacing.sm },
   cardSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.sm },
