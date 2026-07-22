@@ -124,6 +124,11 @@ type InspData  = { has_failures: boolean; items: Record<string, boolean>; notes?
 type FuelLog   = { id: string; odometer_start: number; odometer_end: number | null; fuel_added: number | null; notes: string | null };
 type Manifest  = { id: string; tote_count: number; ov_count: number; notes: string | null; acknowledged_at: string | null };
 type AP        = { id: string; location: string; eta: string | null; status: string; sequence: number };
+type LocationHint = {
+  label: string; sublabel: string;
+  source: 'history' | 'truck_anchor' | 'building_profile';
+  use_count?: number | null; distance_m?: number | null; reason?: string | null;
+};
 type CheckInRecord = { check_in_number: number; routes_remaining: number; help_requested: boolean; working_crew_count: number; ncns_count: number; submitted_at: string };
 type RTSReport = { id: string; status: string; crew_confirmed: number; total_rts: number; rts_packages: { reason: string; count: number }[]; dispatch_notes: string | null };
 // ADR-181 dock flow (tote check-off + driver load confirmation)
@@ -1683,7 +1688,21 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
   const [etaDate,     setEtaDate]     = useState<Date | null>(null);
   const [showPicker,  setShowPicker]  = useState(false);
   const [saving,      setSaving]      = useState(false);
+  const [hints,       setHints]       = useState<LocationHint[]>([]);
   const submitting = useRef(false);
+
+  // Suggested APs (ADR-225): historical spots ranked by proximity to today's
+  // package cluster, each scored (distance + use count) so the driver weighs a
+  // near spot against a proven-parkable one. Fetched once the truck is known and
+  // only while the step is still open (no AP posted yet).
+  useEffect(() => {
+    if (!truckId || done) return;
+    let cancelled = false;
+    apiClient.get<LocationHint[]>(`/anchor-points/truck/${truckId}/location-hints`)
+      .then(res => { if (!cancelled) setHints(res.data ?? []); })
+      .catch(() => { /* best-effort — form works without suggestions */ });
+    return () => { cancelled = true; };
+  }, [truckId, done]);
 
   const etaLabel = etaDate
     ? etaDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -1718,6 +1737,61 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
       <SectionHeader num="8" title="Post Anchor Point + ETA"
         subtitle="Enter a cross street or address — it's geocoded to place your AP. ETA is required."
         c={c} />
+
+      {/* Suggested APs (ADR-225) — ranked by proximity to today's package cluster;
+          each shows distance + how often it was used so you can pick a spot that's
+          both close AND known-parkable. Tap to fill the field, then edit if needed. */}
+      {hints.length > 0 && (
+        <View style={{ marginBottom: spacing.sm }}>
+          <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.mutedForeground, letterSpacing: 0.4, marginBottom: spacing.xs }}>
+            SUGGESTED — NEAR TODAY'S PACKAGES
+          </Text>
+          <View style={{ gap: spacing.xs }}>
+            {hints.map((h, i) => {
+              const picked = location.trim() === h.label;
+              const dist = h.distance_m != null
+                ? (h.distance_m < 1000 ? `~${h.distance_m} m` : `~${(h.distance_m / 1000).toFixed(1)} km`)
+                : null;
+              return (
+                <TouchableOpacity
+                  key={`${h.label}:${i}`}
+                  onPress={() => setLocation(h.label)}
+                  style={{
+                    borderWidth: 1, borderRadius: radius.md, padding: spacing.sm,
+                    borderColor: picked ? c.primary : c.border,
+                    backgroundColor: picked ? c.primaryLight : c.background,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+                    <Text style={{ flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: picked ? c.primary : c.foreground }} numberOfLines={1}>
+                      {h.label}
+                    </Text>
+                    {dist && (
+                      <View style={{ backgroundColor: c.infoLight, borderRadius: radius.xs, paddingHorizontal: spacing.xs, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 10, fontWeight: fontWeight.bold, color: c.info, fontVariant: ['tabular-nums'] }}>{dist}</Text>
+                      </View>
+                    )}
+                    {h.use_count != null && h.use_count > 0 && (
+                      <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.xs, paddingHorizontal: spacing.xs, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 10, fontWeight: fontWeight.bold, color: c.mutedForeground, fontVariant: ['tabular-nums'] }}>{h.use_count}×</Text>
+                      </View>
+                    )}
+                  </View>
+                  {(h.reason || h.sublabel) && (
+                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }} numberOfLines={1}>
+                      {h.reason ?? h.sublabel}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={{ fontSize: 10, color: c.mutedForeground, marginTop: spacing.xs, fontStyle: 'italic' }}>
+            Confirm parking/access before you commit — suggestions are past spots, not today's conditions.
+          </Text>
+        </View>
+      )}
+
       <FieldInput label="Cross street or address" value={location} onChangeText={setLocation}
         placeholder="e.g. W 28 St & 9 Ave" c={c} />
       <TouchableOpacity onPress={() => { setEtaDate(etaDate ?? new Date()); setShowPicker(true); }}
