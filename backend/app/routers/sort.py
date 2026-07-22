@@ -3104,6 +3104,7 @@ class RemovalOut(BaseModel):
     whole_tote: bool
     reason: str
     locator: Optional[str] = None        # dock tag / OV zone — where to find it
+    truck_name: Optional[str] = None     # DERIVED: which truck the unit sits on (from the day's zones)
     status: str                          # flagged | removed
     pull_point: str = "station"          # station (dock, dispatch) | anchor_point (walker/driver)
     removed_by_name: Optional[str] = None
@@ -3203,10 +3204,19 @@ def _removals_response(db: Session, company_id, sort_date: date, scope_truck_id=
         .order_by(PackageRemoval.status, PackageRemoval.bag_id)
         .all()
     )
+    # bag_id → truck_id from the day's active zones (PackageRemoval carries no
+    # truck_id — the removed unit's truck is whichever zone's roster holds the bag).
+    # Also used for driver/trainer scoping below, so build it once.
+    bag_truck = _bag_truck_map(db, company_id, sort_date)
     if scope_truck_id is not None:
         # Driver/trainer scope: only returns whose bag belongs to their truck.
-        bag_truck = _bag_truck_map(db, company_id, sort_date)
         rows = [r for r in rows if bag_truck.get(r.bag_id) == scope_truck_id]
+    # truck_id → name so the crew sees WHICH truck each unit was pulled from.
+    truck_ids = {tid for tid in bag_truck.values() if tid is not None}
+    truck_names = {
+        t.id: t.name
+        for t in db.query(Truck).filter(Truck.id.in_(truck_ids), Truck.company_id == company_id).all()
+    } if truck_ids else {}
     owner = _bag_owner_map(db, company_id, sort_date) if any(r.pull_point == "anchor_point" for r in rows) else {}
     outs = []
     for r in rows:
@@ -3215,6 +3225,7 @@ def _removals_response(db: Session, company_id, sort_date: date, scope_truck_id=
             id=r.id, bag_id=r.bag_id, tba=r.tba, tba_numbers=r.tba_numbers,
             package_count=r.package_count, whole_tote=r.whole_tote, reason=r.reason,
             locator=r.locator, status=r.status, pull_point=r.pull_point,
+            truck_name=truck_names.get(bag_truck.get(r.bag_id)),
             removed_by_name=r.removed_by_name, removed_at=r.removed_at,
             owner_walker_name=w_name, owner_route_number=w_route,
             handoff_status=r.handoff_status,

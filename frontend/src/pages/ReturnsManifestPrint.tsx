@@ -80,6 +80,7 @@ export default function ReturnsManifestPrint() {
         <thead>
           <tr>
             <th style={{ width: 100 }}>Bag ID</th>
+            <th style={{ width: 90 }}>Truck</th>
             <th style={{ width: 70 }}>Dock</th>
             <th style={{ width: 50 }}>Pkgs</th>
             <th>TBA number(s)</th>
@@ -92,6 +93,7 @@ export default function ReturnsManifestPrint() {
               <td className="mono" style={{ fontWeight: 700 }}>
                 {r.bag_id}{r.whole_tote ? ' (whole tote)' : ''}
               </td>
+              <td>{r.truck_name ?? '—'}</td>
               <td className="mono">{r.locator ?? '—'}</td>
               <td style={{ textAlign: 'right' }}>{r.package_count}</td>
               <td className="mono" style={{ fontSize: 11 }}>

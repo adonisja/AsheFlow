@@ -27,6 +27,7 @@ function RemovalRow({ r, busy, onConfirm }: {
           : <span className="font-mono">{r.tba}</span>}
       </td>
       <td className="px-2 py-1.5 text-right tabular-nums text-xs text-foreground">{r.package_count}</td>
+      <td className="px-2 py-1.5 text-xs text-foreground whitespace-nowrap">{r.truck_name ?? '—'}</td>
       <td className="px-2 py-1.5 font-mono text-xs text-muted-foreground">{r.locator ?? '—'}</td>
       <td className="px-2 py-1.5">
         {removed ? (
@@ -126,6 +127,7 @@ export default function RemovalsPanel({ date }: { date: string }) {
               <th className="px-2 py-1.5 text-left">Bag</th>
               <th className="px-2 py-1.5 text-left">Unit</th>
               <th className="px-2 py-1.5 text-right">Pkgs</th>
+              <th className="px-2 py-1.5 text-left">Truck</th>
               <th className="px-2 py-1.5 text-left">Dock</th>
               <th className="px-2 py-1.5 text-left w-44">Status</th>
             </tr>

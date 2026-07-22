@@ -135,6 +135,7 @@ export interface RemovalOut {
   whole_tote: boolean;
   reason: string;
   locator?: string | null;
+  truck_name?: string | null;
   status: 'flagged' | 'removed';
   pull_point: 'station' | 'anchor_point';
   removed_by_name?: string | null;
