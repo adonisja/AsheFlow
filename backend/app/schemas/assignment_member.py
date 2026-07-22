@@ -77,6 +77,12 @@ class CrewStatusMember(BaseModel):
     # active member, or has not arrived at the AP while the trainee has). Drives
     # the "Reassign" entry point to the Phase B dispatch reassignment.
     orphaned: bool = False
+    # Current stop (the in-progress, else first not-completed stop on the member's
+    # active route). Folds the AP-Sort per-route /rts/stops fan-out into this one
+    # call — the crew loop already fetches the route.
+    current_stop_sequence: Optional[int] = None
+    current_stop_address: Optional[str] = None
+    current_stop_total: Optional[int] = None
 
 
 class CrewStatusTruck(BaseModel):

@@ -225,8 +225,11 @@ export default function RouteSortScreen() {
         setTraineeArrivedAt(null);
       }
 
-      // Crew-status enrichment (ADR-197 Phase B): availability chip + trip count
-      // per member. Scoped to this truck (field caller → own truck). Best-effort.
+      // Crew-status enrichment (ADR-197 Phase B): availability chip + trip count +
+      // CURRENT STOP per member, all from ONE call. Previously the current stop
+      // required a per-route /rts/stops fan-out (N requests, N=route count) which
+      // was the Route-Sort hang risk on big trucks — crew-status now returns it.
+      const stopMap: Record<string, CurrentStop> = {};
       try {
         const cs = await apiClient.get(`/crew-status/${today}`);
         const myTruck = (cs.data?.trucks ?? []).find((t: any) => t.truck_assignment_id === assignmentId);
@@ -238,29 +241,16 @@ export default function RouteSortScreen() {
             route_completion_pct: mm.route_completion_pct ?? null,
             trip_count: mm.trip_count ?? 0,
           };
+          if (mm.current_stop_sequence != null) {
+            stopMap[mm.employee_id] = {
+              stop_sequence: mm.current_stop_sequence,
+              normalised_address: mm.current_stop_address,
+              total: mm.current_stop_total ?? 0,
+            };
+          }
         }
         setCrewStatus(map);
       } catch { setCrewStatus({}); }
-
-      // In-progress current stop (ADR-197 lifecycle) for each active route, keyed
-      // by the walker on it. Only the OUT-NOW routes need it; best-effort per route.
-      const activeRoutes = myRoutes.filter(r => (r.status === 'assigned' || r.status === 'in_progress') && !r.returned_at);
-      const stopEntries = await Promise.all(activeRoutes.map(async (r) => {
-        try {
-          const sres = await apiClient.get(`/rts/stops/${r.id}`);
-          const stops = (sres.data ?? []) as any[];
-          const inProgress = stops.find(st => st.status === 'in_progress');
-          if (!inProgress || !r.executor?.id) return null;
-          const cur: CurrentStop = {
-            stop_sequence: inProgress.stop_sequence,
-            normalised_address: inProgress.normalised_address,
-            total: stops.length,
-          };
-          return [r.executor?.id, cur] as const;
-        } catch { return null; }
-      }));
-      const stopMap: Record<string, CurrentStop> = {};
-      for (const e of stopEntries) { if (e) stopMap[e[0]] = e[1]; }
       setCurrentStops(stopMap);
     } catch {
       setTaId(null);
@@ -791,7 +781,7 @@ export default function RouteSortScreen() {
                   )}
                   {stop && (
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
-                      📍 On stop {stop.stop_sequence}/{stop.total}: {stop.normalised_address}
+                      📍 On stop {stop.stop_sequence}/{stop.total}{stop.normalised_address ? `: ${stop.normalised_address}` : ''}
                     </Text>
                   )}
                 </View>

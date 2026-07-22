@@ -112,6 +112,7 @@ def get_crew_status(
         # Availability inputs per member (mirrors the /availability endpoint).
         progress: list[MemberProgress] = []
         pct_by_emp: dict = {}
+        current_stop_by_emp: dict = {}   # employee_id → (sequence, address, total)
         for m in members:
             has_route = False
             pct = None
@@ -134,14 +135,19 @@ def get_crew_status(
                 ).first()
                 if route is not None:
                     has_route = True
-                    total = db.query(DeliveryStop).filter(
+                    stops = db.query(DeliveryStop).filter(
                         DeliveryStop.route_id == route.id, DeliveryStop.company_id == cid,
-                    ).count()
-                    done = db.query(DeliveryStop).filter(
-                        DeliveryStop.route_id == route.id, DeliveryStop.company_id == cid,
-                        DeliveryStop.status == "completed",
-                    ).count()
+                    ).order_by(DeliveryStop.stop_sequence).all()
+                    total = len(stops)
+                    done = sum(1 for s in stops if s.status == "completed")
                     pct = (done / total) if total else 0.0
+                    # Current stop = in_progress, else the first not-completed one.
+                    cur = next((s for s in stops if s.status == "in_progress"), None) \
+                        or next((s for s in stops if s.status != "completed"), None)
+                    if cur is not None:
+                        current_stop_by_emp[m.employee_id] = (
+                            cur.stop_sequence, cur.normalised_address, total,
+                        )
             pct_by_emp[m.employee_id] = pct
             progress.append(MemberProgress(
                 employee_id=m.employee_id, name=names.get(m.employee_id), role=m.role,
@@ -199,6 +205,9 @@ def get_crew_status(
                 paired_trainee_id=paired_trainee.employee_id if paired_trainee else None,
                 paired_trainee_name=names.get(paired_trainee.employee_id) if paired_trainee else None,
                 orphaned=orphaned,
+                current_stop_sequence=(current_stop_by_emp.get(m.employee_id) or (None, None, None))[0],
+                current_stop_address=(current_stop_by_emp.get(m.employee_id) or (None, None, None))[1],
+                current_stop_total=(current_stop_by_emp.get(m.employee_id) or (None, None, None))[2],
             ))
 
         trucks.append(CrewStatusTruck(

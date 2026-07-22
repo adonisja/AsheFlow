@@ -52,7 +52,7 @@ def _rc(employee_id, status):
     return SimpleNamespace(employee_id=employee_id, status=status, date=_DATE, company_id=_CID)
 
 
-def _db(members, *, own_member=None, route_first=None, roll_calls=None):
+def _db(members, *, own_member=None, route_first=None, roll_calls=None, delivery_stops=None):
     """Mock Session. TruckAssignment list → [_ta()]; AssignmentMember list →
     members; Employee names → simple objects; Route/DeliveryStop → none/empty;
     ShiftRollCall list → roll_calls (default none → everyone 'not_arrived')."""
@@ -94,7 +94,8 @@ def _db(members, *, own_member=None, route_first=None, roll_calls=None):
                 f.all.return_value = []
             elif model is DeliveryStop:
                 f.count.return_value = 0
-                f.all.return_value = []
+                f.all.return_value = delivery_stops or []
+                f.order_by.return_value = f   # .order_by(...).all() → same chain
             else:
                 f.first.return_value = None
                 f.all.return_value = []
@@ -127,6 +128,42 @@ class TestCrewStatusEnrichment:
         resp = self._run([m])
         walker = resp.trucks[0].members[0]
         assert walker.trip_count == 3
+
+    def test_current_stop_populated_from_delivery_stops(self):
+        # ADR (Route-Sort hang fix): crew-status returns the member's current stop
+        # (in_progress, else first not-completed) so the AP-Sort screen needn't
+        # fan out an /rts/stops call per route.
+        import uuid as _uuid
+        m = _member(_WALKER, "walker")
+        route = SimpleNamespace(id=_uuid.uuid4())
+        stops = [
+            SimpleNamespace(stop_sequence=1, normalised_address="100 W 30 St", status="completed"),
+            SimpleNamespace(stop_sequence=2, normalised_address="120 W 30 St", status="in_progress"),
+            SimpleNamespace(stop_sequence=3, normalised_address="140 W 30 St", status="planned"),
+        ]
+        resp = self._run([m], route_first=route, delivery_stops=stops)
+        walker = resp.trucks[0].members[0]
+        assert walker.current_stop_sequence == 2               # the in_progress one
+        assert walker.current_stop_address == "120 W 30 St"
+        assert walker.current_stop_total == 3
+
+    def test_current_stop_falls_back_to_first_incomplete(self):
+        import uuid as _uuid
+        m = _member(_WALKER, "walker")
+        route = SimpleNamespace(id=_uuid.uuid4())
+        stops = [
+            SimpleNamespace(stop_sequence=1, normalised_address="A", status="completed"),
+            SimpleNamespace(stop_sequence=2, normalised_address="B", status="planned"),
+        ]
+        resp = self._run([m], route_first=route, delivery_stops=stops)
+        walker = resp.trucks[0].members[0]
+        assert walker.current_stop_sequence == 2               # first not-completed
+        assert walker.current_stop_address == "B"
+
+    def test_no_route_means_no_current_stop(self):
+        resp = self._run([_member(_WALKER, "walker")])         # route_first=None
+        walker = resp.trucks[0].members[0]
+        assert walker.current_stop_sequence is None
 
     def test_pairing_populated_both_directions(self):
         trainer = _member(_TRAINER, "trainer", ap_arrived_at=_NOW)
