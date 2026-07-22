@@ -301,3 +301,47 @@ def decay_troublesome_scores() -> dict:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.cleanup.prune_notifications")
+def prune_notifications() -> dict:
+    """Delete stale notifications (ADR-227). Global (all companies). 0 disables.
+
+    Removes anything older than notification_retention_days (read OR unread — an
+    operational notice's shift is long over after a few days), PLUS any expired
+    notification (past expires_at) regardless of age. The inbox already hides
+    expired/old ones; this reclaims the storage so the table (and the 10s SSE
+    poll that scans it) doesn't grow unbounded. Automates the manual
+    DELETE /notifications/prune endpoint.
+    """
+    from sqlalchemy import or_
+    from app.models.notification import Notification
+
+    days = settings.notification_retention_days
+    if days <= 0:
+        logger.info("prune_notifications: disabled (retention_days=0).")
+        return {"skipped": True}
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(Notification)
+            .filter(
+                or_(
+                    Notification.created_at < cutoff,                              # aged out (read or unread)
+                    (Notification.expires_at.isnot(None)) & (Notification.expires_at <= now),  # expired
+                )
+            )
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        logger.info("prune_notifications: deleted %d notification(s) (cutoff %s).", deleted, cutoff.date())
+        return {"deleted": deleted, "cutoff": cutoff.date().isoformat(), "days": days}
+    except Exception as e:
+        db.rollback()
+        logger.error("prune_notifications failed: %s", e)
+        raise
+    finally:
+        db.close()

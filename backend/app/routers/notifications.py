@@ -118,15 +118,17 @@ def mark_all_read(
 
 @router.delete("/prune", status_code=status.HTTP_200_OK)
 def prune_notifications(
-    days: int = Query(default=30, ge=1, le=365, description="Delete read notifications older than this many days"),
+    days: int = Query(default=3, ge=1, le=365, description="Delete notifications older than this many days"),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_management),
     db: Session = Depends(get_db),
 ):
-    """Delete read notifications older than N days (default 30). Management/admin only.
+    """Delete notifications older than N days (default 3). Management/admin only.
 
-    Only removes notifications that have already been marked as read — unread
-    notifications are never pruned regardless of age.
+    Removes anything older than the window (read OR unread — an operational
+    notice's shift is long over after a few days) plus any expired notification
+    regardless of age (ADR-227). Same rule as the nightly prune_notifications
+    task, so the manual and automated paths behave identically.
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
@@ -135,9 +137,9 @@ def prune_notifications(
         .filter(
             Notification.company_id == caller.company_id,
             or_(
-                # old read notifications
-                (Notification.is_read == True) & (Notification.created_at < cutoff),
-                # expired notifications regardless of read state
+                # aged out (read or unread)
+                Notification.created_at < cutoff,
+                # expired regardless of read state
                 (Notification.expires_at != None) & (Notification.expires_at <= now),
             ),
         )

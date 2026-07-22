@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     stop_urgent_window_minutes: int = 60
     stop_caution_window_minutes: int = 60
 
+    # ADR-227: prune notifications older than this many days (applies to read AND
+    # unread — an operational notice's shift is long over after a few days).
+    # Expired notifications (past expires_at) are pruned regardless of age. The
+    # inbox already hides expired/old ones; this reclaims the storage. 0 disables.
+    notification_retention_days: int = 3
+
     # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
     # Register at https://api.nyc.gov/ (free, requires NYC account).
     # v2 auth: subscription-key query param only — no app_id needed.

@@ -71,6 +71,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.decay_troublesome_scores",
         "schedule": crontab(hour=2, minute=30),
     },
+    # 03:15 AM Eastern — delete notifications older than notification_retention_days
+    # (default 3, read or unread) + any expired (ADR-227). Bounds the table + SSE poll.
+    "prune-notifications-nightly": {
+        "task": "app.tasks.cleanup.prune_notifications",
+        "schedule": crontab(hour=3, minute=15),
+    },
     # 04:00 AM Eastern — null delivery-row customer addresses older than
     # delivery_address_retention_hours (default 48h, ADR-219). Keeps block_key + counts.
     "null-expired-delivery-addresses-nightly": {
