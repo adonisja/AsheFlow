@@ -127,8 +127,23 @@ function APForm({ hints, onSubmit, submitLabel, submitting, error }: APFormProps
                     : 'border-border bg-surface text-foreground hover:border-primary/50 hover:bg-accent/40'
                 }`}
               >
-                <span className="block truncate">{h.label}</span>
-                <span className="text-xs text-muted-foreground">{h.sublabel}</span>
+                <span className="flex items-center justify-between gap-2">
+                  <span className="truncate">{h.label}</span>
+                  {/* Both scores surfaced so the driver weighs proximity vs. a proven spot */}
+                  <span className="flex items-center gap-1 shrink-0">
+                    {h.distance_m != null && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-info/10 text-info tabular-nums">
+                        ~{h.distance_m < 1000 ? `${h.distance_m} m` : `${(h.distance_m / 1000).toFixed(1)} km`}
+                      </span>
+                    )}
+                    {h.use_count != null && h.use_count > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground tabular-nums">
+                        {h.use_count}×
+                      </span>
+                    )}
+                  </span>
+                </span>
+                <span className="text-xs text-muted-foreground">{h.reason ?? h.sublabel}</span>
               </button>
             ))}
           </div>

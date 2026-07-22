@@ -962,7 +962,10 @@ export interface BuildingProfileCreate {
 export interface LocationHint {
   label: string;
   sublabel: string;
-  source: 'history' | 'building_profile';
+  source: 'history' | 'truck_anchor' | 'building_profile';
+  use_count?: number | null;   // times this AP was used (history)
+  distance_m?: number | null;  // metres from today's package cluster centroid
+  reason?: string | null;      // human summary, e.g. "used 4× · ~230 m from today's cluster"
 }
 
 export interface BuildingProfileAnchorPatch {

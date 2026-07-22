@@ -47,6 +47,7 @@ from app.models.notification import Notification
 from app.models.field_ops import Departure
 from app.models.company import CompanyConfig
 from app.models.dispatch_confirmation import DispatchConfirmation
+from app.models.truck_zone import TruckZone
 from app.services.audit import write_audit
 from app.schemas.anchor_point import (
     AnchorPointCreate,
@@ -730,6 +731,17 @@ def get_anchor_points_for_truck(
     )
 
 
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in METRES. Local copy (route_sort's _haversine_km is
+    proprietary; keeping this router importable in public CI)."""
+    from math import radians, cos, sin, sqrt, atan2
+    R = 6_371_000.0
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
 @router.get("/truck/{truck_id}/location-hints")
 def get_location_hints_for_truck(
     truck_id: UUID,
@@ -737,16 +749,43 @@ def get_location_hints_for_truck(
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_truck_read),
 ):
-    """Return suggested starting locations for a truck's AP submission form.
+    """Ranked, scored starting-location suggestions for a truck's AP form (ADR-225).
 
-    Sources (in priority order):
-      1. Historical is_initial APs for this truck (last 5, most recent first)
-      2. Building profile initial anchor points for this company (fallback when no AP history)
+    The ideal AP is closest to where today's packages cluster — but a *usable* AP
+    also has to satisfy parking/access/legality, which the system can't compute.
+    A driver already solved that on past days, so historical APs encode it. So we
+    rank HISTORICAL initial APs by proximity to TODAY's package cluster (the
+    assigned TruckZone centroid): a past spot that is near today's work AND was
+    actually used is both close and proven-parkable. We surface both scores
+    (distance + use count) so the driver judges the tradeoff — the tool suggests,
+    the driver confirms.
 
-    Returns a flat list: [{label, sublabel, source}]
-    where source is "history" or "building_profile".
+    Tiers:
+      1. history near today's cluster (centroid known) — proximity + use_count
+      2. history by frequency (no zone yet)
+      3. truck anchor intersection (stable dispatch-set corner)
+      4. building-profile institutional anchors (cold start)
+
+    Returns [{label, sublabel, source, use_count?, distance_m?, reason?}].
+    source ∈ history | truck_anchor | building_profile.
     """
-    # 1. Historical APs
+    hints: list[dict] = []
+
+    # Today's package cluster centre for this truck (persisted at sort time).
+    today = company_today(db, caller.company_id)
+    zone = (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.truck_id == truck_id,
+            TruckZone.company_id == caller.company_id,
+            TruckZone.zone_date == today,
+            TruckZone.is_active.is_(True),
+        )
+        .first()
+    )
+    centroid = (zone.centroid_lat, zone.centroid_lng) if zone and zone.centroid_lat is not None else None
+
+    # Historical initial APs, grouped by canonical location → use_count + latest coords.
     historical = (
         db.query(AnchorPoint)
         .join(Truck, AnchorPoint.truck_id == Truck.id)
@@ -756,37 +795,98 @@ def get_location_hints_for_truck(
             Truck.company_id == caller.company_id,
         )
         .order_by(AnchorPoint.date.desc())
-        .limit(5)
         .all()
     )
-
-    if historical:
-        return [
-            {
-                "label":    h.location,
-                "sublabel": h.date.isoformat(),
-                "source":   "history",
+    groups: dict[str, dict] = {}
+    for h in historical:
+        g = groups.get(h.location)
+        if g is None:
+            groups[h.location] = {
+                "location": h.location, "use_count": 1,
+                "lat": h.lat, "lng": h.lng, "last_date": h.date,
             }
-            for h in historical
-        ]
+        else:
+            g["use_count"] += 1
+            # keep the most recent non-null coords for the proximity measure
+            if g["lat"] is None and h.lat is not None:
+                g["lat"], g["lng"] = h.lat, h.lng
 
-    # 2. Fallback: building profile initial anchors (label = note if set, else lat/lng)
-    bp_anchors = (
-        db.query(BuildingProfile)
-        .filter(
-            BuildingProfile.company_id == caller.company_id,
-            BuildingProfile.initial_anchor_lat.isnot(None),
-            BuildingProfile.initial_anchor_lng.isnot(None),
+    def _distance(g) -> Optional[float]:
+        if centroid is None or g["lat"] is None:
+            return None
+        return _haversine_m(g["lat"], g["lng"], centroid[0], centroid[1])
+
+    scored = []
+    for g in groups.values():
+        d = _distance(g)
+        scored.append({**g, "distance_m": d})
+
+    # Rank: when the cluster is known, proximity primary + use_count secondary;
+    # otherwise most-used then most-recent. Rows with no measurable distance sink
+    # below measurable ones (but stay ahead of non-history tiers).
+    if centroid is not None:
+        scored.sort(key=lambda g: (
+            g["distance_m"] is None,                                   # measurable first
+            g["distance_m"] if g["distance_m"] is not None else 0.0,   # nearer first
+            -g["use_count"],                                            # then more-used
+        ))
+    else:
+        scored.sort(key=lambda g: (-g["use_count"], g["last_date"].toordinal() * -1))
+
+    for g in scored[:5]:
+        d = g["distance_m"]
+        used = f"used {g['use_count']}×"
+        if d is not None:
+            reason = f"{used} · ~{round(d)} m from today's cluster"
+        elif centroid is not None:
+            reason = f"{used} · distance unknown (older record)"
+        else:
+            reason = used
+        hints.append({
+            "label":      g["location"],
+            "sublabel":   g["last_date"].isoformat(),
+            "source":     "history",
+            "use_count":  g["use_count"],
+            "distance_m": round(d) if d is not None else None,
+            "reason":     reason,
+        })
+
+    # Truck anchor intersection — stable dispatch-set corner, always offered when set.
+    truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
+    if truck and truck.initial_anchor_lat is not None:
+        label = truck.initial_anchor_display_address or truck.initial_anchor_address
+        if label:
+            d = _haversine_m(truck.initial_anchor_lat, truck.initial_anchor_lng, *centroid) if centroid else None
+            hints.append({
+                "label":      label,
+                "sublabel":   "Truck anchor",
+                "source":     "truck_anchor",
+                "use_count":  None,
+                "distance_m": round(d) if d is not None else None,
+                "reason":     (f"territory anchor · ~{round(d)} m from today's cluster" if d is not None
+                               else "dispatch territory anchor"),
+            })
+
+    # Cold start: building-profile institutional anchors (only if we have nothing else).
+    if not hints:
+        bp_anchors = (
+            db.query(BuildingProfile)
+            .filter(
+                BuildingProfile.company_id == caller.company_id,
+                BuildingProfile.initial_anchor_lat.isnot(None),
+                BuildingProfile.initial_anchor_lng.isnot(None),
+            )
+            .limit(5)
+            .all()
         )
-        .limit(5)
-        .all()
-    )
+        for bp in bp_anchors:
+            hints.append({
+                "label":      bp.initial_anchor_note or f"{bp.initial_anchor_lat:.5f}, {bp.initial_anchor_lng:.5f}",
+                "sublabel":   "Station anchor",
+                "source":     "building_profile",
+                "use_count":  None,
+                "distance_m": None,
+                "reason":     "institutional anchor",
+            })
 
-    return [
-        {
-            "label":    bp.initial_anchor_note or f"{bp.initial_anchor_lat:.5f}, {bp.initial_anchor_lng:.5f}",
-            "sublabel": "Station anchor",
-            "source":   "building_profile",
-        }
-        for bp in bp_anchors
-    ]
+    return hints

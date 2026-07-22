@@ -566,3 +566,106 @@ class TestActiveAPCrewVisibilityGate:
 
     def test_dispatch_sees_ap_without_confirmation_gate(self):
         assert self._run("dispatch", confirmed=False) is not None
+
+
+# ---------------------------------------------------------------------------
+# get_location_hints_for_truck: history ranked by proximity to today's cluster
+# (ADR-225), with both scores surfaced.
+# ---------------------------------------------------------------------------
+
+class TestLocationHintsRanking:
+    """Historical initial APs ranked by proximity to today's TruckZone centroid,
+    use_count as secondary; truck-anchor + building-profile fallbacks; each hint
+    carries distance_m + use_count so the driver weighs the tradeoff."""
+
+    def _ap(self, location, dt, lat, lng):
+        a = MagicMock()
+        a.location, a.date, a.lat, a.lng, a.is_initial = location, dt, lat, lng, True
+        return a
+
+    def _zone(self, lat, lng):
+        z = MagicMock()
+        z.centroid_lat, z.centroid_lng = lat, lng
+        return z
+
+    def _truck(self, anchor=None):
+        t = MagicMock()
+        if anchor:
+            t.initial_anchor_lat, t.initial_anchor_lng = anchor
+            t.initial_anchor_display_address = "W 34 St & 9 Ave"
+            t.initial_anchor_address = "W 34 St & 9 Ave"
+        else:
+            t.initial_anchor_lat = t.initial_anchor_lng = None
+        return t
+
+    def _run(self, *, zone, aps, truck, bps=()):
+        from app.routers.anchor_points import get_location_hints_for_truck
+        from app.models.anchor_point import AnchorPoint
+        from app.models.truck_zone import TruckZone
+        from app.models.truck import Truck
+        from app.models.building_profile import BuildingProfile
+
+        caller = _make_caller(role="driver")
+        db = MagicMock()
+
+        def _query(model):
+            q = MagicMock()
+            q.join = MagicMock(return_value=q)
+            def _filter(*a):
+                f = MagicMock(); f.join = MagicMock(return_value=f)
+                f.filter = MagicMock(return_value=f); f.order_by = MagicMock(return_value=f)
+                f.limit = MagicMock(return_value=f)
+                if model is TruckZone:      f.first.return_value = zone
+                elif model is AnchorPoint:  f.all.return_value = aps
+                elif model is Truck:        f.first.return_value = truck
+                elif model is BuildingProfile: f.all.return_value = list(bps)
+                else:                       f.first.return_value = None; f.all.return_value = []
+                return f
+            q.filter = _filter
+            q.order_by = MagicMock(return_value=q); q.limit = MagicMock(return_value=q)
+            return q
+        db.query = _query
+
+        with patch("app.routers.anchor_points.company_today", return_value=date(2026, 7, 22)):
+            return get_location_hints_for_truck(truck_id=uuid.uuid4(), db=db, caller=caller, _={})
+
+    def test_near_ranks_above_far_when_cluster_known(self):
+        # Centroid at (40.750, -73.995). "Near" AP ~ right there; "Far" AP ~2 km off
+        # but used more. Proximity is primary → near wins.
+        near = self._ap("W 30 St & 8 Ave", date(2026, 7, 20), 40.7505, -73.9948)
+        far1 = self._ap("W 14 St & 6 Ave", date(2026, 7, 21), 40.737, -73.996)
+        far2 = self._ap("W 14 St & 6 Ave", date(2026, 7, 19), 40.737, -73.996)  # used 2×
+        out = self._run(zone=self._zone(40.750, -73.995), aps=[near, far1, far2], truck=self._truck())
+        assert out[0]["label"] == "W 30 St & 8 Ave"
+        assert out[0]["source"] == "history"
+        assert out[0]["distance_m"] is not None and out[0]["distance_m"] < 200
+        # The far one is grouped → use_count 2, and still ranked below the near one.
+        far_hint = next(h for h in out if h["label"] == "W 14 St & 6 Ave")
+        assert far_hint["use_count"] == 2
+        assert out.index(far_hint) > 0
+
+    def test_no_zone_falls_back_to_frequency(self):
+        a1 = self._ap("Spot A", date(2026, 7, 21), 40.75, -73.99)
+        a2 = self._ap("Spot B", date(2026, 7, 20), 40.74, -73.99)
+        a3 = self._ap("Spot B", date(2026, 7, 19), 40.74, -73.99)  # B used 2×
+        out = self._run(zone=None, aps=[a1, a2, a3], truck=self._truck())
+        assert out[0]["label"] == "Spot B"          # most-used first
+        assert out[0]["use_count"] == 2
+        assert out[0]["distance_m"] is None          # no cluster to measure against
+
+    def test_truck_anchor_appended_with_distance(self):
+        near = self._ap("Spot A", date(2026, 7, 21), 40.7505, -73.9948)
+        out = self._run(zone=self._zone(40.750, -73.995), aps=[near],
+                        truck=self._truck(anchor=(40.752, -73.994)))
+        anchor = next(h for h in out if h["source"] == "truck_anchor")
+        assert anchor["label"] == "W 34 St & 9 Ave"
+        assert anchor["distance_m"] is not None
+
+    def test_cold_start_uses_building_profiles(self):
+        bp = MagicMock()
+        bp.initial_anchor_note = "Loading dock — 9th Ave side"
+        bp.initial_anchor_lat, bp.initial_anchor_lng = 40.75, -73.99
+        out = self._run(zone=None, aps=[], truck=self._truck(), bps=[bp])
+        assert len(out) == 1
+        assert out[0]["source"] == "building_profile"
+        assert out[0]["label"] == "Loading dock — 9th Ave side"
