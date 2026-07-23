@@ -55,14 +55,18 @@ if [ "${1:-}" = "--init" ]; then
 fi
 
 # Determine which private branch to push to based on current public branch.
+# The private branch MIRRORS the public branch 1:1 so a feature branch never
+# clobbers staging's proprietary code (which would poison staging's CI — a
+# feature branch and staging can have divergent proprietary/public APIs). CI
+# reads the matching private branch by the same rule (see .github/workflows/ci.yml).
+#   master  → main
+#   staging → staging
+#   <other> → <other>   (a private branch named exactly like the public one)
 CURRENT_BRANCH=$(git -C "$PUBLIC_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
 if [ "$CURRENT_BRANCH" = "master" ]; then
   PRIVATE_BRANCH="main"
-elif [ "$CURRENT_BRANCH" = "staging" ]; then
-  PRIVATE_BRANCH="staging"
 else
-  # Feature branches sync to staging so they can be tested without touching main.
-  PRIVATE_BRANCH="staging"
+  PRIVATE_BRANCH="$CURRENT_BRANCH"
 fi
 
 echo "Public branch:  $CURRENT_BRANCH"
@@ -72,7 +76,15 @@ echo "Cloning private repo to: $TMP_DIR"
 if $INIT_MODE; then
   git clone "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
 else
-  git clone -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+  # A feature branch may not have a private counterpart yet — branch it off staging
+  # (the closest baseline) so the first sync of a new feature branch succeeds.
+  if git clone -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private" 2>/dev/null; then
+    echo "Cloned existing private branch: $PRIVATE_BRANCH"
+  else
+    echo "Private branch '$PRIVATE_BRANCH' does not exist yet — creating it off staging."
+    git clone -b staging "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+    git -C "$TMP_DIR/AsheFlow-private" checkout -B "$PRIVATE_BRANCH"
+  fi
 fi
 
 cd "$TMP_DIR/AsheFlow-private"

@@ -74,8 +74,13 @@ jobs:
         env:
           PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
         run: |
-          # Private branch mirrors the public branch: staging→staging, else→main.
-          if [ "${GITHUB_REF##*/}" = "staging" ]; then PRIV_BRANCH=staging; else PRIV_BRANCH=main; fi
+          # Private branch mirrors the public branch 1:1 (must match the rule in
+          # scripts/setup_private_repo.sh): master→main, else→same name. This keeps a
+          # feature branch's proprietary code isolated from staging's, so a feature
+          # push can't poison staging CI. Fall back to staging if the branch's private
+          # counterpart doesn't exist yet (never synced).
+          PUB_BRANCH="${GITHUB_REF##*/}"
+          if [ "$PUB_BRANCH" = "master" ]; then PRIV_BRANCH=main; else PRIV_BRANCH="$PUB_BRANCH"; fi
           mkdir -p ~/.ssh
           # Write the key verbatim (preserving its internal newlines) and ensure a
           # trailing newline — OpenSSH/libcrypto rejects a key that lacks the final LF.
@@ -91,8 +96,14 @@ jobs:
             exit 1
           fi
           ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-          GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=no" \
+          export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+          # Pull the matching private branch; if it was never synced, fall back to
+          # staging so CI still has proprietary code to run against.
+          if ! git clone -b "$PRIV_BRANCH" git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private 2>/dev/null; then
+            echo "Private branch '$PRIV_BRANCH' not found — falling back to staging."
+            PRIV_BRANCH=staging
             git clone -b "$PRIV_BRANCH" git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private
+          fi
           cp /tmp/asheflow-private/backend/app/routers/*.py backend/app/routers/
           cp /tmp/asheflow-private/backend/app/services/*.py backend/app/services/
           cp -r /tmp/asheflow-private/asheflow_private backend/asheflow_private
