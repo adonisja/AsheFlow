@@ -196,12 +196,15 @@ export default function RouteSortScreen() {
       setCrew(myCrew);
       setViewerId(eid);
 
-      // ADR-228: if the viewer is this truck's DRIVER, load any existing draft
-      // compliance so the roster toggles reflect what's already recorded.
+      // ADR-228: the Crew Roster is shared by the truck's captains (driver +
+      // trainers), so any of them sees/edits compliance. It's keyed to the truck's
+      // DRIVER, so pre-load the driver's records into the toggles.
+      const viewerRole = myCrew.find(m => m.employee_id === eid)?.role;
       const driverMember = myCrew.find(m => m.role === 'driver');
-      if (eid && driverMember && driverMember.employee_id === eid) {
+      const viewerIsCaptain = viewerRole === 'driver' || viewerRole === 'trainer';
+      if (viewerIsCaptain && driverMember) {
         try {
-          const compRes = await apiClient.get(`/shift-ops/crew-compliance/${eid}`, { params: { target_date: today } });
+          const compRes = await apiClient.get(`/shift-ops/crew-compliance/${driverMember.employee_id}`, { params: { target_date: today } });
           const map: Record<string, { uniform_pass: boolean; cart_cover_pass: boolean; status: string }> = {};
           for (const r of (compRes.data ?? [])) {
             map[r.employee_id] = { uniform_pass: r.uniform_pass, cart_cover_pass: r.cart_cover_pass, status: r.status };
@@ -369,8 +372,9 @@ export default function RouteSortScreen() {
     setCompliance(m => ({ ...m, [employeeId]: next }));
     setSavingCompliance(employeeId);
     try {
+      // driver_id is resolved server-side from the caller's truck (any captain).
       await apiClient.put('/shift-ops/crew-compliance/draft', {
-        driver_id: viewerId, date: todayStr(), employee_id: employeeId,
+        date: todayStr(), employee_id: employeeId,
         uniform_pass: next.uniform_pass, cart_cover_pass: next.cart_cover_pass,
       });
     } catch (e) {
@@ -555,8 +559,11 @@ export default function RouteSortScreen() {
   const unassigned = routes.filter(r => r.status === 'unassigned');
   const active     = routes.filter(r => r.status === 'assigned' || r.status === 'in_progress');
   const completed  = routes.filter(r => r.status === 'completed');
-  // ADR-228: the viewer is the truck's driver → they capture uniform/cart-cover.
-  const isDriver = !!viewerId && crew.some(m => m.role === 'driver' && m.employee_id === viewerId);
+  // ADR-228: any captain on the truck (driver or trainer) shares the Crew Roster
+  // and can record uniform/cart-cover. The record keys to the truck's driver
+  // server-side, so the caller need not be the driver.
+  const viewerRole = viewerId ? crew.find(m => m.employee_id === viewerId)?.role : undefined;
+  const isCaptain = viewerRole === 'driver' || viewerRole === 'trainer';
 
   // Reassign candidates: non-driver crew who are PRESENT — you can't hand a route
   // to someone who hasn't arrived (matches the backend presence gate). Present =
@@ -945,10 +952,11 @@ export default function RouteSortScreen() {
                       </View>
                     </View>
                   )}
-                  {/* ADR-228: driver records uniform + cart-cover for each present
-                      member, live. Saved as draft; Check-In #1 finalizes + ships it
-                      to Dispatch. Tap a pill to flip pass/fail. */}
-                  {isDriver && present && (
+                  {/* ADR-228: any captain (driver or trainer) records uniform +
+                      cart-cover for each present member, live on the shared roster.
+                      Saved as draft; Check-In #1 finalizes + ships it to Dispatch.
+                      Applies to every present member, trainers included. */}
+                  {isCaptain && present && (
                     <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
                       {([['uniform_pass', 'Uniform'], ['cart_cover_pass', 'Cart cover']] as const).map(([field, label]) => {
                         const pass = comp[field];

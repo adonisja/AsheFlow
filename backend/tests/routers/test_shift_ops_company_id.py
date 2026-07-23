@@ -16,6 +16,7 @@ from app.schemas.shift_ops import DriverCheckInCreate, CrewComplianceCreate, Cre
 
 _CID = uuid.uuid4()
 _DRIVER = uuid.uuid4()
+_TRAINER = uuid.uuid4()
 _WALKER = uuid.uuid4()
 _TA = uuid.uuid4()
 _DATE = date(2026, 7, 19)
@@ -142,22 +143,23 @@ def test_crew_compliance_sets_company_id():
 
 # ── ADR-228: draft compliance upsert (Crew Roster live capture) ──────────────
 
-def _crew_db(*, existing=None, member_on_crew=True):
-    """Mock for upsert_crew_compliance_draft. member_row + members list come from
-    AssignmentMember; existing CrewCompliance row optional."""
+def _crew_db(*, existing=None, caller_on_truck=True, has_driver=True):
+    """Mock for upsert_crew_compliance_draft. The endpoint resolves the caller's
+    truck (my_row), its members (incl. the driver), and any existing compliance."""
     from app.models.assignment_member import AssignmentMember
     from app.models.crew_compliance import CrewCompliance
-    from app.models.truck_assignment import TruckAssignment
 
-    member_row = SimpleNamespace(assignment_id=_TA)
-    crew_members = [SimpleNamespace(employee_id=_WALKER)] if member_on_crew else []
+    my_row = SimpleNamespace(assignment_id=_TA) if caller_on_truck else None
+    crew_members = [SimpleNamespace(employee_id=_WALKER, role="walker")]
+    if has_driver:
+        crew_members.append(SimpleNamespace(employee_id=_DRIVER, role="driver"))
     db = MagicMock()
 
     def _query(model):
         q = MagicMock(); q.join = MagicMock(return_value=q)
         f = MagicMock(); f.filter.return_value = f; f.join = MagicMock(return_value=f)
         if model is AssignmentMember:
-            f.first.return_value = member_row
+            f.first.return_value = my_row
             f.all.return_value = crew_members
         elif model is CrewCompliance:
             f.first.return_value = existing
@@ -170,17 +172,18 @@ def _crew_db(*, existing=None, member_on_crew=True):
     return db
 
 
-def _draft(db, uniform=True, cart=True):
+def _draft(db, uniform=True, cart=True, caller=None, employee_id=_WALKER):
     from app.routers.shift_ops import upsert_crew_compliance_draft
     from app.schemas.shift_ops import CrewComplianceDraftUpsert
     payload = CrewComplianceDraftUpsert(
-        driver_id=_DRIVER, date=_DATE, employee_id=_WALKER,
+        date=_DATE, employee_id=employee_id,
         uniform_pass=uniform, cart_cover_pass=cart,
     )
-    return upsert_crew_compliance_draft(payload=payload, db=db, _=None, caller=_caller())
+    return upsert_crew_compliance_draft(payload=payload, db=db, _=None, caller=caller or _caller())
 
 
-def test_draft_creates_new_row_as_draft():
+def test_draft_creates_new_row_keyed_to_driver():
+    # Caller is the DRIVER; record is keyed to the resolved driver_id (_DRIVER).
     db = _crew_db(existing=None)
     added = {}
     db.add = lambda r: added.setdefault("row", r)
@@ -188,7 +191,28 @@ def test_draft_creates_new_row_as_draft():
     row = added["row"]
     assert row.status == "draft"
     assert row.company_id == _CID
+    assert row.driver_id == _DRIVER
     assert row.uniform_pass is False and row.cart_cover_pass is True
+
+
+def test_trainer_captain_can_record_keyed_to_driver():
+    # A TRAINER on the same truck records compliance; the record still keys to the
+    # truck's DRIVER (resolved server-side), not the trainer.
+    trainer = SimpleNamespace(id=_TRAINER, company_id=_CID, role="trainer", name="Cap")
+    db = _crew_db(existing=None)
+    added = {}
+    db.add = lambda r: added.setdefault("row", r)
+    _draft(db, uniform=True, cart=False, caller=trainer)
+    assert added["row"].driver_id == _DRIVER          # keyed to driver, not the trainer caller
+
+
+def test_draft_can_target_a_trainer_member():
+    # Compliance applies to EVERY present member incl. trainers.
+    db = _crew_db(existing=None)
+    added = {}
+    db.add = lambda r: added.setdefault("row", r)
+    _draft(db, employee_id=_DRIVER)   # the driver is a crew member too; any member works
+    assert added["row"].employee_id == _DRIVER
 
 
 def test_draft_updates_existing_draft():
@@ -210,23 +234,17 @@ def test_draft_does_not_downgrade_submitted():
     assert existing.uniform_pass is True and existing.cart_cover_pass is True
 
 
-def test_draft_rejects_non_crew_member():
+def test_draft_rejects_caller_not_on_truck():
     from fastapi import HTTPException
-    db = _crew_db(member_on_crew=False)
+    db = _crew_db(caller_on_truck=False)
     with pytest.raises(HTTPException) as exc:
         _draft(db)
     assert exc.value.status_code == 400
 
 
-def test_draft_rejects_foreign_driver():
+def test_draft_rejects_truck_without_driver():
     from fastapi import HTTPException
-    from app.routers.shift_ops import upsert_crew_compliance_draft
-    from app.schemas.shift_ops import CrewComplianceDraftUpsert
-    db = _crew_db()
-    payload = CrewComplianceDraftUpsert(
-        driver_id=uuid.uuid4(), date=_DATE, employee_id=_WALKER,   # not the caller
-        uniform_pass=True, cart_cover_pass=True,
-    )
+    db = _crew_db(has_driver=False)
     with pytest.raises(HTTPException) as exc:
-        upsert_crew_compliance_draft(payload=payload, db=db, _=None, caller=_caller())
-    assert exc.value.status_code == 403
+        _draft(db)
+    assert exc.value.status_code == 409

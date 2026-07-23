@@ -35,10 +35,10 @@ class CrewComplianceResponse(BaseModel):
 
 
 class CrewComplianceDraftUpsert(BaseModel):
-    """One member's uniform/cart-cover, saved live on the Crew Roster page as a
-    DRAFT (ADR-228). Upserts by (driver, employee, date) so the driver can edit
-    freely before Check-In #1 finalizes."""
-    driver_id: UUID
+    """One member's uniform/cart-cover, saved live on the shared Crew Roster page
+    as a DRAFT (ADR-228). The record is keyed to the truck's DRIVER, but that is
+    resolved server-side from the caller's own assignment (any captain may record
+    it) — no driver_id is accepted from the client (anti-spoof)."""
     date: date
     employee_id: UUID
     uniform_pass: bool

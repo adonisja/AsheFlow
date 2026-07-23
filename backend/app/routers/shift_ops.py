@@ -28,6 +28,8 @@ from app.schemas.shift_ops import (
 router = APIRouter(prefix="/shift-ops", tags=["shift-ops"])
 
 allow_driver      = RoleChecker(["driver"])
+# Captains on a truck who share the Crew Roster (ADR-228): the driver + trainers.
+allow_captain     = RoleChecker(["driver", "trainer"])
 allow_management  = RoleChecker(["dispatch", "management", "admin"])
 
 
@@ -139,24 +141,60 @@ def _driver_crew_ids(db: Session, driver_id: UUID, target_date: date, company_id
     }
 
 
+def _caller_truck_crew(db: Session, caller_id: UUID, target_date: date, company_id: UUID):
+    """Resolve the truck the CALLER is on for the date → (driver_id, member_ids).
+
+    ADR-228: the Crew Roster is shared by the truck's captains (driver + trainers),
+    so ANY of them may record compliance — but the record is keyed to the truck's
+    DRIVER (it's the driver's Check-In #1 submission). We resolve the driver from
+    the assignment rather than trusting a client-supplied driver_id. Raises 400 if
+    the caller isn't on a truck that day, 409 if the truck has no driver.
+    """
+    my_row = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == caller_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if not my_row:
+        raise HTTPException(status_code=400, detail="You are not on a truck assignment for this date.")
+    members = (
+        db.query(AssignmentMember)
+        .filter(
+            AssignmentMember.assignment_id == my_row.assignment_id,
+            AssignmentMember.company_id == company_id,
+        )
+        .all()
+    )
+    driver = next((m for m in members if m.role == "driver"), None)
+    if driver is None:
+        raise HTTPException(status_code=409, detail="This truck has no driver assigned — compliance is keyed to the driver.")
+    return driver.employee_id, {str(m.employee_id) for m in members}
+
+
 @router.put("/crew-compliance/draft", response_model=CrewComplianceResponse)
 def upsert_crew_compliance_draft(
     payload: CrewComplianceDraftUpsert,
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_driver),
+    _: dict = Depends(allow_captain),
     caller: Employee = Depends(get_caller_employee),
 ):
-    """Save ONE crew member's uniform/cart-cover as a DRAFT, live on the Crew
-    Roster page (ADR-228). Upserts by (driver, employee, date) so the driver can
-    edit freely; Check-In #1 later finalizes all drafts (draft → submitted).
+    """Save ONE crew member's uniform/cart-cover as a DRAFT, live on the shared
+    Crew Roster (ADR-228). ANY captain on the truck (driver or trainer) may record
+    it — the roster is shared context — but the record is keyed to the truck's
+    DRIVER (it's the driver's Check-In #1 submission). The driver is resolved from
+    the caller's own assignment, so a client-supplied driver_id can't be spoofed.
+    Compliance applies to every present crew member, trainers included.
 
-    A row already finalized (status='submitted') is not downgraded — once Check-In
-    #1 has shipped it, corrections go through the batch submit/override path.
+    Upserts by (driver, employee, date); Check-In #1 later finalizes all drafts
+    (draft → submitted). A row already 'submitted' is not downgraded.
     """
-    if payload.driver_id != caller.id:
-        raise HTTPException(status_code=403, detail="You can only record compliance for your own crew.")
-
-    crew_ids = _driver_crew_ids(db, payload.driver_id, payload.date, caller.company_id)
+    driver_id, crew_ids = _caller_truck_crew(db, caller.id, payload.date, caller.company_id)
     if str(payload.employee_id) not in crew_ids:
         raise HTTPException(
             status_code=400,
@@ -164,7 +202,7 @@ def upsert_crew_compliance_draft(
         )
 
     row = db.query(CrewCompliance).filter(
-        CrewCompliance.driver_id == payload.driver_id,
+        CrewCompliance.driver_id == driver_id,
         CrewCompliance.employee_id == payload.employee_id,
         CrewCompliance.date == payload.date,
         CrewCompliance.company_id == caller.company_id,
@@ -173,7 +211,7 @@ def upsert_crew_compliance_draft(
     if row is None:
         row = CrewCompliance(
             company_id=caller.company_id,
-            driver_id=payload.driver_id,
+            driver_id=driver_id,
             employee_id=payload.employee_id,
             date=payload.date,
             arrival_time=payload.arrival_time,
