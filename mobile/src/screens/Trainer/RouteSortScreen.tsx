@@ -86,6 +86,9 @@ type RouteResp = {
   executor: { id: string; name: string } | null;
   supervisors: { id: string; name: string }[];
   returned_at: string | null;
+  // ADR-229: set when help was requested on this route — gates the captain's
+  // "cover remaining stops" emergency split on an in-progress route.
+  help_requested_at: string | null;
   block_keys: string[];
   normalised_addresses: string[];
   stops: RouteStop[] | null;   // null = route predates ADR-194 → fall back to flat lists
@@ -155,6 +158,11 @@ export default function RouteSortScreen() {
   // ADR-228: per-member uniform/cart-cover draft compliance, by employee_id. Only
   // the DRIVER captures it (it's their crew record); saved live as the roster fills.
   const [compliance, setCompliance] = useState<Record<string, { uniform_pass: boolean; cart_cover_pass: boolean; status: string }>>({});
+  // Per-field "has the captain actually set this pill" — the row stores both fields
+  // as non-null booleans, so a persisted row can't say "uniform set, cart-cover not".
+  // We track it client-side so tapping Uniform never implies Cart cover was reviewed
+  // (item 2). A loaded row counts both as touched; a fresh tap touches just that field.
+  const [complianceTouched, setComplianceTouched] = useState<Record<string, { uniform_pass: boolean; cart_cover_pass: boolean }>>({});
   const [savingCompliance, setSavingCompliance] = useState<string | null>(null);
   const [routes,     setRoutes]     = useState<RouteResp[]>([]);
   const [committing, setCommitting] = useState(false);
@@ -206,10 +214,13 @@ export default function RouteSortScreen() {
         try {
           const compRes = await apiClient.get(`/shift-ops/crew-compliance/${driverMember.employee_id}`, { params: { target_date: today } });
           const map: Record<string, { uniform_pass: boolean; cart_cover_pass: boolean; status: string }> = {};
+          const touched: Record<string, { uniform_pass: boolean; cart_cover_pass: boolean }> = {};
           for (const r of (compRes.data ?? [])) {
             map[r.employee_id] = { uniform_pass: r.uniform_pass, cart_cover_pass: r.cart_cover_pass, status: r.status };
+            touched[r.employee_id] = { uniform_pass: true, cart_cover_pass: true };  // persisted row = both reviewed
           }
           setCompliance(map);
+          setComplianceTouched(touched);
         } catch { /* best-effort */ }
       }
 
@@ -368,17 +379,48 @@ export default function RouteSortScreen() {
   // update local state immediately, PUT the draft, roll back on failure.
   const setComplianceField = async (employeeId: string, field: 'uniform_pass' | 'cart_cover_pass', value: boolean) => {
     const prev = compliance[employeeId] ?? { uniform_pass: true, cart_cover_pass: true, status: 'draft' };
+    const prevTouched = complianceTouched[employeeId] ?? { uniform_pass: false, cart_cover_pass: false };
     const next = { ...prev, [field]: value };
+    const nextTouched = { ...prevTouched, [field]: true };  // only THIS pill becomes set (item 2)
     setCompliance(m => ({ ...m, [employeeId]: next }));
+    setComplianceTouched(m => ({ ...m, [employeeId]: nextTouched }));
     setSavingCompliance(employeeId);
     try {
       // driver_id is resolved server-side from the caller's truck (any captain).
+      // The row stores both booleans (columns are non-null); an untapped field
+      // rides along at its default until the captain taps it too.
       await apiClient.put('/shift-ops/crew-compliance/draft', {
         date: todayStr(), employee_id: employeeId,
         uniform_pass: next.uniform_pass, cart_cover_pass: next.cart_cover_pass,
       });
     } catch (e) {
       setCompliance(m => ({ ...m, [employeeId]: prev }));   // roll back
+      setComplianceTouched(m => ({ ...m, [employeeId]: prevTouched }));
+      Alert.alert('Error', errorText(e, 'Could not save compliance.'));
+    } finally {
+      setSavingCompliance(null);
+    }
+  };
+
+  // ADR-228: bulk "mark all present crew compliant" — creates a pass record for
+  // every present member who has NO record yet, so the captain doesn't tap 2×N
+  // pills just to satisfy the Check-In #1 gate. Exceptions get flipped to ✗
+  // individually afterward. Only touches unrecorded members (never overwrites an
+  // existing pass/fail).
+  const markAllCompliant = async (employeeIds: string[]) => {
+    if (employeeIds.length === 0) return;
+    setSavingCompliance('__bulk__');
+    try {
+      const today = todayStr();
+      for (const employeeId of employeeIds) {
+        await apiClient.put('/shift-ops/crew-compliance/draft', {
+          date: today, employee_id: employeeId,
+          uniform_pass: true, cart_cover_pass: true,
+        });
+        setCompliance(m => ({ ...m, [employeeId]: { uniform_pass: true, cart_cover_pass: true, status: 'draft' } }));
+        setComplianceTouched(m => ({ ...m, [employeeId]: { uniform_pass: true, cart_cover_pass: true } }));
+      }
+    } catch (e) {
       Alert.alert('Error', errorText(e, 'Could not save compliance.'));
     } finally {
       setSavingCompliance(null);
@@ -443,6 +485,39 @@ export default function RouteSortScreen() {
               await load();
             } catch (e) {
               Alert.alert('Error', errorText(e, 'Could not drop the route.'));
+            } finally {
+              setRouteActionId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // ADR-229: emergency cover — peel the undelivered stops off an in-progress
+  // route (walker injured/emergency, already flagged via request-help) into a new
+  // unassigned covering route the captain can wave/reassign to present crew.
+  const coverRemaining = (routeId: string, routeNumber: number, holderName: string) => {
+    Alert.alert(
+      'Cover remaining stops?',
+      `Take the undelivered stops on route #${routeNumber} off ${holderName} and spin them into a new route for someone else to cover? ${holderName}'s route closes at what they've delivered.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Cover', style: 'destructive',
+          onPress: async () => {
+            setRouteActionId(routeId);
+            try {
+              const res = await apiClient.post(`/walker-routes/routes/${routeId}/cover-remaining`, {});
+              const moved = res.data?.stops_moved ?? 0;
+              const covNum = res.data?.covering_route?.route_number;
+              await load();
+              Alert.alert(
+                'Coverage route created',
+                `${moved} remaining stop${moved === 1 ? '' : 's'} moved to route #${covNum ?? '?'} — assign it from the wave / crew list.`,
+              );
+            } catch (e) {
+              Alert.alert('Error', errorText(e, 'Could not cover the remaining stops.'));
             } finally {
               setRouteActionId(null);
             }
@@ -564,6 +639,12 @@ export default function RouteSortScreen() {
   // server-side, so the caller need not be the driver.
   const viewerRole = viewerId ? crew.find(m => m.employee_id === viewerId)?.role : undefined;
   const isCaptain = viewerRole === 'driver' || viewerRole === 'trainer';
+  // ADR-228 item 3: once Check-In #1 finalizes the roster it flips every draft
+  // compliance row to 'submitted'. When there's at least one record and none are
+  // still 'draft', the check-in is done — hide the compliance pills to lean out
+  // the crew card (the review is over; the record has shipped to Dispatch).
+  const complianceRows = Object.values(compliance);
+  const complianceSubmitted = complianceRows.length > 0 && complianceRows.every(r => r.status === 'submitted');
 
   // Reassign candidates: non-driver crew who are PRESENT — you can't hand a route
   // to someone who hasn't arrived (matches the backend presence gate). Present =
@@ -690,40 +771,6 @@ export default function RouteSortScreen() {
         </View>
       )}
 
-      {/* Paired arrival & rebalance (ADR-212): the trainer confirms the pair is
-          present; the backend finds the TRAINEE's (executor) route and attaches
-          the trainer as a supervisor, lifting the 1.5× ceiling. (Pre-ADR-212 this
-          looked the route up by the trainer and 404'd — the reported bug.) */}
-      {routes.length > 0 && pairedTrainee && (
-        <View style={[s.card, { backgroundColor: c.card, borderColor: rebalanced ? c.border : c.success + '55' }]}>
-          {rebalanced ? (
-            <>
-              <Text style={s.cardSub}>
-                🤝 Paired route active — {pairedTrainee.name} rides with you at 1.5× capacity.
-              </Text>
-              {/* ADR-213: split off if the pair is strong enough to run two solo
-                  routes. Trainee keeps theirs; you take the nearest open route. */}
-              <Button variant="secondary" fullWidth loading={splitting} onPress={runSplit}>
-                ✂️ Split — take my own route
-              </Button>
-            </>
-          ) : (
-            <>
-              <Text style={s.cardTitle}>Paired arrival — {pairedTrainee.name}</Text>
-              <Text style={s.cardSub}>
-                {traineeArrivedAt
-                  ? `📍 Arrived ${new Date(traineeArrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — run the rebalance to expand your shared route to 1.5×.`
-                  : 'Waiting for your trainee to confirm arrival in their app — you can rebalance anyway if they\'re standing next to you.'}
-              </Text>
-              <Button variant={traineeArrivedAt ? 'success' : 'primary'} fullWidth
-                loading={rebalancing} onPress={runRebalance}>
-                🤝 Confirm Arrival & Rebalance (1.5×)
-              </Button>
-            </>
-          )}
-        </View>
-      )}
-
       {/* Out-of-zone removals (ADR-214) — packages outside the company zone.
           These are NOT misroutes; pull them and return to station (they were
           flagged at the sort, not something a route should cover). */}
@@ -840,9 +887,33 @@ export default function RouteSortScreen() {
       {/* Crew Roster — folded into its own sub-view (segmented bar above). Mark a
           walker/trainer/trainee departed when they leave; roll call; open a
           member's route detail. */}
-      {apView === 'crew' && members.length > 0 && (
+      {apView === 'crew' && members.length > 0 && (() => {
+        // Present members (non-driver, arrived) with no compliance record yet —
+        // the exact set the Check-In #1 gate will flag. Drives the bulk shortcut.
+        const presentUnrecorded = members
+          .filter(m => m.role !== 'driver' && m.status === 'active')
+          .filter(m => {
+            const av = crewStatus[m.employee_id]?.availability;
+            return av != null && av !== 'not_arrived' && av !== 'off_crew';
+          })
+          .filter(m => compliance[m.employee_id] == null)
+          .map(m => m.employee_id);
+        return (
         <View style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}>
-          <Text style={s.cardTitle}>Crew</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xs }}>
+            <Text style={[s.cardTitle, { marginBottom: 0 }]}>Crew</Text>
+            {isCaptain && !complianceSubmitted && presentUnrecorded.length > 0 && (
+              <TouchableOpacity
+                disabled={savingCompliance === '__bulk__'}
+                onPress={() => markAllCompliant(presentUnrecorded)}
+                style={{ paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: c.success }}
+              >
+                <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.success }}>
+                  {savingCompliance === '__bulk__' ? 'Saving…' : `✓ Mark ${presentUnrecorded.length} compliant`}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
           {members
             .filter(m => m.role !== 'driver')
             .map(m => {
@@ -854,7 +925,12 @@ export default function RouteSortScreen() {
               const stop = currentStops[m.employee_id];
               // ADR-228: compliance is captured for PRESENT crew (arrived), by the driver.
               const present = !off && !!cs && cs.availability !== 'not_arrived' && cs.availability !== 'off_crew';
+              // A record must EXIST to count — the backend gate flags any present
+              // member with no CrewCompliance row. Don't default to pass, or the
+              // pills read ✓ while nothing is persisted (looks done, isn't). Each
+              // pill's neutral/✓/✗ is driven by its own touched flag (item 2).
               const comp = compliance[m.employee_id] ?? { uniform_pass: true, cart_cover_pass: true, status: 'draft' };
+              const compTouched = complianceTouched[m.employee_id] ?? { uniform_pass: false, cart_cover_pass: false };
               const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
               // ADR-216 phase 2: tapping a crew member with a route opens their
               // per-employee detail. Executor → their own route; a paired trainer
@@ -952,33 +1028,88 @@ export default function RouteSortScreen() {
                       </View>
                     </View>
                   )}
+                  {/* ADR-229: emergency cover — only on an IN-PROGRESS route where
+                      the walker has already raised request-help. Peels the remaining
+                      stops into a new coverable route (Reassign/Drop above are for a
+                      route that hasn't started; this is the mid-route lifeline). */}
+                  {execRoute && execRoute.status === 'in_progress' && execRoute.help_requested_at && (
+                    <View style={{ marginTop: spacing.sm }}>
+                      <Button variant="danger" size="sm" fullWidth
+                        loading={routeActionId === execRoute.id}
+                        onPress={() => coverRemaining(execRoute.id, execRoute.route_number, name)}>
+                        🚑 Cover remaining stops
+                      </Button>
+                    </View>
+                  )}
                   {/* ADR-228: any captain (driver or trainer) records uniform +
                       cart-cover for each present member, live on the shared roster.
                       Saved as draft; Check-In #1 finalizes + ships it to Dispatch.
                       Applies to every present member, trainers included. */}
-                  {isCaptain && present && (
-                    <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
-                      {([['uniform_pass', 'Uniform'], ['cart_cover_pass', 'Cart cover']] as const).map(([field, label]) => {
-                        const pass = comp[field];
-                        return (
-                          <TouchableOpacity
-                            key={field}
-                            disabled={savingCompliance === m.employee_id}
-                            onPress={() => setComplianceField(m.employee_id, field, !pass)}
-                            style={{
-                              flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                              gap: spacing.xs, paddingVertical: spacing.xs + 2, borderRadius: radius.md, borderWidth: 1,
-                              borderColor: pass ? c.success : c.danger,
-                              backgroundColor: (pass ? c.success : c.danger) + '15',
-                            }}
-                          >
-                            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: pass ? c.success : c.danger }}>
-                              {pass ? '✓' : '✗'} {label}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
+                  {isCaptain && present && !complianceSubmitted && (
+                    <>
+                      {!(compTouched.uniform_pass && compTouched.cart_cover_pass) && (
+                        <Text style={{ fontSize: fontSize.xs, color: c.warning, marginTop: spacing.sm, marginBottom: -spacing.xs / 2 }}>
+                          Tap each to record — not checked yet.
+                        </Text>
+                      )}
+                      <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+                        {([['uniform_pass', 'Uniform'], ['cart_cover_pass', 'Cart cover']] as const).map(([field, label]) => {
+                          const set = compTouched[field];          // per-field (item 2)
+                          const pass = comp[field];
+                          // Untapped → neutral ○ (tapping sets THIS field to pass, not both).
+                          // Tapped → ✓/✗ toggling only its own value.
+                          const tint = !set ? c.mutedForeground : pass ? c.success : c.danger;
+                          const glyph = !set ? '○' : pass ? '✓' : '✗';
+                          return (
+                            <TouchableOpacity
+                              key={field}
+                              disabled={savingCompliance === m.employee_id || savingCompliance === '__bulk__'}
+                              onPress={() => setComplianceField(m.employee_id, field, set ? !pass : true)}
+                              style={{
+                                flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                                gap: spacing.xs, paddingVertical: spacing.xs + 2, borderRadius: radius.md, borderWidth: 1,
+                                borderColor: tint,
+                                backgroundColor: tint + (set ? '15' : '08'),
+                              }}
+                            >
+                              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: tint }}>
+                                {glyph} {label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </>
+                  )}
+                  {/* Paired arrival & rebalance (ADR-212) — folded into the paired
+                      trainee's own crew row so it reads as "this trainee joins you"
+                      rather than a floating card. The trainer confirms the pair is
+                      present; the backend attaches the trainer as supervisor on the
+                      TRAINEE's route and lifts the 1.5× ceiling. */}
+                  {routes.length > 0 && pairedTrainee?.employee_id === m.employee_id && (
+                    rebalanced ? (
+                      <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
+                        <Text style={{ fontSize: fontSize.xs, color: c.success, fontWeight: fontWeight.semibold }}>
+                          🤝 Riding with you at 1.5× capacity
+                        </Text>
+                        {/* ADR-213: split off if the pair can run two solo routes. */}
+                        <Button variant="secondary" size="sm" fullWidth loading={splitting} onPress={runSplit}>
+                          ✂️ Split — take my own route
+                        </Button>
+                      </View>
+                    ) : (
+                      <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
+                        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
+                          {traineeArrivedAt
+                            ? `📍 Arrived ${new Date(traineeArrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — rebalance to share your route at 1.5×.`
+                            : 'Waiting on arrival — rebalance anyway if they\'re next to you.'}
+                        </Text>
+                        <Button variant={traineeArrivedAt ? 'success' : 'primary'} size="sm" fullWidth
+                          loading={rebalancing} onPress={runRebalance}>
+                          🤝 Confirm Arrival & Rebalance (1.5×)
+                        </Button>
+                      </View>
+                    )
                   )}
                   {stop && (
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
@@ -989,7 +1120,8 @@ export default function RouteSortScreen() {
               );
             })}
         </View>
-      )}
+        );
+      })()}
 
       {/* Live reassign picker (ADR-226) — pass an already-assigned route to another
           PRESENT crew member. pickerOptions is already present-gated. */}

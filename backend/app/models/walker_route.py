@@ -64,6 +64,9 @@ class Route(Base):
     departed_at           = Column(DateTime(timezone=True), nullable=True)
     # returned_at is set ONLY by POST /back-at-truck, not by status=completed (ADR-139)
     returned_at           = Column(DateTime(timezone=True), nullable=True)
+    # ADR-229: stamped by POST /request-help — the distress signal that gates the
+    # captain's "cover remaining stops" emergency split. Idempotent re-stamp.
+    help_requested_at     = Column(DateTime(timezone=True), nullable=True)
     created_at            = Column(DateTime(timezone=True), server_default=func.now())
 
     misrouted_packages = relationship(
