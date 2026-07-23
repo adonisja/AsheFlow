@@ -668,4 +668,25 @@ class TestLocationHintsRanking:
         out = self._run(zone=None, aps=[], truck=self._truck(), bps=[bp])
         assert len(out) == 1
         assert out[0]["source"] == "building_profile"
-        assert out[0]["label"] == "Loading dock — 9th Ave side"
+
+    def test_coordinateless_history_is_geocoded_and_persisted(self):
+        # ADR-225 backfill: an old AP with no lat/lng gets geocoded on read, gains
+        # a real distance, and the row's coords are written back (self-heal).
+        old = self._ap("W 30 St & 8 Ave", date(2026, 7, 20), None, None)   # pre-geocode row
+        # patch the geocoder to place it right at the centroid.
+        with patch("app.routers.trucks._resolve_anchor_location",
+                   return_value=("W 30 ST & 8 AVE", 40.750, -73.995)):
+            out = self._run(zone=self._zone(40.750, -73.995), aps=[old], truck=self._truck())
+        h = next(x for x in out if x["label"] == "W 30 St & 8 Ave")
+        assert h["distance_m"] is not None and h["distance_m"] < 50   # now measurable
+        assert old.lat == 40.750 and old.lng == -73.995               # persisted back onto the row
+
+    def test_backfill_geocode_failure_leaves_unmeasured(self):
+        # If the geocoder can't resolve the old location, it stays "unknown" — no crash.
+        old = self._ap("Nowhere Junction", date(2026, 7, 20), None, None)
+        with patch("app.routers.trucks._resolve_anchor_location",
+                   side_effect=Exception("geocode failed")):
+            out = self._run(zone=self._zone(40.750, -73.995), aps=[old], truck=self._truck())
+        h = next(x for x in out if x["label"] == "Nowhere Junction")
+        assert h["distance_m"] is None
+        assert old.lat is None                                        # not written

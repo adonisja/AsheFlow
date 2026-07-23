@@ -804,12 +804,38 @@ def get_location_hints_for_truck(
             groups[h.location] = {
                 "location": h.location, "use_count": 1,
                 "lat": h.lat, "lng": h.lng, "last_date": h.date,
+                # rows sharing this location that still lack coords — backfilled below
+                "rows_missing_coords": [] if h.lat is not None else [h],
             }
         else:
             g["use_count"] += 1
-            # keep the most recent non-null coords for the proximity measure
-            if g["lat"] is None and h.lat is not None:
-                g["lat"], g["lng"] = h.lat, h.lng
+            if h.lat is not None and g["lat"] is None:
+                g["lat"], g["lng"] = h.lat, h.lng   # adopt the most recent real coords
+            elif h.lat is None:
+                g["rows_missing_coords"].append(h)
+
+    # ADR-225 backfill: a pre-geocode history row has no lat/lng, so it can't be
+    # ranked by distance and floats as "unknown" (misleading — a stale far spot
+    # looks the same as a close one). Geocode the location string once, use it for
+    # ranking, AND persist it back so the row self-heals. Best-effort: a geocode
+    # failure just leaves the group unmeasured (prior behaviour).
+    groups_needing_geocode = [g for g in groups.values() if g["lat"] is None]
+    if groups_needing_geocode:
+        from app.routers.trucks import _resolve_anchor_location
+        _cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+        _borough = (_cfg.geoclient_borough if _cfg and _cfg.geoclient_borough else None) or "manhattan"
+        _backfilled = False
+        for g in groups_needing_geocode:
+            try:
+                _canon, glat, glng = _resolve_anchor_location(g["location"], _borough)
+            except Exception:
+                continue   # unresolvable → stays unmeasured, ranked as unknown
+            g["lat"], g["lng"] = glat, glng
+            for row in g["rows_missing_coords"]:
+                row.lat, row.lng = glat, glng   # persist the self-heal
+                _backfilled = True
+        if _backfilled:
+            db.commit()
 
     def _distance(g) -> Optional[float]:
         if centroid is None or g["lat"] is None:
