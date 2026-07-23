@@ -1859,166 +1859,97 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeC
 function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
   employeeId: string; shift: ShiftState; crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
+  const switchTab = useTabSwitch();
   const done = !!shift.checkIn1;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
-  // `marked` = attendance has actually been decided (by the trainer/dispatch roll
-  // call OR a local tap) — vs. still awaiting a decision. Lets the driver tell who
-  // is done from who isn't, instead of everyone showing a default "Present" (ADR-208).
-  type Entry = { present: boolean; uniform: boolean; cartCover: boolean; marked: boolean };
-  const rollStatus = (id: string) => shift.rollCall[id];
-  const isUpstreamMarked = (id: string) => {
-    const st = rollStatus(id);
-    return !!st && st !== 'pending';
-  };
-  const entryFor = (id: string): Entry => ({
-    present: rollStatus(id) !== 'ncns',
-    uniform: true, cartCover: true,
-    marked: isUpstreamMarked(id),
+
+  // ADR-228: Check-In #1 no longer RE-collects the roster — the attendance +
+  // uniform/cart-cover are captured on the Crew Roster page (AP Sort). #1 is a
+  // gate + handoff: it verifies the roster is complete, then submits (the server
+  // finalizes the compliance drafts and hands them to Dispatch). The only signal
+  // this step can see locally is roll-call (rollCall); the server is the authority
+  // on compliance completeness and 422s with specifics, which we surface below.
+  const pending = nonDriverCrew.filter(m => {
+    const st = shift.rollCall[m.id];
+    return !st || st === 'pending';
   });
-  const defaultEntries = (): Record<string, Entry> =>
-    Object.fromEntries(nonDriverCrew.map(m => [m.id, entryFor(m.id)]));
-  const [entries, setEntries] = useState<Record<string, Entry>>(defaultEntries);
+  const rolledCount = nonDriverCrew.length - pending.length;
+  const looksComplete = pending.length === 0;
+
   const [saving, setSaving] = useState(false);
+  const [problems, setProblems] = useState<string[] | null>(null);
 
-  // Re-sync as the crew list / roll call arrives. New members get a fresh default;
-  // for existing members, keep the driver's local edits but let an upstream roll
-  // call (trainer/dispatch) mark + set presence — so a trainer's mark shows here.
-  useEffect(() => {
-    if (nonDriverCrew.length > 0)
-      setEntries(prev => {
-        const next = { ...prev };
-        for (const m of nonDriverCrew) {
-          if (!next[m.id]) { next[m.id] = entryFor(m.id); continue; }
-          if (isUpstreamMarked(m.id)) {
-            next[m.id] = { ...next[m.id], present: rollStatus(m.id) !== 'ncns', marked: true };
-          }
-        }
-        return next;
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nonDriverCrew.length, shift.rollCall]);
-
-  // A present/ncns tap marks the member; uniform/cart edits don't change marked.
-  const setField = (id: string, field: keyof Entry, val: boolean) =>
-    setEntries(p => {
-      const cur = p[id] ?? entryFor(id);
-      const marked = field === 'present' ? true : cur.marked;
-      return { ...p, [id]: { ...cur, [field]: val, marked } };
-    });
-
-  // Everyone must be explicitly marked (present or NCNS) before submit.
-  const allSet = nonDriverCrew.every(m => entries[m.id]?.marked);
+  const goToRoster = () => switchTab('RouteSort');
 
   const submit = async () => {
-    if (!allSet) { Alert.alert('Incomplete', 'Mark attendance for all crew members.'); return; }
     setSaving(true);
-    const ncns = nonDriverCrew.filter(m => !entries[m.id]?.present).length;
-    const working = nonDriverCrew.filter(m => entries[m.id]?.present).length;
+    setProblems(null);
+    const ncns = nonDriverCrew.filter(m => shift.rollCall[m.id] === 'ncns').length;
+    const working = nonDriverCrew.filter(m => {
+      const st = shift.rollCall[m.id];
+      return st === 'early' || st === 'present' || st === 'late';
+    }).length;
     try {
-      // Sync attendance to the shared roll call (ADR-208) so the trainer/dispatch
-      // views reflect the driver's marks too. Reuses POST /roll-call (which lets a
-      // driver mark any member of their own truck). Best-effort per member — a 409
-      // means dispatch locked that record (we intentionally don't override it), so
-      // swallow it rather than block CI1.
-      await Promise.all(nonDriverCrew.map(m =>
-        apiClient.post('/roll-call', {
-          employee_id: m.id, date: localToday(), ncns: !entries[m.id]?.present,
-        }).catch(() => { /* already-set / locked — leave as-is */ }),
-      ));
-
-      // Submit crew compliance for all present members
-      const compEntries = nonDriverCrew
-        .filter(m => entries[m.id]?.present)
-        .map(m => ({
-          employee_id: m.id,
-          uniform_pass:    entries[m.id]?.uniform   ?? true,
-          cart_cover_pass: entries[m.id]?.cartCover ?? true,
-        }));
-      if (compEntries.length > 0) {
-        await apiClient.post('/shift-ops/crew-compliance', {
-          driver_id: employeeId, date: localToday(), entries: compEntries,
-        });
-      }
-      // Submit check-in 1
+      // Handoff only — no roll-call / compliance re-entry. The server gates on
+      // roster completeness (422 with problems) and finalizes the drafts.
       await apiClient.post('/shift-ops/check-in', {
         driver_id: employeeId, date: localToday(), check_in_number: 1,
-        routes_remaining: nonDriverCrew.length, // total routes initially = crew size
-        help_requested: false,
-        working_crew_count: working,
-        ncns_count: ncns,
+        routes_remaining: working, help_requested: false,
+        working_crew_count: working, ncns_count: ncns,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', errorText(e, 'Could not submit check-in. Try again.')); }
-    finally { setSaving(false); }
+    } catch (e: any) {
+      // Roster-incomplete → the server returns { message, problems: [...] }.
+      const detail = e?.response?.data?.detail;
+      if (e?.response?.status === 422 && detail && typeof detail === 'object' && detail.problems) {
+        setProblems(detail.problems);
+      } else {
+        Alert.alert('Error', errorText(e, 'Could not submit check-in. Try again.'));
+      }
+    } finally { setSaving(false); }
   };
 
   if (done) {
     return <CompletedRow num="10" title="Check-in 1" c={c}
       summary={shift.checkIn1 ? `${shift.checkIn1.working_crew_count} working · ${shift.checkIn1.ncns_count} NCNS` : ''} />;
   }
+
   return (
     <Card c={c}>
       <SectionHeader num="10" title={`Check-in 1 ${CI_TIMES[0]}`}
-        subtitle="Routes handed out by captain. Mark attendance and uniform compliance for each crew member." c={c} />
-      {(() => {
-        const markedCount = nonDriverCrew.filter(m => entries[m.id]?.marked).length;
-        return (
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
-            <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>
-              {markedCount}/{nonDriverCrew.length} marked
-            </Text>
-            {markedCount < nonDriverCrew.length && (
-              <Badge tone="warning" size="sm">{nonDriverCrew.length - markedCount} awaiting</Badge>
-            )}
+        subtitle="Submits the completed Crew Roster + compliance to dispatch. Finish the roster on the AP Sort tab first." c={c} />
+
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>
+          {rolledCount}/{nonDriverCrew.length} crew rolled
+        </Text>
+        {!looksComplete && <Badge tone="warning" size="sm">{pending.length} awaiting roll-call</Badge>}
+      </View>
+
+      {/* Incomplete roster (locally visible: someone unrolled) → guide to the roster page. */}
+      {!looksComplete && (
+        <View style={{ backgroundColor: c.warningLight, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.sm }}>
+          <Text style={{ fontSize: fontSize.sm, color: c.foreground, lineHeight: 20 }}>
+            ⏳ {pending.length} crew member{pending.length === 1 ? '' : 's'} still need roll-call. Complete the Crew Roster before Check-In #1.
+          </Text>
+          <Button variant="outline" size="sm" onPress={goToRoster}>Go to Crew Roster</Button>
+        </View>
+      )}
+
+      {/* Server rejected as incomplete (covers missing uniform/cart-cover the step can't see). */}
+      {problems && (
+        <View style={{ backgroundColor: c.dangerLight, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.xs }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.danger }}>Roster isn't complete yet:</Text>
+          {problems.map((p, i) => (
+            <Text key={i} style={{ fontSize: fontSize.xs, color: c.danger }}>• {p}</Text>
+          ))}
+          <View style={{ marginTop: spacing.xs }}>
+            <Button variant="outline" size="sm" onPress={goToRoster}>Go to Crew Roster</Button>
           </View>
-        );
-      })()}
-      {nonDriverCrew.map(m => {
-        const e = entries[m.id] ?? entryFor(m.id);
-        return (
-          <View key={m.id} style={{ backgroundColor: c.background, borderRadius: radius.md, borderWidth: 1,
-            borderColor: e.marked ? c.border : c.warning + '55', padding: spacing.md, marginBottom: spacing.sm,
-            opacity: e.marked ? 1 : 0.9 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
-              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
-                {m.name}
-              </Text>
-              {e.marked
-                ? <Badge tone={e.present ? 'success' : 'danger'} size="sm" dot>{e.present ? 'Present' : 'NCNS'}</Badge>
-                : <Badge tone="warning" size="sm">Not marked</Badge>}
-            </View>
-            <View style={{ marginBottom: e.marked && e.present ? spacing.xs : 0 }}>
-              <Segmented<boolean>
-                options={[
-                  { value: true,  label: 'Present', tone: c.success },
-                  { value: false, label: 'NCNS',    tone: c.danger },
-                ]}
-                value={e.marked ? e.present : undefined}
-                onChange={(v) => setField(m.id, 'present', v)} c={c} />
-            </View>
-            {e.marked && e.present && (
-              <View style={{ gap: spacing.xs }}>
-                {[
-                  { field: 'uniform' as const,    label: 'Uniform pass' },
-                  { field: 'cartCover' as const,  label: 'Cart cover pass' },
-                ].map(({ field, label }) => (
-                  <View key={field} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>{label}</Text>
-                    <Switch
-                      value={e[field]}
-                      onValueChange={v => setField(m.id, field, v)}
-                      trackColor={{ false: c.danger + '80', true: c.success + '80' }}
-                      thumbColor={e[field] ? c.success : c.danger}
-                    />
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        );
-      })}
-      <Btn label={allSet ? 'Submit Check-in 1 & Compliance' : 'Mark all crew to submit'}
-        onPress={submit} disabled={!allSet} loading={saving} c={c} />
+        </View>
+      )}
+
+      <Btn label="Submit Check-in 1" onPress={submit} disabled={saving} loading={saving} c={c} />
     </Card>
   );
 }

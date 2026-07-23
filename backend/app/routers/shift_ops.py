@@ -10,6 +10,7 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
 from app.models.employee import Employee
 from app.models.field_ops import Departure
+from app.models.shift_roll_call import ShiftRollCall
 from app.models.notification import Notification
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
@@ -177,6 +178,105 @@ def _caller_truck_crew(db: Session, caller_id: UUID, target_date: date, company_
     return driver.employee_id, {str(m.employee_id) for m in members}
 
 
+_PRESENT_STATUSES = ("early", "present", "late")
+
+
+def _assert_roster_complete_and_finalize(db: Session, driver_id: UUID, target_date: date, company_id: UUID) -> dict:
+    """Check-In #1 gate + handoff (ADR-228).
+
+    The completed Crew Roster rides Check-In #1 to Dispatch, so #1 is only accepted
+    when the roster is COMPLETE:
+      - every non-driver crew member has a roll-call status (nobody 'pending'), and
+      - every PRESENT member (early/present/late) has a uniform + cart-cover record.
+    NCNS members are accounted-for and need no compliance. On success, the draft
+    CrewCompliance rows are FINALIZED (draft → submitted). Raises 422 (listing what's
+    missing) when incomplete. Returns a small summary for the dispatch notification.
+    """
+    # Crew on the driver's truck (exclude the driver — not rolled on their own roster).
+    my_row = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == driver_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if not my_row:
+        raise HTTPException(status_code=400, detail="No truck assignment found for you on this date.")
+    members = (
+        db.query(AssignmentMember, Employee)
+        .join(Employee, AssignmentMember.employee_id == Employee.id)
+        .filter(
+            AssignmentMember.assignment_id == my_row.assignment_id,
+            AssignmentMember.company_id == company_id,
+        )
+        .all()
+    )
+    crew = [(am, emp) for am, emp in members if am.role != "driver"]
+
+    roll = {
+        rc.employee_id: rc.status
+        for rc in db.query(ShiftRollCall).filter(
+            ShiftRollCall.company_id == company_id,
+            ShiftRollCall.date == target_date,
+        ).all()
+    }
+    comp = {
+        cc.employee_id: cc
+        for cc in db.query(CrewCompliance).filter(
+            CrewCompliance.company_id == company_id,
+            CrewCompliance.driver_id == driver_id,
+            CrewCompliance.date == target_date,
+        ).all()
+    }
+
+    not_rolled: list[str] = []
+    missing_compliance: list[str] = []
+    present_ids: list[UUID] = []
+    for am, emp in crew:
+        st = roll.get(am.employee_id)
+        if st is None:
+            not_rolled.append(emp.name)
+            continue
+        if st in _PRESENT_STATUSES:
+            present_ids.append(am.employee_id)
+            if am.employee_id not in comp:
+                missing_compliance.append(emp.name)
+
+    if not_rolled or missing_compliance:
+        problems = []
+        if not_rolled:
+            problems.append(f"not rolled: {', '.join(not_rolled)}")
+        if missing_compliance:
+            problems.append(f"no uniform/cart-cover check: {', '.join(missing_compliance)}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": "Complete the Crew Roster before Check-In #1 — every member must be rolled and every present member checked.",
+                "problems": problems,
+            },
+        )
+
+    # Finalize the drafts (draft → submitted). Already-submitted rows are left as is.
+    finalized = 0
+    for eid in present_ids:
+        row = comp.get(eid)
+        if row is not None and row.status == "draft":
+            row.status = "submitted"
+            finalized += 1
+
+    present = len(present_ids)
+    ncns = sum(1 for am, _ in crew if roll.get(am.employee_id) == "ncns")
+    fails = sum(
+        1 for eid in present_ids
+        if (r := comp.get(eid)) is not None and (not r.uniform_pass or not r.cart_cover_pass)
+    )
+    return {"present": present, "ncns": ncns, "compliance_fails": fails, "finalized": finalized}
+
+
 @router.put("/crew-compliance/draft", response_model=CrewComplianceResponse)
 def upsert_crew_compliance_draft(
     payload: CrewComplianceDraftUpsert,
@@ -324,10 +424,41 @@ def submit_driver_check_in(
             detail=f"Check-in #{payload.check_in_number} already submitted for today.",
         )
 
+    # ADR-228: Check-In #1 carries the completed Crew Roster + compliance. Gate on
+    # roster completeness and finalize the draft compliance rows (draft → submitted)
+    # before recording the check-in. Runs first so an incomplete roster 422s without
+    # a partial write. Later check-ins (2–4) skip this.
+    roster_summary = None
+    if payload.check_in_number == 1:
+        roster_summary = _assert_roster_complete_and_finalize(
+            db, payload.driver_id, payload.date, caller.company_id
+        )
+
     # company_id is NOT NULL on DriverCheckIn but absent from the payload — set it
     # from the caller (was an IntegrityError 500 on every check-in submit).
     row = DriverCheckIn(**payload.model_dump(), company_id=caller.company_id)
     db.add(row)
+
+    # ADR-228: hand the finalized roster + compliance summary to Dispatch on #1.
+    if roster_summary is not None:
+        for recipient in db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(["dispatch", "management", "admin"]),
+            Employee.is_active == True,
+        ).all():
+            fails = roster_summary["compliance_fails"]
+            db.add(Notification(
+                company_id=caller.company_id,
+                employee_id=recipient.id,
+                type="crew_roster_submitted",
+                message=(
+                    f"📋 {caller.name}'s crew roster is in — {roster_summary['present']} present, "
+                    f"{roster_summary['ncns']} NCNS"
+                    + (f", ⚠ {fails} uniform/cart-cover fail(s)" if fails else ", all compliant")
+                    + f" ({payload.date})."
+                ),
+                dispatch_date=payload.date,
+            ))
 
     # ADR-215: push a "Request help" to dispatch on submit (the badge on the
     # dashboard only surfaced if someone was looking). Fire on every submitted

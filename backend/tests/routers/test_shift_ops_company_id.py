@@ -27,22 +27,24 @@ def _caller():
 
 
 def test_check_in_sets_company_id():
+    # check_in_number=2: exercises the company_id regression WITHOUT the ADR-228
+    # roster gate (which only runs on #1). The gate is covered separately below.
     added = {}
     db = MagicMock()
     db.add = lambda row: added.setdefault("row", row)
     # departure present, no existing check-in
-    def _query(model):
+    def _query(*models):
         q = MagicMock()
         f = MagicMock()
         f.filter.return_value = f
         from app.models.field_ops import Departure
-        f.first.return_value = SimpleNamespace() if model is Departure else None
+        f.first.return_value = SimpleNamespace() if models[0] is Departure else None
         q.filter.return_value = f
         return q
     db.query = _query
 
     payload = DriverCheckInCreate(
-        driver_id=_DRIVER, date=_DATE, check_in_number=1, routes_remaining=3,
+        driver_id=_DRIVER, date=_DATE, check_in_number=2, routes_remaining=3,
         help_requested=False, working_crew_count=3, ncns_count=0,
     )
     submit_driver_check_in(payload=payload, db=db, _=None, caller=_caller())
@@ -248,3 +250,107 @@ def test_draft_rejects_truck_without_driver():
     with pytest.raises(HTTPException) as exc:
         _draft(db)
     assert exc.value.status_code == 409
+
+
+# ── ADR-228 WS4: Check-In #1 roster-complete gate + finalize ─────────────────
+
+def _roster_db(*, crew, roll, comp):
+    """Mock for _assert_roster_complete_and_finalize.
+      crew: list of (employee_id, role, name)
+      roll: {employee_id: status}
+      comp: {employee_id: SimpleNamespace(status, uniform_pass, cart_cover_pass)}
+    """
+    from app.models.assignment_member import AssignmentMember
+    from app.models.employee import Employee
+    from app.models.shift_roll_call import ShiftRollCall
+    from app.models.crew_compliance import CrewCompliance
+
+    my_row = SimpleNamespace(assignment_id=_TA)
+    member_emp_rows = [
+        (SimpleNamespace(employee_id=eid, role=role), SimpleNamespace(id=eid, name=name))
+        for eid, role, name in crew
+    ]
+    roll_rows = [SimpleNamespace(employee_id=eid, status=st) for eid, st in roll.items()]
+    comp_rows = list(comp.values())
+    db = MagicMock()
+
+    def _query(*models):
+        model = models[0]
+        q = MagicMock(); q.join = MagicMock(return_value=q)
+        f = MagicMock(); f.filter.return_value = f; f.join = MagicMock(return_value=f)
+        if model is AssignmentMember and len(models) == 1:
+            f.first.return_value = my_row
+        elif model is AssignmentMember:                # join(AssignmentMember, Employee)
+            f.all.return_value = member_emp_rows
+        elif model is ShiftRollCall:
+            f.all.return_value = roll_rows
+        elif model is CrewCompliance:
+            f.all.return_value = comp_rows
+        else:
+            f.first.return_value = None; f.all.return_value = []
+        q.filter = MagicMock(return_value=f)
+        return q
+    db.query = _query
+    return db
+
+
+def _comp(eid, status="draft", uniform=True, cart=True):
+    return SimpleNamespace(employee_id=eid, status=status, uniform_pass=uniform, cart_cover_pass=cart)
+
+
+def _run_gate(db):
+    from app.routers.shift_ops import _assert_roster_complete_and_finalize
+    return _assert_roster_complete_and_finalize(db, _DRIVER, _DATE, _CID)
+
+
+def test_roster_gate_complete_finalizes_drafts():
+    w1, w2 = _WALKER, _TRAINER
+    comp = {w1: _comp(w1, "draft", uniform=True, cart=True),
+            w2: _comp(w2, "draft", uniform=False, cart=True)}
+    db = _roster_db(
+        crew=[(_DRIVER, "driver", "Drv"), (w1, "walker", "Wa"), (w2, "trainer", "Tr")],
+        roll={w1: "present", w2: "late"},
+        comp=comp,
+    )
+    summary = _run_gate(db)
+    assert summary["present"] == 2 and summary["ncns"] == 0
+    assert summary["finalized"] == 2
+    assert comp[w1].status == "submitted" and comp[w2].status == "submitted"
+    assert summary["compliance_fails"] == 1     # w2 failed uniform
+
+
+def test_roster_gate_ncns_needs_no_compliance():
+    db = _roster_db(
+        crew=[(_DRIVER, "driver", "Drv"), (_WALKER, "walker", "Wa")],
+        roll={_WALKER: "ncns"},        # absent → no compliance required
+        comp={},
+    )
+    summary = _run_gate(db)
+    assert summary["present"] == 0 and summary["ncns"] == 1
+
+
+def test_roster_gate_blocks_unrolled_member():
+    from fastapi import HTTPException
+    db = _roster_db(
+        crew=[(_DRIVER, "driver", "Drv"), (_WALKER, "walker", "Wanda")],
+        roll={},                       # nobody rolled
+        comp={},
+    )
+    with pytest.raises(HTTPException) as exc:
+        _run_gate(db)
+    assert exc.value.status_code == 422
+    assert any("not rolled" in p for p in exc.value.detail["problems"])
+    assert "Wanda" in str(exc.value.detail["problems"])
+
+
+def test_roster_gate_blocks_present_without_compliance():
+    from fastapi import HTTPException
+    db = _roster_db(
+        crew=[(_DRIVER, "driver", "Drv"), (_WALKER, "walker", "Wanda")],
+        roll={_WALKER: "present"},
+        comp={},                       # present but no uniform/cart-cover
+    )
+    with pytest.raises(HTTPException) as exc:
+        _run_gate(db)
+    assert exc.value.status_code == 422
+    assert any("uniform" in p for p in exc.value.detail["problems"])
