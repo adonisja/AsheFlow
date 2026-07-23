@@ -239,7 +239,7 @@ export default function DriverSurveys() {
       await axiosClient.post('/driver-surveys/', { date: selectedDate });
       await loadSurveys(0);
       await loadDetail(selectedDate);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to activate survey.'));
     } finally {
       setActivating(false);

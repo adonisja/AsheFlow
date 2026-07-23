@@ -241,7 +241,7 @@ function SendCredentialsPanel({ traineeId }: { traineeId: string }) {
       });
       setExisting(res.data);
       setOpen(false);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to send credentials.'));
     } finally {
       setSaving(false);

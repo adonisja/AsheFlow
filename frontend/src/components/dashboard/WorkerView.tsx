@@ -2,10 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Calendar, ClipboardCheck, MapPin, AlertTriangle, RefreshCw, Truck, Anchor } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
-import { getLocalYMD } from '../../utils/date';
 
 export default function WorkerView() {
-  const { user, groups } = useAuth();
+  const { groups } = useAuth();
 
   const isTrainer = groups.includes('trainer');
   const isTrainee = groups.includes('trainee');

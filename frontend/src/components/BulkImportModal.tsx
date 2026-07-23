@@ -604,7 +604,7 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
       setStep('results');
       const anyCreated = res.data.some(r => r.status === 'created');
       if (anyCreated) onComplete();
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Surface top-level API errors (e.g. 400 too many rows) back in preview
       alert(errorText(e, 'Import failed. Please try again.'));
     } finally {

@@ -1,6 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useEffect, useState } from 'react';
-import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2, HelpCircle } from 'lucide-react';
+import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -165,7 +165,7 @@ export default function GearRequest() {
       const ordersRes = await axiosClient.get<GearOrderResponse[]>('/gear-requests/my-orders');
       setOrders(ordersRes.data);
       setTimeout(() => setSubmitSuccess(false), 4000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const detail = errorText(err, '') || undefined;
       setSubmitError(Array.isArray(detail) ? detail : (detail ?? 'Failed to submit order.'));
     } finally {

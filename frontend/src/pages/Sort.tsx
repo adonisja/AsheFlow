@@ -12,9 +12,9 @@ import type { ZonePolygon, Centroid, AnchorPin, OutlierToteMarker } from '../com
 import type { CompanyZone, Truck as ApiTruck, OutlierTotesResponse } from '../api/types';
 import {
   Package, Truck, CheckCircle2, RefreshCw,
-  ChevronDown, ChevronUp, MapPin, Layers, Loader2,
+  ChevronDown, ChevronUp, Layers, Loader2,
   Upload, X, FileText, ArrowRight, AlertTriangle,
-  Route, Zap, Send, Download,
+  Route, Zap, Download,
 } from 'lucide-react';
 import ReportDamagedModal from '../components/ReportDamagedModal';
 import { getLocalYMD } from '../utils/date';
@@ -104,7 +104,7 @@ function PackageAddressEditor({
       );
       onPatched(data);
       setEditing(false);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setSaveError(errorText(e, 'Save failed.'));
     } finally {
       setSaving(false);
@@ -167,7 +167,7 @@ function ManifestPreviewPanel({ sortDate }: { sortDate: string }) {
       setPreview(data);
       setPage(p);
       setExpanded(true);
-    } catch (e: any) {
+    } catch (e: unknown) {
       const detail = errorText(e, 'Failed to load preview.');
       setError(typeof detail === 'string' ? detail : 'Failed to load preview.');
     } finally {
@@ -440,7 +440,7 @@ function ManifestUploadPanel({
       enrichStartRef.current = Date.now();
       setPhase('enriching');
       startPolling(uploadDate);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const detail = errorText(err, 'Upload failed.');
       setErrorMsg(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setPhase('error');
@@ -919,7 +919,7 @@ function ManifestSortPanel({
       // Fallback poller: catches the result if SSE notification is missed
       // (e.g. notification already read, SSE reconnecting, token refresh gap)
       pollRef.current = setInterval(() => fetchStatus(taskId), _SORT_POLL_INTERVAL);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const detail = errorText(err, 'Sort failed.');
       setError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setPhase('idle');
@@ -1222,7 +1222,7 @@ export default function SortPage() {
       }
       if (taRes.status === 'rejected') throw taRes.reason;
       setAssignments(taRes.value.data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to load data.'));
     } finally {
       setLoading(false);

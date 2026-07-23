@@ -127,7 +127,7 @@ function SubmitModal({
       });
       onSubmitted();
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Failed to submit. Try again.');
     } finally {
@@ -221,7 +221,7 @@ function ProfilePanel({
         confirmed_building_type: verifyType,
       });
       onUpdate(res.data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Verification failed.');
     } finally {
@@ -237,7 +237,7 @@ function ProfilePanel({
         operational_note: noteText,
       });
       onUpdate(res.data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Failed to save note.');
     } finally {
@@ -251,7 +251,7 @@ function ProfilePanel({
     try {
       const res = await axiosClient.post<LocationProfile>(`/location-profiles/${profile.id}/verify-note`);
       onUpdate(res.data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const msg = errorText(err, '') || undefined;
       setError(typeof msg === 'string' ? msg : 'Failed to verify note.');
     } finally {

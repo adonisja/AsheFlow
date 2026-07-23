@@ -1,6 +1,6 @@
 import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState, useCallback } from 'react';
-import { CheckCircle2, XCircle, Clock, Package, Loader2, RefreshCw, ChevronDown } from 'lucide-react';
+import { CheckCircle2, XCircle, Package, Loader2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../ui/ErrorBanner';
@@ -302,7 +302,7 @@ export default function GearManagerInbox() {
           order.items.some(i => i.status === 'pending')
         ));
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Action failed.'));
     }
   };

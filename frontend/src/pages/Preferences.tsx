@@ -339,7 +339,7 @@ function RateTeamSection({ myId }: { myId: string }) {
         ratee_id: rateeId, date: today, stars: d.stars, comment: d.comment || null,
       });
       await load();
-    } catch (e: any) {
+    } catch (e: unknown) {
       const msg = errorText(e, 'Could not submit rating.');
       // The window-not-open / not-departed case is informational, not an error.
       if (/depart|window/i.test(msg)) setNotReady(msg); else setErr(msg);
@@ -415,7 +415,7 @@ function RateTeamSection({ myId }: { myId: string }) {
 
 // ---------------------------------------------------------------------------
 const Preferences = () => {
-  const { groups = [], user } = useAuth();
+  const { groups = [] } = useAuth();
   const isAdmin = groups.includes('admin');
   const isTrainee = groups.includes('trainee');
   const canFavBan = groups.some(r => ['driver', 'walker', 'trainer'].includes(r));
@@ -490,7 +490,7 @@ const Preferences = () => {
       });
       setChangeRequestReason('');
       loadChangeRequests(myId);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setChangeRequestError(errorText(err, 'Failed to submit request.'));
     }
   };
@@ -506,7 +506,7 @@ const Preferences = () => {
     try {
       await axiosClient.delete(`/assignment-change-requests/${id}`);
       loadChangeRequests(myId);
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Failed to cancel request.'));
     }
   };

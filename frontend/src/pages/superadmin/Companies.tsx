@@ -73,7 +73,7 @@ function CreateCompanyForm({
       });
       onCreated(res.data);
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to create company.'));
     } finally {
       setSaving(false);
@@ -184,7 +184,7 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
       onDone(res.data);
       setOpen(false);
       setName(''); setEmail('');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Bootstrap failed.'));
     } finally {
       setSaving(false);

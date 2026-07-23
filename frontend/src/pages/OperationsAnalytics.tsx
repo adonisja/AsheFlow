@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BarChart2, Users, AlertTriangle, Clock, TrendingUp, RefreshCw } from 'lucide-react';
+import { BarChart2, Users, AlertTriangle, Clock, TrendingUp } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { today, nWeeksAgo } from '../utils/date';

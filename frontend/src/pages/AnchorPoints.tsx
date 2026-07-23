@@ -267,7 +267,7 @@ function DriverView() {
       await axiosClient.post('/anchor-points/', { truck_id: truckId, date: today, location, eta, notes });
       setShowRelocate(false);
       loadData();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setSubmitError(errorText(e, 'Failed to submit anchor point.'));
     } finally {
       setSubmitting(false);
@@ -284,7 +284,7 @@ function DriverView() {
         notes: arriveNotes.trim() || undefined,
       });
       loadData();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setSubmitError(errorText(e, 'Failed to confirm arrival.'));
     } finally {
       setArriving(false);

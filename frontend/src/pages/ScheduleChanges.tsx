@@ -140,7 +140,7 @@ function ScheduleAnalytics({ allRequests }: { allRequests: any[] }) {
 // ---------------------------------------------------------------------------
 
 const ScheduleChanges = () => {
-  const { user, groups } = useAuth();
+  const { groups } = useAuth();
   const isAdmin = groups.includes('admin');
   const isPrivileged = isAdmin || groups.includes('management') || groups.includes('dispatch');
   const { confirmState, confirm, cancelConfirm } = useConfirm();
@@ -243,7 +243,7 @@ const ScheduleChanges = () => {
       setSelectedDays([]);
       setReason('');
       loadMyRequests();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to submit request.'));
     } finally {
       setSubmitting(false);
@@ -261,7 +261,7 @@ const ScheduleChanges = () => {
     try {
       await axiosClient.delete(`/schedule-change-requests/${id}`);
       loadMyRequests();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Failed to cancel.'));
     }
   };
@@ -280,7 +280,7 @@ const ScheduleChanges = () => {
       await axiosClient.patch(`/schedule-change-requests/${id}/${action}`);
       loadPendingRequests();
       if (isPrivileged) loadAllRequests();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, `Failed to ${action}.`));
     }
   };

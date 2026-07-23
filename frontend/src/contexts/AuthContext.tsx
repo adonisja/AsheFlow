@@ -90,7 +90,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setIsConfigured(true);
       }
 
-    } catch (error) {
+    } catch {
       // If this throws, the user is simply not logged in.
       setUser(null);
       setGroups([]);

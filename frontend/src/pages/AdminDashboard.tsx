@@ -190,7 +190,7 @@ export default function AdminDashboard() {
       const res = await axiosClient.post<SeedManifestData>(`/sort/seed-manifest?sort_date=${seedDate}`);
       setSeedData(res.data);
       setSeedPhase('ready');
-    } catch (err: any) {
+    } catch (err: unknown) {
       const detail = errorText(err, 'Failed to generate manifest.');
       setSeedError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setSeedPhase('error');
@@ -211,7 +211,7 @@ export default function AdminDashboard() {
       });
       setUploadResult(res.data);
       setSeedPhase('done');
-    } catch (err: any) {
+    } catch (err: unknown) {
       const detail = errorText(err, 'Upload failed.');
       setSeedError(typeof detail === 'string' ? detail : JSON.stringify(detail));
       setSeedPhase('error');

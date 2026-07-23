@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import {
   Settings, Clock, BookOpen, Truck, Star, CheckSquare,
   Save, RefreshCw, CheckCircle2, AlertTriangle, RotateCcw,
-  MessageSquare, MapPin, Package, HelpCircle, Plus, Trash2,
+  MessageSquare, MapPin, HelpCircle, Plus, Trash2,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
@@ -382,7 +382,7 @@ function CheckInDeadlineEditor({ shiftStart, ncnsCutoff, onHelp }: {
       await axiosClient.post('/companies/my-config/check-in-deadlines', { offset_minutes: offset });
       setDraft('');
       await load();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Could not add the check-in.'));
     } finally { setBusy(false); }
   };
@@ -392,7 +392,7 @@ function CheckInDeadlineEditor({ shiftStart, ncnsCutoff, onHelp }: {
     try {
       await axiosClient.delete(`/companies/my-config/check-in-deadlines/${sequence}`);
       await load();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Could not remove the check-in.'));
     } finally { setBusy(false); }
   };
@@ -593,7 +593,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
 
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to save configuration.'));
     } finally {
       setSaving(false);
@@ -611,7 +611,7 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
       setDiscordValues(discordToFormValues(res.data));
       setDiscordSaved(true);
       setTimeout(() => setDiscordSaved(false), 3000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setDiscordError(errorText(err, 'Failed to save Discord configuration.'));
     } finally {
       setDiscordSaving(false);

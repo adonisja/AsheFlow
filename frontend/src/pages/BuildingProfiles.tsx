@@ -72,7 +72,7 @@ function SubmitModal({ onClose, onCreated }: SubmitModalProps) {
       const { data } = await axiosClient.post<BuildingProfileResponse>('/building-profiles/', body);
       onCreated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Submission failed.'));
     } finally {
       setSaving(false);
@@ -164,7 +164,7 @@ function VerifyModal({ profile, onClose, onUpdated }: VerifyModalProps) {
       );
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Verify failed.'));
     } finally {
       setSaving(false);
@@ -250,7 +250,7 @@ function NoteModal({ profile, onClose, onUpdated }: NoteModalProps) {
       );
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Note update failed.'));
     } finally {
       setSaving(false);
@@ -323,7 +323,7 @@ function AnchorModal({ profile, onClose, onUpdated }: AnchorModalProps) {
       );
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to save anchor point.'));
     } finally {
       setSaving(false);
@@ -340,7 +340,7 @@ function AnchorModal({ profile, onClose, onUpdated }: AnchorModalProps) {
       );
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to clear anchor point.'));
     } finally {
       setSaving(false);
@@ -579,7 +579,7 @@ export default function BuildingProfilesPage() {
     try {
       const { data } = await axiosClient.get<BuildingProfileResponse[]>('/building-profiles/');
       setProfiles(data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to load building profiles.'));
     } finally {
       setLoading(false);
@@ -602,7 +602,7 @@ export default function BuildingProfilesPage() {
     try {
       const { data } = await axiosClient.post<BuildingProfileResponse>(`/building-profiles/${profile.id}/lock`);
       applyUpdate(data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setLockError(errorText(e, 'Lock failed.'));
     } finally {
       setLockBusy(null);

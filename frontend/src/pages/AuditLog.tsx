@@ -142,20 +142,6 @@ const LEFT_BORDER_CLASSES: Record<BadgeVariant, string> = {
   default: 'border-l-border',
 };
 
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-  });
-}
-
-function fmtDateShort(iso: string) {
-  return new Date(iso).toLocaleString('en-US', {
-    month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit',
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Custom dropdown (avoids browser-native select styling)
 // ---------------------------------------------------------------------------

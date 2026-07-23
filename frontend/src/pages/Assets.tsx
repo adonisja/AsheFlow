@@ -208,7 +208,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
         ...form,
         phone_number: form.phone_number ? toE164Phone(form.phone_number) : '',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Something went wrong.'));
       setStep('form');
     } finally {
@@ -453,7 +453,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
         // Backend TruckUpdate accepts Optional[int] and Pydantic coerces string → int.
         discord_channel_id: channelId.trim() || null,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Something went wrong.'));
     } finally {
       setSaving(false);
@@ -598,7 +598,7 @@ function PeopleTab() {
     try {
       await axiosClient.post('/registration/invite', { employee_id: emp.id });
       setResendMsg({ id: emp.id, ok: true, text: `Invite re-sent to ${emp.email}.` });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setResendMsg({ id: emp.id, ok: false, text: errorText(err, 'Failed to send invite.') });
     } finally {
       setResendingId(null);
@@ -611,7 +611,7 @@ function PeopleTab() {
     try {
       await axiosClient.post('/registration/resend-credentials', { employee_id: emp.id });
       setResendMsg({ id: emp.id, ok: true, text: `Credentials re-sent to ${emp.email}.` });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setResendMsg({ id: emp.id, ok: false, text: errorText(err, 'Failed to resend credentials.') });
     } finally {
       setResendingId(null);
@@ -645,7 +645,7 @@ function PeopleTab() {
       const res = await axiosClient.post(`/employees/${emp.id}/promote`);
       setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
       setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} promoted to trainer.` });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Promotion failed.') });
     } finally {
       setPromotingId(null);
@@ -666,7 +666,7 @@ function PeopleTab() {
       const res = await axiosClient.post(`/employees/${emp.id}/demote`);
       setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
       setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} demoted to walker.` });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Demotion failed.') });
     } finally {
       setPromotingId(null);
@@ -1137,7 +1137,7 @@ function TruckAnchorModal({
       });
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Geocoding failed. Check the address and try again.'));
     } finally {
       setSaving(false);
@@ -1151,7 +1151,7 @@ function TruckAnchorModal({
       const { data } = await axiosClient.patch<TruckRecord>(`/trucks/${truck.id}/anchor`, { address: null });
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to clear anchor.'));
     } finally {
       setClearing(false);
@@ -1281,7 +1281,7 @@ function TruckAnchor2Modal({
       });
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Geocoding failed. Check the address and try again.'));
     } finally {
       setSaving(false);
@@ -1295,7 +1295,7 @@ function TruckAnchor2Modal({
       const { data } = await axiosClient.patch<TruckRecord>(`/trucks/${truck.id}/anchor2`, { address: null });
       onUpdated(data);
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to clear anchor.'));
     } finally {
       setClearing(false);
@@ -2126,7 +2126,7 @@ function SystemTab() {
     try {
       const res = await axiosClient.delete(`/notifications/prune?days=${days}`);
       setResult(res.data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Something went wrong.'));
     } finally {
       setPruning(false);

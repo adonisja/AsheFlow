@@ -2,7 +2,7 @@ import { errorText } from '../utils/errorText';
 import { useCallback, useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import type { RemovalsResponse, RemovalOut } from '../api/types';
-import { PackageX, Printer, Loader2, CheckCircle2 } from 'lucide-react';
+import { PackageX, Printer, CheckCircle2 } from 'lucide-react';
 
 /**
  * Out-of-zone removals panel (ADR-176).
