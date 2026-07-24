@@ -10,7 +10,25 @@ from typing import Optional
 
 import openpyxl
 
+from app.core.bag_colors import parse_bag_label
+
 logger = logging.getLogger(__name__)
+
+
+def _resolve_bag(row: dict, cm: dict) -> tuple[str | None, str | None]:
+    """Return (bag_id, bag_color_hex) for a manifest row (ADR-230).
+
+    Prefers the "Bag Labels" column ("<Color> <number>"): its number is the
+    bag_id, its color word resolves to a hex. Falls back to the plain "Bag ID"
+    column (no color) when there's no label.
+    """
+    label = row.get(cm.get("bag_label", "")) or None
+    if label:
+        bag_id, color = parse_bag_label(str(label))
+        if bag_id:
+            return bag_id, color
+    plain = row.get(cm.get("bag_id", "")) or None
+    return (str(plain) if plain else None), None
 
 
 @dataclass
@@ -18,6 +36,10 @@ class RawPackage:
     tba: str
     address: str | None = None
     bag_id: str | None = None
+    # ADR-230: the physical bag color hex, parsed from the "Bag Labels" column
+    # (label = "<Color> <number>"). None when the manifest has no label / an
+    # unknown color — clients then render a neutral pill.
+    bag_color: str | None = None
     tag_number: str | None = None
     package_type: str | None = None
     # Amazon may supply lat/lng; GeoClient is the primary source during enrichment.
@@ -64,6 +86,10 @@ DEFAULT_COLUMN_MAP = {
     "lng":          "Longitude",
     "address":      "Address",
     "bag_id":       "Bag ID",
+    # ADR-230: the human-readable "<Color> <number>" bag label. When present its
+    # color is parsed to bag_color and its number is used as the bag_id (falling
+    # back to the Bag ID column when there's no label).
+    "bag_label":    "Bag Labels",
     "tag_number":   "Tag Number",
     "package_type": "Package Type",
 }
@@ -170,13 +196,13 @@ class APIManifestIngestor(ManifestIngestor):
             try:
                 raw_tba = str(row.get(cm["tba"], "") or "").strip()
                 address = row.get(cm.get("address", "")) or None
-                bag_id = row.get(cm.get("bag_id", "")) or None
+                bag_id, bag_color = _resolve_bag(row, cm)
 
                 if not raw_tba:
                     pending.append(PendingResolutionPackage(
                         row_index=i,
                         raw_address=str(address) if address else None,
-                        bag_id=str(bag_id) if bag_id else None,
+                        bag_id=bag_id,
                     ))
                     continue
 
@@ -191,7 +217,8 @@ class APIManifestIngestor(ManifestIngestor):
                 packages.append(RawPackage(
                     tba=raw_tba,
                     address=str(address) if address else None,
-                    bag_id=str(bag_id) if bag_id else None,
+                    bag_id=bag_id,
+                    bag_color=bag_color,
                     tag_number=row.get(cm.get("tag_number", "")) or None,
                     package_type=row.get(cm.get("package_type", "")) or None,
                     lat=lat,
@@ -237,13 +264,13 @@ class FileManifestIngestor(ManifestIngestor):
             try:
                 raw_tba = str(row.get(cm["tba"], "") or "").strip()
                 address = row.get(cm.get("address", "")) or None
-                bag_id = row.get(cm.get("bag_id", "")) or None
+                bag_id, bag_color = _resolve_bag(row, cm)
 
                 if not raw_tba:
                     pending.append(PendingResolutionPackage(
                         row_index=i,
                         raw_address=str(address) if address else None,
-                        bag_id=str(bag_id) if bag_id else None,
+                        bag_id=bag_id,
                     ))
                     continue
 
@@ -258,7 +285,8 @@ class FileManifestIngestor(ManifestIngestor):
                 packages.append(RawPackage(
                     tba=raw_tba,
                     address=str(address) if address else None,
-                    bag_id=str(bag_id) if bag_id else None,
+                    bag_id=bag_id,
+                    bag_color=bag_color,
                     tag_number=row.get(cm.get("tag_number", "")) or None,
                     package_type=row.get(cm.get("package_type", "")) or None,
                     lat=lat,
@@ -419,13 +447,13 @@ class ImageManifestIngestor(ManifestIngestor):
             try:
                 raw_tba = str(row.get(cm["tba"], "") or "").strip()
                 address = row.get(cm.get("address", "")) or None
-                bag_id = row.get(cm.get("bag_id", "")) or None
+                bag_id, bag_color = _resolve_bag(row, cm)
 
                 if not raw_tba:
                     pending.append(PendingResolutionPackage(
                         row_index=i,
                         raw_address=str(address) if address else None,
-                        bag_id=str(bag_id) if bag_id else None,
+                        bag_id=bag_id,
                     ))
                     continue
 
@@ -440,7 +468,8 @@ class ImageManifestIngestor(ManifestIngestor):
                 packages.append(RawPackage(
                     tba=raw_tba,
                     address=str(address) if address else None,
-                    bag_id=str(bag_id) if bag_id else None,
+                    bag_id=bag_id,
+                    bag_color=bag_color,
                     tag_number=row.get(cm.get("tag_number", "")) or None,
                     package_type=row.get(cm.get("package_type", "")) or None,
                     lat=lat,

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal } from 'react-native';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
-import { formatBlockKey } from './RouteStopsList';
+import { formatBlockKey, type BagGroup } from './RouteStopsList';
+import { BagGroups, bagsFromTbas } from './BagStopBody';
 import { resolveStopUrgency, cutoffChipText, type CutoffState } from './stopUrgency';
 
 /** Rich per-stop drill-down for the crew detail page (ADR-216 phase 2 + 3).
@@ -18,6 +19,7 @@ export type DetailedStop = {
   block_key: string;
   address: string;
   tba_numbers: string[];
+  bags?: BagGroup[];               // ADR-230: bag-grouped TBAs + color
   package_count: number;
   workload_class: string | null;   // bulk_drop | standard | high_touch | high_wait
   building_type: string | null;    // doorman | elevator | walkup | biz_freight | …
@@ -170,7 +172,7 @@ export default function RouteStopsDetailed({
                       </Text>
                     ) : null}
                     <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: 'auto', paddingLeft: spacing.xs }}>
-                      {stop.package_count} pkg{stop.package_count === 1 ? '' : 's'}
+                      ({stop.package_count})
                     </Text>
                     {showInfo && (
                       <Pressable
@@ -203,21 +205,8 @@ export default function RouteStopsDetailed({
                     )}
                   </View>
 
-                  {/* Full TBAs — 2-column, monospaced, complete (not truncated). */}
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 }}>
-                    {stop.tba_numbers.map(tba => (
-                      <Text
-                        key={tba}
-                        style={{
-                          width: '50%', fontSize: fontSize.xs, color: c.mutedForeground,
-                          fontVariant: ['tabular-nums'], lineHeight: 18,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {tba}
-                      </Text>
-                    ))}
-                  </View>
+                  {/* Bag-grouped, full TBAs (ADR-230): colored number pill + TBAs. */}
+                  <BagGroups bags={stop.bags?.length ? stop.bags : bagsFromTbas(stop.tba_numbers)} c={c} />
                 </View>
               </View>
             );
