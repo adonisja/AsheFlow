@@ -114,7 +114,7 @@ export default function ScheduleScreen() {
       setPtoList(ptoRes.data ?? []);
       setScrList(scrRes.data ?? []);
       setFetchError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSchedule([]);
       setFetchError(errorText(err, 'Failed to load schedule.'));
     } finally {
@@ -169,7 +169,7 @@ export default function ScheduleScreen() {
       Alert.alert('Submitted', `PTO request for ${selectedDate} sent to management.`);
       setPtoModal(false);
       fetchSchedule();
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setPtoSubmitting(false);
@@ -205,7 +205,7 @@ export default function ScheduleScreen() {
       setScrModal(false);
       setScrDaysAdd([]); setScrDaysDrop([]); setScrProposed([]); setScrReason('');
       fetchSchedule();
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setScrSubmitting(false);

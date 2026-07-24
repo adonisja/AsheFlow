@@ -9,7 +9,6 @@ import ErrorBanner from '../components/ui/ErrorBanner';
 import { getLocalYMD } from '../utils/date';
 import type {
   WalkerSummary, WalkerProfile, WalkerConsistency,
-  WalkerRatingDetail as RatingEntry,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------

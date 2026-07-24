@@ -1,6 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
+import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -76,7 +76,7 @@ function InspectionPanel({ employeeId, onComplete }: { employeeId: string; onCom
       setSubmitted(true);
       setSubmittedData({ has_failures, items: results as Record<string, boolean>, notes: notes.trim() || undefined });
       onComplete?.();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Inspection submission failed.'));
     } finally {
       setLoading(false);
@@ -213,7 +213,7 @@ function CheckInPanel({ employeeId, onComplete }: { employeeId: string; onComple
         const t = new Date(res.data.checked_in_at);
         setCheckedInAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Check-in failed.'));
     } finally {
       setLoading(false);
@@ -305,7 +305,7 @@ function DeparturePanel({ employeeId, onComplete }: { employeeId: string; onComp
       });
       setDeparted(true);
       onComplete?.();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Departure record failed.'));
     } finally {
       setLoading(false);
@@ -395,7 +395,7 @@ function ReturnPanel({ employeeId, onComplete }: { employeeId: string; onComplet
         const t = new Date(res.data.returned_at);
         setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Failed to record return.'));
     } finally {
       setLoading(false);
@@ -537,7 +537,7 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
       });
       setLog(res.data);
       onStartComplete?.();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Failed to save fuel log.'));
     } finally {
       setLoading(false);
@@ -559,7 +559,7 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
       });
       setLog(res.data);
       onEndComplete?.();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Failed to update fuel log.'));
     } finally {
       setLoading(false);
@@ -950,7 +950,7 @@ function AdminFieldOpsView() {
     try {
       await axiosClient.delete(`/shift-sessions/driver/${driverId}/active/wipe`);
       setSessions(prev => prev.filter(s => s.driver_id !== driverId));
-    } catch (e: any) {
+    } catch (e: unknown) {
       alert(errorText(e, 'Failed to wipe session.'));
     } finally {
       setWipingId(null);
@@ -1293,7 +1293,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
     try {
       await axiosClient.patch(`/anchor-points/${activeAP.id}/arrive`, {});
       loadAPs();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to confirm arrival.'));
     } finally {
       setArriving(false);
@@ -1307,7 +1307,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
     try {
       await axiosClient.patch(`/anchor-points/${activeAP.id}/depart`);
       loadAPs();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to record departure.'));
     } finally {
       setDeparting(false);
@@ -1337,7 +1337,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
       setRelocEta('');
       setRelocDeptTime('');
       loadAPs();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to submit relocation.'));
     } finally {
       setRelocLoading(false);
@@ -1774,7 +1774,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
     try {
       const res = await axiosClient.post<ShiftSession>('/shift-sessions/');
       setSession(res.data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to start shift.'));
     } finally {
       setAdvancing(false);
@@ -1788,7 +1788,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
     try {
       const res = await axiosClient.patch<ShiftSession>('/shift-sessions/me/active/advance');
       setSession(res.data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to advance gate.'));
     } finally {
       setAdvancing(false);
@@ -1802,7 +1802,7 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       const res = await axiosClient.patch<ShiftSession>(`/shift-sessions/me/active/skip-to/${gate}`);
       setSession(res.data);
       setSkipOpen(false);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to skip gate.'));
     } finally {
       setAdvancing(false);

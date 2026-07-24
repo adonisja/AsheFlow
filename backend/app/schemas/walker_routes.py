@@ -287,6 +287,9 @@ class RouteResponse(BaseModel):
     status: str
     departed_at: Optional[datetime] = None
     returned_at: Optional[datetime] = None
+    # ADR-229: set when the walker (or a captain) raised request-help; gates the
+    # crew-row "cover remaining stops" emergency split on the client.
+    help_requested_at: Optional[datetime] = None
     created_at: datetime
     misrouted_packages: list["MisroutedPackageFlagResponse"] = []
     model_config = ConfigDict(from_attributes=True)
@@ -343,6 +346,15 @@ class PairSplitResponse(BaseModel):
     trainee_route: "RouteResponse"
     trainer_route: "RouteResponse"
     overflow_totes_moved: int
+
+
+class CoverRemainingResponse(BaseModel):
+    """ADR-229 — result of an emergency split of an in-progress route. The original
+    route capped at delivered + closed; the undelivered stops moved to a new
+    unassigned covering route for the captain to assign via the wave/reassign UI."""
+    original_route: "RouteResponse"
+    covering_route: "RouteResponse"
+    stops_moved: int
 
 
 # ---------------------------------------------------------------------------

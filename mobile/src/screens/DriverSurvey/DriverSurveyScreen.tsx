@@ -201,7 +201,7 @@ export default function DriverSurveyScreen() {
                 notes:                 notes.trim() || null,
               });
               await loadSurveyData();
-            } catch (err: any) {
+            } catch (err: unknown) {
               Alert.alert('Error', errorText(err, 'Failed to submit. Please try again.'));
             } finally {
               setSubmitting(false);

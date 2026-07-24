@@ -1,6 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
-import { ClipboardList, Users, CheckCircle, XCircle, RefreshCw, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { ClipboardList, Users, CheckCircle, XCircle, RefreshCw, ChevronLeft, ChevronRight, X, type LucideIcon } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { today } from '../utils/date';
@@ -22,7 +22,7 @@ function StatCard({ label, value, sub, color = 'text-foreground' }: {
 }
 
 function SectionHeader({ icon: Icon, title, subtitle, iconColor }: {
-  icon: any; title: string; subtitle?: string; iconColor: string;
+  icon: LucideIcon; title: string; subtitle?: string; iconColor: string;
 }) {
   return (
     <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
@@ -239,7 +239,7 @@ export default function DriverSurveys() {
       await axiosClient.post('/driver-surveys/', { date: selectedDate });
       await loadSurveys(0);
       await loadDetail(selectedDate);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to activate survey.'));
     } finally {
       setActivating(false);

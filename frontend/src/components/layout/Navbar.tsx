@@ -7,11 +7,9 @@ import {
   navItemsForGroups, homeRouteForGroups, HOME_ICON, type NavItem,
 } from '../../config/navConfig';
 import axiosClient from '../../api/axiosClient';
-import { LogOut, Menu, X, Home, Calendar, Settings, Truck,
- ClipboardCheck, Users, MapPin, AlertTriangle, Shield, RefreshCw,
-  ShieldAlert, MessageSquare, Star, Bell, CheckCircle2,
-  XCircle, Info, Search, BarChart2, UserCircle2, Building2,
-  Route, Activity, ShoppingBag, ClipboardList, ScrollText, Navigation,
+import {
+  LogOut, Menu, X, Truck, MapPin, AlertTriangle,
+  Bell, CheckCircle2, XCircle, Info, Search, UserCircle2,
 } from 'lucide-react';
 import ThemeToggle from '../ui/ThemeToggle';
 import Avatar from '../ui/Avatar';

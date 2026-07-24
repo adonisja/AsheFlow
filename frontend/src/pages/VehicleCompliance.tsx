@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import axiosClient from '../api/axiosClient';
 import {
   ShieldAlert, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronUp,
-  Truck, Users, BarChart2, Filter,
+  Truck, Users, BarChart2,
 } from 'lucide-react';
 import ErrorBanner from '../components/ui/ErrorBanner';
 

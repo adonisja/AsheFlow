@@ -121,7 +121,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
       setSelected([]);
       setReason('');
       load(myId);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to submit request.'));
     } finally {
       setSubmitting(false);
@@ -138,7 +138,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
           try {
             await apiClient.delete(`/schedule-change-requests/${id}`);
             load(myId);
-          } catch (err: any) {
+          } catch (err: unknown) {
             Alert.alert('Error', errorText(err, 'Failed to cancel.'));
           }
         },
@@ -307,7 +307,7 @@ function PrivilegedView({ c }: { c: ThemeColors }) {
           try {
             await apiClient.patch(`/schedule-change-requests/${id}/${action}`);
             load();
-          } catch (err: any) {
+          } catch (err: unknown) {
             Alert.alert('Error', errorText(err, `Failed to ${action}.`));
           }
         },

@@ -132,7 +132,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
       setIncidentTime(''); setPackagesTba(''); setIncidentLocation(''); setWitnessName('');
       setBodyPart(''); setMedicalAttention(null);
       onSubmitted();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to submit incident.'));
     } finally {
       setLoading(false);
@@ -403,7 +403,7 @@ function ManagementView() {
     try {
       await axiosClient.patch(`/incidents/${id}/resolve`);
       load();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(errorText(err, 'Failed to resolve.'));
     } finally {
       setResolving(null);
@@ -505,7 +505,7 @@ function ManagementView() {
 // ---------------------------------------------------------------------------
 
 export default function Incidents() {
-  const { groups, user } = useAuth();
+  const { groups } = useAuth();
   const isManagement = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
   const isFieldStaff = groups.some(r => ['driver', 'walker', 'trainer', 'trainee'].includes(r));
 

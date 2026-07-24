@@ -172,6 +172,7 @@ TESTS=(
   routers/test_finalize_gate.py
   routers/test_my_performance.py
   routers/test_pair_split.py
+  routers/test_cover_remaining.py
   routers/test_route_detail.py
   routers/test_route_reassign_unassign.py
   routers/test_peer_ratings.py

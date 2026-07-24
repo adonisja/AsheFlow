@@ -258,7 +258,7 @@ function IdentityCard({
       });
       onUpdated(res.data);
       setEditing(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to save.'));
     } finally {
       setSaving(false);
@@ -564,7 +564,7 @@ function ConfigEditorCard({
       );
       onUpdated(res.data);
       setEditing(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSaveError(errorText(err, 'Failed to save config.'));
     } finally {
       setSaving(false);
@@ -741,7 +741,7 @@ function DiscordConfigCard({ companyId }: { companyId: string }) {
       );
       setCfg(res.data);
       setEditing(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSaveError(errorText(err, 'Failed to save Discord config.'));
     } finally {
       setSaving(false);
@@ -853,7 +853,7 @@ function DangerZoneCard({
       const action = detail.is_active ? 'deactivate' : 'reactivate';
       await axiosClient.patch(`/admin/companies/${detail.id}/${action}`);
       onToggled(!detail.is_active);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Action failed.'));
     } finally {
       setToggling(false);

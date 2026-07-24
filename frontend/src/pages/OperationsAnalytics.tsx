@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BarChart2, Users, AlertTriangle, Clock, TrendingUp, RefreshCw } from 'lucide-react';
+import { BarChart2, Users, AlertTriangle, Clock, TrendingUp, type LucideIcon } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useAuth } from '../contexts/AuthContext';
 import { today, nWeeksAgo } from '../utils/date';
@@ -18,7 +18,7 @@ function StatCard({ label, value, sub, color = 'text-foreground' }: { label: str
   );
 }
 
-function SectionHeader({ icon: Icon, title, subtitle, iconColor }: { icon: any; title: string; subtitle?: string; iconColor: string }) {
+function SectionHeader({ icon: Icon, title, subtitle, iconColor }: { icon: LucideIcon; title: string; subtitle?: string; iconColor: string }) {
   return (
     <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
       <Icon className={`w-5 h-5 ${iconColor}`} />

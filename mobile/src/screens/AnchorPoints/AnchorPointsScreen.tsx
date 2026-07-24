@@ -160,7 +160,7 @@ export default function AnchorPointsScreen() {
       setSubmitModal(false);
       setApLocation(''); setApEta(''); setApNotes('');
       fetchAPs();
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
@@ -186,7 +186,7 @@ export default function AnchorPointsScreen() {
       Alert.alert('Arrived', 'Arrival confirmed. Crew and dispatch notified.');
       setArriveModal(false);
       fetchAPs();
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not confirm. Try again.'));
     } finally {
       setArriving(false);

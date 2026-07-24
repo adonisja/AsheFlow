@@ -7,7 +7,7 @@ import StatCard from '../components/ui/StatCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import {
   Package, Route, Users, AlertTriangle, CheckCircle2,
-  RefreshCw, ChevronDown, ChevronUp, MapPin, Layers, Clock,
+  RefreshCw, ChevronDown, ChevronUp, MapPin, Layers,
   UserCheck, Loader2, ShieldAlert, Send, Zap, CircleAlert,
   ArrowRightLeft, Shuffle,
 } from 'lucide-react';
@@ -129,7 +129,7 @@ function ReassignModal({ route, walkers, onClose, onReassigned }: ReassignModalP
       });
       onReassigned();
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       const detail = errorText(e, '') || undefined;
       setError(typeof detail === 'string' ? detail : 'Reassign failed.');
     } finally {
@@ -208,7 +208,7 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
       });
       onResolved();
       onClose();
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Resolve failed.'));
     } finally {
       setSaving(false);
@@ -705,7 +705,7 @@ function WavePoolPanel({
       if (res.data.conflicts.length > 0) {
         setPropError(`Conflicts: ${res.data.conflicts.join('; ')}`);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setPropError(errorText(e, 'Auto-propose failed.'));
     } finally {
       setProposing(false);
@@ -860,7 +860,7 @@ function ProposalReviewPanel({
         .filter(([, eid]) => eid)
         .map(([rn, eid]) => ({ route_number: Number(rn), employee_id: eid }));
       await onConfirm(taId, assignments);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Confirm failed.'));
     } finally {
       setConfirming(false);
@@ -1034,7 +1034,7 @@ function TruckSortPanel({
     setError(null);
     setCommitLoading(true);
     try { await onCommit(state.ta.id); }
-    catch (e: any) { setError(errorText(e, 'Commit failed.')); }
+    catch (e: unknown) { setError(errorText(e, 'Commit failed.')); }
     finally { setCommitLoading(false); }
   };
 
@@ -1052,7 +1052,7 @@ function TruckSortPanel({
       setProposalMap(Object.fromEntries(
         data.proposed_assignments.map(p => [p.route_number, p.employee_id]),
       ));
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Auto-propose failed.'));
     } finally {
       setFirstWaveProposing(false);
@@ -1091,7 +1091,7 @@ function TruckSortPanel({
       );
       // Wave is committed server-side — staged state has served its purpose.
       try { sessionStorage.removeItem(stagingKey); } catch { /* non-fatal */ }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Wave distribution failed.'));
     } finally {
       setDistributeLoading(false);
@@ -1103,7 +1103,7 @@ function TruckSortPanel({
     if (!pairStatus) { setError('No trainer–trainee pair on this truck.'); return; }
     setArrivalLoading(true);
     try { await onArrivalConfirm(state.ta.id, pairStatus.trainerId, pairStatus.traineeId); }
-    catch (e: any) { setError(errorText(e, 'Arrival confirmation failed.')); }
+    catch (e: unknown) { setError(errorText(e, 'Arrival confirmation failed.')); }
     finally { setArrivalLoading(false); }
   };
 
@@ -1644,7 +1644,7 @@ export default function WalkerSortMonitor() {
       setTrainers(emps.filter(e => e.role === 'trainer'));
 
       await fetchDynamic(tas);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setError(errorText(e, 'Failed to load data.'));
     } finally {
       setLoading(false);

@@ -2,7 +2,7 @@ import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { Calendar, Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
+import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
 import type { UnavailableStaff, DispatchResult } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
@@ -228,7 +228,7 @@ export default function DispatchDashboard() {
         setTransferDestTruckId('');
         setTransferNote('');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setTransferWarnings([errorText(err, 'Transfer failed.')]);
     } finally {
       setIsTransferring(false);
@@ -255,7 +255,7 @@ export default function DispatchDashboard() {
           }
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
           startConfirmationPolling(selectedDate);
-        } catch (err: any) {
+        } catch (err: unknown) {
           setError(errorText(err, 'Failed to publish to Discord.'));
         } finally {
           setIsPublishing(false);
@@ -288,7 +288,7 @@ export default function DispatchDashboard() {
         try {
           await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
           await fetchDispatchData();
-        } catch (err: any) {
+        } catch (err: unknown) {
           setError(errorText(err, 'Failed to post final assignments to Discord.'));
         } finally {
           setIsFinalizing(false);
@@ -305,7 +305,7 @@ export default function DispatchDashboard() {
         status: 'confirmed',
       });
       setConfirmations(prev => ({ ...prev, [employeeId]: 'confirmed' }));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to confirm employee.'));
     } finally {
       setConfirmingEmployee(null);
@@ -349,7 +349,7 @@ export default function DispatchDashboard() {
       });
       await fetchDispatchData();
       setUnavailableStaff(prev => prev.filter(s => s.id !== member.id));
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, `Failed to add ${member.name} to dispatch.`));
     } finally {
       setAddingStaffId(null);
@@ -477,7 +477,7 @@ export default function DispatchDashboard() {
         });
       }
       await fetchDispatchData(); // Refresh on drop
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
       setError(errorText(err, 'Failed to move employee.'));
     } finally {
@@ -494,7 +494,7 @@ export default function DispatchDashboard() {
       });
       setPairingFor(null);
       await fetchDispatchData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to update trainer pairing.'));
     } finally {
       setSavingPairing(false);
@@ -510,7 +510,7 @@ export default function DispatchDashboard() {
       await axiosClient.patch('/dispatch/assign', { employee_id: empA, date: selectedDate, new_truck_id: truckB });
       await axiosClient.patch('/dispatch/assign', { employee_id: empB, date: selectedDate, new_truck_id: truckA });
       await fetchDispatchData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to swap the two employees.'));
     } finally {
       setIsLoading(false);
@@ -530,7 +530,7 @@ export default function DispatchDashboard() {
         try {
           await axiosClient.delete(`/dispatch/assign/${selectedDate}/${employeeId}`);
           await Promise.all([fetchDispatchData(), fetchAvailablePool()]);
-        } catch (err: any) {
+        } catch (err: unknown) {
           console.error(err);
           setError(errorText(err, 'Failed to remove employee.'));
         } finally {
@@ -554,7 +554,7 @@ export default function DispatchDashboard() {
           await axiosClient.delete(`/dispatch/${selectedDate}`);
           setDispatchData(null);
           await fetchDispatchData();
-        } catch (err: any) {
+        } catch (err: unknown) {
           setError(errorText(err, 'Failed to clear dispatch.'));
         } finally {
           setIsLoading(false);
@@ -572,7 +572,7 @@ export default function DispatchDashboard() {
       setShowHubModal(false);
       setHubModalTruckId('');
       await fetchDispatchData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(errorText(err, 'Failed to create hub.'));
     } finally {
       setIsCreatingHub(false);
@@ -593,7 +593,7 @@ export default function DispatchDashboard() {
         try {
           await axiosClient.post(`/dispatch/hubs/${truckId}/publish`, { date: selectedDate });
           await fetchDispatchData();
-        } catch (err: any) {
+        } catch (err: unknown) {
           setError(errorText(err, 'Failed to publish hub.'));
         } finally {
           setPublishingHubTruckId(null);

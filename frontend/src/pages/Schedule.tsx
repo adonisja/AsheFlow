@@ -572,7 +572,7 @@ const Schedule = () => {
       const data = await getSchedule(employeeId, fmtDate(startDate), fmtDate(endDate));
       setScheduleData(data);
       setLoadError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setLoadError(errorText(err, 'Failed to load schedule.'));
     }
   };
@@ -618,7 +618,7 @@ const Schedule = () => {
     try {
       await createTimeOffRequest(myId, dateStr);
       await fetchSchedule(myId, currentMonth);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const alertText = errorText(err, ''); if (alertText) alert(alertText);
     }
   };
