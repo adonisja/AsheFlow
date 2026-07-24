@@ -113,7 +113,7 @@ export default function IncidentsScreen() {
       setDescription(''); setBodyPart(''); setMedAttn(null);
       setTbaCount(''); setLocation(''); setWitness(''); setStolenTime('');
       setCategory('vehicle');
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);

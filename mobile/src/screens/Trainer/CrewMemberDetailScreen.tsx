@@ -47,7 +47,7 @@ export default function CrewMemberDetailScreen() {
     try {
       const res = await apiClient.get(`/walker-routes/routes/${routeId}/detail`);
       setDetail(res.data);
-    } catch (e) {
+    } catch {
       // Non-fatal; screen shows the empty state below.
       setDetail(null);
     } finally {

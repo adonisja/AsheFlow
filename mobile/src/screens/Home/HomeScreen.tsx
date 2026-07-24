@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  TouchableOpacity, ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -17,7 +17,7 @@ import {
   spacing, radius, fontSize, fontWeight,
   getRoleColor, getRoleLight, ROLE_LABELS, type ThemeColors,
 } from '@theme/index';
-import { Avatar, Badge, Skeleton } from '@components/ui/primitives';
+import { Avatar, Skeleton } from '@components/ui/primitives';
 
 function greet() {
   const h = new Date().getHours();

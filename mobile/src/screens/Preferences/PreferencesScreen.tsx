@@ -77,7 +77,7 @@ function gradeColor(grade: string | null, c: ThemeColors) {
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function PreferencesScreen() {
   const c = useColors();
-  const { user, hasRole } = useAuth();
+  const { hasRole } = useAuth();
 
   const isWalker  = hasRole('walker');
   const isTrainer = hasRole('trainer');
@@ -216,7 +216,7 @@ export default function PreferencesScreen() {
     try {
       await apiClient.post('/field-ops/rating', { ratee_id: rateeId, date: todayStr, stars });
       await fetchRateTeam();
-    } catch (e: any) {
+    } catch (e: unknown) {
       Alert.alert('Rating', errorText(e, 'Could not submit rating.'));
     } finally {
       setRatingId(null);
@@ -244,7 +244,7 @@ export default function PreferencesScreen() {
       setAddModal(false);
       setSearchQuery('');
       fetchRelationships();
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not add. Try again.'));
     } finally {
       setAdding(false);
@@ -283,7 +283,7 @@ export default function PreferencesScreen() {
       setReassignModal(false);
       setReassignReason('');
       fetchReassignments();
-    } catch (err: any) {
+    } catch (err: unknown) {
       Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setReassigning(false);

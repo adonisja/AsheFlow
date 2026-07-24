@@ -223,7 +223,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
           : 'Your assignment has been declined. Dispatch has been notified.',
         [{ text: 'OK', onPress: onClose }],
       );
-    } catch (e: any) {
+    } catch (e: unknown) {
       Alert.alert('Error', errorText(e, 'Could not record your response. Try again.'));
     } finally {
       setActing(null);

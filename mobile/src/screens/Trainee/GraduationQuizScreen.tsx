@@ -114,7 +114,7 @@ export default function GraduationQuizScreen() {
                 })),
               });
               setSubmitted(true);
-            } catch (err: any) {
+            } catch (err: unknown) {
               Alert.alert('Error', errorText(err, 'Could not submit quiz. Try again.'));
             } finally {
               setSubmitting(false);
