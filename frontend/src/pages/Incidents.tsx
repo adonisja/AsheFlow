@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
+import type { Incident } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -306,7 +307,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
 // ---------------------------------------------------------------------------
 
 function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKey: number }) {
-  const [incidents, setIncidents] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
@@ -372,7 +373,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
 
 function ManagementView() {
   const { confirmState, confirm, cancelConfirm } = useConfirm();
-  const [incidents, setIncidents] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [filterSeverity, setFilterSeverity] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterResolved, setFilterResolved] = useState('');
@@ -380,7 +381,7 @@ function ManagementView() {
   const [resolving, setResolving] = useState<string | null>(null);
 
   const load = () => {
-    const params: any = {};
+    const params: Record<string, string | boolean> = {};
     if (filterSeverity) params.severity = filterSeverity;
     if (filterCategory) params.category = filterCategory;
     if (filterResolved !== '') params.resolved = filterResolved === 'true';
