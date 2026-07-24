@@ -6,6 +6,9 @@ import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import { getLocalYMD as todayStr } from '../utils/date';
 import { fileToDataUrl } from '../utils/file';
+import type {
+  CheckInSummaryRow, ReturnSummaryRow, InspectionSummaryRow, FuelLogSummaryRow, NoShowRow,
+} from '../api/types';
 
 // Human-readable labels for inspection items
 const ITEM_LABELS: Record<string, string> = {
@@ -919,11 +922,11 @@ function AdminFieldOpsView() {
   const { groups } = useAuth();
   const isAdmin = groups.includes('admin');
 
-  const [checkIns, setCheckIns]         = useState<any[]>([]);
-  const [departures, setDepartures]     = useState<any[]>([]);
-  const [inspections, setInspections]   = useState<any[]>([]);
-  const [fuelLogs, setFuelLogs]         = useState<any[]>([]);
-  const [noShows, setNoShows]           = useState<any[]>([]);
+  const [checkIns, setCheckIns]         = useState<CheckInSummaryRow[]>([]);
+  const [departures, setDepartures]     = useState<ReturnSummaryRow[]>([]);
+  const [inspections, setInspections]   = useState<InspectionSummaryRow[]>([]);
+  const [fuelLogs, setFuelLogs]         = useState<FuelLogSummaryRow[]>([]);
+  const [noShows, setNoShows]           = useState<NoShowRow[]>([]);
   const [midShiftCheckIns, setMidShiftCheckIns] = useState<any[]>([]);   // ADR-215
   const [loading, setLoading]           = useState(true);
   const [sessions, setSessions]         = useState<ActiveSession[]>([]);
@@ -1072,7 +1075,7 @@ function AdminFieldOpsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {departures.map((d: any) => (
+                {departures.map((d) => (
                   <tr key={d.employee_id}>
                     <td className="py-2 pr-4 font-medium text-foreground">{d.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{fmt(d.departed_at)}</td>
@@ -1123,7 +1126,7 @@ function AdminFieldOpsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {inspections.map((insp: any) => (
+                {inspections.map((insp) => (
                   <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
                     <td className="py-2 pr-4 font-medium text-foreground">{insp.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{insp.truck_name ?? '—'}</td>
@@ -1175,7 +1178,7 @@ function AdminFieldOpsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {fuelLogs.map((log: any) => (
+                {fuelLogs.map((log) => (
                   <tr key={log.log_id}>
                     <td className="py-2 pr-4 font-medium text-foreground">{log.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{log.truck_name ?? '—'}</td>
@@ -1207,7 +1210,7 @@ function AdminFieldOpsView() {
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {noShows.map((ns: any) => (
+            {noShows.map((ns) => (
               <div key={ns.walker_id} className="py-2 flex items-center justify-between">
                 <span className="text-sm font-medium text-foreground">{ns.walker_name}</span>
                 <span className="text-xs text-muted-foreground">Driver: {ns.driver_name}</span>
