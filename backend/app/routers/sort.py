@@ -1142,6 +1142,7 @@ def geoclient_probe(
 ):
     """Admin-only probe: returns the raw GeoClient v2 response for an intersection."""
     import requests as _requests
+    from app.tasks.enrich_manifest import _GEOCLIENT_BASE
 
     if not settings.geoclient_app_key:
         return {"error": "GEOCLIENT_APP_KEY is not set on this server."}
@@ -1687,6 +1688,8 @@ def reassign_tbas(
     Only TBAs actually present in the source zone are moved; any unknown TBAs
     in the request are silently ignored.
     """
+    from app.models.audit_log import AuditLog
+
     if not body.tba_numbers:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
