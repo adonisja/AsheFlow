@@ -10,7 +10,7 @@ import {
 import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
-import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users } from 'lucide-react';
+import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, type LucideIcon } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
 
 const selectStyles = {
@@ -697,7 +697,7 @@ const Preferences = () => {
   );
 };
 
-function Section({ icon: Icon, title, iconColor, children }: { icon: any; title: string; iconColor: string; children: React.ReactNode }) {
+function Section({ icon: Icon, title, iconColor, children }: { icon: LucideIcon; title: string; iconColor: string; children: React.ReactNode }) {
   return (
     <div className="card">
       <div className="flex items-center gap-3 mb-5">
