@@ -168,6 +168,7 @@ TESTS=(
   routers/test_back_at_truck.py
   routers/test_confirmation_gate.py
   routers/test_dispatch_move_pairing.py
+  routers/test_clear_dispatch.py
   routers/test_finalize_gate.py
   routers/test_my_performance.py
   routers/test_pair_split.py
