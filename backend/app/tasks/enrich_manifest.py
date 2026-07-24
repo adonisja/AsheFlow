@@ -390,6 +390,7 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
     tag = pkg.get("tag_number")
     package_type = pkg.get("package_type")
     bag_id = pkg.get("bag_id")
+    bag_color = pkg.get("bag_color")   # ADR-230: parsed physical bag color hex (or None)
     amazon_lat = pkg.get("lat")
     amazon_lng = pkg.get("lng")
 
@@ -402,6 +403,7 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
         ov_entry = {
             "tba":          tba,
             "bag_id":       bag_id,
+            "bag_color":    bag_color,   # ADR-230
             "tag_number":   tag.strip(),
             "package_type": package_type,
         }
@@ -457,6 +459,7 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
     enriched_pkg = {
         "tba":                tba,
         "bag_id":             bag_id,
+        "bag_color":          bag_color,   # ADR-230: physical bag color hex (or None)
         "tag_number":         tag,
         "package_type":       package_type,
         "lat":                final_lat,

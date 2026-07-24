@@ -10,6 +10,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import RouteStopsList, { type RouteStop } from '@components/route/RouteStopsList';
+import { BagPill } from '@components/route/BagStopBody';
 import apiClient from '@api/client';
 import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
@@ -44,7 +45,7 @@ type RouteResp = {
 };
 
 type StopSignal = { signal: string; reason: string; urgency: number };
-type BagGroup = { bag_id: string; tba_numbers: string[] };
+type BagGroup = { bag_id: string; bag_color?: string | null; tba_numbers: string[] };
 type Stop = {
   normalised_address: string;
   block_key: string;
@@ -549,11 +550,18 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
               {started ? '● IN PROGRESS' : 'NEXT STOP'}
             </Text>
           )}
-          <Text style={[cs.address, { color: c.foreground }]}>{stop.normalised_address}</Text>
-          <Text style={[cs.meta, { color: c.mutedForeground }]}>
-            {stop.packages_total} pkg{stop.packages_total === 1 ? '' : 's'}
-            {stop.building_type ? ` · ${stop.building_type.replace(/_/g, ' ')}` : ''}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={[cs.address, { color: c.foreground, flexShrink: 1 }]} numberOfLines={1}>{stop.normalised_address}</Text>
+            {/* ADR-230: package count in brackets, right-aligned + muted. */}
+            <Text style={[cs.meta, { color: c.mutedForeground, marginTop: 0, marginLeft: 'auto', paddingLeft: spacing.xs }]}>
+              ({stop.packages_total})
+            </Text>
+          </View>
+          {stop.building_type ? (
+            <Text style={[cs.meta, { color: c.mutedForeground }]}>
+              {stop.building_type.replace(/_/g, ' ')}
+            </Text>
+          ) : null}
         </View>
         <Text style={{ color: c.mutedForeground, fontSize: 12 }}>{expanded ? '▲' : '▼'}</Text>
       </TouchableOpacity>
@@ -581,16 +589,18 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
         <View style={cs.bagWrap}>
           {stop.bags.map(bag => (
             <View key={bag.bag_id} style={cs.bagRow}>
-              <Text style={[cs.bagLabel, { color: c.mutedForeground }]}>{bag.bag_id}</Text>
+              {/* ADR-230: number-only pill tinted the bag's physical color. */}
+              <BagPill bag={bag} c={c} />
               <View style={cs.tbaWrap}>
                 {bag.tba_numbers.map(tba => (
                   <TouchableOpacity
                     key={tba}
-                    style={[cs.tbaChip, { backgroundColor: c.surfaceMuted, borderColor: c.border }]}
+                    style={{ width: '50%' }}
                     onLongPress={() => onFlag(tba, 'rts')}
                     onPress={() => onFlag(tba, 'rts')}
                   >
-                    <Text style={[cs.tbaText, { color: c.foreground }]}>{tba.slice(-6)}</Text>
+                    {/* FULL TBA (not truncated), plain monospaced — not a pill. */}
+                    <Text style={[cs.tbaText, { color: c.foreground }]} numberOfLines={1}>{tba}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -750,11 +760,9 @@ const cs = StyleSheet.create({
   noteBox:     { borderRadius: radius.md, padding: spacing.sm, marginTop: spacing.sm },
   noteText:    { fontSize: fontSize.xs, lineHeight: 17 },
   bagWrap:     { marginTop: spacing.sm },
-  bagRow:      { marginBottom: spacing.xs },
-  bagLabel:    { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, marginBottom: 4 },
-  tbaWrap:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  tbaChip:     { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.md, borderWidth: 1 },
-  tbaText:     { fontSize: fontSize.xs, fontVariant: ['tabular-nums'] },
+  bagRow:      { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginBottom: spacing.xs + 2 },
+  tbaWrap:     { flex: 1, flexDirection: 'row', flexWrap: 'wrap' },
+  tbaText:     { fontSize: fontSize.xs, fontVariant: ['tabular-nums'], lineHeight: 18 },
   tbaHint:     { fontSize: 10, marginTop: 4, fontStyle: 'italic' },
   completeBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginTop: spacing.sm },
   completeBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },

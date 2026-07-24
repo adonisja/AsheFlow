@@ -445,6 +445,7 @@ def upload_manifest(
             "lng":          p.lng,
             "address":      p.address,
             "bag_id":       p.bag_id,
+            "bag_color":    p.bag_color,
             "tag_number":   p.tag_number,
             "package_type": p.package_type,
         }

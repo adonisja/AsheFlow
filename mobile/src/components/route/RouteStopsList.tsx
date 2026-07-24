@@ -1,6 +1,7 @@
 import React from 'react';
-import { View, Text } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { StopAddressHeader, BagGroups, bagsFromTbas } from './BagStopBody';
 
 /** Grouped route drill-down (ADR-194): block section → address → TBA grid.
  *
@@ -10,10 +11,18 @@ import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/
  * back to its flat address list.
  */
 
+// ADR-230: TBAs grouped by physical bag, with the bag's color tint.
+export type BagGroup = {
+  bag_id: string;
+  bag_color?: string | null;   // hex from backend; null → neutral pill
+  tba_numbers: string[];
+};
+
 export type RouteStop = {
   block_key: string;
   address: string;
   tba_numbers: string[];
+  bags?: BagGroup[];           // ADR-230; falls back to a single group when absent
 };
 
 /** "W_44_St_300" → "WEST 44 ST · 300 BLOCK"; "9_Ave_800" → "9 AVE · 800 BLOCK". */
@@ -63,27 +72,24 @@ export default function RouteStopsList({ stops, c }: { stops: RouteStop[]; c: Th
               {formatBlockKey(section.block_key)}
             </Text>
           </View>
-          {section.stops.map(stop => (
-            <View key={`${section.block_key}:${stop.address}`} style={{ marginBottom: spacing.xs + 2 }}>
-              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.foreground }}>
-                {stop.address}
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 2 }}>
-                {stop.tba_numbers.map(tba => (
-                  <Text
-                    key={tba}
-                    style={{
-                      width: '50%', fontSize: fontSize.xs, color: c.mutedForeground,
-                      fontVariant: ['tabular-nums'], lineHeight: 17,
-                    }}
-                    numberOfLines={1}
-                  >
-                    …{tba.slice(-8)}
-                  </Text>
-                ))}
+          {section.stops.map((stop, i) => {
+            // ADR-230: bag-grouped, full TBAs. Fall back to a single group for
+            // stops written before bags existed.
+            const bags = stop.bags?.length ? stop.bags : bagsFromTbas(stop.tba_numbers);
+            return (
+              <View
+                key={`${section.block_key}:${stop.address}`}
+                style={{
+                  borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth,
+                  borderTopColor: c.border,
+                  paddingVertical: spacing.sm,
+                }}
+              >
+                <StopAddressHeader address={stop.address} count={stop.tba_numbers.length} c={c} />
+                <BagGroups bags={bags} c={c} />
               </View>
-            </View>
-          ))}
+            );
+          })}
         </View>
       ))}
     </View>

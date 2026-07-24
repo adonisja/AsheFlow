@@ -48,6 +48,7 @@ TOTE_HALF_SLOTS = 2
 class PackageInput(BaseModel):
     tba_number: str
     bag_id: str
+    bag_color: Optional[str] = None            # ADR-230: physical bag color hex, parsed from the manifest label
     block_key: Optional[str] = None            # pre-computed from enriched Redis manifest
     normalised_address: Optional[str] = None   # from GeoClient — used for BuildingProfile lookup
     package_type: Optional[str] = None         # "OV_S"|"OV_M"|"OV_L"|"OV_XL"|"standard"|None
@@ -84,6 +85,16 @@ class MisroutedPackageOut(BaseModel):
     suggested_route_number: Optional[int] = None       # None = needs captain review
 
 
+class BagGroupOut(BaseModel):
+    """TBAs grouped by their bag (ADR-230). bag_id is the numeric id the driver
+    reads on the physical bag; bag_color is the resolved hex tint (None → neutral
+    pill). The client renders a number-only pill tinted bag_color, then the FULL
+    TBAs as plain text."""
+    bag_id: str
+    bag_color: Optional[str] = None
+    tba_numbers: list[str]
+
+
 class StopOut(BaseModel):
     """One delivery stop — a unique normalised address with its packages (ADR-194).
 
@@ -94,6 +105,9 @@ class StopOut(BaseModel):
     block_key: str
     address: str
     tba_numbers: list[str]
+    # ADR-230: TBAs grouped by bag (with color). tba_numbers stays as the flat
+    # union for back-compat; clients render from bags.
+    bags: list[BagGroupOut] = []
 
 
 class StopDetailOut(BaseModel):
@@ -112,6 +126,7 @@ class StopDetailOut(BaseModel):
     block_key: str
     address: str
     tba_numbers: list[str]
+    bags: list[BagGroupOut] = []            # ADR-230: TBAs grouped by bag (with color)
     package_count: int
     workload_class: Optional[str] = None    # bulk_drop | standard | high_touch | high_wait
     building_type: Optional[str] = None     # doorman | elevator | walkup | biz_freight | …

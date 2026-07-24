@@ -309,6 +309,7 @@ class StopSignal(BaseModel):
 class BagGroup(BaseModel):
     """TBA numbers grouped by their physical bag/tote container."""
     bag_id: str
+    bag_color: Optional[str] = None   # ADR-230: physical bag color hex (None → neutral pill)
     tba_numbers: list[str]
 
 

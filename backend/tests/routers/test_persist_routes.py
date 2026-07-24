@@ -274,7 +274,9 @@ from app.schemas.walker_routes import StopOut
 
 
 def _stop(bk: str, addr: str, tbas: list[str]) -> dict:
-    return {"block_key": bk, "address": addr, "tba_numbers": tbas}
+    # ADR-230: StopOut now carries a bag-grouped view; default [] when built
+    # without bags (these fixtures pass only tba_numbers).
+    return {"block_key": bk, "address": addr, "tba_numbers": tbas, "bags": []}
 
 
 class TestPersistRoutesStops:
@@ -374,7 +376,11 @@ class TestMoveFlagGeography:
     def test_dest_gains_stop_block_and_address(self):
         src, dest, flag = self._routes()
         _move_flag_geography(flag, src, dest, other_flags=[])
-        assert _stop("W_57_St_400", "446 WEST 57 STREET", ["FAR"]) in dest.stops
+        # ADR-230: the moved package rides in a bag group (color unknown here).
+        moved = {"block_key": "W_57_St_400", "address": "446 WEST 57 STREET",
+                 "tba_numbers": ["FAR"],
+                 "bags": [{"bag_id": "(loose)", "bag_color": None, "tba_numbers": ["FAR"]}]}
+        assert moved in dest.stops
         assert "W_57_St_400" in dest.block_keys
         assert "446 WEST 57 STREET" in dest.normalised_addresses
 
