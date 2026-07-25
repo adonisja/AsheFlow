@@ -267,7 +267,9 @@ export interface ReturnSummaryRow {
 export interface InspectionSummaryRow {
   inspection_id: string;
   driver_name: string;
-  truck_name: string;
+  truck_name: string | null;
+  date: string;
+  inspection_type: string;
   submitted_at: string;
   has_failures: boolean;
   failed_items: string[];

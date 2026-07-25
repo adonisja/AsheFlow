@@ -7,16 +7,17 @@ import {
   LayoutDashboard, RefreshCw, Package, MapPin, LogIn, ShoppingBag,
 } from 'lucide-react';
 import GearManagerInbox from '../gear/GearManagerInbox';
+import type { NoShowRow, InspectionSummaryRow } from '../../api/types';
 
 export default function ManagementView() {
   const { user } = useAuth();
   const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
   const [incidentSummary, setIncidentSummary] = useState<any>(null);
   const [walkerStats, setWalkerStats] = useState<any[]>([]);
-  const [noShows, setNoShows] = useState<any[]>([]);
+  const [noShows, setNoShows] = useState<NoShowRow[]>([]);
   const [trainingPipeline, setTrainingPipeline] = useState<any>(null);
   const [inspectionFailures, setInspectionFailures] = useState<any>(null);
-  const [todayInspections, setTodayInspections]     = useState<any[]>([]);
+  const [todayInspections, setTodayInspections]     = useState<InspectionSummaryRow[]>([]);
   const [truckStatuses, setTruckStatuses] = useState<{ truck_id: string; status: string }[]>([]);
   const [checkInSummary, setCheckInSummary]   = useState<any>(null);
   const [handoffSummary, setHandoffSummary]   = useState<any>(null);
@@ -259,8 +260,8 @@ export default function ManagementView() {
           <h2 className="text-base font-semibold text-foreground">Vehicle Inspections — Today</h2>
           {todayInspections.length > 0 && (
             <span className="ml-auto text-xs text-subtle">
-              {todayInspections.filter((i: any) => i.has_failures).length} failed ·{' '}
-              {todayInspections.filter((i: any) => !i.has_failures).length} passed
+              {todayInspections.filter((i) => i.has_failures).length} failed ·{' '}
+              {todayInspections.filter((i) => !i.has_failures).length} passed
             </span>
           )}
         </div>
@@ -281,7 +282,7 @@ export default function ManagementView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {todayInspections.map((insp: any) => (
+                {todayInspections.map((insp) => (
                   <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
                     <td className="py-2 pr-4 font-medium text-foreground whitespace-nowrap">{insp.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{insp.truck_name ?? '—'}</td>
