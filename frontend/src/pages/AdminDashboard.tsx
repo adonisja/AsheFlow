@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
 import { useAuth } from '../contexts/AuthContext';
+import type { Incident } from '../api/types';
 import {
   Shield, Users, Truck, AlertTriangle, ClipboardCheck,
   BarChart2, RefreshCw, CheckCircle2, ArrowRight, Zap,
@@ -108,7 +109,7 @@ export default function AdminDashboard() {
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [trucks, setTrucks] = useState<TruckType[]>([]);
-  const [incidents, setIncidents] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [trainingToday, setTrainingToday] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

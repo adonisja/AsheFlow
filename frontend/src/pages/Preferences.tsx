@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import Select from 'react-select';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
+import type { Employee } from '../api/types';
 import {
   getRelationships, createRelationship, deleteRelationship,
   type EmployeeRelationship
@@ -49,7 +50,7 @@ const FIELD_ROLES = ['driver', 'walker', 'trainer'];
 
 function PreferenceAnalytics() {
   const [rels, setRels]   = useState<EmployeeRelationship[]>([]);
-  const [emps, setEmps]   = useState<any[]>([]);
+  const [emps, setEmps]   = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [matrixTab, setMatrixTab] = useState<'fav' | 'ban'>('fav');
 

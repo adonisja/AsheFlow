@@ -11,7 +11,7 @@ import StatCard from '../components/ui/StatCard';
 import MotionCard from '../components/ui/MotionCard';
 import PackageExceptionsCard from '../components/PackageExceptionsCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import type { CrewMember, UnavailableStaff } from '../api/types';
+import type { CrewMember, UnavailableStaff, Incident } from '../api/types';
 import { getLocalYMD } from '../utils/date';
 
 interface ScheduleChangeRequest {
@@ -46,7 +46,7 @@ export default function DispatchHome() {
   const [confirmations, setConfirmations] = useState<ConfirmationMap>({});
   const [unavailable, setUnavailable] = useState<UnavailableStaff[]>([]);
   const [changeRequests, setChangeRequests] = useState<ScheduleChangeRequest[]>([]);
-  const [incidents, setIncidents] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [pendingRTS, setPendingRTS] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [rtsActionError, setRtsActionError] = useState<string | null>(null);
