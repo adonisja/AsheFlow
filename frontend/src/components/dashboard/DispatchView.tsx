@@ -7,6 +7,7 @@ import {
 import { getLocalYMD } from '../../utils/date';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { useConfirm } from '../../hooks/useConfirm';
+import type { Incident } from '../../api/types';
 
 export default function DispatchView() {
   const { confirmState, confirm, cancelConfirm } = useConfirm();
@@ -17,7 +18,7 @@ export default function DispatchView() {
   const [pendingRequests, setPendingRequests]         = useState<any[]>([]);
   const [pendingOffDays, setPendingOffDays]           = useState<any[]>([]);
   const [pendingChangeRequests, setPendingChangeRequests] = useState<any[]>([]);
-  const [urgentIncidents, setUrgentIncidents]         = useState<any[]>([]);
+  const [urgentIncidents, setUrgentIncidents]         = useState<Incident[]>([]);
   const [fleetAssignments, setFleetAssignments]       = useState<any[]>([]);
   const [pendingRTS, setPendingRTS]                   = useState<any[]>([]);
   const [loadErrors, setLoadErrors]                   = useState<string[]>([]);
