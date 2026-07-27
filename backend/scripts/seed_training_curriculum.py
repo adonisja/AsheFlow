@@ -357,12 +357,19 @@ CURRICULUM: list[tuple[int, str, str | None, str, bool]] = [
 ]
 
 
-def seed(db) -> None:
+def seed(db, company_id) -> None:
+    """Seed the static curriculum for ONE company.
+
+    company_id is nullable=False on TrainingCurriculum, so it must be supplied —
+    the curriculum is per-tenant. The existence check is company-scoped too, or a
+    second company would be skipped because company A already has the row.
+    """
     inserted = 0
     skipped = 0
 
     for phase, title, description, category, is_mandatory in CURRICULUM:
         exists = db.query(TrainingCurriculum).filter(
+            TrainingCurriculum.company_id == company_id,
             TrainingCurriculum.day_number == phase,
             TrainingCurriculum.topic_title == title,
         ).first()
@@ -372,6 +379,7 @@ def seed(db) -> None:
             continue
 
         item = TrainingCurriculum(
+            company_id=company_id,
             day_number=phase,
             topic_title=title,
             description=description,
@@ -383,12 +391,23 @@ def seed(db) -> None:
         inserted += 1
 
     db.commit()
-    print(f"Curriculum seed complete: {inserted} inserted, {skipped} skipped (already existed).")
+    print(f"  {company_id}: {inserted} inserted, {skipped} skipped (already existed).")
 
 
 if __name__ == "__main__":
+    from app.models.company import Company
+
     db = SessionLocal()
     try:
-        seed(db)
+        # Optional company id argument; default = seed every company.
+        if len(sys.argv) > 1:
+            targets = [sys.argv[1]]
+        else:
+            targets = [str(c.id) for c in db.query(Company).all()]
+        if not targets:
+            print("No companies found — run seed_demo.py first.")
+        for cid in targets:
+            seed(db, cid)
+        print("Curriculum seed complete.")
     finally:
         db.close()
