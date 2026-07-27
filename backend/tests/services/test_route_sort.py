@@ -18,6 +18,7 @@ import pytest
 from app.services.derive_block_key import derive_block_key, ParsedBlock, UnparseableAddress
 from app.services.route_sort import (
     _build_adjacency_graph,
+    _nearest_block_within_hops,
     _haversine_km,
     _resolve_effort_class,
     _pair_ovs,
@@ -1017,17 +1018,21 @@ class TestTimeUrgencySeeding:
 # ---------------------------------------------------------------------------
 
 class TestF5Consolidation:
-    """Sparse clients (low per-block density) produce blocks with NO block-key
-    adjacency edges → each thin block dead-ends as its own route (fragmentation).
-    F5 consolidates them via nearest-block-by-centroid within a walk radius, up
-    to a load floor, when crew_size is passed. crew_size=None = baseline."""
+    """F5 consolidates thin blocks into viable routes up to a load floor when
+    crew_size is passed (crew_size=None = baseline).
+
+    ADR-234: consolidation follows the ADJACENCY GRAPH (within F5_MAX_HOPS street
+    steps), NOT straight-line centroid distance. The original ADR-197 mechanism
+    merged anything within 1.2 km, which put blocks five Manhattan streets apart on
+    one walking route (reported from the field). Blocks with no hop-path are now
+    left unmerged — the honest outcome; orphan handling is a separate concern."""
 
     def _sparse_zone(self):
-        # 4 thin blocks, 1 tote each, that are PAIRWISE NON-ADJACENT by block-key
-        # (different street >1 apart AND different hundred → no cost-2/3 edge; no
-        # cross-street data → no cost-1 edge) but clustered within ~1km. This is
-        # the sparse case: the block-key graph has zero edges, so baseline
-        # fragments them and only the coord fallback can consolidate.
+        # 4 thin blocks, 1 tote each, PAIRWISE NON-ADJACENT by block-key (streets
+        # >1 apart AND different hundreds → no cost-2/3 edge; no cross-street data
+        # → no cost-1 edge) but clustered within ~1km. The graph has ZERO edges, so
+        # there is no hop-path between any pair: ADR-234 must NOT merge these, even
+        # though the old centroid radius did.
         specs = [
             ("S0", "10 W 20th St",  40.7000, -74.0000),
             ("S1", "250 W 23rd St", 40.7030, -73.9980),
@@ -1036,24 +1041,70 @@ class TestF5Consolidation:
         ]
         return [_pkg(t, a, f"BAG{i}", lat=lat, lng=lng) for i, (t, a, lat, lng) in enumerate(specs)]
 
+    def _hop_reachable_zone(self):
+        # Thin blocks that ARE adjacency-reachable: contiguous hundred-blocks on
+        # ONE street (cost-2 edges chain 100→200→300→400), so a walker can cover
+        # them as a continuous walk. These SHOULD consolidate.
+        specs = [
+            ("H0", "110 W 36th St", 40.7501, -73.9886),
+            ("H1", "210 W 36th St", 40.7503, -73.9902),
+            ("H2", "310 W 36th St", 40.7505, -73.9918),
+            ("H3", "410 W 36th St", 40.7507, -73.9934),
+        ]
+        return [_pkg(t, a, f"BAGH{i}", lat=lat, lng=lng) for i, (t, a, lat, lng) in enumerate(specs)]
+
     def test_baseline_fragments_sparse_without_crew(self):
         # crew_size=None → no consolidation → each thin block is its own route.
         res = run_sort(_request(self._sparse_zone()), {}, {}, {})
         assert len(res.routes) == 4
         assert res.routes_built is None and res.crew_size is None
 
-    def test_consolidates_sparse_with_crew(self):
-        # With crew, coord-fallback merges the thin blocks into fewer routes.
+    def test_non_adjacent_blocks_are_not_merged(self):
+        # ADR-234: no hop-path between these blocks (graph has zero edges), so even
+        # with crew they must stay separate. Previously the 1.2 km centroid radius
+        # merged them — that produced the unwalkable routes reported from the field.
         res = run_sort(_request(self._sparse_zone()), {}, {}, {}, crew_size=8)
-        assert len(res.routes) < 4, "F5 should consolidate thin scattered blocks"
+        assert len(res.routes) == 4, (
+            "blocks with no adjacency hop-path must not be merged (ADR-234)"
+        )
+        for r in res.routes:
+            assert len(r.block_keys) == 1
+
+    def test_consolidates_hop_reachable_blocks_with_crew(self):
+        # The case F5 exists for, done correctly: contiguous hundred-blocks on one
+        # street are hop-reachable, so they consolidate into fewer routes.
+        res = run_sort(_request(self._hop_reachable_zone()), {}, {}, {}, crew_size=8)
+        assert len(res.routes) < 4, "hop-reachable thin blocks should consolidate"
         assert res.crew_size == 8
         assert res.routes_built == len(res.routes)
 
     def test_surplus_signal(self):
-        # Thin blocks consolidate to fewer routes than crew → surplus reported.
-        res = run_sort(_request(self._sparse_zone()), {}, {}, {}, crew_size=8)
+        # Hop-reachable thin blocks consolidate to fewer routes than crew →
+        # surplus reported (uses the reachable fixture; the scattered one no
+        # longer consolidates by design).
+        res = run_sort(_request(self._hop_reachable_zone()), {}, {}, {}, crew_size=8)
         surplus = res.crew_size - res.routes_built
         assert surplus > 0, "fewer routes than crew → walkers can be released"
+
+    def test_regression_five_streets_apart_never_one_route(self):
+        # The reported bug: W 50 St + W 55 St 400 + W 55 St 600 on one route.
+        # No hop-path joins them, so no route may contain blocks from both streets.
+        pkgs = [
+            _pkg("R0", "695 W 50th St", "BAGR0", lat=40.7615, lng=-73.9882),
+            _pkg("R1", "402 W 55th St", "BAGR1", lat=40.7660, lng=-73.9820),
+            _pkg("R2", "659 W 55th St", "BAGR2", lat=40.7660, lng=-73.9882),
+        ]
+        res = run_sort(_request(pkgs), {}, {}, {}, crew_size=6)
+        for r in res.routes:
+            streets = {bk.split("_")[1] for bk in r.block_keys}
+            assert len(streets) == 1, (
+                f"route mixes streets {streets} — blocks are not hop-connected"
+            )
+            # and never both non-adjacent hundreds of W 55th
+            hundreds = {bk.split("_")[3] for bk in r.block_keys if bk.split("_")[1] == "55"}
+            assert not {"400", "600"}.issubset(hundreds), (
+                "W 55th 400 and 600 blocks merged with no 500 block between them"
+            )
 
     def test_walk_radius_respected(self):
         # Two thin blocks FAR apart (>1.2km) must NOT merge even with crew.
@@ -1117,3 +1168,107 @@ class TestOutOfZoneRemovals:
         pkgs.append(_pkg("INZ_OUT", "100 W 24th St", "BAGZ", lat=40.7415, lng=-73.9815))
         result = run_sort(_request(pkgs), {}, {}, {}, boundary=self._BOUNDARY)
         assert "INZ_OUT" not in {m.tba_number for m in result.out_of_zone_removals}
+
+
+# ---------------------------------------------------------------------------
+# _nearest_block_within_hops — F5 consolidation follows the adjacency graph
+# (ADR-234; replaces the old straight-line-distance fallback)
+# ---------------------------------------------------------------------------
+
+class TestF5HopBoundedConsolidation:
+    """The F5 fallback may only extend a thin route to a block reachable within
+    F5_MAX_HOPS real street steps. The old centroid version merged blocks five
+    Manhattan streets apart into one walking route (the reported bug)."""
+
+    def _tote(self, bk: str) -> list[_Tote]:
+        t = _Tote(bag_id=bk)
+        t.packages.append(_Package(
+            tba_number=f"T_{bk}", bag_id=bk, block_key=bk, lat=40.76, lng=-73.99,
+        ))
+        return [t]
+
+    def _graph(self, bks: list[str]) -> dict:
+        return _build_adjacency_graph({bk: self._tote(bk) for bk in bks})
+
+    # Real Manhattan geometry: a cross-town hundred-block is ~0.26 km, so blocks
+    # on W 55th step westward at that spacing. All pairs here sit inside the OLD
+    # 1.2 km radius (400->600 is 0.52 km), so if these tests pass it is the HOP
+    # BOUND doing the work, not distance.
+    _CENTROIDS = {
+        "W_50_St_600": (40.7615, -73.9882),   # 5 streets south of W 55th
+        "W_55_St_400": (40.7660, -73.9820),
+        "W_55_St_500": (40.7660, -73.9851),
+        "W_55_St_600": (40.7660, -73.9882),
+        "W_55_St_700": (40.7660, -73.9913),
+    }
+
+    def test_two_hop_reachable_block_merges(self):
+        # 400 -> 500 -> 600 along W 55th: a contiguous walk, 2 hops. Allowed.
+        bks = ["W_55_St_400", "W_55_St_500", "W_55_St_600"]
+        graph = self._graph(bks)
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_600"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=0.8,
+        )
+        assert got == "W_55_St_600"
+
+    def test_gap_block_absent_is_unreachable(self):
+        # The reported case: 400 and 600 with NO 500 block in the manifest. There
+        # is no node to walk through, so it must be refused (was merged at 0.65 km).
+        graph = self._graph(["W_55_St_400", "W_55_St_600"])
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_600"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=0.8,
+        )
+        assert got is None
+
+    def test_five_streets_apart_never_merges(self):
+        # W 50 St -> W 55 St is 5 streets: no path at any sane hop bound.
+        graph = self._graph(["W_50_St_600", "W_55_St_400"])
+        got = _nearest_block_within_hops(
+            {"W_50_St_600"}, {"W_55_St_400"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=0.8,
+        )
+        assert got is None
+
+    def test_hop_bound_is_respected(self):
+        # 400 -> 500 -> 600 -> 700 is 3 hops from 400; max_hops=2 must refuse 700.
+        # max_km is generous (1.0 > the 0.78 km 3-hop span) so the HOP bound, not
+        # distance, is what refuses it.
+        bks = ["W_55_St_400", "W_55_St_500", "W_55_St_600", "W_55_St_700"]
+        graph = self._graph(bks)
+        assert _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_700"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=1.0,
+        ) is None
+        # ...but 3 hops reaches it
+        assert _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_700"}, graph, self._CENTROIDS,
+            max_hops=3, max_km=1.0,
+        ) == "W_55_St_700"
+
+    def test_prefers_fewest_hops(self):
+        # Both 500 (1 hop) and 600 (2 hops) unassigned → the nearer one wins.
+        bks = ["W_55_St_400", "W_55_St_500", "W_55_St_600"]
+        graph = self._graph(bks)
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_500", "W_55_St_600"}, graph,
+            self._CENTROIDS, max_hops=2, max_km=0.8,
+        )
+        assert got == "W_55_St_500"
+
+    def test_km_cap_rejects_absurdly_far_hop_neighbour(self):
+        # Hop-reachable but centroid far beyond the cap → refused (backstop).
+        bks = ["W_55_St_400", "W_55_St_500"]
+        graph = self._graph(bks)
+        cents = {"W_55_St_400": (40.7655, -73.9835), "W_55_St_500": (41.20, -73.60)}
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_500"}, graph, cents, max_hops=2, max_km=0.8,
+        )
+        assert got is None
+
+    def test_no_candidates_returns_none(self):
+        graph = self._graph(["W_55_St_400"])
+        assert _nearest_block_within_hops(
+            {"W_55_St_400"}, set(), graph, self._CENTROIDS, max_hops=2, max_km=0.8,
+        ) is None
