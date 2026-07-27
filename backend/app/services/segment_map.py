@@ -183,6 +183,49 @@ def walk_connectors(
     return upsert_segments(db, found)
 
 
+def load_node_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str]]:
+    """LION NODE adjacency for misroute detection (ADR-238 D4b).
+
+    Returns {node_id: {adjacent node_ids}} — two nodes are adjacent iff a segment
+    connects them. This mirrors `route_sort._build_node_adjacency`, but sourced
+    from the PERSISTED map rather than only the segments this sort happens to
+    carry, so it includes the connector segments that bridge clusters (99%
+    connected vs a 47-component per-sort reconstruction).
+
+    Scoped to the neighbourhood of `segment_ids`: we take those segments' nodes,
+    then every segment touching them (one hop out), so connectors are included
+    without loading all of NYC. Empty input or empty map → {} (caller degrades to
+    its own topology).
+    """
+    ids = {str(s) for s in segment_ids if s}
+    if not ids:
+        return {}
+
+    seeds = db.execute(
+        select(StreetSegment).where(StreetSegment.segment_id.in_(ids))
+    ).scalars().all()
+    nodes = {n for s in seeds for n in (s.from_lion_node_id, s.to_lion_node_id) if n}
+    if not nodes:
+        return {}
+
+    # One hop out: segments touching those nodes — this is what pulls in the
+    # connectors, which carry no packages and so are never in `segment_ids`.
+    nearby = db.execute(
+        select(StreetSegment).where(
+            (StreetSegment.from_lion_node_id.in_(nodes))
+            | (StreetSegment.to_lion_node_id.in_(nodes))
+        )
+    ).scalars().all()
+
+    adj: dict[str, set[str]] = {}
+    for s in nearby:
+        a, b = s.from_lion_node_id, s.to_lion_node_id
+        if a and b and a != b:
+            adj.setdefault(a, set()).add(b)
+            adj.setdefault(b, set()).add(a)
+    return adj
+
+
 def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str]]:
     """Segment adjacency from the map: two segments are adjacent iff they share a
     LION node (ADR-196).

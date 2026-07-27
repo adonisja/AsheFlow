@@ -119,3 +119,47 @@ class TestLoadAdjacency:
         adj = load_adjacency(db, ["0033838"])
         assert adj["0033838"] == {"0033840"}
         assert adj["0033840"] == {"0033838"}
+
+
+# ---------------------------------------------------------------------------
+# load_node_adjacency — NODE-keyed graph for misroute detection (ADR-238 D4b)
+# ---------------------------------------------------------------------------
+
+class TestLoadNodeAdjacency:
+    def test_empty_input_returns_empty(self):
+        from app.services.segment_map import load_node_adjacency
+        assert load_node_adjacency(MagicMock(), []) == {}
+
+    def test_nodes_joined_by_a_segment_are_adjacent(self):
+        # A segment IS an edge between its two nodes — that is the whole model.
+        from app.services.segment_map import load_node_adjacency
+        s = MagicMock(segment_id="0033840",
+                      from_lion_node_id="0021354", to_lion_node_id="0021355")
+        db = MagicMock()
+        db.execute.return_value.scalars.return_value.all.side_effect = [[s], [s]]
+        adj = load_node_adjacency(db, ["0033840"])
+        assert adj["0021354"] == {"0021355"}
+        assert adj["0021355"] == {"0021354"}
+
+    def test_connector_bridges_two_clusters(self):
+        # The connector carries no packages (never in segment_ids) but shares a
+        # node with each side — this is what a per-sort reconstruction cannot see.
+        from app.services.segment_map import load_node_adjacency
+        left = MagicMock(segment_id="A", from_lion_node_id="n1", to_lion_node_id="n2")
+        conn = MagicMock(segment_id="C", from_lion_node_id="n2", to_lion_node_id="n3")
+        right = MagicMock(segment_id="B", from_lion_node_id="n3", to_lion_node_id="n4")
+        db = MagicMock()
+        db.execute.return_value.scalars.return_value.all.side_effect = [
+            [left, right],            # seeds
+            [left, conn, right],      # one hop out — pulls in the connector
+        ]
+        adj = load_node_adjacency(db, ["A", "B"])
+        assert "n3" in adj["n2"], "connector must join the two clusters"
+
+    def test_segment_with_one_node_is_skipped(self):
+        # A dangling segment cannot form an edge; it must not crash or self-link.
+        from app.services.segment_map import load_node_adjacency
+        s = MagicMock(segment_id="X", from_lion_node_id="n1", to_lion_node_id=None)
+        db = MagicMock()
+        db.execute.return_value.scalars.return_value.all.side_effect = [[s], [s]]
+        assert load_node_adjacency(db, ["X"]) == {}
