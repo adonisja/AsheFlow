@@ -19,6 +19,7 @@ from app.services.derive_block_key import derive_block_key, ParsedBlock, Unparse
 from app.services.route_sort import (
     _build_adjacency_graph,
     _nearest_block_within_hops,
+    _build_stops,
     _haversine_km,
     _resolve_effort_class,
     _pair_ovs,
@@ -1272,3 +1273,70 @@ class TestF5HopBoundedConsolidation:
         assert _nearest_block_within_hops(
             {"W_55_St_400"}, set(), graph, self._CENTROIDS, max_hops=2, max_km=0.8,
         ) is None
+
+
+# ---------------------------------------------------------------------------
+# _order_stops — block-coherent nearest-neighbour stop ordering (ADR-239)
+# ---------------------------------------------------------------------------
+
+class TestGeometricStopOrdering:
+    """Stops are ordered by geometry, not by house number, but each block's stops
+    stay contiguous. Measured on a clean 4,000-package manifest: 43.96 -> 38.94 km
+    (-11.4%) with ZERO block re-visits. Free nearest-neighbour is 1.7 points better
+    but leaves a block and comes back, which reads like a missed stop to a walker."""
+
+    def _pkg(self, bk, addr, lat, lng, tba=None):
+        return _Package(tba_number=tba or f"T_{addr}", bag_id="BAG1", block_key=bk,
+                        lat=lat, lng=lng, normalised_address=addr)
+
+    def test_keeps_each_block_contiguous(self):
+        # Two blocks interleaved by house number; ordering must not alternate.
+        pkgs = [
+            self._pkg("W_33_St_600", "601 W 33 ST", 40.7550, -73.9990),
+            self._pkg("W_34_St_600", "602 W 34 ST", 40.7560, -73.9995),
+            self._pkg("W_33_St_600", "603 W 33 ST", 40.7551, -73.9991),
+            self._pkg("W_34_St_600", "604 W 34 ST", 40.7561, -73.9996),
+        ]
+        stops = _build_stops(pkgs)
+        keys = [s.block_key for s in stops]
+        # every block appears as one contiguous run
+        runs = [k for i, k in enumerate(keys) if i == 0 or keys[i - 1] != k]
+        assert len(runs) == len(set(runs)), f"block revisited: {keys}"
+
+    def test_no_stop_is_lost_or_duplicated(self):
+        pkgs = [self._pkg("W_23_St_100", f"{100+i} W 23 ST", 40.74 + i / 1000, -73.99)
+                for i in range(8)]
+        stops = _build_stops(pkgs)
+        assert len(stops) == 8
+        assert len({s.address for s in stops}) == 8
+
+    def test_deterministic(self):
+        pkgs = [self._pkg("W_23_St_100", f"{100+i} W 23 ST", 40.74 + i / 1000, -73.99)
+                for i in range(6)]
+        a = [(s.block_key, s.address) for s in _build_stops(pkgs)]
+        b = [(s.block_key, s.address) for s in _build_stops(pkgs)]
+        assert a == b
+
+    def test_coordless_stops_keep_lexical_order_and_are_not_dropped(self):
+        # No coordinates anywhere -> must reproduce today's house-number ordering.
+        pkgs = [
+            _Package(tba_number="T3", bag_id="B", block_key="W_23_St_100",
+                     lat=None, lng=None, normalised_address="300 W 23 ST"),
+            _Package(tba_number="T1", bag_id="B", block_key="W_23_St_100",
+                     lat=None, lng=None, normalised_address="100 W 23 ST"),
+            _Package(tba_number="T2", bag_id="B", block_key="W_23_St_100",
+                     lat=None, lng=None, normalised_address="200 W 23 ST"),
+        ]
+        stops = _build_stops(pkgs)
+        assert [s.address for s in stops] == ["100 W 23 ST", "200 W 23 ST", "300 W 23 ST"]
+
+    def test_geometric_order_beats_house_number_on_a_detour(self):
+        # House numbers ascend but geography does not: 200 is far, 300 is next door
+        # to 100. Geometric ordering must not walk 100 -> 200 -> 300.
+        pkgs = [
+            self._pkg("W_23_St_100", "100 W 23 ST", 40.7400, -73.9900),
+            self._pkg("W_23_St_100", "200 W 23 ST", 40.7480, -73.9900),   # far north
+            self._pkg("W_23_St_100", "300 W 23 ST", 40.7401, -73.9901),   # beside 100
+        ]
+        order = [s.address for s in _build_stops(pkgs)]
+        assert order[1] == "300 W 23 ST", f"expected the near stop second, got {order}"
