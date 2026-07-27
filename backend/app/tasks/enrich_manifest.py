@@ -490,6 +490,112 @@ def _enrich_one(pkg: dict, borough: str) -> dict:
     return {"enriched_pkg": enriched_pkg, "failed_entry": failed_entry, "ov_entry": ov_entry}
 
 
+def _street_of(normalised_address: str | None) -> str | None:
+    """"168 WEST 23 STREET" -> "WEST 23 STREET" (ADR-236).
+
+    /blockface.json takes a STREET name, not a full address, so the leading house
+    number has to come off. Returns None when there is no house number to strip
+    (the value is then not a normalised address and is not safe to pass through).
+    """
+    if not normalised_address:
+        return None
+    parts = normalised_address.strip().split(None, 1)
+    if len(parts) != 2 or not parts[0][:1].isdigit():
+        return None
+    return parts[1].strip() or None
+
+
+def _street_sort_key(street: str) -> tuple:
+    """Order streets so "consecutive" means geographically adjacent (ADR-236).
+
+    "WEST 42 STREET" -> (0, 42): numbered streets sort numerically, so W 9 ST comes
+    before W 10 ST (alphabetically it would not). Unnumbered names sort after, by
+    name, so the pairing stays deterministic.
+    """
+    import re as _re
+    m = _re.search(r"\b(\d+)\b", street or "")
+    return (0, int(m.group(1)), "") if m else (1, 0, street or "")
+
+
+def _persist_segment_map(enriched: list[dict], borough: str) -> None:
+    """Write-through the run's LION topology + walk the connectors (ADR-236).
+
+    Two steps:
+      1. Upsert every segment the packages resolved (self-seeding: the map
+         densifies from work already happening, so later sorts hit the table
+         instead of GeoClient).
+      2. For each street, fetch the blockface segments BETWEEN its cross streets.
+         Those connectors carry no packages, so they are never learned from
+         addresses — and their absence is exactly why the graph fragmented.
+
+    Entirely best-effort: any failure is logged and swallowed. Enrichment's job is
+    to produce the manifest; a topology-cache miss must never cost us that.
+    """
+    try:
+        from app.services.segment_map import (
+            SOURCE_PACKAGE, upsert_segments, walk_connectors,
+        )
+
+        pkg_segments = [
+            {
+                "segment_id":        p.get("segment_id"),
+                "from_lion_node_id": p.get("from_lion_node_id"),
+                "to_lion_node_id":   p.get("to_lion_node_id"),
+                "block_key":         p.get("block_key"),
+                "lat":               p.get("lat"),
+                "lng":               p.get("lng"),
+                "borough":           borough,
+                "source":            SOURCE_PACKAGE,
+            }
+            for p in enriched
+            if p.get("segment_id")
+        ]
+
+        # Connector pairs, as (on_street, cross_one, cross_two) for /blockface.json.
+        #
+        # A package on "WEST 42 STREET" between 8 AVENUE and 9 AVENUE gives us its
+        # own block (which we already have from the address). The MISSING piece is
+        # the AVENUE stretch: 8 AVENUE between W 42 ST and W 43 ST is what links
+        # W 42nd's cluster to W 43rd's.
+        #
+        # So for each cross street, walk it between CONSECUTIVE streets that name
+        # it. Both bounds are then the same kind of street, which is what blockface
+        # requires — pairing a street with an avenue (10 AVE between W 23 ST and
+        # 9 AVE) is geometrically meaningless and returns nothing.
+        #
+        # Bounded by (distinct cross streets x their consecutive street pairs).
+        streets_by_cross: dict[str, set[str]] = {}
+        for p in enriched:
+            street = _street_of(p.get("normalised_address"))
+            if not street:
+                continue
+            for key in ("first_cross_street", "second_cross_street"):
+                cross = (p.get(key) or "").strip()
+                if cross and cross != street:
+                    streets_by_cross.setdefault(cross, set()).add(street)
+
+        pairs: set[tuple[str, str, str]] = set()
+        for cross, streets in streets_by_cross.items():
+            ordered = sorted(streets, key=_street_sort_key)
+            for a, b in zip(ordered, ordered[1:]):
+                pairs.add((cross, a, b))
+
+        db = SessionLocal()
+        try:
+            n_pkg = upsert_segments(db, pkg_segments)
+            db.commit()
+            n_conn = walk_connectors(db, sorted(pairs), borough)
+            db.commit()
+            logger.info(
+                "segment_map updated: %s package segments, %s connectors, %s pairs probed",
+                n_pkg, n_conn, len(pairs),
+            )
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001 — never fail enrichment for the cache
+        logger.warning("segment_map persistence skipped: %s", type(exc).__name__)
+
+
 def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_key):
     total_packages = len(packages)
     t_start = time.monotonic()
@@ -589,6 +695,13 @@ def _run_enrichment(self, company_id, sort_date, packages, borough, r, _failed_k
 
     r.delete(_failed_key)
     r.delete(prog_key)
+
+    # ADR-236: persist the LION topology this run already resolved, instead of
+    # letting it expire with the manifest's 24h TTL, then walk the connectors so
+    # the segment graph stops being fragmented (measured 47 components / 6%
+    # connectivity when we only ever mapped package addresses).
+    # Best-effort by design: a failure here must not lose an enriched manifest.
+    _persist_segment_map(enriched, borough)
 
     db = SessionLocal()
     try:
