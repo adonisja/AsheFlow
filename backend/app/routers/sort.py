@@ -687,8 +687,18 @@ def download_enriched_manifest(
     # NOTE: DictWriter uses extrasaction="ignore" below, so ANY enriched key not
     # listed here is silently dropped from the CSV — new columns must be added
     # explicitly. block_key = display identity; segment_id = routing identity.
-    fields = ["tba", "bag_id", "raw_address", "normalised_address",
+    # Keep this in sync with `enriched_pkg` in tasks/enrich_manifest.py: the export
+    # is meant to be a faithful dump, and a silently-missing column makes the CSV
+    # unusable for re-running the sort (it degrades the result without erroring).
+    #   - first/second_cross_street: cost-1 adjacency edges in the route graph.
+    #     Absent, the graph loses its cheapest edge type and routes fragment.
+    #   - package_type: OV size → half-slot capacity cost. Absent, OVs are costed
+    #     as standard packages and routes are overfilled.
+    #   - bag_color (ADR-230): physical bag colour. tag_number: dock/OV-zone locator.
+    fields = ["tba", "bag_id", "bag_color", "raw_address", "normalised_address",
               "block_key", "segment_id",
+              "first_cross_street", "second_cross_street",
+              "package_type", "tag_number",
               "from_lion_node_id", "to_lion_node_id",
               "x_low_address_end", "y_low_address_end",
               "x_high_address_end", "y_high_address_end",
