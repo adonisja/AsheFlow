@@ -11,7 +11,7 @@ Covers:
               no address data in output, empty input, oversize block
 """
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -1340,3 +1340,87 @@ class TestGeometricStopOrdering:
         ]
         order = [s.address for s in _build_stops(pkgs)]
         assert order[1] == "300 W 23 ST", f"expected the near stop second, got {order}"
+
+
+class TestCutoffFirstOrdering:
+    """ADR-240 — a missed cutoff is a FAILED delivery, so a stop whose deadline is
+    inside the urgency window jumps the queue. But the queue is DYNAMIC, not a static
+    two-tier split: only stops urgent *right now* are promoted. When the urgent set is
+    empty the walker proceeds by proximity from where they are standing, and a stop
+    that becomes urgent as the simulated clock advances jumps the line at that moment.
+
+    The static version (promote every in-window stop up front) cost +63.7% walking at
+    5% cutoff density; this dynamic form costs +18.7% with zero missed deadlines."""
+
+    BASE = datetime(2026, 7, 27, 9, 0, 0)
+
+    def _pkg(self, bk, addr, lat, lng, tba=None):
+        return _Package(tba_number=tba or f"T_{addr}", bag_id="BAG1", block_key=bk,
+                        lat=lat, lng=lng, normalised_address=addr)
+
+    def _three(self):
+        # Two stops adjacent to each other, one ~900 m north (a real detour).
+        return [
+            self._pkg("W_23_St_100", "100 W 23 ST", 40.7400, -73.9900),
+            self._pkg("W_23_St_100", "102 W 23 ST", 40.7401, -73.9900),
+            self._pkg("W_23_St_400", "400 W 23 ST", 40.7480, -73.9900),
+        ]
+
+    def _order(self, pkgs, cutoffs=None):
+        return [s.address for s in _build_stops(pkgs, stop_cutoffs=cutoffs, now=self.BASE)]
+
+    def test_stop_inside_the_urgency_window_jumps_the_line(self):
+        # The far stop closes in 30 min -> inside the 120 min window -> visited first,
+        # even though geometry would leave it for last.
+        order = self._order(self._three(),
+                            {"400 W 23 ST": self.BASE + timedelta(minutes=30)})
+        assert order[0] == "400 W 23 ST", f"urgent stop not promoted: {order}"
+
+    def test_cutoff_far_outside_the_window_is_not_promoted(self):
+        # Closes in 10 hours: real deadline, no pressure at 09:00. Pure geometry.
+        order = self._order(self._three(),
+                            {"400 W 23 ST": self.BASE + timedelta(hours=10)})
+        assert order == self._order(self._three()), \
+            f"a non-urgent deadline changed the order: {order}"
+
+    def test_soonest_deadline_wins_over_a_nearer_deadline(self):
+        # Both urgent; the tighter deadline goes first even though it is further away.
+        order = self._order(self._three(), {
+            "102 W 23 ST": self.BASE + timedelta(minutes=90),
+            "400 W 23 ST": self.BASE + timedelta(minutes=20),
+        })
+        assert order[0] == "400 W 23 ST", f"later deadline served first: {order}"
+
+    def test_passed_cutoff_sorts_first(self):
+        # Already closed = maximally at risk (matches _get_block_time_urgency -> 1.0).
+        order = self._order(self._three(),
+                            {"400 W 23 ST": self.BASE - timedelta(minutes=15)})
+        assert order[0] == "400 W 23 ST", f"passed cutoff not first: {order}"
+
+    def test_a_stop_becomes_urgent_as_the_clock_advances(self):
+        # This is the property the STATIC version cannot express. The deadline is 150
+        # min out -- outside the window at route start, so it is NOT promoted up front.
+        # It is served by proximity, not by promotion, so it is not first.
+        pkgs = self._three()
+        order = self._order(pkgs, {"400 W 23 ST": self.BASE + timedelta(minutes=150)})
+        assert order[0] != "400 W 23 ST", \
+            f"stop outside the window at t=0 was promoted anyway: {order}"
+        assert set(order) == {"100 W 23 ST", "102 W 23 ST", "400 W 23 ST"}
+
+    def test_no_cutoffs_is_identical_to_geometric_ordering(self):
+        pkgs = self._three()
+        assert self._order(pkgs, None) == self._order(pkgs, {}), \
+            "None and {} must both reproduce ADR-239 geometry"
+
+    def test_no_stop_is_lost_when_promoting(self):
+        pkgs = [self._pkg("W_23_St_100", f"{100 + i} W 23 ST", 40.74 + i / 1000, -73.99)
+                for i in range(8)]
+        cutoffs = {"105 W 23 ST": self.BASE + timedelta(minutes=10),
+                   "107 W 23 ST": self.BASE + timedelta(minutes=45)}
+        order = self._order(pkgs, cutoffs)
+        assert len(order) == 8 and len(set(order)) == 8, f"stop lost/duped: {order}"
+
+    def test_deterministic(self):
+        pkgs = self._three()
+        cutoffs = {"400 W 23 ST": self.BASE + timedelta(minutes=30)}
+        assert self._order(pkgs, cutoffs) == self._order(pkgs, cutoffs)
