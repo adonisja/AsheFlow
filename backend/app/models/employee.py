@@ -69,6 +69,12 @@ class Employee(Base):
     # Timecard sync only runs for employees where this flag is true.
     hr_system_id_adp          = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     hr_system_id_adp_verified = Column(Boolean, nullable=False, default=False)
+    # hr_system_work_assignment_id_adp: ADP's Position Fulfillment Identifier (PFID),
+    # from workAssignments[].itemID on GET /hr/v2/workers. Required in the
+    # eventContext of every timeEntries.modify write — a correction cannot be
+    # submitted without it. Nullable: populated by adp_sync, absent until the
+    # employee's first roster sync (ADR-233).
+    hr_system_work_assignment_id_adp = Column(String(64), nullable=True)
 
     # ── Modified duty / injury status ─────────────────────────────────────────
     # null = no restriction; "injured" = temporary light duty; "disabled" = permanent light duty.

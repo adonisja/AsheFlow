@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task"]
 )
 
 celery_app.conf.update(
@@ -54,6 +54,13 @@ celery_app.conf.beat_schedule = {
     "fuel-log-reminder-second": {
         "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
         "schedule": crontab(hour=18, minute=30),
+    },
+    # 01:00 AM Eastern Sunday — refresh the ADP pay period schedule. Runs ahead of
+    # the employee/timecard syncs because mismatch detection resolves a pay period
+    # per timecard and skips the timecard when none covers its work_date (ADR-233).
+    "sync-adp-pay-periods-weekly": {
+        "task": "app.tasks.adp_pay_period_sync.sync_adp_pay_periods",
+        "schedule": crontab(hour=1, minute=0, day_of_week=0),
     },
     # 02:00 AM Eastern — sync ADP employee roster for all enabled integrations
     "sync-adp-employees-nightly": {

@@ -25,6 +25,29 @@ from app.models.notification import Notification
 
 logger = logging.getLogger(__name__)
 
+
+def _primary_work_assignment_id(worker: dict) -> str | None:
+    """Extract the PFID (workAssignments[].itemID) from an ADP worker record.
+
+    Every timeEntries.modify write carries this in its eventContext alongside the
+    associateOID — a break correction cannot be submitted without it, and the
+    roster sync is the only place it is available (ADR-233).
+
+    A worker can hold several assignments (a transfer, a second position).
+    ADP flags the main one with primaryIndicator; absent that, the first is used,
+    which matches the single-assignment case that covers DSP staff.
+    """
+    assignments = worker.get("workAssignments") or []
+    if not assignments:
+        return None
+
+    primary = next(
+        (a for a in assignments if a.get("primaryIndicator") is True),
+        assignments[0],
+    )
+    item_id = primary.get("itemID")
+    return None if item_id is None else str(item_id)
+
 @celery_app.task(name="app.tasks.adp_sync.sync_adp_employees")
 def sync_adp_employees() -> dict:
     """Sync AsheFlow's employee roster against ADP RUN for all enabled integrations.
@@ -54,6 +77,7 @@ def sync_adp_employees() -> dict:
                 for worker in workers:
                     associate_oid = worker["associateOID"]
                     assignment_status = worker["workerStatus"]["statusCode"]["codeValue"]
+                    work_assignment_id = _primary_work_assignment_id(worker)
 
                     employee = db.query(Employee).filter(
                         Employee.hr_system_id_adp == associate_oid,
@@ -128,6 +152,7 @@ def sync_adp_employees() -> dict:
                             name = worker["person"]["legalName"]["formattedName"],
                             hr_system_id_adp = associate_oid,
                             hr_system_id_adp_verified = True,
+                            hr_system_work_assignment_id_adp = work_assignment_id,
                             account_status = "pending_verification",
                             is_active = True,
                             role = "walker"
@@ -137,6 +162,11 @@ def sync_adp_employees() -> dict:
                     else:
                         employee.name = worker["person"]["legalName"]["formattedName"]
                         employee.hr_system_id_adp_verified = True
+                        # Refreshed every sync: a transfer or position change
+                        # gives the worker a new PFID, and a stale one would make
+                        # ADP reject every correction for them.
+                        if work_assignment_id:
+                            employee.hr_system_work_assignment_id_adp = work_assignment_id
                         db.commit()
 
             except Exception as e:

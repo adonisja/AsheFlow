@@ -51,6 +51,9 @@ class ADPConfigureRequest(BaseModel):
     adp_client_secret: str
     adp_certificate: str
     adp_environment: str = "sandbox"
+    # Payroll group whose pay period schedule drives correction deadlines.
+    # Without it, pay period sync no-ops and mismatch detection stays blocked.
+    adp_payroll_group_id: str | None = None
 
     @field_validator("adp_environment")
     @classmethod
@@ -111,7 +114,23 @@ async def configure_adp(
     integration.adp_client_secret_arn = secret_arn
     integration.adp_certificate_arn   = cert_arn
     integration.adp_environment       = payload.adp_environment
+    integration.adp_payroll_group_id  = payload.adp_payroll_group_id
 
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=str(caller.id),
+        action_type="adp_integration.configure",
+        target_table="adp_integrations",
+        target_id=str(integration.id),
+        # Credentials are deliberately absent — only the non-sensitive config is
+        # recorded, never the secret or certificate material.
+        after={
+            "adp_environment": payload.adp_environment,
+            "adp_payroll_group_id": payload.adp_payroll_group_id,
+        },
+    )
     db.commit()
     return {"detail": "ADP integration configured"}
 
@@ -275,16 +294,28 @@ async def manager_sign_off(
         Employee.id == adjustment.employee_id,
     ).first()
 
-    pay_period = db.query(ADPPayPeriod).filter(
-        ADPPayPeriod.company_id == caller.company_id,
-        ADPPayPeriod.id == adjustment.pay_period_id
-    ).first()
+    # The Workforce Now write addresses the correction by the ADP entry it is
+    # amending and the employee's work assignment (PFID). Neither is recoverable
+    # here if absent, so fail before contacting ADP rather than sending a payload
+    # ADP will reject (ADR-233).
+    if not adjustment.adp_entry_id or not employee.hr_system_work_assignment_id_adp:
+        logger.warning(
+            "Adjustment %s (company %s) cannot be written to ADP: missing %s",
+            adjustment.id, caller.company_id,
+            "adp_entry_id" if not adjustment.adp_entry_id else "work assignment id",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This adjustment is missing the ADP references needed to submit a correction.",
+        )
 
     try:
         adp_response = await patch_adp_timecard(
             integration,
             employee.hr_system_id_adp,
-            pay_period.adp_pay_period_id,
+            employee.hr_system_work_assignment_id_adp,
+            adjustment.adp_entry_id,
+            adjustment.work_date,
             adjustment.proposed_break_start_at,
             adjustment.proposed_break_end_at
         )
@@ -292,7 +323,7 @@ async def manager_sign_off(
         adjustment.status = "applied"
         adjustment.adp_applied_at = datetime.now(timezone.utc)
         adjustment.adp_response_payload = adp_response
-    
+
     except ADPAuthError as e:
         logger.warning(
             "ADP auth failed during manager approval of adjustment %s (company %s) with status %s: %s",
