@@ -16,6 +16,7 @@ httpx==0.28.1
 slowapi==0.1.9
 pytest
 pytest-mock
+pytest-asyncio
 hypothesis
 
 openpyxl
