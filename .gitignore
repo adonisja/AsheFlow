@@ -179,3 +179,16 @@ cognito_keys.json
 
 backend/app/services/wave_distribution.py
 backend/app/services/stop_cutoff.py
+
+# Local browser-automation debug artifacts (Playwright MCP)
+.playwright-mcp/
+
+# Scraped ADP API catalogue — local research artifact, not source
+adp_api_list.json
+
+# Route-sort measurement/prototype scripts — import proprietary
+# seed_manifest/route_sort; synced to AsheFlow-private by the pre-push hook.
+backend/scripts/gen_clean_manifest.py
+backend/scripts/measure_clean.py
+backend/scripts/proto_clean.py
+backend/scripts/proto_segment_graph.py
