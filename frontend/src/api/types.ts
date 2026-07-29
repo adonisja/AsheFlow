@@ -1270,3 +1270,288 @@ export interface ScorecardCrossCheck {
   items: CrossCheckItem[];
   rts_evidence: { rts_type: string; count: number }[];
 }
+
+// ── Dashboard DTOs (Phase 1: Operational Efficiency & Compliance) ──────────────
+
+// Admin Dashboard
+export interface AdminSystemHealthSummary {
+  adp_last_sync: string; // ISO datetime
+  adp_status: 'connected' | 'stale' | 'error';
+  adp_employee_count: number;
+  adp_sync_failures_this_week: number;
+
+  flex_last_sync: string;
+  flex_manifest_count: number;
+  flex_misroute_count: number;
+  flex_data_freshness_hours: number;
+
+  db_health: {
+    replication_lag_ms: number;
+    backup_ok: boolean;
+    migration_active: boolean;
+  };
+  active_alerts: Array<{
+    severity: 'critical' | 'warning';
+    message: string;
+    since: string; // ISO datetime
+  }>;
+}
+
+export interface AdminComplianceSummary {
+  training_completion_pct: number;
+  days_since_last_crew_training: number;
+  overdue_trainees_count: number;
+
+  vehicle_inspection_pass_rate_7d: number;
+  failed_items_trending: Array<{
+    item_name: string;
+    failure_count: number;
+  }>;
+  repeat_failure_count: number;
+
+  incident_7d_count: number;
+  incident_30d_trend: Array<{
+    date: string; // YYYY-MM-DD
+    count: number;
+  }>;
+  unresolved_incident_count: number;
+  critical_incident_count: number;
+
+  timesheets_pending_approval: number;
+  hours_variance_flagged: number;
+  audit_flags_active: number;
+}
+
+export interface AdminDashboardSummary {
+  system_health: AdminSystemHealthSummary;
+  compliance: AdminComplianceSummary;
+}
+
+// Management Dashboard
+export interface ManagementOperationalSummary {
+  period: 'today' | 'week' | 'month';
+
+  packages_per_hour: number;
+  avg_time_per_package_minutes: number;
+  total_packages_delivered: number;
+  total_paid_hours: number;
+
+  delivery_success_rate_pct: number;
+  rework_rate_pct: number;
+  total_rework_count: number;
+
+  on_time_completion_rate_pct: number;
+  routes_completed: number;
+  routes_dispatched: number;
+
+  crew_utilization_pct: number;
+  crews_deployed: number;
+  crews_total: number;
+
+  trend_packages_per_hour: 'up' | 'down' | 'flat';
+  trend_success_rate: 'up' | 'down' | 'flat';
+}
+
+export interface ManagementCrewSummary {
+  active_trainees: number;
+  escalated_trainees: number;
+  training_completion_pct: number;
+
+  no_shows_this_week: Array<{
+    employee_name: string;
+    count: number;
+    role: string;
+  }>;
+  roll_call_completion_pct: number;
+
+  top_walkers: Array<{
+    employee_name: string;
+    avg_rating: number;
+    deliveries: number;
+  }>;
+  trouble_walkers: Array<{
+    employee_name: string;
+    no_show_count: number;
+    avg_rating: number | null;
+  }>;
+
+  vehicle_inspection_pass_rate_7d: number;
+  repeat_failure_items: Array<{
+    item_name: string;
+    failure_count: number;
+  }>;
+}
+
+export interface ManagementIncidentSummary {
+  total_7d: number;
+  by_severity: Record<string, number>;
+  by_category: Array<{
+    category: string;
+    count: number;
+    avg_30d: number;
+  }>;
+
+  unresolved_count: number;
+  oldest_unresolved_age_hours: number;
+
+  rts_pending_count: number;
+  avg_field_time_hours: number;
+  patterns: Array<{
+    route_id?: string;
+    category: string;
+    frequency: number;
+  }>;
+}
+
+export interface ManagementFleetSummary {
+  fleet_active: number;
+  fleet_completed: number;
+  fleet_pending: number;
+  fleet_behind_schedule: number;
+
+  route_on_time_rate_pct: number;
+  route_avg_completion_time_hours: number;
+
+  misrouted_7d_count: number;
+  misrouted_pct: number;
+  misrouted_hotspots: Array<{
+    zone?: string;
+    address?: string;
+    count: number;
+  }>;
+}
+
+export interface ManagementDashboardSummary {
+  operational: ManagementOperationalSummary;
+  crew: ManagementCrewSummary;
+  incidents: ManagementIncidentSummary;
+  fleet: ManagementFleetSummary;
+}
+
+// Dispatch Dashboard
+export interface DispatchFleetSnapshot {
+  timestamp: string; // ISO datetime
+  active_truck_count: number;
+  avg_deliveries_per_truck: number;
+  avg_time_per_package_minutes: number;
+
+  routes_dispatched_count: number;
+  routes_on_time_pct: number;
+  routes_stopped_count: number;
+
+  manifest_total: number;
+  manifest_assigned: number;
+  manifest_in_transit: number;
+  manifest_completed: number;
+}
+
+export interface DispatchPendingRequest {
+  id: string;
+  type: 'time_off' | 'off_day' | 'reassignment';
+  employee_name: string;
+  date: string;
+  submitted_at: string; // ISO datetime
+  age_minutes: number;
+  is_urgent: boolean;
+}
+
+export interface DispatchRtsRequest {
+  driver_id: string;
+  driver_name: string;
+  route_id: string;
+  completion_pct: number;
+  time_in_field_hours: number;
+  packages_remaining: number;
+  requested_at: string; // ISO datetime
+}
+
+export interface DispatchUrgentIncident {
+  incident_id: string;
+  severity: string;
+  category: string;
+  route_id?: string;
+  reported_at: string; // ISO datetime
+  age_minutes: number;
+}
+
+export interface DispatchActionQueue {
+  pending_requests: DispatchPendingRequest[];
+  rts_requests: DispatchRtsRequest[];
+  urgent_incidents: DispatchUrgentIncident[];
+}
+
+export interface DispatchPerformanceSummary {
+  slowest_routes: Array<{
+    route_id: string;
+    actual_time_hours: number;
+    expected_time_hours: number;
+    variance_pct: number;
+  }>;
+
+  fastest_crew: {
+    crew_id: string;
+    driver_name: string;
+    packages_per_hour: number;
+  } | null;
+  slowest_crew: {
+    crew_id: string;
+    driver_name: string;
+    packages_per_hour: number;
+  } | null;
+  crew_variance_pct: number;
+
+  optimization_suggestions: Array<{
+    type: string;
+    impact: string;
+    action: string;
+  }>;
+}
+
+export interface DispatchDashboardSummary {
+  fleet_snapshot: DispatchFleetSnapshot;
+  action_queue: DispatchActionQueue;
+  performance: DispatchPerformanceSummary;
+}
+
+// Trainer Dashboard
+export interface TrainerTraineeStatus {
+  active_trainees: number;
+  by_phase: Record<number, number>;
+  escalated_count: number;
+
+  today_sessions_scheduled: number;
+  today_sessions_completed: number;
+  today_sessions_pending: number;
+
+  graduation_completion_pct: number;
+  stuck_trainees: Array<{
+    trainee_name: string;
+    phase: number;
+    days_in_phase: number;
+  }>;
+}
+
+export interface TrainerPerformanceSummary {
+  weekly_rating_distribution: Record<number, number>;
+  problem_areas: Array<{
+    category: string;
+    trainee_name: string;
+    count: number;
+  }>;
+
+  escalations: Array<{
+    trainee_name: string;
+    reason: 'low_rating' | 'no_shows' | 'field_behavior' | 'incomplete_training';
+    escalated_at: string; // ISO datetime
+  }>;
+
+  ready_for_solo_phase4: Array<{
+    trainee_name: string;
+    approval_date: string; // YYYY-MM-DD
+  }>;
+}
+
+export interface TrainerDashboardSummary {
+  trainee_status: TrainerTraineeStatus;
+  performance: TrainerPerformanceSummary;
+}
