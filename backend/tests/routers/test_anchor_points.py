@@ -122,7 +122,7 @@ class TestConfirmAnchorPointIdempotency:
                 mock_cfg.return_value = MagicMock(is_configured=False, drivers_channel_id=None)
                 # Should raise 409 but currently does not — this asserts the bug
                 try:
-                    result = asyncio.get_event_loop().run_until_complete(
+                    result = asyncio.run(
                         confirm_anchor_point(
                             anchor_id=ap.id,
                             db=db,
@@ -153,7 +153,7 @@ class TestConfirmAnchorPointIdempotency:
         with patch("app.routers.anchor_points._post_embed_to_discord", new_callable=AsyncMock):
             with patch("app.routers.anchor_points.get_discord_config") as mock_cfg:
                 mock_cfg.return_value = MagicMock(is_configured=False)
-                result = asyncio.get_event_loop().run_until_complete(
+                result = asyncio.run(
                     confirm_anchor_point(
                         anchor_id=ap.id,
                         db=db,
@@ -173,7 +173,7 @@ class TestConfirmAnchorPointIdempotency:
         db = _make_db_returning(None)  # not found
 
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 confirm_anchor_point(
                     anchor_id=uuid.uuid4(),
                     db=db,
@@ -207,7 +207,7 @@ class TestArriveAnchorPointGuards:
         body.notes = None
 
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 arrive_anchor_point(
                     anchor_id=ap.id,
                     payload=body,
@@ -237,7 +237,7 @@ class TestArriveAnchorPointGuards:
         body.notes = None
 
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 arrive_anchor_point(
                     anchor_id=ap.id,
                     payload=body,
@@ -270,7 +270,7 @@ class TestDepartAnchorPointGuards:
         db = _make_db_returning(ap)
 
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 depart_anchor_point(
                     anchor_id=ap.id,
                     db=db,
@@ -296,7 +296,7 @@ class TestDepartAnchorPointGuards:
         db = _make_db_returning(ap)
 
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 depart_anchor_point(
                     anchor_id=ap.id,
                     db=db,
@@ -418,7 +418,7 @@ class TestSubmitAnchorPointMissingAudit:
                                    return_value=("MAIN ST & 5TH AVE", 40.75, -73.99)):
                             with patch("app.routers.anchor_points.write_audit") as mock_audit:
                                 try:
-                                    asyncio.get_event_loop().run_until_complete(
+                                    asyncio.run(
                                         submit_anchor_point(
                                             payload=body, db=db, caller=caller, _={}
                                         )
@@ -471,7 +471,7 @@ class TestSubmitAnchorPointGate:
                                     mock_geo.side_effect = geocode_raises
                                 else:
                                     mock_geo.return_value = geocode_return
-                                return asyncio.get_event_loop().run_until_complete(
+                                return asyncio.run(
                                     submit_anchor_point(payload=body, db=db, caller=caller, _={})
                                 )
 
@@ -547,7 +547,7 @@ class TestActiveAPCrewVisibilityGate:
 
         with patch("app.routers.anchor_points.company_today", return_value=date.today()):
             with patch("app.routers.anchor_points._maybe_flag_late", return_value=False):
-                return asyncio.get_event_loop().run_until_complete(
+                return asyncio.run(
                     get_active_anchor_point_for_truck(truck_id=truck_id, db=db, caller=caller, _={})
                 )
 
