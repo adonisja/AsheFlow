@@ -8,18 +8,33 @@ export default function TrainerDashboard() {
   const { user } = useAuth();
   const [summary, setSummary] = useState<TrainerDashboardSummary | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const loadDashboard = useCallback(async () => {
     setIsRefreshing(true);
+    setError(null);
     try {
       const res = await axiosClient.get('/dashboards/trainer/summary');
       setSummary(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message || 'Failed to load dashboard');
+      console.error('Dashboard error:', err);
     } finally {
       setIsRefreshing(false);
     }
   }, []);
 
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  if (error) {
+    return (
+      <div className="text-center py-10 space-y-4">
+        <p className="text-danger font-semibold">Error loading dashboard</p>
+        <p className="text-subtle text-sm">{error}</p>
+        <button onClick={loadDashboard} className="btn-primary text-sm">Retry</button>
+      </div>
+    );
+  }
 
   if (!summary) return <div className="text-center py-10 text-subtle">Loading dashboard...</div>;
 

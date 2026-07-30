@@ -12,19 +12,34 @@ export default function ManagementDashboard() {
   const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
   const [summary, setSummary] = useState<ManagementDashboardSummary | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<'today' | 'week' | 'month'>('week');
 
   const loadDashboard = useCallback(async () => {
     setIsRefreshing(true);
+    setError(null);
     try {
       const res = await axiosClient.get(`/dashboards/management/summary?period=${period}`);
       setSummary(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message || 'Failed to load dashboard');
+      console.error('Dashboard error:', err);
     } finally {
       setIsRefreshing(false);
     }
   }, [period]);
 
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  if (error) {
+    return (
+      <div className="text-center py-10 space-y-4">
+        <p className="text-danger font-semibold">Error loading dashboard</p>
+        <p className="text-subtle text-sm">{error}</p>
+        <button onClick={loadDashboard} className="btn-primary text-sm">Retry</button>
+      </div>
+    );
+  }
 
   if (!summary) return <div className="text-center py-10 text-subtle">Loading dashboard...</div>;
 
