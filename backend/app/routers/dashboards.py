@@ -1,23 +1,29 @@
-"""Dashboard API endpoints — role-scoped summary data for frontend dashboards.
+"""Role-scoped dashboard summary endpoints.
 
-Each endpoint returns pre-calculated summary DTOs:
-- /admin/summary — AdminDashboardSummary (admin only)
-- /management/summary — ManagementDashboardSummary (management only)
-- /dispatch/summary — DispatchDashboardSummary (dispatch only)
-- /trainer/summary — TrainerDashboardSummary (trainer only)
+  GET /dashboards/admin/summary       admin
+  GET /dashboards/management/summary  management, admin
+  GET /dashboards/dispatch/summary    dispatch, management, admin
+  GET /dashboards/trainer/summary     trainer, management, admin
 
-All endpoints:
-- Validate role permissions via RoleChecker
-- Scope queries to caller's company_id
-- Return cached DTOs (refresh every 2-10 minutes depending on metric velocity)
-- Handle errors gracefully (return defaults on query failure)
+Read-only aggregations. Every query is company-scoped inside the service layer
+(CLAUDE.md Dimension 1); the trainer endpoint is additionally scoped to the
+caller's own trainee roster.
+
+Imports follow the established router convention — app.database for get_db and
+app.api.deps for auth. The previous revision imported a non-existent app.db and
+app.auth, which raised ImportError at module load and prevented uvicorn from
+starting at all (502 on every route, including /health).
 """
+
+from datetime import date as _date
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from uuid import UUID
 
-from app.db import get_db
+from app.database import get_db
+from app.api.deps import RoleChecker, get_caller_employee
+from app.models.employee import Employee
 from app.schemas.dashboard_summaries import (
     AdminDashboardSummary,
     ManagementDashboardSummary,
@@ -30,93 +36,78 @@ from app.services.dashboard_summaries import (
     get_dispatch_dashboard_summary,
     get_trainer_dashboard_summary,
 )
-from app.auth import RoleChecker, get_current_user, CurrentUser
 
-router = APIRouter(prefix='/dashboards', tags=['dashboards'])
+router = APIRouter(prefix="/dashboards", tags=["dashboards"])
+
+allow_admin      = RoleChecker(["admin"])
+allow_management = RoleChecker(["management", "admin"])
+allow_dispatch   = RoleChecker(["dispatch", "management", "admin"])
+allow_trainer    = RoleChecker(["trainer", "management", "admin"])
 
 
-@router.get('/admin/summary', response_model=AdminDashboardSummary)
-def get_admin_summary(
+@router.get("/admin/summary", response_model=AdminDashboardSummary)
+def admin_summary(
     db: Session = Depends(get_db),
-    caller: CurrentUser = Depends(get_current_user),
-    _: None = Depends(RoleChecker(['admin'])),
-) -> AdminDashboardSummary:
-    """
-    Admin dashboard summary: system health + compliance.
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+):
+    """Integration freshness (ADP/Flex) + compliance posture.
 
-    Returns:
-    - System health (ADP/Flex sync status, DB health, active alerts)
-    - Compliance metrics (training %, inspections, incidents, payroll flags)
-
-    Access: admin only
-    Caching: 10 minutes (integration status changes infrequently)
+    Suggested client refresh: 10 minutes — sync state moves slowly.
     """
     return get_admin_dashboard_summary(db, caller.company_id)
 
 
-@router.get('/management/summary', response_model=ManagementDashboardSummary)
-def get_management_summary(
-    period: str = Query('week', regex='^(today|week|month)$'),
+@router.get("/management/summary", response_model=ManagementDashboardSummary)
+def management_summary(
+    period: str = Query("week", pattern="^(today|week|month)$"),
     db: Session = Depends(get_db),
-    caller: CurrentUser = Depends(get_current_user),
-    _: None = Depends(RoleChecker(['management', 'admin'])),
-) -> ManagementDashboardSummary:
-    """
-    Management dashboard summary: operational efficiency, crew, incidents, fleet.
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+):
+    """Operational efficiency, crew, incidents, fleet.
 
-    Query parameters:
-    - period: 'today', 'week', or 'month' (default: week)
+    Rates are package-denominated. Metrics with no available data return null,
+    never 0 — the client must render those as "—".
 
-    Returns:
-    - Operational efficiency (packages/hour, success rate, rework %, on-time %)
-    - Crew metrics (trainees, no-shows, walker performance, inspections)
-    - Incident summary (7d/30d trends, unresolved, RTS queue)
-    - Fleet status (active/completed/pending, utilization, misroutes)
-
-    Access: management, admin
-    Caching: 5 minutes (payroll/crew data doesn't update minute-by-minute)
+    Suggested client refresh: 5 minutes.
     """
     return get_management_dashboard_summary(db, caller.company_id, period=period)
 
 
-@router.get('/dispatch/summary', response_model=DispatchDashboardSummary)
-def get_dispatch_summary(
-    date: str = Query(None, description='YYYY-MM-DD; defaults to today'),
+@router.get("/dispatch/summary", response_model=DispatchDashboardSummary)
+def dispatch_summary(
+    target_date: Optional[_date] = Query(
+        None, alias="date", description="YYYY-MM-DD; defaults to company-local today"
+    ),
     db: Session = Depends(get_db),
-    caller: CurrentUser = Depends(get_current_user),
-    _: None = Depends(RoleChecker(['dispatch', 'management', 'admin'])),
-) -> DispatchDashboardSummary:
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch),
+):
+    """Live fleet snapshot, action queue, route performance.
+
+    The action queue carries reassignments only — time-off is a manager concern
+    owned by ADP, not a dispatch queue.
+
+    Suggested client refresh: 30 seconds.
     """
-    Dispatch dashboard summary: real-time operations.
-
-    Query parameters:
-    - date: YYYY-MM-DD for specific dispatch date (default: today)
-
-    Returns:
-    - Fleet snapshot (active trucks, deliveries, manifest progress)
-    - Action queue (pending approvals aged, RTS requests, urgent incidents)
-    - Performance (slowest routes, crew variance, optimization suggestions)
-
-    Access: dispatch, management, admin
-    Caching: 30 seconds (real-time ops; fleet status changes frequently)
-    """
-    return get_dispatch_dashboard_summary(db, caller.company_id, date_str=date)
+    return get_dispatch_dashboard_summary(
+        db, caller.company_id,
+        date_str=target_date.isoformat() if target_date else None,
+    )
 
 
-@router.get('/trainer/summary', response_model=TrainerDashboardSummary)
-def get_trainer_summary(
+@router.get("/trainer/summary", response_model=TrainerDashboardSummary)
+def trainer_summary(
     db: Session = Depends(get_db),
-    caller: CurrentUser = Depends(get_current_user),
-    _: None = Depends(RoleChecker(['trainer', 'management', 'admin'])),
-) -> TrainerDashboardSummary:
-    """
-    Trainer dashboard summary: trainee progress & performance.
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_trainer),
+):
+    """Trainee roster + training signals, scoped to the caller's own trainees.
 
-    Returns trainee data scoped to caller's trainee roster:
-    - Trainee status (active by phase, escalations, graduation %, stuck trainees)
-    - Performance (weekly ratings, problem areas, escalation reasons, ready-for-solo)
+    Object-level scoping: filtered by TrainingRecord.trainer_id == caller.id, so
+    a trainer sees only their own roster (Dimension 2).
 
-    Access: trainer, management, admin
-    Caching: 10 minutes (training status changes via explicit actions, not polling)
+    Suggested client refresh: 10 minutes.
     """
     return get_trainer_dashboard_summary(db, caller.company_id, trainer_id=caller.id)
