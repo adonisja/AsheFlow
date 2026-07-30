@@ -120,3 +120,73 @@ class ScorecardTrendResponse(BaseModel):
     # to-do list, rather than making the reader scan every row.
     focus_now: List[str] = []
     missing_weeks: List[str] = []       # gaps in the range, so absence is visible
+
+
+# ── Tier 1: company overview, visible to every role ──────────────────────────
+
+class CompanyStandingCard(BaseModel):
+    """The company's standing — a shared fact about the operation, no PII.
+
+    Surfaces as a header card for every role, so a driver knows where the DSP
+    stands without seeing anyone's individual numbers.
+    """
+    week: Optional[str] = None
+    standing: Optional[str] = None
+    previous_standing: Optional[str] = None
+    direction: Optional[str] = None       # improved | declined | unchanged | None
+    consecutive_weeks: int = 0            # weeks held at the CURRENT standing
+    has_data: bool = False
+
+
+# ── Tier 3: individual trends ────────────────────────────────────────────────
+
+class IndividualMetricPoint(BaseModel):
+    week: str
+    value: Optional[float] = None
+    raw: str
+    flag: Optional[str] = None
+
+
+class IndividualMetricTrend(BaseModel):
+    key: str
+    label: str
+    unit: Optional[str] = None
+    points: List[IndividualMetricPoint]
+    latest: Optional[float] = None
+    previous: Optional[float] = None
+    delta: Optional[float] = None
+    direction: Optional[str] = None       # already inverted for lower-is-better
+
+
+class IndividualTrendResponse(BaseModel):
+    """One person's scorecard trend. Self-serve or management-viewed."""
+    employee_id: Optional[str] = None
+    employee_name: Optional[str] = None
+    weeks: List[str]
+    standings: List[StandingPoint]
+    current_standing: Optional[str] = None
+    metrics: List[IndividualMetricTrend]
+    focus_now: List[str] = []
+
+
+class IndividualRosterRow(BaseModel):
+    """A roster row for the management leaderboard.
+
+    Named deliberately — management and admin only, consistent with
+    /field-ops/walker-leaderboard which already shows named ratings to the same
+    audience. Never exposed to dispatch or to field staff.
+    """
+    employee_id: str
+    employee_name: str
+    employee_role: Optional[str] = None
+    latest_week: Optional[str] = None
+    standing: Optional[str] = None
+    weeks_recorded: int = 0
+    flagged_metric_count: int = 0         # metrics needing focus in latest week
+    trend_direction: Optional[str] = None # standing movement vs prior week
+
+
+class IndividualRosterResponse(BaseModel):
+    weeks_considered: List[str]
+    rows: List[IndividualRosterRow]
+    employees_without_scorecards: int = 0

@@ -12,6 +12,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -19,6 +20,8 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.scorecard import Scorecard, ScorecardMetric
 from app.schemas.scorecard import (
+    CompanyStandingCard, IndividualTrendResponse, IndividualMetricTrend,
+    IndividualMetricPoint, IndividualRosterResponse, IndividualRosterRow,
     ScorecardTrendResponse, MetricTrend, MetricTrendPoint, StandingPoint,
     ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn,
     CrossCheckResponse, CrossCheckItem, RtsReasonEvidence,
@@ -27,7 +30,20 @@ from app.services.audit import write_audit
 
 router = APIRouter(prefix="/scorecards", tags=["scorecards"])
 
-_allow_mgmt = RoleChecker(["dispatch", "management", "admin"])
+# Access tiers — see docs/SCORECARD_ACCESS_MODEL.md.
+#
+# Dispatch and management are NOT the same role. The former single _allow_mgmt
+# gate conflated them and sat on endpoints returning individual scorecards, so
+# dispatch could read every driver's personal Amazon metrics. Dispatch assigns
+# tomorrow's crew; per-person performance review is not their function.
+_ALL_ROLES = ["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"]
+
+# Tier 1 — company standing only. A shared fact about the operation, no per-person data.
+_allow_company_read = RoleChecker(_ALL_ROLES)
+# Tier 2 — company detail + trend. Dispatch included: company-level context, still no PII.
+_allow_company_detail = RoleChecker(["dispatch", "management", "admin"])
+# Tier 3/4 — individual scorecards, entry, deletion, appeals. Management owns these.
+_allow_individual = RoleChecker(["management", "admin"])
 
 
 def _serialize(sc: Scorecard, emp_name: Optional[str]) -> dict:
@@ -43,7 +59,7 @@ def _serialize(sc: Scorecard, emp_name: Optional[str]) -> dict:
 def upsert_scorecard(
     payload: ScorecardCreate,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_mgmt),
+    _: dict = Depends(_allow_individual),
     db: Session = Depends(get_db),
 ):
     """Create or replace the scorecard for (week, scope, employee). Upsert on the
@@ -109,7 +125,7 @@ def upsert_scorecard(
 async def parse_scorecard(
     file: UploadFile = File(...),
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_mgmt),
+    _: dict = Depends(_allow_individual),
 ):
     """Auto-extract a scorecard image into a DRAFT (ADR-204 Phase C) using the
     existing AWS Textract integration. Does NOT save — the manager reviews/edits
@@ -156,56 +172,11 @@ def get_my_scorecards(
     return [_serialize(sc, caller.name) for sc in rows]
 
 
-@router.get("/{week}", response_model=List[ScorecardOut])
-def get_week_scorecards(
-    week: str,
-    caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_mgmt),
-    db: Session = Depends(get_db),
-):
-    """All scorecards for a week (individual + company) — management view."""
-    cid = caller.company_id
-    rows = db.query(Scorecard).filter(
-        Scorecard.company_id == cid, Scorecard.week == week,
-    ).all()
-    emp_ids = {sc.employee_id for sc in rows if sc.employee_id}
-    names = {
-        e.id: e.name for e in db.query(Employee).filter(
-            Employee.id.in_(emp_ids), Employee.company_id == cid,
-        ).all()
-    } if emp_ids else {}
-    return [_serialize(sc, names.get(sc.employee_id)) for sc in rows]
-
-
-def _iso_week_range(week: str):
-    """"2026-W28" → (monday, sunday) dates, or None if unparseable."""
-    import re
-    from datetime import date as _date
-    m = re.match(r"^\s*(\d{4})-W(\d{1,2})\s*$", week)
-    if not m:
-        return None
-    year, wk = int(m.group(1)), int(m.group(2))
-    try:
-        monday = _date.fromisocalendar(year, wk, 1)
-        sunday = _date.fromisocalendar(year, wk, 7)
-        return monday, sunday
-    except ValueError:
-        return None
-
-
-def _num(value: str):
-    """Pull the first number out of a scorecard value string ("203", "14492.7",
-    "100.0%"). Returns None for tier words (PLATINUM)."""
-    import re
-    m = re.search(r"-?\d[\d,]*\.?\d*", (value or "").replace(",", ""))
-    return float(m.group(0)) if m else None
-
-
 @router.get("/{scorecard_id}/cross-check", response_model=CrossCheckResponse)
 def cross_check_scorecard(
     scorecard_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_mgmt),
+    _: dict = Depends(_allow_individual),
     db: Session = Depends(get_db),
 ):
     """Compare an INDIVIDUAL scorecard's Amazon numbers against our own data for
@@ -305,7 +276,7 @@ def cross_check_scorecard(
 def delete_scorecard(
     scorecard_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_mgmt),
+    _: dict = Depends(_allow_individual),
     db: Session = Depends(get_db),
 ):
     sc = db.query(Scorecard).filter(
@@ -333,6 +304,26 @@ _LOWER_IS_BETTER = {
     "harsh_braking", "harsh_acceleration", "harsh_cornering",
     "customer_escalation_dpmo", "cdf_dpmo", "ced",
 }
+
+
+# Amazon's standing ladder, best first. Index order matters: a LOWER index is a
+# BETTER tier, so improvement means the index decreased.
+_STANDING_LADDER = ["FANTASTIC", "GREAT", "FAIR", "POOR", "AT RISK"]
+
+
+def _standing_rank(standing: Optional[str]) -> Optional[int]:
+    """Ladder position, or None for an unrecognised label.
+
+    None is deliberate: an unknown tier word must not be silently treated as
+    best or worst, which would fabricate a direction.
+    """
+    if not standing:
+        return None
+    u = standing.strip().upper()
+    for i, tier in enumerate(_STANDING_LADDER):
+        if tier in u:
+            return i
+    return None
 
 
 def _numeric(raw: str) -> Optional[float]:
@@ -379,7 +370,7 @@ def get_company_trend(
     weeks: int = 12,
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_mgmt),
+    _: dict = Depends(_allow_company_detail),
 ):
     """Company scorecard trend over the last N weeks.
 
@@ -488,3 +479,339 @@ def get_company_trend(
         focus_now=focus_now,
         missing_weeks=missing,
     )
+
+
+# ── Tier 1: company standing card (all roles) ────────────────────────────────
+
+@router.get("/company/current", response_model=CompanyStandingCard)
+def get_company_standing(
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_company_read),
+):
+    """The company's current standing — visible to EVERY role.
+
+    Tier 1 (docs/SCORECARD_ACCESS_MODEL.md): a shared fact about the operation
+    with no per-person data in it. A driver knowing the DSP is at PLATINUM is the
+    same class of information as a company announcement.
+
+    Returns the streak of consecutive weeks at the current standing, because
+    "PLATINUM, 6 weeks running" carries information that "PLATINUM" alone does not.
+    """
+    cards = (
+        db.query(Scorecard)
+        .filter(Scorecard.company_id == caller.company_id,
+                Scorecard.scope == "company")
+        .order_by(Scorecard.week.desc())
+        .limit(52)
+        .all()
+    )
+    if not cards:
+        return CompanyStandingCard(has_data=False)
+
+    current = cards[0]
+    previous = cards[1] if len(cards) > 1 else None
+
+    direction = None
+    if previous and current.overall_standing and previous.overall_standing:
+        cur_i = _standing_rank(current.overall_standing)
+        prev_i = _standing_rank(previous.overall_standing)
+        if cur_i is None or prev_i is None:
+            direction = None
+        elif cur_i < prev_i:
+            direction = "improved"        # lower index = better tier
+        elif cur_i > prev_i:
+            direction = "declined"
+        else:
+            direction = "unchanged"
+
+    # Walk back while the standing matches — the streak at the CURRENT tier.
+    streak = 0
+    for c in cards:
+        if c.overall_standing == current.overall_standing:
+            streak += 1
+        else:
+            break
+
+    return CompanyStandingCard(
+        week=current.week,
+        standing=current.overall_standing,
+        previous_standing=previous.overall_standing if previous else None,
+        direction=direction,
+        consecutive_weeks=streak,
+        has_data=True,
+    )
+
+
+# ── Tier 3: individual trends ────────────────────────────────────────────────
+
+def _individual_trend(db: Session, company_id, employee_id, name: Optional[str],
+                      weeks: int) -> IndividualTrendResponse:
+    """Shared trend builder for one person.
+
+    Reuses _numeric, _LOWER_IS_BETTER and the same 0.5% dead band as the company
+    trend, so self-serve and management views cannot drift from each other or
+    from the company page.
+    """
+    cards = (
+        db.query(Scorecard)
+        .filter(Scorecard.company_id == company_id,
+                Scorecard.scope == "individual",
+                Scorecard.employee_id == employee_id)
+        .order_by(Scorecard.week.desc())
+        .limit(max(2, min(weeks, 52)))
+        .all()
+    )
+    cards.reverse()
+    if not cards:
+        return IndividualTrendResponse(
+            employee_id=str(employee_id) if employee_id else None,
+            employee_name=name, weeks=[], standings=[], metrics=[], focus_now=[],
+        )
+
+    week_labels = [c.week for c in cards]
+    metric_rows = (
+        db.query(ScorecardMetric)
+        .filter(ScorecardMetric.scorecard_id.in_([c.id for c in cards]))
+        .all()
+    )
+    by_card: dict = {}
+    for m in metric_rows:
+        by_card.setdefault(m.scorecard_id, []).append(m)
+
+    series: dict = {}
+    for card in cards:
+        for m in by_card.get(card.id, []):
+            s = series.setdefault(m.key, {
+                "label": m.label, "unit": m.unit,
+                "sort_order": m.sort_order, "weeks": {},
+            })
+            s["weeks"][card.week] = m
+
+    trends = []
+    for key, s in series.items():
+        points, numeric_seen = [], []
+        for wk in week_labels:
+            m = s["weeks"].get(wk)
+            if m is None:
+                points.append(IndividualMetricPoint(week=wk, value=None, raw=""))
+                continue
+            val = _numeric(m.value)
+            if val is not None:
+                numeric_seen.append(val)
+            points.append(IndividualMetricPoint(
+                week=wk, value=val, raw=m.value, flag=m.flag))
+
+        latest = numeric_seen[-1] if numeric_seen else None
+        prev = numeric_seen[-2] if len(numeric_seen) > 1 else None
+        delta = round(latest - prev, 3) if (latest is not None and prev is not None) else None
+
+        direction = None
+        if delta is not None and prev:
+            improved = delta < 0 if key in _LOWER_IS_BETTER else delta > 0
+            if abs(delta) / abs(prev) < 0.005:
+                direction = "flat"
+            else:
+                direction = "up" if improved else "down"
+
+        trends.append(IndividualMetricTrend(
+            key=key, label=s["label"], unit=s["unit"], points=points,
+            latest=latest, previous=prev, delta=delta, direction=direction))
+
+    trends.sort(key=lambda t: series[t.key]["sort_order"])
+    newest = week_labels[-1]
+    focus = [t.label for t in trends
+             if any(p.week == newest and p.flag == "needs_focus" for p in t.points)]
+
+    return IndividualTrendResponse(
+        employee_id=str(employee_id) if employee_id else None,
+        employee_name=name,
+        weeks=week_labels,
+        standings=[StandingPoint(week=c.week, standing=c.overall_standing) for c in cards],
+        current_standing=cards[-1].overall_standing,
+        metrics=trends,
+        focus_now=focus,
+    )
+
+
+@router.get("/me/trend", response_model=IndividualTrendResponse)
+def get_my_trend(
+    weeks: int = 12,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """The caller's OWN scorecard trend.
+
+    Self-access is an ownership filter (employee_id == caller.id), not a role
+    gate — which is why this needs nothing beyond authentication. Field staff see
+    the numbers they are judged by; they see no peer's data.
+    """
+    return _individual_trend(db, caller.company_id, caller.id, caller.name, weeks)
+
+
+@router.get("/individual/{employee_id}/trend", response_model=IndividualTrendResponse)
+def get_employee_trend(
+    employee_id: UUID,
+    weeks: int = 12,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+):
+    """Any employee's scorecard trend — management and admin only (Tier 3).
+
+    Dispatch is denied by the gate: per-person performance review is not a
+    dispatch function.
+    """
+    target = (
+        db.query(Employee)
+        .filter(Employee.id == employee_id,
+                Employee.company_id == caller.company_id)
+        .first()
+    )
+    if target is None:
+        # 404 rather than leaking whether the id exists in another tenant.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Employee not found.")
+    return _individual_trend(db, caller.company_id, target.id, target.name, weeks)
+
+
+@router.get("/individual/roster", response_model=IndividualRosterResponse)
+def get_individual_roster(
+    weeks: int = 4,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+):
+    """Named roster of individual scorecard status — management and admin only.
+
+    Named deliberately, matching /field-ops/walker-leaderboard which already
+    shows named performance to this same audience. Anonymising it would make it
+    unactionable for the people whose job is to act on it.
+
+    Reports employees_without_scorecards so a thin roster reads as missing data
+    rather than as a small team.
+    """
+    weeks = max(1, min(weeks, 26))
+
+    cards = (
+        db.query(Scorecard)
+        .filter(Scorecard.company_id == caller.company_id,
+                Scorecard.scope == "individual")
+        .order_by(Scorecard.week.desc())
+        .all()
+    )
+    if not cards:
+        return IndividualRosterResponse(weeks_considered=[], rows=[])
+
+    recent_weeks = sorted({c.week for c in cards}, reverse=True)[:weeks]
+    in_scope = [c for c in cards if c.week in set(recent_weeks)]
+
+    emp_ids = {c.employee_id for c in in_scope if c.employee_id}
+    employees = {
+        e.id: e for e in
+        db.query(Employee).filter(Employee.id.in_(emp_ids),
+                                  Employee.company_id == caller.company_id).all()
+    }
+
+    flagged = {}
+    for m in (db.query(ScorecardMetric)
+              .filter(ScorecardMetric.scorecard_id.in_([c.id for c in in_scope]),
+                      ScorecardMetric.flag == "needs_focus").all()):
+        flagged[m.scorecard_id] = flagged.get(m.scorecard_id, 0) + 1
+
+    per_emp: dict = {}
+    for c in sorted(in_scope, key=lambda x: x.week):
+        if c.employee_id:
+            per_emp.setdefault(c.employee_id, []).append(c)
+
+    rows = []
+    for eid, ecards in per_emp.items():
+        emp = employees.get(eid)
+        if emp is None:
+            continue
+        newest = ecards[-1]
+        prior = ecards[-2] if len(ecards) > 1 else None
+        direction = None
+        if prior and newest.overall_standing and prior.overall_standing:
+            n_i, p_i = _standing_rank(newest.overall_standing), _standing_rank(prior.overall_standing)
+            if n_i is not None and p_i is not None:
+                direction = "improved" if n_i < p_i else "declined" if n_i > p_i else "unchanged"
+        rows.append(IndividualRosterRow(
+            employee_id=str(eid),
+            employee_name=emp.name,
+            employee_role=emp.role,
+            latest_week=newest.week,
+            standing=newest.overall_standing,
+            weeks_recorded=len(ecards),
+            flagged_metric_count=flagged.get(newest.id, 0),
+            trend_direction=direction,
+        ))
+
+    # Worst first: flagged count, then declining standing. The point of a roster
+    # is finding who needs attention, not alphabetical browsing.
+    rows.sort(key=lambda r: (-r.flagged_metric_count, r.trend_direction != "declined"))
+
+    active_field = (
+        db.query(func.count(Employee.id))
+        .filter(Employee.company_id == caller.company_id,
+                Employee.is_active == True,   # noqa: E712
+                Employee.role.in_(["driver", "walker", "trainer", "trainee"]))
+        .scalar()
+    ) or 0
+
+    return IndividualRosterResponse(
+        weeks_considered=sorted(recent_weeks),
+        rows=rows,
+        employees_without_scorecards=max(0, int(active_field) - len(rows)),
+    )
+
+
+# NOTE ON ORDERING: /{week} is a catch-all single-segment path, so it MUST be
+# declared after every literal route under /scorecards. Declared earlier, a
+# request to /scorecards/company/current matched here with week="company" and hit
+# the management-only gate — surfacing as an inexplicable 403 for field staff
+# rather than as a routing bug. FastAPI matches in declaration order.
+
+@router.get("/{week}", response_model=List[ScorecardOut])
+def get_week_scorecards(
+    week: str,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+    db: Session = Depends(get_db),
+):
+    """All scorecards for a week (individual + company) — management view."""
+    cid = caller.company_id
+    rows = db.query(Scorecard).filter(
+        Scorecard.company_id == cid, Scorecard.week == week,
+    ).all()
+    emp_ids = {sc.employee_id for sc in rows if sc.employee_id}
+    names = {
+        e.id: e.name for e in db.query(Employee).filter(
+            Employee.id.in_(emp_ids), Employee.company_id == cid,
+        ).all()
+    } if emp_ids else {}
+    return [_serialize(sc, names.get(sc.employee_id)) for sc in rows]
+
+
+def _iso_week_range(week: str):
+    """"2026-W28" → (monday, sunday) dates, or None if unparseable."""
+    import re
+    from datetime import date as _date
+    m = re.match(r"^\s*(\d{4})-W(\d{1,2})\s*$", week)
+    if not m:
+        return None
+    year, wk = int(m.group(1)), int(m.group(2))
+    try:
+        monday = _date.fromisocalendar(year, wk, 1)
+        sunday = _date.fromisocalendar(year, wk, 7)
+        return monday, sunday
+    except ValueError:
+        return None
+
+
+def _num(value: str):
+    """Pull the first number out of a scorecard value string ("203", "14492.7",
+    "100.0%"). Returns None for tier words (PLATINUM)."""
+    import re
+    m = re.search(r"-?\d[\d,]*\.?\d*", (value or "").replace(",", ""))
+    return float(m.group(0)) if m else None
