@@ -4,9 +4,9 @@ import { getLocalYMD } from '../../utils/date';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2,
-  LayoutDashboard, RefreshCw, Package, MapPin, LogIn, ShoppingBag,
+  LayoutDashboard, RefreshCw, Package, MapPin, LogIn,
 } from 'lucide-react';
-import GearManagerInbox from '../gear/GearManagerInbox';
+import GearRequestSummary from '../gear/GearRequestSummary';
 import type { NoShowRow, InspectionSummaryRow, ManagementDashboardSummary } from '../../api/types';
 import { pct, metric, count, hours } from '../../utils/metric';
 
@@ -653,14 +653,11 @@ export default function ManagementView() {
         )}
       </div>
 
-      {/* Gear Requests */}
-      <div className="card border-border/60">
-        <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
-          <ShoppingBag className="w-5 h-5 text-primary" />
-          <h2 className="text-base font-semibold text-foreground">Gear Requests</h2>
-        </div>
-        <GearManagerInbox />
-      </div>
+      {/* Gear requests — SUMMARY only. The full interactive queue (per-item
+          approve/deny/fulfil) lives on /gear; embedding it here duplicated the
+          same actions in two places. This answers "does the queue need me?" and
+          links onward. */}
+      <GearRequestSummary />
     </div>
   );
 }
