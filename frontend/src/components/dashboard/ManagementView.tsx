@@ -7,7 +7,8 @@ import {
   LayoutDashboard, RefreshCw, Package, MapPin, LogIn, ShoppingBag,
 } from 'lucide-react';
 import GearManagerInbox from '../gear/GearManagerInbox';
-import type { NoShowRow, InspectionSummaryRow } from '../../api/types';
+import type { NoShowRow, InspectionSummaryRow, ManagementDashboardSummary } from '../../api/types';
+import { pct, metric, count, hours } from '../../utils/metric';
 
 export default function ManagementView() {
   const { user } = useAuth();
@@ -24,6 +25,12 @@ export default function ManagementView() {
   const [pendingRTS, setPendingRTS]           = useState<any[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
+  // ADR-241: efficiency + routing quality. This is the only source of
+  // packages/hour, success/rework rates, on-time and misroutes — the other
+  // panels here are all point-in-time counts. Nullable throughout: the backend
+  // returns null when a metric cannot be computed, never a misleading 0.
+  const [efficiency, setEfficiency] = useState<ManagementDashboardSummary | null>(null);
+  const [effPeriod, setEffPeriod]   = useState<'today' | 'week' | 'month'>('week');
 
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
@@ -40,9 +47,11 @@ export default function ManagementView() {
       axiosClient.get('/shift-ops/station-handoffs/summary').then(r => setHandoffSummary(r.data)).catch(() => {}),
       axiosClient.get('/shift-ops/rts-reports/pending').then(r => setPendingRTS(r.data)).catch(() => {}),
       axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {}),
+      axiosClient.get(`/dashboards/management/summary?period=${effPeriod}`)
+        .then(r => setEfficiency(r.data)).catch(() => setEfficiency(null)),
     ]);
     setIsRefreshing(false);
-  }, []);
+  }, [effPeriod]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -121,6 +130,123 @@ export default function ManagementView() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Operational efficiency + routing quality (ADR-241).
+          Deliberately NOT cost-per-delivery: clients do not share wage rates,
+          so cost is not computable. These are the operational facts a manager
+          can act on, and against which they can apply their own costs. */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <BarChart2 className="w-5 h-5 text-info" />
+          <h2 className="text-base font-semibold text-foreground">Operational Efficiency</h2>
+          <select
+            value={effPeriod}
+            onChange={(e) => setEffPeriod(e.target.value as 'today' | 'week' | 'month')}
+            className="ml-auto px-2 py-1 rounded-lg border border-border bg-accent/20 text-xs"
+            aria-label="Efficiency period"
+          >
+            <option value="today">Today</option>
+            <option value="week">This week</option>
+            <option value="month">This month</option>
+          </select>
+        </div>
+
+        {!efficiency ? (
+          <p className="text-sm text-subtle text-center py-6">
+            Efficiency data unavailable.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {[
+                {
+                  label: 'Packages/Hour',
+                  value: metric(efficiency.operational.packages_per_hour),
+                  sub: efficiency.operational.prior_packages_per_hour != null
+                    ? `prior ${metric(efficiency.operational.prior_packages_per_hour)}`
+                    : efficiency.operational.paid_hours_source === 'none'
+                      ? 'no payroll hours'
+                      : 'no prior period',
+                  trend: efficiency.operational.trend_packages_per_hour,
+                },
+                {
+                  label: 'Success Rate',
+                  value: pct(efficiency.operational.delivery_success_rate_pct),
+                  sub: `${count(efficiency.operational.total_packages_delivered)} delivered`,
+                  trend: efficiency.operational.trend_success_rate,
+                },
+                {
+                  label: 'Rework Rate',
+                  value: pct(efficiency.operational.rework_rate_pct, 1),
+                  sub: `${count(efficiency.operational.total_rework_count)} RTS + missing`,
+                },
+                {
+                  // Distinct from route completion: needs CompanyConfig.shift_end.
+                  label: 'On-Time',
+                  value: pct(efficiency.operational.on_time_rate_pct),
+                  sub: efficiency.operational.on_time_reference
+                    ? `vs ${efficiency.operational.on_time_reference}`
+                    : 'shift end not set',
+                },
+                {
+                  label: 'Crew Utilization',
+                  value: pct(efficiency.operational.crew_utilization_pct),
+                  sub: `${count(efficiency.operational.crews_deployed)}/${count(efficiency.operational.crews_total)} deployed`,
+                },
+              ].map(k => (
+                <div key={k.label} className="p-3 rounded-lg bg-accent/20">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider truncate">{k.label}</p>
+                  <p className="text-xl font-bold text-foreground mt-0.5 tabular-nums">{k.value}</p>
+                  <p className="text-xs text-subtle truncate">
+                    {k.trend === 'up' ? '↑ ' : k.trend === 'down' ? '↓ ' : ''}{k.sub}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Routing quality — nothing else on this page surfaces misroutes */}
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+              <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
+                <span className="text-subtle">Avg route time</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {hours(efficiency.fleet.route_avg_duration_hours)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
+                <span className="text-subtle">Misroutes</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {count(efficiency.fleet.misrouted_count)}
+                  <span className="text-subtle ml-1">
+                    ({count(efficiency.fleet.misrouted_unresolved)} open)
+                  </span>
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
+                <span className="text-subtle">Avg min/stop</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {metric(efficiency.operational.avg_minutes_per_stop)}
+                </span>
+              </div>
+            </div>
+
+            {efficiency.fleet.misrouted_hotspots.length > 0 && (
+              <div className="mt-4 space-y-1.5">
+                <p className="text-xs text-subtle uppercase tracking-wider flex items-center gap-1">
+                  <MapPin className="w-3 h-3" /> Misroute hotspots
+                </p>
+                {efficiency.fleet.misrouted_hotspots.map(h => (
+                  <div key={h.block_key} className="flex items-center justify-between">
+                    {/* block_key, never normalised_address — Dimension 7, and
+                        ADR-219 nulls addresses 48h post-route anyway. */}
+                    <span className="text-sm text-foreground font-mono truncate">{h.block_key}</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums">{count(h.count)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* 3-column reporting panels */}
