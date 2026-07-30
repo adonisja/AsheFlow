@@ -33,7 +33,6 @@ from app.models.delivery_stop import DeliveryStop
 from app.models.truck_assignment import TruckAssignment
 from app.models.incident import Incident
 from app.models.training import TrainingRecord, TrainingTask
-from app.models.trainer_mark import TrainerMark
 from app.models.shift_roll_call import ShiftRollCall
 from app.models.rts_clearance import RTSReport
 from app.models.walker_route import Route, RouteParticipant, MisroutedPackageFlag
@@ -52,9 +51,7 @@ from app.schemas.dashboard_summaries import (
     DispatchFleetSnapshot, DispatchActionQueue, DispatchPendingRequest,
     DispatchRtsRequest, DispatchUrgentIncident, DispatchPerformanceSummary,
     DispatchDashboardSummary, SlowestRoute, CrewPerformance,
-    TrainerTraineeStatus, TrainerPerformanceSummary, TrainerDashboardSummary,
-    TraineePhaseRow, StuckTrainee, ProblemArea, Phase4Result,
-    TraineeFeedbackAboutMe, TrainerMarkSummary,
+    TraineePhaseRow, StuckTrainee, ProblemArea,
 )
 
 URGENT_AGE_MINUTES = 240
@@ -289,11 +286,17 @@ def _graduation_pct(db: Session, company_id: UUID) -> Optional[float]:
 
     There is no graduation timestamp; role transition is the actual end state.
     """
-    trainee_ids = [
-        r[0] for r in
+    # Coerce to UUID: SQLite round-trips these as plain strings, which then
+    # fail to bind against a UUID-typed IN clause. Postgres returns UUID
+    # objects already, so this is a no-op there.
+    trainee_ids = []
+    for (tid,) in (
         db.query(func.distinct(TrainingRecord.trainee_id))
         .filter(TrainingRecord.company_id == company_id).all()
-    ]
+    ):
+        if tid is None:
+            continue
+        trainee_ids.append(tid if isinstance(tid, UUID) else UUID(str(tid)))
     if not trainee_ids:
         return None
     graduated = (
@@ -335,6 +338,95 @@ def _active_trainee_count(db: Session, company_id: UUID) -> int:
         )
         .scalar()
     ) or 0
+
+
+def _training_oversight(db: Session, company_id: UUID) -> dict:
+    """Company-wide training roster: phase distribution, stuck trainees, and
+    failing task topics.
+
+    Scoped to the COMPANY, not a trainer — this is oversight. Phases are rows,
+    not a {1..4} dict, because current_day_number reaches 5 (quiz) and 6+
+    (remediation); a fixed map silently drops those trainees.
+    """
+    today = _company_today(db, company_id)
+
+    active_ids = {
+        r[0] for r in
+        db.query(Employee.id).filter(
+            Employee.company_id == company_id,
+            Employee.role == "trainee",
+            Employee.is_active == True,        # noqa: E712
+        ).all()
+    }
+    if not active_ids:
+        return {"phases": [], "stuck": [], "problem_areas": []}
+
+    records = (
+        db.query(TrainingRecord)
+        .filter(TrainingRecord.company_id == company_id,
+                TrainingRecord.trainee_id.in_(active_ids))
+        .order_by(TrainingRecord.record_date)
+        .all()
+    )
+
+    # Latest record per trainee gives their current phase.
+    latest: dict = {}
+    for r in records:
+        latest[r.trainee_id] = r
+
+    phase_counts: dict[int, int] = {}
+    for r in latest.values():
+        p = int(r.current_day_number or 0)
+        phase_counts[p] = phase_counts.get(p, 0) + 1
+    phases = [
+        TraineePhaseRow(phase=p,
+                        label=PHASE_LABELS.get(p, f"Phase {p} (remediation)"),
+                        trainee_count=c)
+        for p, c in sorted(phase_counts.items())
+    ]
+
+    # Days at current phase, measured from the FIRST record at that phase —
+    # one record exists per day, so a single record's timestamp is wrong grain.
+    names = _employee_names(db, company_id, latest.keys())
+    stuck = []
+    for tid, rec in latest.items():
+        phase = int(rec.current_day_number or 0)
+        first = min((r.record_date for r in records
+                     if r.trainee_id == tid and r.current_day_number == phase),
+                    default=rec.record_date)
+        days = (today - first).days
+        if days > STUCK_PHASE_DAYS:
+            stuck.append(StuckTrainee(
+                trainee_name=names.get(tid, ("Unknown", ""))[0],
+                phase=phase, days_in_phase=days,
+            ))
+    stuck.sort(key=lambda s: s.days_in_phase, reverse=True)
+
+    problem_areas = []
+    record_ids = [r.id for r in records]
+    if record_ids:
+        rows = (
+            db.query(
+                TrainingTask.topic_title,
+                func.sum(case((TrainingTask.is_escalated == True, 1), else_=0)),      # noqa: E712
+                func.sum(case((TrainingTask.completed_late == True, 1), else_=0)),    # noqa: E712
+                func.sum(case((TrainingTask.is_training_debt == True, 1), else_=0)),  # noqa: E712
+            )
+            .filter(TrainingTask.company_id == company_id,
+                    TrainingTask.training_record_id.in_(record_ids))
+            .group_by(TrainingTask.topic_title)
+            .all()
+        )
+        problem_areas = sorted(
+            (ProblemArea(topic_title=t, escalated_count=int(e or 0),
+                         late_count=int(l or 0), debt_count=int(d or 0))
+             for t, e, l, d in rows
+             if (e or 0) + (l or 0) + (d or 0) > 0),
+            key=lambda p: (p.escalated_count, p.debt_count, p.late_count),
+            reverse=True,
+        )[:8]
+
+    return {"phases": phases, "stuck": stuck, "problem_areas": problem_areas}
 
 
 def _inspection_pass_rate(db: Session, company_id: UUID, start: date,
@@ -679,6 +771,7 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
     insp_pass, _ = _inspection_pass_rate(db, company_id, week_ago, today)
 
     escalated = _escalated_trainee_ids(db, company_id)
+    oversight = _training_oversight(db, company_id)
     crew = ManagementCrewSummary(
         active_trainees=_active_trainee_count(db, company_id),
         escalated_trainees=len(escalated),
@@ -689,6 +782,9 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
         top_walkers=top_walkers,
         trouble_walkers=trouble,
         vehicle_inspection_pass_rate_7d=insp_pass,
+        trainee_phases=oversight["phases"],
+        stuck_trainees=oversight["stuck"],
+        training_problem_areas=oversight["problem_areas"],
     )
 
     # ── incidents ──
@@ -1033,176 +1129,3 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
     return DispatchDashboardSummary(fleet_snapshot=fleet_snapshot,
                                     action_queue=action_queue,
                                     performance=performance)
-
-
-# ── Trainer ───────────────────────────────────────────────────────────────────
-
-def get_trainer_dashboard_summary(db: Session, company_id: UUID,
-                                  trainer_id: UUID) -> TrainerDashboardSummary:
-    today = _company_today(db, company_id)
-    week_ago = today - timedelta(days=7)
-
-    my_records = (
-        db.query(TrainingRecord)
-        .filter(TrainingRecord.company_id == company_id,
-                TrainingRecord.trainer_id == trainer_id)
-        .all()
-    )
-    trainee_ids = {r.trainee_id for r in my_records}
-
-    active_ids = set()
-    if trainee_ids:
-        active_ids = {
-            r[0] for r in
-            db.query(Employee.id).filter(
-                Employee.company_id == company_id,
-                Employee.id.in_(trainee_ids),
-                Employee.role == "trainee",
-                Employee.is_active == True,        # noqa: E712
-            ).all()
-        }
-
-    # Latest record per active trainee gives their current phase.
-    latest: dict = {}
-    for r in sorted(my_records, key=lambda x: x.record_date):
-        if r.trainee_id in active_ids:
-            latest[r.trainee_id] = r
-
-    phase_counts: dict[int, int] = {}
-    for r in latest.values():
-        p = int(r.current_day_number or 0)
-        phase_counts[p] = phase_counts.get(p, 0) + 1
-    phases = [
-        TraineePhaseRow(
-            phase=p,
-            label=PHASE_LABELS.get(p, f"Phase {p} (remediation)"),
-            trainee_count=c,
-        )
-        for p, c in sorted(phase_counts.items())
-    ]
-
-    escalated = _escalated_trainee_ids(db, company_id) & active_ids
-
-    today_records = [r for r in my_records if r.record_date == today]
-    submitted_today = sum(1 for r in today_records if r.submitted_at is not None)
-
-    # Days at current phase — measured from the FIRST record at that phase.
-    # Phase 2 used a single record's created_at, which is the wrong grain
-    # (one record exists per day).
-    names = _employee_names(db, company_id, active_ids)
-    stuck = []
-    for tid, rec in latest.items():
-        phase = int(rec.current_day_number or 0)
-        first = min(
-            (r.record_date for r in my_records
-             if r.trainee_id == tid and r.current_day_number == phase),
-            default=rec.record_date,
-        )
-        days = (today - first).days
-        if days > STUCK_PHASE_DAYS:
-            stuck.append(StuckTrainee(
-                trainee_name=names.get(tid, ("Unknown", ""))[0],
-                phase=phase, days_in_phase=days,
-            ))
-    stuck.sort(key=lambda s: s.days_in_phase, reverse=True)
-
-    trainee_status = TrainerTraineeStatus(
-        active_trainees=len(active_ids),
-        phases=phases,
-        escalated_count=len(escalated),
-        records_today_total=len(today_records),
-        records_today_submitted=submitted_today,
-        records_today_open=len(today_records) - submitted_today,
-        graduation_completion_pct=_graduation_pct(db, company_id),
-        stuck_trainees=stuck,
-    )
-
-    # ── performance: real TrainingTask signals ──
-    record_ids = [r.id for r in my_records]
-    problem_areas = []
-    if record_ids:
-        rows = (
-            db.query(
-                TrainingTask.topic_title,
-                func.sum(case((TrainingTask.is_escalated == True, 1), else_=0)),      # noqa: E712
-                func.sum(case((TrainingTask.completed_late == True, 1), else_=0)),    # noqa: E712
-                func.sum(case((TrainingTask.is_training_debt == True, 1), else_=0)),  # noqa: E712
-            )
-            .filter(TrainingTask.company_id == company_id,
-                    TrainingTask.training_record_id.in_(record_ids))
-            .group_by(TrainingTask.topic_title)
-            .all()
-        )
-        problem_areas = sorted(
-            (
-                ProblemArea(topic_title=t, escalated_count=int(e or 0),
-                            late_count=int(l or 0), debt_count=int(d or 0))
-                for t, e, l, d in rows
-                if (e or 0) + (l or 0) + (d or 0) > 0
-            ),
-            key=lambda p: (p.escalated_count, p.debt_count, p.late_count),
-            reverse=True,
-        )[:8]
-
-    phase4 = [
-        Phase4Result(
-            trainee_name=names.get(r.trainee_id, ("Unknown", ""))[0],
-            score=float(r.score) if r.score is not None else None,
-            passed=r.passed, record_date=r.record_date,
-        )
-        for r in sorted(my_records, key=lambda x: x.record_date, reverse=True)
-        if r.current_day_number == 4 and (r.score is not None or r.passed is not None)
-    ][:10]
-
-    # Phase 4 passed and still a trainee — no fabricated approval_date.
-    ready = [
-        names.get(r.trainee_id, ("Unknown", ""))[0]
-        for r in latest.values()
-        if r.current_day_number == 4 and r.passed is True
-        and r.trainee_id not in escalated
-    ]
-
-    # trainer_rating is the TRAINEE rating the TRAINER — labelled accordingly.
-    fb = (
-        db.query(func.avg(TrainingRecord.trainer_rating),
-                 func.count(TrainingRecord.trainer_rating))
-        .filter(TrainingRecord.company_id == company_id,
-                TrainingRecord.trainer_id == trainer_id,
-                TrainingRecord.trainer_rating.isnot(None))
-        .first()
-    )
-    comments = [
-        c[0] for c in
-        db.query(TrainingRecord.trainee_comments)
-        .filter(TrainingRecord.company_id == company_id,
-                TrainingRecord.trainer_id == trainer_id,
-                TrainingRecord.trainee_comments.isnot(None),
-                TrainingRecord.record_date >= week_ago)
-        .order_by(TrainingRecord.record_date.desc()).limit(5).all()
-        if c[0]
-    ]
-
-    mark_rows = (
-        db.query(TrainerMark.reason, func.count(TrainerMark.id))
-        .filter(TrainerMark.company_id == company_id,
-                TrainerMark.trainer_id == trainer_id)
-        .group_by(TrainerMark.reason).all()
-    )
-
-    performance = TrainerPerformanceSummary(
-        problem_areas=problem_areas,
-        phase4_results=phase4,
-        ready_for_solo=ready,
-        trainee_feedback_about_me=TraineeFeedbackAboutMe(
-            avg_rating=round(float(fb[0]), 2) if fb and fb[0] else None,
-            rating_count=int(fb[1]) if fb else 0,
-            recent_comments=comments,
-        ),
-        my_marks=TrainerMarkSummary(
-            total_marks=sum(int(c) for _, c in mark_rows),
-            by_reason={r: int(c) for r, c in mark_rows},
-        ),
-    )
-
-    return TrainerDashboardSummary(trainee_status=trainee_status,
-                                   performance=performance)

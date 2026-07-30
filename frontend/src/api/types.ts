@@ -1272,11 +1272,10 @@ export interface ScorecardCrossCheck {
 }
 
 // ── Dashboard DTOs — GENERATED from the backend OpenAPI schema ──────────────
-// Do not hand-edit. Regenerate after changing app/schemas/dashboard_summaries.py:
-//   docker run ... python -c "import json,app.main as m; print(json.dumps(m.app.openapi()))"
+// Do not hand-edit. Regenerate after changing app/schemas/dashboard_summaries.py.
 //
 // `| null` means the backend could not compute the metric. Render it as "—",
-// never as 0 — those are different facts.
+// never 0 — those are different facts. Use utils/metric.ts.
 
 export interface FailureItem {
   item_name: string;
@@ -1367,6 +1366,25 @@ export interface TroubleWalker {
   avg_rating?: number | null;
 }
 
+export interface TraineePhaseRow {
+  phase: number;
+  label: string;
+  trainee_count: number;
+}
+
+export interface StuckTrainee {
+  trainee_name: string;
+  phase: number;
+  days_in_phase: number;
+}
+
+export interface ProblemArea {
+  topic_title: string;
+  escalated_count: number;
+  late_count: number;
+  debt_count: number;
+}
+
 export interface ManagementCrewSummary {
   active_trainees: number;
   escalated_trainees: number;
@@ -1377,6 +1395,9 @@ export interface ManagementCrewSummary {
   top_walkers: WalkerPerformance[];
   trouble_walkers: TroubleWalker[];
   vehicle_inspection_pass_rate_7d?: number | null;
+  trainee_phases: TraineePhaseRow[];
+  stuck_trainees: StuckTrainee[];
+  training_problem_areas: ProblemArea[];
 }
 
 export interface IncidentCategory {
@@ -1505,66 +1526,5 @@ export interface DispatchDashboardSummary {
   fleet_snapshot: DispatchFleetSnapshot;
   action_queue: DispatchActionQueue;
   performance: DispatchPerformanceSummary;
-}
-
-export interface TraineePhaseRow {
-  phase: number;
-  label: string;
-  trainee_count: number;
-}
-
-export interface StuckTrainee {
-  trainee_name: string;
-  phase: number;
-  days_in_phase: number;
-}
-
-export interface TrainerTraineeStatus {
-  active_trainees: number;
-  phases: TraineePhaseRow[];
-  escalated_count: number;
-  records_today_total: number;
-  records_today_submitted: number;
-  records_today_open: number;
-  graduation_completion_pct?: number | null;
-  stuck_trainees: StuckTrainee[];
-}
-
-export interface ProblemArea {
-  topic_title: string;
-  escalated_count: number;
-  late_count: number;
-  debt_count: number;
-}
-
-export interface Phase4Result {
-  trainee_name: string;
-  score?: number | null;
-  passed?: boolean | null;
-  record_date: string;
-}
-
-export interface TraineeFeedbackAboutMe {
-  avg_rating?: number | null;
-  rating_count: number;
-  recent_comments: string[];
-}
-
-export interface TrainerMarkSummary {
-  total_marks: number;
-  by_reason: Record<string, number>;
-}
-
-export interface TrainerPerformanceSummary {
-  problem_areas: ProblemArea[];
-  phase4_results: Phase4Result[];
-  ready_for_solo: string[];
-  trainee_feedback_about_me: TraineeFeedbackAboutMe;
-  my_marks: TrainerMarkSummary;
-}
-
-export interface TrainerDashboardSummary {
-  trainee_status: TrainerTraineeStatus;
-  performance: TrainerPerformanceSummary;
 }
 

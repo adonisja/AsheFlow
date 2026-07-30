@@ -249,6 +249,76 @@ export default function ManagementView() {
         )}
       </div>
 
+      {/* Training oversight (ADR-241). Roster-wide comparison is a MANAGEMENT
+          judgement — a trainer's own view is scoped to their session, on mobile.
+          The Training Pipeline panel below shows counts; this shows distribution
+          and who is falling behind. */}
+      {efficiency && (efficiency.crew.stuck_trainees.length > 0
+        || efficiency.crew.trainee_phases.length > 0
+        || efficiency.crew.training_problem_areas.length > 0) && (
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <ClipboardCheck className="w-5 h-5 text-info" />
+            <h2 className="text-base font-semibold text-foreground">Training Oversight</h2>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Phase distribution — rows, not a 1..4 map: current_day_number
+                reaches 5 (quiz) and 6+ (remediation). */}
+            <div>
+              <p className="text-xs text-subtle uppercase tracking-wider mb-2">Phase distribution</p>
+              {efficiency.crew.trainee_phases.length === 0 ? (
+                <p className="text-sm text-subtle">No active trainees.</p>
+              ) : efficiency.crew.trainee_phases.map(p => (
+                <div key={p.phase} className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm text-foreground w-32 truncate">{p.label}</span>
+                  <div className="flex-1 bg-accent/20 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-info h-full"
+                      style={{ width: `${(p.trainee_count / Math.max(efficiency.crew.active_trainees, 1)) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-sm font-semibold text-foreground w-6 text-right tabular-nums">
+                    {count(p.trainee_count)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Stuck trainees */}
+            <div>
+              <p className="text-xs text-subtle uppercase tracking-wider mb-2">Stuck &gt;21 days</p>
+              {efficiency.crew.stuck_trainees.length === 0 ? (
+                <p className="text-sm text-subtle">None — all trainees progressing.</p>
+              ) : efficiency.crew.stuck_trainees.map(s => (
+                <div key={`${s.trainee_name}-${s.phase}`}
+                     className="flex items-center justify-between p-2 mb-1.5 rounded-lg bg-warning/10 border border-warning/20">
+                  <span className="text-sm text-foreground truncate">{s.trainee_name}</span>
+                  <span className="text-xs text-warning font-semibold shrink-0 tabular-nums">
+                    P{s.phase} · {count(s.days_in_phase)}d
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Failing topics — real TrainingTask signals */}
+            <div>
+              <p className="text-xs text-subtle uppercase tracking-wider mb-2">Failing topics</p>
+              {efficiency.crew.training_problem_areas.length === 0 ? (
+                <p className="text-sm text-subtle">No escalated or late tasks.</p>
+              ) : efficiency.crew.training_problem_areas.slice(0, 5).map(a => (
+                <div key={a.topic_title} className="flex items-center justify-between mb-1.5">
+                  <span className="text-sm text-foreground truncate">{a.topic_title}</span>
+                  <span className="text-xs text-subtle shrink-0 tabular-nums ml-2">
+                    {count(a.escalated_count)} esc · {count(a.late_count)} late
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 3-column reporting panels */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Incident trend */}

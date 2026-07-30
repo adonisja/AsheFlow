@@ -72,6 +72,7 @@ from app.models.employee import Employee  # noqa: E402
 from app.models.field_ops import Departure, VehicleInspection, WalkerRating  # noqa: E402
 from app.models.incident import Incident  # noqa: E402
 from app.models.shift_roll_call import ShiftRollCall  # noqa: E402
+from app.models.training import TrainingRecord  # noqa: E402
 from app.models.truck import Truck  # noqa: E402
 from app.models.truck_assignment import TruckAssignment  # noqa: E402
 from app.models.walker_route import Route  # noqa: E402
@@ -81,7 +82,6 @@ from app.services.dashboard_summaries import (  # noqa: E402
     get_admin_dashboard_summary,
     get_dispatch_dashboard_summary,
     get_management_dashboard_summary,
-    get_trainer_dashboard_summary,
 )
 
 COMPANY = uuid.UUID("a0000000-0000-0000-0000-000000000001")
@@ -259,14 +259,17 @@ class TestNoFabricatedValues:
         assert counts.get("Brakes") == 3
         assert "Lights" not in counts        # it passed, so never counted
 
-    def test_trainer_escalations_not_hardcoded_reason(self, db):
-        """The original stamped 'incomplete_training' on every escalation row."""
+    def test_training_oversight_empty_not_hardcoded(self, db):
+        """Roster oversight moved to Management (ADR-241 follow-up): comparing
+        trainees across a roster is a management judgement, not a trainer's own
+        work. The original also stamped 'incomplete_training' as every
+        escalation reason; that field is gone entirely."""
         _config(db)
-        t = _employee(db, "Trainer", "trainer")
-        perf = get_trainer_dashboard_summary(db, COMPANY, t.id).performance
-        assert perf.problem_areas == []
-        assert perf.ready_for_solo == []
-        assert perf.trainee_feedback_about_me.avg_rating is None
+        _employee(db, "Trainer", "trainer")
+        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        assert crew.trainee_phases == []
+        assert crew.stuck_trainees == []
+        assert crew.training_problem_areas == []
 
 
 # ── on-time, per the locked definition ────────────────────────────────────────
@@ -505,3 +508,104 @@ class TestPaidHours:
         op = get_management_dashboard_summary(db, COMPANY, period="month").operational
         assert op.total_paid_hours == 10.0
         assert op.packages_per_hour == 15.0
+
+
+# ── training oversight lives on management, not trainer (ADR-241 follow-up) ────
+
+class TestTrainingOversightScope:
+    """Roster-wide training comparison is MANAGEMENT oversight.
+
+    A trainer's own view is scoped to their session and lives on mobile
+    (TrainerTodayScreen / TrainerPerformanceScreen / TrainerHistoryScreen).
+    These assert the data is company-scoped, not trainer-scoped.
+    """
+
+    def test_phases_are_rows_covering_all_phase_numbers(self, db):
+        """A {1..4} dict silently drops phase 5 (quiz) and 6+ (remediation)."""
+        _config(db)
+        t = _employee(db, "Trainer", "trainer")
+        for name, phase in [("A", 1), ("B", 1), ("C", 4), ("D", 6)]:
+            tr = _employee(db, f"Trainee {name}", "trainee")
+            db.add(TrainingRecord(
+                id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
+                trainer_id=t.id, record_date=date(2026, 7, 20),
+                current_day_number=phase,
+            ))
+        db.commit()
+
+        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        counts = {p.phase: p.trainee_count for p in crew.trainee_phases}
+        assert counts == {1: 2, 4: 1, 6: 1}
+        # phase 6 must be labelled, not dropped
+        labels = {p.phase: p.label for p in crew.trainee_phases}
+        assert "remediation" in labels[6]
+
+    def test_stuck_measured_from_first_record_at_phase(self, db):
+        """Days-in-phase comes from the FIRST record at that phase — one record
+        exists per day, so a single record's timestamp is the wrong grain."""
+        _config(db)
+        t = _employee(db, "Trainer", "trainer")
+        tr = _employee(db, "Slow Trainee", "trainee")
+        today = datetime.now(timezone.utc).date()
+        # same phase across 30 days -> 30 days in phase
+        for offset in (30, 20, 10, 0):
+            db.add(TrainingRecord(
+                id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
+                trainer_id=t.id, record_date=today - timedelta(days=offset),
+                current_day_number=2,
+            ))
+        db.commit()
+
+        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        assert len(crew.stuck_trainees) == 1
+        assert crew.stuck_trainees[0].trainee_name == "Slow Trainee"
+        assert crew.stuck_trainees[0].phase == 2
+        assert crew.stuck_trainees[0].days_in_phase == 30
+
+    def test_recent_phase_change_is_not_stuck(self, db):
+        _config(db)
+        t = _employee(db, "Trainer", "trainer")
+        tr = _employee(db, "Fine Trainee", "trainee")
+        today = datetime.now(timezone.utc).date()
+        db.add(TrainingRecord(
+            id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
+            trainer_id=t.id, record_date=today - timedelta(days=3),
+            current_day_number=2,
+        ))
+        db.commit()
+
+        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        assert crew.stuck_trainees == []
+
+    def test_oversight_is_company_scoped_not_trainer_scoped(self, db):
+        """Two trainers, one company: management sees BOTH rosters."""
+        _config(db)
+        t1 = _employee(db, "Trainer One", "trainer")
+        t2 = _employee(db, "Trainer Two", "trainer")
+        for trainer, name in [(t1, "X"), (t2, "Y")]:
+            tr = _employee(db, f"Trainee {name}", "trainee")
+            db.add(TrainingRecord(
+                id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
+                trainer_id=trainer.id, record_date=date(2026, 7, 20),
+                current_day_number=1,
+            ))
+        db.commit()
+
+        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        assert sum(p.trainee_count for p in crew.trainee_phases) == 2
+
+    def test_other_company_trainees_never_leak(self, db):
+        _config(db)
+        t = _employee(db, "Trainer", "trainer")
+        mine = _employee(db, "Mine", "trainee")
+        theirs = _employee(db, "Theirs", "trainee", company=OTHER_COMPANY)
+        for tr, company in [(mine, COMPANY), (theirs, OTHER_COMPANY)]:
+            db.add(TrainingRecord(
+                id=uuid.uuid4(), company_id=company, trainee_id=tr.id,
+                trainer_id=t.id, record_date=date(2026, 7, 20),
+                current_day_number=1,
+            ))
+        db.commit()
+
+        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        assert sum(p.trainee_count for p in crew.trainee_phases) == 1

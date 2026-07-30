@@ -3,11 +3,15 @@
   GET /dashboards/admin/summary       admin
   GET /dashboards/management/summary  management, admin
   GET /dashboards/dispatch/summary    dispatch, management, admin
-  GET /dashboards/trainer/summary     trainer, management, admin
+
+The trainer endpoint was removed: its roster fields (phases, stuck trainees,
+problem areas) are management oversight and moved to /management/summary, and
+everything else it returned is already covered better by the mobile trainer
+screens (TrainerPerformanceScreen, TrainerHistoryScreen, TrainerTodayScreen).
+Field staff are mobile-first.
 
 Read-only aggregations. Every query is company-scoped inside the service layer
-(CLAUDE.md Dimension 1); the trainer endpoint is additionally scoped to the
-caller's own trainee roster.
+(CLAUDE.md Dimension 1).
 
 Imports follow the established router convention — app.database for get_db and
 app.api.deps for auth. The previous revision imported a non-existent app.db and
@@ -28,13 +32,11 @@ from app.schemas.dashboard_summaries import (
     AdminDashboardSummary,
     ManagementDashboardSummary,
     DispatchDashboardSummary,
-    TrainerDashboardSummary,
 )
 from app.services.dashboard_summaries import (
     get_admin_dashboard_summary,
     get_management_dashboard_summary,
     get_dispatch_dashboard_summary,
-    get_trainer_dashboard_summary,
 )
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
@@ -42,7 +44,6 @@ router = APIRouter(prefix="/dashboards", tags=["dashboards"])
 allow_admin      = RoleChecker(["admin"])
 allow_management = RoleChecker(["management", "admin"])
 allow_dispatch   = RoleChecker(["dispatch", "management", "admin"])
-allow_trainer    = RoleChecker(["trainer", "management", "admin"])
 
 
 @router.get("/admin/summary", response_model=AdminDashboardSummary)
@@ -95,19 +96,3 @@ def dispatch_summary(
         db, caller.company_id,
         date_str=target_date.isoformat() if target_date else None,
     )
-
-
-@router.get("/trainer/summary", response_model=TrainerDashboardSummary)
-def trainer_summary(
-    db: Session = Depends(get_db),
-    caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_trainer),
-):
-    """Trainee roster + training signals, scoped to the caller's own trainees.
-
-    Object-level scoping: filtered by TrainingRecord.trainer_id == caller.id, so
-    a trainer sees only their own roster (Dimension 2).
-
-    Suggested client refresh: 10 minutes.
-    """
-    return get_trainer_dashboard_summary(db, caller.company_id, trainer_id=caller.id)

@@ -148,9 +148,37 @@ class TroubleWalker(BaseModel):
     avg_rating: Optional[float] = None
 
 
+class TraineePhaseRow(BaseModel):
+    """current_day_number is 1-4 normal, 5 = quiz, 6+ = remediation. A {1..4}
+    dict silently drops trainees, so phases are returned as rows.
+    """
+    phase: int
+    label: str
+    trainee_count: int
+
+
+class StuckTrainee(BaseModel):
+    trainee_name: str
+    phase: int
+    days_in_phase: int
+
+
+class ProblemArea(BaseModel):
+    topic_title: str
+    escalated_count: int
+    late_count: int
+    debt_count: int
+
+
 class ManagementCrewSummary(BaseModel):
     """No-shows come from ShiftRollCall.status=='ncns' (ADR-200/201) — there is
     no NoShow model. Escalation comes from TrainingTask, not TrainingRecord.
+
+    Training OVERSIGHT lives here, not on the trainer dashboard: comparing
+    trainees across a roster, spotting who is stuck, and finding which topics
+    keep failing company-wide are management judgements. A trainer's own view is
+    correctly scoped to their session (see pages/TrainerDashboard/index.tsx and
+    the mobile Trainer screens).
 
     DELETED: repeat_failure_items (folded into Admin's failed_items_trending).
     """
@@ -166,6 +194,11 @@ class ManagementCrewSummary(BaseModel):
     trouble_walkers: List[TroubleWalker]
 
     vehicle_inspection_pass_rate_7d: Optional[float] = None
+
+    # Roster-wide training oversight (moved from TrainerDashboardSummary).
+    trainee_phases: List[TraineePhaseRow]
+    stuck_trainees: List[StuckTrainee]
+    training_problem_areas: List[ProblemArea]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -349,87 +382,26 @@ class DispatchDashboardSummary(BaseModel):
 
 
 # ── Trainer ───────────────────────────────────────────────────────────────────
-
-class TraineePhaseRow(BaseModel):
-    """current_day_number is 1-4 normal, 5 = quiz, 6+ = remediation. A {1..4}
-    dict silently drops trainees, so phases are returned as rows.
-    """
-    phase: int
-    label: str
-    trainee_count: int
-
-
-class StuckTrainee(BaseModel):
-    trainee_name: str
-    phase: int
-    days_in_phase: int
-
-
-class TrainerTraineeStatus(BaseModel):
-    """DELETED: today_sessions_scheduled (no scheduling concept — a
-    TrainingRecord is created FOR a day, never 'scheduled').
-    """
-    active_trainees: int
-    phases: List[TraineePhaseRow]
-    escalated_count: int
-
-    records_today_total: int
-    records_today_submitted: int
-    records_today_open: int
-
-    graduation_completion_pct: Optional[float] = None
-    stuck_trainees: List[StuckTrainee]
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class ProblemArea(BaseModel):
-    topic_title: str
-    escalated_count: int
-    late_count: int
-    debt_count: int
-
-
-class Phase4Result(BaseModel):
-    trainee_name: str
-    score: Optional[float] = None
-    passed: Optional[bool] = None
-    record_date: date
-
-
-class TraineeFeedbackAboutMe(BaseModel):
-    """TrainingRecord.trainer_rating is the TRAINEE rating the TRAINER.
-    Phase 2 mislabelled this as trainee performance — opposite direction.
-    """
-    avg_rating: Optional[float] = None
-    rating_count: int
-    recent_comments: List[str]
-
-
-class TrainerMarkSummary(BaseModel):
-    """TrainerMark is a demerit against the TRAINER
-    (phase_not_closed | submitted_late), not against the trainee.
-    """
-    total_marks: int
-    by_reason: Dict[str, int]
-
-
-class TrainerPerformanceSummary(BaseModel):
-    """DELETED: weekly_rating_distribution (measured the wrong direction);
-    escalations[].reason (Phase 2 hardcoded 'incomplete_training' for every
-    row) — replaced by problem_areas with real TrainingTask signals;
-    ready_for_solo_phase4[].approval_date (Phase 2 used today's date).
-    """
-    problem_areas: List[ProblemArea]
-    phase4_results: List[Phase4Result]
-    ready_for_solo: List[str]
-    trainee_feedback_about_me: TraineeFeedbackAboutMe
-    my_marks: TrainerMarkSummary
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class TrainerDashboardSummary(BaseModel):
-    trainee_status: TrainerTraineeStatus
-    performance: TrainerPerformanceSummary
-    model_config = ConfigDict(from_attributes=True)
+#
+# REMOVED (ADR-241 follow-up). The trainer dashboard endpoint has no consumer and
+# no remaining unique data:
+#
+#   phases / stuck_trainees / problem_areas
+#       -> moved to ManagementCrewSummary. Comparing trainees across a roster is
+#          management oversight, not a trainer's own work.
+#
+#   my_marks
+#       -> mobile TrainerPerformanceScreen already does this better via
+#          /trainer-marks/mine + /mine/summary (standing banner, per-mark debt
+#          chain expansion, distinct_trainees_with_marks).
+#
+#   trainee_feedback_about_me
+#       -> mobile TrainerHistoryScreen already surfaces trainer_rating and
+#          trainee_comments.
+#
+#   phase4_results / records_today_*
+#       -> mobile Phase4Screen and TrainerTodayScreen cover these from
+#          /training/trainer/today.
+#
+# Field staff are mobile-first, and the mobile trainer surface (7 screens) is
+# more complete than the web page ever was.

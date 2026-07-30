@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
 import { useAuth } from '../contexts/AuthContext';
-import type { Incident } from '../api/types';
+import type { Incident, AdminDashboardSummary } from '../api/types';
+import { count, hours, shortDate } from '../utils/metric';
 import {
   Shield, Users, Truck, AlertTriangle, ClipboardCheck,
   BarChart2, RefreshCw, CheckCircle2, ArrowRight, Zap,
@@ -113,6 +114,10 @@ export default function AdminDashboard() {
   const [trainingToday, setTrainingToday] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // ADR-241: integration freshness. Nothing else in the app surfaces whether
+  // ADP or Flex data has gone stale — and stale sync silently degrades
+  // dispatch, payroll reconciliation and mismatch detection.
+  const [health, setHealth] = useState<AdminDashboardSummary | null>(null);
 
   const fetchAll = () => {
     setLoading(true);
@@ -128,6 +133,8 @@ export default function AdminDashboard() {
         setPendingConfirmCount(count);
         setConfirmDate(today);
       }).catch(() => {}),
+      axiosClient.get('/dashboards/admin/summary')
+        .then(r => setHealth(r.data)).catch(() => setHealth(null)),
     ]).then(results => {
       if (results.some(r => r.status === 'rejected')) {
         setError('Some dashboard data failed to load. Refresh to retry.');
@@ -262,6 +269,79 @@ export default function AdminDashboard() {
       />
 
       <ErrorBanner message={error} />
+
+      {/* Integration freshness (ADR-241). Stale ADP/Flex data degrades dispatch,
+          payroll reconciliation and mismatch detection silently — this is the
+          only surface that shows it. Fails closed: a backend without the
+          endpoint hides the panel rather than breaking the page. */}
+      {health && (
+        <MotionCard>
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <Zap className="w-5 h-5 text-warning" />
+            <h2 className="text-base font-semibold text-foreground">Integration Health</h2>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {/* ADP */}
+            <div className="p-3 rounded-lg bg-accent/20 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-foreground">ADP Workforce Now</span>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                  health.system_health.adp_status === 'connected'
+                    ? 'bg-success/10 text-success border-success/20'
+                    : health.system_health.adp_status === 'stale' || health.system_health.adp_status === 'never_synced'
+                      ? 'bg-warning/10 text-warning border-warning/20'
+                      : 'bg-accent text-muted-foreground border-border'
+                }`}>
+                  {health.system_health.adp_status.replace(/_/g, ' ')}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-xs text-subtle">
+                <span>Roster: {shortDate(health.system_health.adp_last_employee_sync)}</span>
+                <span>Timecards: {shortDate(health.system_health.adp_last_timecard_sync)}</span>
+                <span className="tabular-nums">
+                  {count(health.system_health.adp_verified_employee_count)} verified
+                </span>
+              </div>
+            </div>
+
+            {/* Flex */}
+            <div className="p-3 rounded-lg bg-accent/20 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-foreground">Flex timesheets &amp; manifests</span>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                  health.system_health.flex_last_upload == null
+                    ? 'bg-accent text-muted-foreground border-border'
+                    : (health.system_health.flex_data_freshness_hours ?? 0) > 24
+                      ? 'bg-warning/10 text-warning border-warning/20'
+                      : 'bg-success/10 text-success border-success/20'
+                }`}>
+                  {health.system_health.flex_last_upload == null
+                    ? 'no uploads'
+                    : (health.system_health.flex_data_freshness_hours ?? 0) > 24 ? 'stale' : 'fresh'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-xs text-subtle">
+                <span>Last: {shortDate(health.system_health.flex_last_upload)}</span>
+                <span className="tabular-nums">
+                  Age: {hours(health.system_health.flex_data_freshness_hours)}
+                </span>
+                <span className="tabular-nums">
+                  {count(health.system_health.manifest_count_today)} manifests
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {health.system_health.unresolved_misroute_count > 0 && (
+            <div className="mt-3 p-2 rounded-lg bg-warning/10 border-l-2 border-warning">
+              <p className="text-sm font-semibold text-warning tabular-nums">
+                {count(health.system_health.unresolved_misroute_count)} unresolved misroutes
+              </p>
+            </div>
+          )}
+        </MotionCard>
+      )}
 
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
