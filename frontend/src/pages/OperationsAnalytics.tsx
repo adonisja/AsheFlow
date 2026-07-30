@@ -1,314 +1,307 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { BarChart2, Users, AlertTriangle, Clock, TrendingUp, type LucideIcon } from 'lucide-react';
+/**
+ * Company scorecard trend.
+ *
+ * Repointed (ADR-241 follow-up) from four algorithm-introspection panels —
+ * dispatch fill rate, ban-override frequency, trainer load, confirmation times.
+ * Three of those measured AsheFlow rather than the operation, and none carried a
+ * baseline, so every figure was an uncomparable absolute.
+ *
+ * Amazon's weekly scorecard is the number the business is judged on, and it is
+ * the one dataset with an inherent baseline — Amazon's own tiers and flags.
+ *
+ * Fill rate and confirmation timing moved to components/dispatch/
+ * DispatchProcessHealth, where they inform tomorrow's run. Trainer load already
+ * existed on the Management dashboard via /training/pipeline-summary.
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  BarChart2, RefreshCw, TrendingUp, TrendingDown, Minus, AlertTriangle,
+  Award, ArrowRight, CircleAlert,
+} from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-import { useAuth } from '../contexts/AuthContext';
-import { today, nWeeksAgo } from '../utils/date';
+import ErrorBanner from '../components/ui/ErrorBanner';
+import type { ScorecardTrendResponse, MetricTrend } from '../api/types';
+import { count } from '../utils/metric';
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
+/** Amazon's standing ladder, best first — drives colour and movement detection. */
+const STANDING_RANK = ['FANTASTIC', 'GREAT', 'FAIR', 'POOR', 'AT RISK'];
 
-function StatCard({ label, value, sub, color = 'text-foreground' }: { label: string; value: string | number; sub?: string; color?: string }) {
+function standingTone(s?: string | null): string {
+  if (!s) return 'text-muted-foreground';
+  const u = s.toUpperCase();
+  if (u.includes('FANTASTIC') || u.includes('PLATINUM')) return 'text-success';
+  if (u.includes('GREAT') || u.includes('GOLD')) return 'text-info';
+  if (u.includes('FAIR') || u.includes('SILVER')) return 'text-warning';
+  return 'text-danger';
+}
+
+/**
+ * Direction is pre-corrected server-side for lower-is-better metrics, so "up"
+ * always means IMPROVED even when the number fell. Never re-derive from delta.
+ */
+function Direction({ dir }: { dir?: string | null }) {
+  const c = 'w-3.5 h-3.5 shrink-0';
+  if (dir === 'up') return <TrendingUp className={`${c} text-success`} />;
+  if (dir === 'down') return <TrendingDown className={`${c} text-danger`} />;
+  if (dir === 'flat') return <Minus className={`${c} text-muted-foreground`} />;
+  return <Minus className={`${c} text-muted-foreground/40`} />;
+}
+
+/** Inline sparkline. A dozen divs beats a charting dependency at this size, and
+ *  missing weeks render as a gap rather than interpolating over absent data. */
+function Sparkline({ trend }: { trend: MetricTrend }) {
+  const vals = trend.points.map(p => p.value).filter((v): v is number => v != null);
+  if (vals.length < 2) return <span className="text-xs text-subtle">not enough history</span>;
+
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+
   return (
-    <div className="card-elevated">
-      <p className="text-xs text-muted-foreground uppercase tracking-wider">{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
-      {sub && <p className="text-xs text-subtle mt-0.5">{sub}</p>}
+    <div className="flex items-end gap-[2px] h-8">
+      {trend.points.map((p, i) => {
+        if (p.value == null) {
+          return (
+            <div key={i} className="w-1.5 h-full bg-border/30 rounded-sm"
+                 title={`${p.week}: no data`} />
+          );
+        }
+        const h = 20 + ((p.value - min) / span) * 80;
+        const flagged = p.flag === 'needs_focus';
+        return (
+          <div
+            key={i}
+            className={`w-1.5 rounded-sm ${flagged ? 'bg-danger/70' : 'bg-primary/60'}`}
+            style={{ height: `${h}%` }}
+            title={`${p.week}: ${p.raw}${flagged ? ' (needs focus)' : ''}`}
+          />
+        );
+      })}
     </div>
   );
 }
 
-function SectionHeader({ icon: Icon, title, subtitle, iconColor }: { icon: LucideIcon; title: string; subtitle?: string; iconColor: string }) {
-  return (
-    <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
-      <Icon className={`w-5 h-5 ${iconColor}`} />
-      <h2 className="text-base font-semibold text-foreground">{title}</h2>
-      {subtitle && <span className="ml-auto text-xs text-subtle">{subtitle}</span>}
-    </div>
-  );
-}
-
-// Inline bar — value/max ratio maps to width
-function Bar({ value, max, color }: { value: number; max: number; color: string }) {
-  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
-  return (
-    <div className="flex items-center gap-2 w-full">
-      <div className="flex-1 h-2 rounded-full bg-accent overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs font-bold text-foreground w-6 text-right">{value}</span>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Panel 1 — Dispatch Fill Rate
-// ---------------------------------------------------------------------------
-function FillRatePanel() {
-  const [data, setData]       = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
-  const [weeks, setWeeks]     = useState(8);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const start = nWeeksAgo(weeks);
-      const end   = today();
-      const res   = await axiosClient.get('/analytics/dispatch-fill-rate', { params: { start_date: start, end_date: end } });
-      setData(res.data);
-    } catch { setError('Failed to load dispatch fill rate data.'); } finally { setLoading(false); }
-  }, [weeks]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const maxTotal = data ? Math.max(...data.by_date.map((d: any) => d.total), 1) : 1;
-
-  return (
-    <div className="card">
-      <SectionHeader icon={TrendingUp} title="Dispatch Fill Rate" subtitle="algo vs manual placements" iconColor="text-primary" />
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs text-subtle">Last</span>
-        {[4, 8, 12].map(w => (
-          <button key={w} onClick={() => setWeeks(w)}
-            className={`text-xs px-2 py-1 rounded-lg border transition-colors ${weeks === w ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
-            {w}w
-          </button>
-        ))}
-      </div>
-      {error ? <Empty text={error} /> : loading ? <Spinner /> : !data || data.by_date.length === 0 ? <Empty text="No dispatch data in range." /> : (
-        <>
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            <StatCard label="Total Slots" value={data.summary.total_slots} />
-            <StatCard label="Algorithm" value={data.summary.algo_slots} color="text-success"
-              sub={`${data.summary.algo_pct}%`} />
-            <StatCard label="Manual" value={data.summary.manual_slots} color="text-warning" />
-          </div>
-          <div className="space-y-2">
-            {data.by_date.slice(-14).map((row: any) => (
-              <div key={row.date} className="flex items-center gap-3">
-                <span className="text-xs text-subtle w-20 shrink-0">{row.date.slice(5)}</span>
-                <div className="flex-1 flex flex-col gap-0.5">
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-success w-12">algo</span>
-                    <Bar value={row.algo}   max={maxTotal} color="bg-success" />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-warning w-12">manual</span>
-                    <Bar value={row.manual} max={maxTotal} color="bg-warning" />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Panel 2 — Trainer Load
-// ---------------------------------------------------------------------------
-function TrainerLoadPanel() {
-  const [data, setData]       = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
-
-  useEffect(() => {
-    axiosClient.get('/analytics/trainer-load')
-      .then(r => setData(r.data))
-      .catch(() => setError('Failed to load trainer load data.'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const maxLoad = Math.max(...data.map(d => d.active_trainees), 1);
-
-  return (
-    <div className="card">
-      <SectionHeader icon={Users} title="Trainer Load" subtitle="active trainees per trainer" iconColor="text-info" />
-      {error ? <Empty text={error} /> : loading ? <Spinner /> : data.length === 0 ? <Empty text="No active training records." /> : (
-        <div className="space-y-3">
-          {data.map((t: any) => (
-            <div key={t.trainer_id} className="p-3 rounded-xl border border-border">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-foreground">{t.trainer_name}</span>
-                <span className={`text-sm font-bold ${t.active_trainees >= 3 ? 'text-danger' : t.active_trainees === 2 ? 'text-warning' : 'text-success'}`}>
-                  {t.active_trainees} trainee{t.active_trainees !== 1 ? 's' : ''}
-                </span>
-              </div>
-              <Bar value={t.active_trainees} max={maxLoad} color={t.active_trainees >= 3 ? 'bg-danger' : t.active_trainees === 2 ? 'bg-warning' : 'bg-success'} />
-              <div className="flex gap-2 mt-2">
-                {Object.entries(t.phases as Record<string, number>).map(([phase, count]) => count > 0 ? (
-                  <span key={phase} className="text-xs text-subtle bg-accent px-2 py-0.5 rounded-full">
-                    P{phase}: {count}
-                  </span>
-                ) : null)}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Panel 3 — Ban Override Frequency
-// ---------------------------------------------------------------------------
-function BanOverridePanel() {
-  const [data, setData]       = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
-  const [weeks, setWeeks]     = useState(8);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await axiosClient.get('/analytics/ban-override-freq', { params: { weeks } });
-      setData(res.data);
-    } catch { setError('Failed to load ban override data.'); } finally { setLoading(false); }
-  }, [weeks]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const maxCount = data ? Math.max(...data.by_week.map((w: any) => w.count), 1) : 1;
-
-  return (
-    <div className="card">
-      <SectionHeader icon={AlertTriangle} title="Ban Override Frequency" subtitle="algorithm fighting preferences?" iconColor="text-warning" />
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs text-subtle">Last</span>
-        {[4, 8, 12].map(w => (
-          <button key={w} onClick={() => setWeeks(w)}
-            className={`text-xs px-2 py-1 rounded-lg border transition-colors ${weeks === w ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
-            {w}w
-          </button>
-        ))}
-      </div>
-      {error ? <Empty text={error} /> : loading ? <Spinner /> : !data ? <Empty text="No override data." /> : (
-        <>
-          <div className="grid grid-cols-2 gap-3 mb-5">
-            <StatCard label="Total Overrides" value={data.total_overrides}
-              color={data.total_overrides > 10 ? 'text-danger' : data.total_overrides > 4 ? 'text-warning' : 'text-success'} />
-            <StatCard label="Period" value={`${data.weeks}w`} />
-          </div>
-          <div className="space-y-2">
-            {data.by_week.map((row: any) => (
-              <div key={row.week_start} className="flex items-center gap-3">
-                <span className="text-xs text-subtle w-20 shrink-0">{row.week_start.slice(5)}</span>
-                <Bar value={row.count} max={maxCount} color={row.count >= 3 ? 'bg-danger' : row.count > 0 ? 'bg-warning' : 'bg-accent'} />
-              </div>
-            ))}
-          </div>
-          {data.total_overrides === 0 && (
-            <p className="text-xs text-success text-center mt-3">No overrides — algorithm and preferences are aligned.</p>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Panel 4 — Confirmation Response Time
-// ---------------------------------------------------------------------------
-function ConfirmationTimesPanel() {
-  const [data, setData]       = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
-  const [weeks, setWeeks]     = useState(4);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const start = nWeeksAgo(weeks);
-      const end   = today();
-      const res   = await axiosClient.get('/analytics/confirmation-times', { params: { start_date: start, end_date: end } });
-      setData(res.data);
-    } catch { setError('Failed to load confirmation time data.'); } finally { setLoading(false); }
-  }, [weeks]);
-
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <div className="card">
-      <SectionHeader icon={Clock} title="Confirmation Response Time" subtitle="median / p90 in minutes" iconColor="text-success" />
-      <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs text-subtle">Last</span>
-        {[2, 4, 8].map(w => (
-          <button key={w} onClick={() => setWeeks(w)}
-            className={`text-xs px-2 py-1 rounded-lg border transition-colors ${weeks === w ? 'bg-primary text-white border-primary' : 'border-border text-muted-foreground hover:border-primary'}`}>
-            {w}w
-          </button>
-        ))}
-      </div>
-      {error ? <Empty text={error} /> : loading ? <Spinner /> : !data || data.overall.total_responses === 0 ? <Empty text="No confirmed responses in range." /> : (
-        <>
-          <div className="grid grid-cols-3 gap-3 mb-5">
-            <StatCard label="Responses" value={data.overall.total_responses} />
-            <StatCard label="Median" value={`${data.overall.median_minutes}m`}
-              color={data.overall.median_minutes > 60 ? 'text-danger' : data.overall.median_minutes > 20 ? 'text-warning' : 'text-success'} />
-            <StatCard label="P90" value={`${data.overall.p90_minutes}m`}
-              color={data.overall.p90_minutes > 120 ? 'text-danger' : 'text-foreground'} />
-          </div>
-          <p className="text-xs text-subtle uppercase tracking-wider mb-3">By Role</p>
-          <div className="space-y-2">
-            {data.by_role.map((row: any) => (
-              <div key={row.role} className="flex items-center gap-3 py-2 border-b border-border last:border-0">
-                <span className="text-sm font-medium capitalize text-foreground w-20 shrink-0">{row.role}</span>
-                <div className="flex-1 flex gap-4 text-xs">
-                  <span className="text-subtle">med <span className="font-bold text-foreground">{row.median_minutes}m</span></span>
-                  <span className="text-subtle">p90 <span className="font-bold text-foreground">{row.p90_minutes}m</span></span>
-                  <span className="text-subtle">{row.count} resp.</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Shared micro-components
-// ---------------------------------------------------------------------------
-function Spinner() {
-  return (
-    <div className="flex h-32 items-center justify-center">
-      <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-}
-function Empty({ text }: { text: string }) {
-  return <p className="text-sm text-subtle text-center py-8">{text}</p>;
-}
-
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
 export default function OperationsAnalytics() {
-  const { groups } = useAuth();
-  const canSeeTrainerLoad = groups.includes('management') || groups.includes('admin');
+  const [data, setData]       = useState<ScorecardTrendResponse | null>(null);
+  const [weeks, setWeeks]     = useState(12);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axiosClient.get<ScorecardTrendResponse>(
+        `/scorecards/company/trend?weeks=${weeks}`,
+      );
+      setData(res.data);
+    } catch {
+      setError('Failed to load scorecard trend.');
+    } finally {
+      setLoading(false);
+    }
+  }, [weeks]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const header = (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 className="page-title flex items-center gap-2">
+          <BarChart2 className="w-5 h-5 text-primary" /> Company Scorecard
+        </h1>
+        <p className="text-subtle mt-1">Amazon's weekly standing and metric trend.</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <select
+          value={weeks}
+          onChange={e => setWeeks(Number(e.target.value))}
+          className="px-3 py-2 rounded-lg border border-border bg-accent/20 text-sm"
+          aria-label="Weeks of history"
+        >
+          <option value={6}>6 weeks</option>
+          <option value={12}>12 weeks</option>
+          <option value={26}>26 weeks</option>
+        </select>
+        <button onClick={load} className="btn-ghost flex items-center gap-2 text-sm">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+        </button>
+      </div>
+    </div>
+  );
+
+  if (loading && !data) {
+    return (
+      <div className="space-y-8 animate-slide-up">
+        {header}
+        <div className="space-y-3">
+          {[1, 2, 3].map(i => <div key={i} className="card animate-pulse h-24" />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return <div className="space-y-8">{header}<ErrorBanner message={error} /></div>;
+  }
+
+  // Nothing entered yet — say so and point at the entry page, rather than
+  // rendering an empty chart frame that looks broken.
+  if (!data || data.weeks.length === 0) {
+    return (
+      <div className="space-y-8 animate-slide-up">
+        {header}
+        <div className="card flex flex-col items-center justify-center py-16 gap-3 text-center">
+          <BarChart2 className="w-8 h-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No company scorecards recorded yet.</p>
+          <Link to="/scorecard-entry"
+                className="text-sm text-primary hover:underline flex items-center gap-1">
+            Enter a scorecard <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const cur = (data.current_standing ?? '').toUpperCase();
+  const prev = (data.previous_standing ?? '').toUpperCase();
+  const standingMoved = Boolean(cur && prev && cur !== prev);
+  const standingWorse = standingMoved &&
+    STANDING_RANK.indexOf(cur) > STANDING_RANK.indexOf(prev);
 
   return (
     <div className="space-y-8 animate-slide-up">
-      <div>
-        <h1 className="page-title flex items-center gap-2">
-          <BarChart2 className="w-5 h-5 text-primary" /> Operations Analytics
-        </h1>
-        <p className="text-subtle mt-1">Dispatch health, crew dynamics, and response patterns.</p>
+      {header}
+
+      {/* Standing — the headline the business is judged on */}
+      <div className="card">
+        <div className="flex flex-wrap items-center gap-4">
+          <Award className={`w-10 h-10 shrink-0 ${standingTone(data.current_standing)}`} />
+          <div>
+            <p className="text-xs text-muted-foreground uppercase tracking-wider">
+              Current standing · {data.weeks[data.weeks.length - 1]}
+            </p>
+            <p className={`text-3xl font-bold ${standingTone(data.current_standing)}`}>
+              {data.current_standing ?? '—'}
+            </p>
+            {standingMoved ? (
+              <p className={`text-xs mt-0.5 ${standingWorse ? 'text-danger' : 'text-success'}`}>
+                {standingWorse ? '▼' : '▲'} from {data.previous_standing}
+              </p>
+            ) : data.previous_standing ? (
+              <p className="text-xs text-subtle mt-0.5">unchanged from prior week</p>
+            ) : null}
+          </div>
+
+          {/* Standing history, oldest -> newest */}
+          <div className="ml-auto flex items-end gap-1">
+            {data.standings.map(s => (
+              <div
+                key={s.week}
+                title={`${s.week}: ${s.standing ?? 'no data'}`}
+                className={`w-2.5 h-8 rounded-sm ${
+                  s.standing ? standingTone(s.standing).replace('text-', 'bg-') : 'bg-border/30'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <FillRatePanel />
-        {canSeeTrainerLoad && <TrainerLoadPanel />}
-        <BanOverridePanel />
-        <ConfirmationTimesPanel />
+      {/* Focus list — the to-do, rather than making the reader scan every row */}
+      {(data.focus_now?.length ?? 0) > 0 && (
+        <div className="card border-danger/30">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-3">
+            <AlertTriangle className="w-5 h-5 text-danger" />
+            <h2 className="text-base font-semibold text-foreground">
+              Flagged this week ({count(data.focus_now?.length)})
+            </h2>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {data.focus_now?.map(label => (
+              <span key={label}
+                    className="text-sm px-2.5 py-1 rounded-full bg-danger/10 text-danger border border-danger/20">
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Gaps are operationally meaningful — somebody did not enter a scorecard */}
+      {(data.missing_weeks?.length ?? 0) > 0 && (
+        <div className="flex items-start gap-2 px-4 py-2.5 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm">
+          <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>No scorecard recorded for {data.missing_weeks?.join(', ')} — the trend has gaps.</span>
+        </div>
+      )}
+
+      {/* Metric trend */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <BarChart2 className="w-5 h-5 text-info" />
+          <h2 className="text-base font-semibold text-foreground">
+            Metric Trend · {data.weeks.length} weeks
+          </h2>
+          <Link to="/scorecard-entry"
+                className="ml-auto text-xs text-primary hover:underline flex items-center gap-1">
+            Enter scorecard <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
+                <th className="pb-2 pr-4">Metric</th>
+                <th className="pb-2 pr-4">Trend</th>
+                <th className="pb-2 pr-4 text-right">Latest</th>
+                <th className="pb-2 pr-4 text-right">Change</th>
+                <th className="pb-2 text-right">Weeks flagged</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {data.metrics.map(m => {
+                const newest = m.points[m.points.length - 1];
+                return (
+                  <tr key={m.key} className={newest?.flag === 'needs_focus' ? 'bg-danger/5' : ''}>
+                    <td className="py-2.5 pr-4">
+                      <span className="font-medium text-foreground">{m.label}</span>
+                      {newest?.tier && (
+                        <span className={`ml-2 text-xs ${standingTone(newest.tier)}`}>
+                          {newest.tier}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-4"><Sparkline trend={m} /></td>
+                    <td className="py-2.5 pr-4 text-right font-semibold text-foreground tabular-nums whitespace-nowrap">
+                      {newest?.raw || '—'}
+                    </td>
+                    <td className="py-2.5 pr-4 text-right whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 justify-end tabular-nums">
+                        <Direction dir={m.direction} />
+                        {m.delta != null
+                          ? `${m.delta > 0 ? '+' : ''}${m.delta}`
+                          : <span className="text-subtle">—</span>}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums">
+                      {(m.weeks_flagged ?? 0) > 0
+                        ? <span className="text-danger font-semibold">{m.weeks_flagged}</span>
+                        : <span className="text-subtle">0</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="mt-3 text-xs text-subtle">
+          Arrows show whether the metric improved, already accounting for metrics
+          where a lower number is better (DPMO, driver behaviour).
+        </p>
       </div>
     </div>
   );

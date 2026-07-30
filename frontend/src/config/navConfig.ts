@@ -44,7 +44,7 @@ const ALL_FIELD: Role[] = ['driver', 'walker', 'trainer', 'trainee'];
  */
 export const NAV_ITEMS: NavItem[] = [
   { path: '/dispatch',              label: 'Assignments',       icon: ClipboardCheck, roles: ['admin', 'dispatch'] },
-  { path: '/operations-analytics',  label: 'Analytics',         icon: BarChart2,      roles: ['admin', 'dispatch', 'management'] },
+  { path: '/operations-analytics',  label: 'Scorecard',         icon: BarChart2,      roles: ['admin', 'dispatch', 'management'] },
   { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver'] },
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },

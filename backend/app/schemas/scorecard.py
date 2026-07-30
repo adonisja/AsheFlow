@@ -78,3 +78,45 @@ class CrossCheckResponse(BaseModel):
     items: List[CrossCheckItem] = []
     # RTS reasons we recorded that week — the evidence for a completion-defect appeal.
     rts_evidence: List[RtsReasonEvidence] = []
+
+
+# ── Company trend (ADR-241 follow-up) ────────────────────────────────────────
+# Amazon's weekly scorecard is the number the business is judged on, and it is
+# the one dataset with an inherent baseline (Amazon's own tiers). Everything
+# below is a multi-week view over company-scope scorecards.
+
+class MetricTrendPoint(BaseModel):
+    week: str
+    value: Optional[float] = None      # parsed numeric, None if non-numeric
+    raw: str                           # original string, e.g. "100.0%" | "PLATINUM"
+    tier: Optional[str] = None
+    flag: Optional[str] = None
+
+
+class MetricTrend(BaseModel):
+    key: str
+    label: str
+    unit: Optional[str] = None
+    points: List[MetricTrendPoint]
+    latest: Optional[float] = None
+    previous: Optional[float] = None
+    delta: Optional[float] = None       # latest - previous
+    direction: Optional[str] = None     # up | down | flat | None when unknown
+    weeks_flagged: int = 0              # how many weeks carried needs_focus
+
+
+class StandingPoint(BaseModel):
+    week: str
+    standing: Optional[str] = None
+
+
+class ScorecardTrendResponse(BaseModel):
+    weeks: List[str]                    # oldest -> newest
+    standings: List[StandingPoint]
+    current_standing: Optional[str] = None
+    previous_standing: Optional[str] = None
+    metrics: List[MetricTrend]
+    # Metrics Amazon flagged needs_focus in the most recent week — the actual
+    # to-do list, rather than making the reader scan every row.
+    focus_now: List[str] = []
+    missing_weeks: List[str] = []       # gaps in the range, so absence is visible

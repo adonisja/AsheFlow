@@ -19,6 +19,7 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.scorecard import Scorecard, ScorecardMetric
 from app.schemas.scorecard import (
+    ScorecardTrendResponse, MetricTrend, MetricTrendPoint, StandingPoint,
     ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn,
     CrossCheckResponse, CrossCheckItem, RtsReasonEvidence,
 )
@@ -319,3 +320,171 @@ def delete_scorecard(
         detail={"week": sc.week, "scope": sc.scope},
     )
     db.commit()
+
+
+# ── Company trend ────────────────────────────────────────────────────────────
+
+# Metrics where a HIGHER number is worse, so an increase is a regression.
+# DPMO (defects per million opportunities) and driver-behaviour counts all
+# invert. Getting this wrong would paint a worsening week as an improvement.
+_LOWER_IS_BETTER = {
+    "dnr_dpmo", "dpmo", "seatbelt_off_rate", "speeding_event_rate",
+    "distractions_rate", "following_distance_rate", "sign_signal_violations_rate",
+    "harsh_braking", "harsh_acceleration", "harsh_cornering",
+    "customer_escalation_dpmo", "cdf_dpmo", "ced",
+}
+
+
+def _numeric(raw: str) -> Optional[float]:
+    """Parse Amazon's value strings to a number, or None.
+
+    Values arrive as display strings: "100.0%", "14492.7", "203", "PLATINUM",
+    "1,234". Tier words are legitimately non-numeric — they chart as standings,
+    not as a line — so None is a real answer here, not a failure.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.strip().replace(",", "").replace("%", "").replace("$", "")
+    try:
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_weeks(start: str, end: str) -> list[str]:
+    """Every ISO week label from start to end inclusive, e.g. 2026-W01.
+
+    Used to surface GAPS: a missing week is operationally meaningful (nobody
+    entered the scorecard) and must not silently close up in the chart.
+    """
+    try:
+        sy, sw = int(start[:4]), int(start.split("W")[1])
+        ey, ew = int(end[:4]), int(end.split("W")[1])
+    except (IndexError, ValueError):
+        return []
+    out, y, w = [], sy, sw
+    # ISO years have 52 or 53 weeks; step conservatively and stop on overrun.
+    for _ in range(400):
+        out.append(f"{y}-W{w:02d}")
+        if (y, w) == (ey, ew):
+            break
+        w += 1
+        if w > 53:
+            y, w = y + 1, 1
+    return out
+
+
+@router.get("/company/trend", response_model=ScorecardTrendResponse)
+def get_company_trend(
+    weeks: int = 12,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_mgmt),
+):
+    """Company scorecard trend over the last N weeks.
+
+    Company-scope rows only — individual scorecards are per-driver performance
+    and belong on the walker/driver surfaces, not in a company trend.
+
+    Returns per-metric series with week-over-week deltas, direction corrected
+    for lower-is-better metrics, and the metrics Amazon flagged needs_focus in
+    the newest week.
+    """
+    weeks = max(2, min(weeks, 52))
+
+    cards = (
+        db.query(Scorecard)
+        .filter(Scorecard.company_id == caller.company_id,
+                Scorecard.scope == "company")
+        .order_by(Scorecard.week.desc())
+        .limit(weeks)
+        .all()
+    )
+    cards.reverse()                      # oldest -> newest for charting
+
+    if not cards:
+        return ScorecardTrendResponse(
+            weeks=[], standings=[], metrics=[], focus_now=[], missing_weeks=[],
+        )
+
+    week_labels = [c.week for c in cards]
+    card_ids = [c.id for c in cards]
+
+    metric_rows = (
+        db.query(ScorecardMetric)
+        .filter(ScorecardMetric.scorecard_id.in_(card_ids))
+        .all()
+    )
+    by_card: dict = {}
+    for m in metric_rows:
+        by_card.setdefault(m.scorecard_id, []).append(m)
+
+    # key -> {label, unit, sort_order, week -> metric}
+    series: dict = {}
+    for card in cards:
+        for m in by_card.get(card.id, []):
+            s = series.setdefault(m.key, {
+                "label": m.label, "unit": m.unit,
+                "sort_order": m.sort_order, "weeks": {},
+            })
+            s["weeks"][card.week] = m
+
+    trends: list[MetricTrend] = []
+    for key, s in series.items():
+        points, numeric_seen = [], []
+        for wk in week_labels:
+            m = s["weeks"].get(wk)
+            if m is None:
+                # Absent week for this metric — hold the slot so the series
+                # stays aligned with week_labels rather than shifting.
+                points.append(MetricTrendPoint(week=wk, value=None, raw=""))
+                continue
+            val = _numeric(m.value)
+            if val is not None:
+                numeric_seen.append(val)
+            points.append(MetricTrendPoint(
+                week=wk, value=val, raw=m.value, tier=m.tier, flag=m.flag,
+            ))
+
+        latest = numeric_seen[-1] if numeric_seen else None
+        previous = numeric_seen[-2] if len(numeric_seen) > 1 else None
+        delta = round(latest - previous, 3) if (latest is not None and previous is not None) else None
+
+        direction = None
+        if delta is not None and previous:
+            improved = delta < 0 if key in _LOWER_IS_BETTER else delta > 0
+            worsened = delta > 0 if key in _LOWER_IS_BETTER else delta < 0
+            # 0.5% band: Amazon's numbers jitter, and calling that a trend is noise.
+            if abs(delta) / abs(previous) < 0.005:
+                direction = "flat"
+            elif improved:
+                direction = "up"
+            elif worsened:
+                direction = "down"
+
+        trends.append(MetricTrend(
+            key=key, label=s["label"], unit=s["unit"], points=points,
+            latest=latest, previous=previous, delta=delta, direction=direction,
+            weeks_flagged=sum(1 for p in points if p.flag == "needs_focus"),
+        ))
+
+    trends.sort(key=lambda t: series[t.key]["sort_order"])
+
+    newest = week_labels[-1]
+    focus_now = [
+        t.label for t in trends
+        if any(p.week == newest and p.flag == "needs_focus" for p in t.points)
+    ]
+
+    expected = _iter_weeks(week_labels[0], week_labels[-1])
+    missing = [w for w in expected if w not in set(week_labels)]
+
+    return ScorecardTrendResponse(
+        weeks=week_labels,
+        standings=[StandingPoint(week=c.week, standing=c.overall_standing) for c in cards],
+        current_standing=cards[-1].overall_standing,
+        previous_standing=cards[-2].overall_standing if len(cards) > 1 else None,
+        metrics=trends,
+        focus_now=focus_now,
+        missing_weeks=missing,
+    )

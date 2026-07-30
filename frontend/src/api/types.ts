@@ -1528,3 +1528,46 @@ export interface DispatchDashboardSummary {
   performance: DispatchPerformanceSummary;
 }
 
+
+// ── Scorecard company trend — GENERATED from the backend OpenAPI schema ──────
+// Amazon's weekly scorecard is the number the business is judged on. Values
+// arrive as display strings ("100.0%", "PLATINUM"); `value` is the parsed
+// number, null when the raw value is a tier word rather than a figure.
+
+export interface MetricTrendPoint {
+  week: string;
+  value?: number | null;
+  raw: string;
+  tier?: string | null;
+  flag?: string | null;
+}
+
+export interface MetricTrend {
+  key: string;
+  label: string;
+  unit?: string | null;
+  points: MetricTrendPoint[];
+  latest?: number | null;
+  previous?: number | null;
+  delta?: number | null;
+  // Direction is already corrected for lower-is-better metrics (DPMO, driver
+  // behaviour), so "up" always means IMPROVED regardless of which way the
+  // number moved. Do not re-derive this from delta on the client.
+  direction?: string | null;
+  weeks_flagged?: number;
+}
+
+export interface StandingPoint {
+  week: string;
+  standing?: string | null;
+}
+
+export interface ScorecardTrendResponse {
+  weeks: string[];
+  standings: StandingPoint[];
+  current_standing?: string | null;
+  previous_standing?: string | null;
+  metrics: MetricTrend[];
+  focus_now?: string[];
+  missing_weeks?: string[];
+}

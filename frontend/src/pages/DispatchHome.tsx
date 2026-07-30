@@ -13,6 +13,7 @@ import PackageExceptionsCard from '../components/PackageExceptionsCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type { CrewMember, UnavailableStaff, Incident } from '../api/types';
 import { getLocalYMD } from '../utils/date';
+import DispatchProcessHealth from '../components/dispatch/DispatchProcessHealth';
 
 interface ScheduleChangeRequest {
   id: string;
@@ -485,6 +486,11 @@ export default function DispatchHome() {
       <MotionCard delay={0.4} hoverable={false}>
         <PackageExceptionsCard />
       </MotionCard>
+
+      {/* Process health — moved off the Analytics page (ADR-241 follow-up).
+          Fill rate and confirmation timing are about DISPATCH's own process, so
+          they belong here where they inform tomorrow's run. */}
+      <DispatchProcessHealth />
     </div>
   );
 }
