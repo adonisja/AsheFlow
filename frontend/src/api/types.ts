@@ -1722,6 +1722,11 @@ export interface AppealListItem {
   created_at: string;
 }
 
+export interface MetricTally {
+  metric: string;
+  count: number;
+}
+
 export interface AppealStats {
   total?: number;
   draft?: number;
@@ -1730,7 +1735,7 @@ export interface AppealStats {
   lost?: number;
   withdrawn?: number;
   win_rate_pct?: number | null;
-  most_appealed_metrics?: Record<string, unknown>[];
-  most_won_metrics?: Record<string, unknown>[];
+  most_appealed_metrics?: MetricTally[];
+  most_won_metrics?: MetricTally[];
 }
 

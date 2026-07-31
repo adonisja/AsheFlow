@@ -1,7 +1,7 @@
 import {
   Home, ClipboardCheck, BarChart2, Users, ScrollText, Building2, ClipboardList,
   MapPin, MessageSquare, Shield, ShoppingBag, AlertTriangle, Route, Calendar,
-  RefreshCw, Settings, Activity, ShieldAlert, Star,
+  RefreshCw, Settings, Activity, ShieldAlert, Star, Gavel,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -44,6 +44,7 @@ const ALL_FIELD: Role[] = ['driver', 'walker', 'trainer', 'trainee'];
  */
 export const NAV_ITEMS: NavItem[] = [
   { path: '/dispatch',              label: 'Assignments',       icon: ClipboardCheck, roles: ['admin', 'dispatch'] },
+  { path: '/scorecard-appeals',     label: 'Appeals',           icon: Gavel,          roles: ['admin', 'management'] },
   { path: '/operations-analytics',  label: 'Scorecard',         icon: BarChart2,      roles: ['admin', 'dispatch', 'management'] },
   { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver'] },
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },

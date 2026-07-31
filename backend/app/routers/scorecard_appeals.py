@@ -32,7 +32,7 @@ from app.models.scorecard_appeal import (
 )
 from app.schemas.scorecard_appeal import (
     AppealCreate, AppealListItem, AppealOut, AppealResolve, AppealStats,
-    AppealItemResolve, AppealSubmit, AppealUpdate,
+    AppealItemResolve, AppealSubmit, AppealUpdate, MetricTally,
 )
 from app.services.audit import write_audit
 
@@ -145,8 +145,8 @@ def get_appeal_stats(
         submitted=int(by_status.get("submitted", 0)),
         won=won, lost=lost, withdrawn=int(by_status.get("withdrawn", 0)),
         win_rate_pct=win_rate,
-        most_appealed_metrics=[{"metric": m, "count": int(n)} for m, n in appealed],
-        most_won_metrics=[{"metric": m, "count": int(n)} for m, n in won_metrics],
+        most_appealed_metrics=[MetricTally(metric=m, count=int(n)) for m, n in appealed],
+        most_won_metrics=[MetricTally(metric=m, count=int(n)) for m, n in won_metrics],
     )
 
 

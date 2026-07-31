@@ -102,6 +102,13 @@ class AppealListItem(BaseModel):
     created_at: datetime
 
 
+class MetricTally(BaseModel):
+    """A metric and how often it appears. Typed rather than a loose dict so the
+    generated TypeScript is usable without casting."""
+    metric: str
+    count: int
+
+
 class AppealStats(BaseModel):
     """Win rate and where it comes from.
 
@@ -115,5 +122,5 @@ class AppealStats(BaseModel):
     lost: int = 0
     withdrawn: int = 0
     win_rate_pct: Optional[float] = None
-    most_appealed_metrics: List[Dict[str, Any]] = []
-    most_won_metrics: List[Dict[str, Any]] = []
+    most_appealed_metrics: List[MetricTally] = []
+    most_won_metrics: List[MetricTally] = []
