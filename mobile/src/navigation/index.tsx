@@ -17,7 +17,6 @@ import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import LoginScreen              from '@screens/Auth/LoginScreen';
 import HomeScreen               from '@screens/Home/HomeScreen';
 import TodayAssignmentScreen    from '@screens/Home/TodayAssignmentScreen';
-import ProfileScreen            from '@screens/Profile/ProfileScreen';
 import FieldOpsScreen           from '@screens/FieldOps/FieldOpsScreen';
 import ScheduleScreen           from '@screens/Schedule/ScheduleScreen';
 import NotificationsScreen      from '@screens/Notifications/NotificationsScreen';
@@ -127,7 +126,11 @@ function HomeNavigator() {
     >
       <HomeStack.Screen name="HomeMain"         component={HomeScreen}            options={{ headerShown: false }} />
       <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ headerShown: false }} />
-      <HomeStack.Screen name="Profile"          component={ProfileScreen}         options={{ headerShown: false }} />
+      {/* The avatar tap on Home routes here. ProfileScreen was deleted: it duplicated
+          MyAccountScreen's email-change flow (same two endpoints) while lacking password
+          change, both performance cards, and the standard PageHeader. Keeping the route
+          name preserves the tap target and the back gesture. */}
+      <HomeStack.Screen name="Profile"          component={MyAccountScreen}       options={{ headerShown: false }} />
     </HomeStack.Navigator>
   );
 }
