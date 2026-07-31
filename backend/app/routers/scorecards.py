@@ -105,7 +105,10 @@ def upsert_scorecard(
         db.flush()
 
     for m in payload.metrics:
+        # company_id is stamped explicitly, not inherited via the relationship —
+        # it is nullable=False, so an unset value fails the insert outright.
         sc.metrics.append(ScorecardMetric(
+            company_id=cid,
             key=m.key, label=m.label, value=m.value, unit=m.unit,
             tier=m.tier, flag=m.flag, sort_order=m.sort_order,
         ))
@@ -403,7 +406,8 @@ def get_company_trend(
 
     metric_rows = (
         db.query(ScorecardMetric)
-        .filter(ScorecardMetric.scorecard_id.in_(card_ids))
+        .filter(ScorecardMetric.company_id == caller.company_id,
+                ScorecardMetric.scorecard_id.in_(card_ids))
         .all()
     )
     by_card: dict = {}
@@ -572,7 +576,8 @@ def _individual_trend(db: Session, company_id, employee_id, name: Optional[str],
     week_labels = [c.week for c in cards]
     metric_rows = (
         db.query(ScorecardMetric)
-        .filter(ScorecardMetric.scorecard_id.in_([c.id for c in cards]))
+        .filter(ScorecardMetric.company_id == company_id,
+                ScorecardMetric.scorecard_id.in_([c.id for c in cards]))
         .all()
     )
     by_card: dict = {}
@@ -715,7 +720,8 @@ def get_individual_roster(
 
     flagged = {}
     for m in (db.query(ScorecardMetric)
-              .filter(ScorecardMetric.scorecard_id.in_([c.id for c in in_scope]),
+              .filter(ScorecardMetric.company_id == caller.company_id,
+                      ScorecardMetric.scorecard_id.in_([c.id for c in in_scope]),
                       ScorecardMetric.flag == "needs_focus").all()):
         flagged[m.scorecard_id] = flagged.get(m.scorecard_id, 0) + 1
 

@@ -77,6 +77,7 @@ from app.models.truck import Truck  # noqa: E402
 from app.models.truck_assignment import TruckAssignment  # noqa: E402
 from app.models.walker_route import Route  # noqa: E402
 from app.services.dashboard_summaries import (  # noqa: E402
+    _company_today,
     _pct,
     _trend,
     get_admin_dashboard_summary,
@@ -243,11 +244,16 @@ class TestNoFabricatedValues:
         _config(db)
         # One inspection per driver/date/type is enforced by a unique constraint,
         # so three failures means three different drivers.
+        # Seed against the SERVICE's notion of today. Using date.today() here
+        # made this flaky across the UTC date boundary: the service windows on
+        # company-local today, so a row stamped with process-UTC today can fall
+        # outside the 7-day window it is meant to be inside.
+        svc_today = _company_today(db, COMPANY)
         for i in range(3):
             d = _employee(db, f"Driver {i}", "driver")
             db.add(VehicleInspection(
                 id=uuid.uuid4(), company_id=COMPANY, driver_id=d.id,
-                date=date.today(), inspection_type="pre_trip",
+                date=svc_today, inspection_type="pre_trip",
                 items={"Tires": False, "Lights": True, "Brakes": False},
                 has_failures=True, submitted_at=datetime.now(timezone.utc),
             ))
@@ -546,7 +552,7 @@ class TestTrainingOversightScope:
         _config(db)
         t = _employee(db, "Trainer", "trainer")
         tr = _employee(db, "Slow Trainee", "trainee")
-        today = datetime.now(timezone.utc).date()
+        today = _company_today(db, COMPANY)   # must match the service's window
         # same phase across 30 days -> 30 days in phase
         for offset in (30, 20, 10, 0):
             db.add(TrainingRecord(
@@ -566,7 +572,7 @@ class TestTrainingOversightScope:
         _config(db)
         t = _employee(db, "Trainer", "trainer")
         tr = _employee(db, "Fine Trainee", "trainee")
-        today = datetime.now(timezone.utc).date()
+        today = _company_today(db, COMPANY)
         db.add(TrainingRecord(
             id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
             trainer_id=t.id, record_date=today - timedelta(days=3),

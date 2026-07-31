@@ -52,6 +52,12 @@ class ScorecardMetric(Base):
     )
 
     id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Stamped directly rather than inherited through scorecard_id. Reaching the
+    # tenant only via a join means any query that starts from this table — a
+    # cross-company metric comparison, a benchmark, an aggregate over metric
+    # rows — has no company_id to filter on and is one forgotten join away from
+    # leaking across tenants (CLAUDE.md Dimension 1).
+    company_id   = Column(UUID(as_uuid=True), nullable=False, index=True)
     scorecard_id = Column(UUID(as_uuid=True), ForeignKey("scorecards.id", ondelete="CASCADE"), nullable=False, index=True)
     key          = Column(String(50), nullable=False)      # stable machine key, e.g. "packages_delivered"
     label        = Column(String(100), nullable=False)     # display label, e.g. "Packages Delivered"
