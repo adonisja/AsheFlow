@@ -100,6 +100,12 @@ class TestEndpointGates:
         for r in ("driver", "walker", "trainee", "dispatch", "management", "admin"):
             assert r in roles
 
+    def test_package_search_is_management_gated(self):
+        """Package records are per-employee data — Tier 3, not dispatch."""
+        roles = self._roles("/scorecards/packages/search")
+        assert "dispatch" not in roles
+        assert roles == {"management", "admin"}
+
     def test_company_trend_keeps_dispatch(self):
         assert self._roles("/scorecards/company/trend") == {"dispatch", "management", "admin"}
 
@@ -115,7 +121,8 @@ class TestRouteOrdering:
         paths = [r.path for r in sc.router.routes]
         week_i = paths.index("/scorecards/{week}")
         for literal in ("/scorecards/company/current", "/scorecards/company/trend",
-                        "/scorecards/me/trend", "/scorecards/individual/roster"):
+                        "/scorecards/me/trend", "/scorecards/individual/roster",
+                        "/scorecards/packages/search"):
             assert paths.index(literal) < week_i, (
                 f"{literal} is shadowed by /{{week}} and will 403 for field staff")
 

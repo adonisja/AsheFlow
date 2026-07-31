@@ -11,7 +11,7 @@ against our DeliveryStop/RTS data. This router is public — no proprietary algo
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from app.schemas.scorecard import (
     IndividualMetricPoint, IndividualRosterResponse, IndividualRosterRow,
     ScorecardTrendResponse, MetricTrend, MetricTrendPoint, StandingPoint,
     ScorecardCreate, ScorecardOut, ScorecardDraftOut, ScorecardMetricIn,
+    PackageRecord, PackageSearchResponse,
     CrossCheckResponse, CrossCheckItem, RtsReasonEvidence,
 )
 from app.services.audit import write_audit
@@ -769,6 +770,112 @@ def get_individual_roster(
         weeks_considered=sorted(recent_weeks),
         rows=rows,
         employees_without_scorecards=max(0, int(active_field) - len(rows)),
+    )
+
+
+# ── Package lookup for appeal evidence ───────────────────────────────────────
+
+# A short suffix could collide across tenants' TBAs, so a minimum length keeps
+# "4" from matching every package ending in 4.
+_MIN_SUFFIX = 4
+
+
+@router.get("/packages/search", response_model=PackageSearchResponse)
+def search_packages(
+    tba: str = Query(..., min_length=_MIN_SUFFIX, max_length=50,
+                     description="Full TBA or its last 4+ digits"),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_individual),
+):
+    """Find our record of a package by TBA, across all three package tables.
+
+    Amazon cites a TBA on the scorecard; this finds what WE logged, so the
+    disagreement can be evidenced on an appeal. Searching all three matters
+    because "no record" and "logged as damaged at station sort" are very
+    different appeal positions.
+
+    Matching: SUFFIX first, since a manager is usually reading the last digits
+    off Amazon's portal. Falls back to EXACT when the suffix finds nothing.
+    A suffix hitting several rows is reported as ambiguous with all matches
+    returned, rather than silently picking one — the caller re-queries with the
+    full TBA.
+
+    Tier 3 gate: package-level records are per-employee data.
+    """
+    from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
+    from app.models.walker_route import Route
+
+    cid = caller.company_id
+    needle = tba.strip().upper()
+
+    def _collect(pattern: str, exact: bool) -> list[PackageRecord]:
+        out: list[PackageRecord] = []
+
+        # Route supplies the date for RTS/missing; damaged carries its own.
+        rts_q = (
+            db.query(RTSPackage, Route.route_date)
+            .outerjoin(Route, Route.id == RTSPackage.route_id)
+            .filter(RTSPackage.company_id == cid)
+        )
+        rts_q = rts_q.filter(RTSPackage.tba_number == pattern) if exact \
+            else rts_q.filter(RTSPackage.tba_number.ilike(f"%{pattern}"))
+        for pkg, rdate in rts_q.limit(25).all():
+            out.append(PackageRecord(
+                source="rts", tba_number=pkg.tba_number,
+                recorded_at=pkg.recorded_at, route_date=rdate,
+                walker_name=pkg.walker_name, rts_type=pkg.rts_type,
+                rts_explanation=pkg.rts_explanation,
+                is_reattemptable=pkg.is_reattemptable,
+            ))
+
+        miss_q = (
+            db.query(MissingPackage, Route.route_date)
+            .outerjoin(Route, Route.id == MissingPackage.route_id)
+            .filter(MissingPackage.company_id == cid)
+        )
+        miss_q = miss_q.filter(MissingPackage.tba_number == pattern) if exact \
+            else miss_q.filter(MissingPackage.tba_number.ilike(f"%{pattern}"))
+        for pkg, rdate in miss_q.limit(25).all():
+            out.append(PackageRecord(
+                source="missing", tba_number=pkg.tba_number,
+                recorded_at=pkg.reported_at, route_date=rdate,
+                walker_name=pkg.walker_name,
+                resolution_status=pkg.resolution_status,
+                notes=pkg.resolution_notes,
+            ))
+
+        dmg_q = db.query(DamagedPackage).filter(DamagedPackage.company_id == cid)
+        dmg_q = dmg_q.filter(DamagedPackage.tba_number == pattern) if exact \
+            else dmg_q.filter(DamagedPackage.tba_number.ilike(f"%{pattern}"))
+        for pkg in dmg_q.limit(25).all():
+            out.append(PackageRecord(
+                source="damaged", tba_number=pkg.tba_number,
+                recorded_at=pkg.reported_at, route_date=pkg.route_date,
+                walker_name=pkg.reported_by_name,
+                resolution_status=pkg.resolution_status,
+                damage_stage=pkg.stage, notes=pkg.damage_notes,
+            ))
+
+        # Newest first — the most recent record is the one being disputed.
+        out.sort(key=lambda r: (r.recorded_at is None, r.recorded_at), reverse=True)
+        return out
+
+    results = _collect(needle, exact=False)
+    matched_on = "suffix"
+
+    # Empty suffix search: the input may BE a full TBA that stores differently
+    # (padding, case), so try exact before giving up.
+    if not results:
+        results = _collect(needle, exact=True)
+        matched_on = "exact" if results else "none"
+
+    # Several suffix hits: return them all and say so. Picking one silently
+    # would attach the wrong package to a financial record.
+    ambiguous = matched_on == "suffix" and len({r.tba_number for r in results}) > 1
+
+    return PackageSearchResponse(
+        query=needle, matched_on=matched_on, results=results, ambiguous=ambiguous,
     )
 
 

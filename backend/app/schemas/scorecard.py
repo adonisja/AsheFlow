@@ -190,3 +190,47 @@ class IndividualRosterResponse(BaseModel):
     weeks_considered: List[str]
     rows: List[IndividualRosterRow]
     employees_without_scorecards: int = 0
+
+
+# ── Package lookup for appeal evidence (ADR-243) ─────────────────────────────
+# Amazon cites a TBA on the scorecard; this finds OUR record of it so the
+# disagreement can be evidenced. Searches all three package tables because
+# "we have no record" and "we logged it as damaged at station sort" are very
+# different appeal positions.
+
+class PackageRecord(BaseModel):
+    """One package as WE recorded it.
+
+    normalised_address is deliberately ABSENT. CLAUDE.md Dimension 7 forbids
+    addresses in output schemas, and ADR-219 nulls them 48h post-route anyway.
+    The TBA identifies the package to Amazon without exposing a customer's
+    location — which is all an appeal needs.
+    """
+    source: str                              # rts | missing | damaged
+    tba_number: str
+    recorded_at: Optional[datetime] = None
+    route_date: Optional[date] = None
+    walker_name: Optional[str] = None
+
+    # RTS-specific
+    rts_type: Optional[str] = None
+    rts_explanation: Optional[str] = None
+    is_reattemptable: Optional[bool] = None
+
+    # Missing/damaged-specific
+    resolution_status: Optional[str] = None
+    damage_stage: Optional[str] = None       # station_sort | truck_load | in_truck
+    notes: Optional[str] = None
+
+
+class PackageSearchResponse(BaseModel):
+    """Result of a TBA lookup.
+
+    `matched_on` tells the caller HOW the match was made, so a suffix hit that
+    returned several rows can be disambiguated by entering the full TBA rather
+    than silently picking one.
+    """
+    query: str
+    matched_on: str                          # suffix | exact | none
+    results: List[PackageRecord] = []
+    ambiguous: bool = False                  # suffix matched >1 record
