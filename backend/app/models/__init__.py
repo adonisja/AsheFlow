@@ -48,3 +48,4 @@ from app.models.delivery_stop import DeliveryStop
 from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment, DamagedPackage
 from app.models.shift_roll_call import ShiftRollCall
 from app.models.scorecard import Scorecard, ScorecardMetric
+from app.models.scorecard_appeal import ScorecardAppeal, ScorecardAppealItem
