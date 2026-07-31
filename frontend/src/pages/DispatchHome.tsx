@@ -14,6 +14,7 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import type { CrewMember, UnavailableStaff, Incident } from '../api/types';
 import { getLocalYMD } from '../utils/date';
 import DispatchProcessHealth from '../components/dispatch/DispatchProcessHealth';
+import CompanyStandingCard from '../components/CompanyStandingCard';
 
 interface ScheduleChangeRequest {
   id: string;
@@ -131,6 +132,9 @@ export default function DispatchHome() {
           </button>
         }
       />
+
+      {/* Tier 1 — company standing, visible to every role */}
+      <CompanyStandingCard />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">

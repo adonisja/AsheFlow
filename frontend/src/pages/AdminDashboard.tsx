@@ -16,6 +16,7 @@ import StatCard from '../components/ui/StatCard';
 import MotionCard from '../components/ui/MotionCard';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import CompanyStandingCard from '../components/CompanyStandingCard';
 
 type Employee = {
   id: string;
@@ -269,6 +270,9 @@ export default function AdminDashboard() {
       />
 
       <ErrorBanner message={error} />
+
+      {/* Tier 1 — company standing, visible to every role */}
+      <CompanyStandingCard />
 
       {/* Integration freshness (ADR-241). Stale ADP/Flex data degrades dispatch,
           payroll reconciliation and mismatch detection silently — this is the

@@ -9,6 +9,7 @@ import {
 import GearRequestSummary from '../gear/GearRequestSummary';
 import type { NoShowRow, InspectionSummaryRow, ManagementDashboardSummary } from '../../api/types';
 import { pct, metric, count, hours } from '../../utils/metric';
+import CompanyStandingCard from '../CompanyStandingCard';
 
 export default function ManagementView() {
   const { user } = useAuth();
@@ -131,6 +132,9 @@ export default function ManagementView() {
           </div>
         ))}
       </div>
+
+      {/* Tier 1 — company standing, visible to every role */}
+      <CompanyStandingCard />
 
       {/* Operational efficiency + routing quality (ADR-241).
           Deliberately NOT cost-per-delivery: clients do not share wage rates,

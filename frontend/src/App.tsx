@@ -53,6 +53,7 @@ import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
 import WorkerView from './components/dashboard/WorkerView';
 import { Users, Calendar } from 'lucide-react';
+import CompanyStandingCard from './components/CompanyStandingCard';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -134,6 +135,9 @@ function Dashboard() {
 
   return (
     <div className="space-y-8 animate-slide-up">
+      {/* Tier 1 — company standing, visible to every role */}
+      <CompanyStandingCard />
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>

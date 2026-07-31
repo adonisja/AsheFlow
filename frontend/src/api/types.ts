@@ -1571,3 +1571,166 @@ export interface ScorecardTrendResponse {
   focus_now?: string[];
   missing_weeks?: string[];
 }
+// ── Scorecard tiers + appeals — GENERATED from the backend OpenAPI schema ───
+// Do not hand-edit. Regenerate after changing app/schemas/scorecard*.py.
+//
+// Access tiers (docs/SCORECARD_ACCESS_MODEL.md): company standing is Tier 1
+// (all roles); individual data and appeals are management/admin only.
+
+export interface CompanyStandingCard {
+  week?: string | null;
+  standing?: string | null;
+  previous_standing?: string | null;
+  direction?: string | null;
+  consecutive_weeks?: number;
+  has_data?: boolean;
+}
+
+export interface IndividualMetricPoint {
+  week: string;
+  value?: number | null;
+  raw: string;
+  flag?: string | null;
+}
+
+export interface IndividualMetricTrend {
+  key: string;
+  label: string;
+  unit?: string | null;
+  points: IndividualMetricPoint[];
+  latest?: number | null;
+  previous?: number | null;
+  delta?: number | null;
+  direction?: string | null;
+}
+
+export interface IndividualTrendResponse {
+  employee_id?: string | null;
+  employee_name?: string | null;
+  weeks: string[];
+  standings: StandingPoint[];
+  current_standing?: string | null;
+  metrics: IndividualMetricTrend[];
+  focus_now?: string[];
+}
+
+export interface IndividualRosterRow {
+  employee_id: string;
+  employee_name: string;
+  employee_role?: string | null;
+  latest_week?: string | null;
+  standing?: string | null;
+  weeks_recorded?: number;
+  flagged_metric_count?: number;
+  trend_direction?: string | null;
+}
+
+export interface IndividualRosterResponse {
+  weeks_considered: string[];
+  rows: IndividualRosterRow[];
+  employees_without_scorecards?: number;
+}
+
+export interface AppealItemIn {
+  metric_key: string;
+  metric_label: string;
+  amazon_value?: string | null;
+  our_value?: string | null;
+  delta?: number | null;
+  evidence?: Record<string, unknown> | null;
+  claim?: string | null;
+  sort_order?: number;
+}
+
+export interface AppealItemOut {
+  metric_key: string;
+  metric_label: string;
+  amazon_value?: string | null;
+  our_value?: string | null;
+  delta?: number | null;
+  evidence?: Record<string, unknown> | null;
+  claim?: string | null;
+  sort_order?: number;
+  id: string;
+  outcome: string;
+  outcome_notes?: string | null;
+  corrected_value?: string | null;
+}
+
+export interface AppealItemResolve {
+  outcome: "accepted" | "rejected";
+  corrected_value?: string | null;
+  outcome_notes?: string | null;
+}
+
+export interface AppealCreate {
+  scorecard_id: string;
+  title?: string | null;
+  rationale?: string | null;
+  items?: AppealItemIn[];
+}
+
+export interface AppealUpdate {
+  title?: string | null;
+  rationale?: string | null;
+  items?: AppealItemIn[] | null;
+}
+
+export interface AppealSubmit {
+  amazon_reference?: string | null;
+}
+
+export interface AppealResolve {
+  outcome: "won" | "lost" | "withdrawn";
+  outcome_notes?: string | null;
+}
+
+export interface AppealOut {
+  id: string;
+  company_id: string;
+  scorecard_id: string;
+  week: string;
+  scope: string;
+  employee_id?: string | null;
+  employee_name?: string | null;
+  status: string;
+  title?: string | null;
+  rationale?: string | null;
+  submitted_at?: string | null;
+  submitted_by_name?: string | null;
+  amazon_reference?: string | null;
+  resolved_at?: string | null;
+  resolved_by_name?: string | null;
+  outcome_notes?: string | null;
+  created_by_name?: string | null;
+  created_at: string;
+  items?: AppealItemOut[];
+}
+
+export interface AppealListItem {
+  id: string;
+  scorecard_id: string;
+  week: string;
+  scope: string;
+  employee_name?: string | null;
+  status: string;
+  title?: string | null;
+  item_count?: number;
+  items_accepted?: number;
+  submitted_at?: string | null;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface AppealStats {
+  total?: number;
+  draft?: number;
+  submitted?: number;
+  won?: number;
+  lost?: number;
+  withdrawn?: number;
+  win_rate_pct?: number | null;
+  most_appealed_metrics?: Record<string, unknown>[];
+  most_won_metrics?: Record<string, unknown>[];
+}
+
