@@ -12,16 +12,48 @@
  * Gated dispatch + management + admin, matching the backend. This is
  * operational tracking, distinct from the Tier 3 appeal-evidence search.
  */
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Search, Package, MapPin, Truck, AlertTriangle, CheckCircle2, Clock, User,
+  Copy, Check, History, X,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import { SkeletonCard } from '../components/ui/Skeleton';
 import type { PackageLookupResponse, PackageTimeline } from '../api/types';
 import { shortDate } from '../utils/metric';
+import { Link } from 'react-router-dom';
 
 const MIN_CHARS = 4;
+const RECENT_KEY = 'asheflow.packageLookup.recent';
+const RECENT_MAX = 6;
+
+/** Recent lookups, newest first.
+ *
+ * Dispatch fields several calls in a row and was re-typing full TBAs each time.
+ * Stored per-browser rather than server-side: it is a convenience, not a record,
+ * and a TBA is not something worth persisting to the account.
+ *
+ * Guarded because localStorage throws in private mode on some browsers, and a
+ * search page should not fail to render over a convenience feature.
+ */
+function loadRecent(): string[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, RECENT_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(list: string[]) {
+  try {
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX)));
+  } catch {
+    /* private mode — recents are best-effort */
+  }
+}
 
 /** Where the holder answer came from — shown so a stale "assigned" is not read
  *  as a confirmed delivery. */
@@ -37,10 +69,14 @@ export default function PackageLookup() {
   const [data, setData] = useState<PackageLookupResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recent, setRecent] = useState<string[]>([]);
 
-  const search = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const q = tba.trim();
+  useEffect(() => { setRecent(loadRecent()); }, []);
+
+  /** Runs a lookup. Takes the term explicitly so a recent chip can trigger it
+   *  without waiting for the input's state to settle. */
+  const runSearch = useCallback(async (term: string) => {
+    const q = term.trim();
     if (q.length < MIN_CHARS) return;
     setLoading(true);
     setError(null);
@@ -49,6 +85,15 @@ export default function PackageLookup() {
         `/packages/lookup?tba=${encodeURIComponent(q)}`,
       );
       setData(res.data);
+      // Only remember searches that found something — a typo is not worth
+      // offering back as a suggestion.
+      if (res.data.matched_on !== 'none') {
+        setRecent(prev => {
+          const next = [q, ...prev.filter(r => r !== q)].slice(0, RECENT_MAX);
+          saveRecent(next);
+          return next;
+        });
+      }
     } catch (err) {
       const e2 = err as { response?: { data?: { detail?: string } } };
       setError(e2.response?.data?.detail ?? 'Lookup failed.');
@@ -56,7 +101,14 @@ export default function PackageLookup() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const search = (e: React.FormEvent) => {
+    e.preventDefault();
+    runSearch(tba);
   };
+
+  const clearRecent = () => { setRecent([]); saveRecent([]); };
 
   return (
     <div className="space-y-8 animate-slide-up">
@@ -87,9 +139,43 @@ export default function PackageLookup() {
         </button>
       </form>
 
+      {/* Recent lookups — dispatch fields several calls in a row, and a TBA is
+          long enough that re-typing it is a real cost. */}
+      {recent.length > 0 && !loading && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-subtle flex items-center gap-1">
+            <History className="w-3 h-3" /> Recent
+          </span>
+          {recent.map(r => (
+            <button
+              key={r}
+              onClick={() => { setTba(r); runSearch(r); }}
+              className="text-xs font-mono px-2 py-1 rounded-lg bg-accent/40 text-foreground hover:bg-accent transition-colors"
+            >
+              …{r.slice(-8)}
+            </button>
+          ))}
+          <button
+            onClick={clearRecent}
+            className="text-xs text-subtle hover:text-foreground flex items-center gap-0.5"
+            aria-label="Clear recent lookups"
+          >
+            <X className="w-3 h-3" /> Clear
+          </button>
+        </div>
+      )}
+
       <ErrorBanner message={error} />
 
-      {data && data.matched_on === 'none' && (
+      {/* Skeleton rather than an empty region: on a slow lookup the page
+          previously looked broken while the button said "Searching…". */}
+      {loading && (
+        <div className="space-y-3">
+          <SkeletonCard className="h-40" />
+        </div>
+      )}
+
+      {!loading && data && data.matched_on === 'none' && (
         <div className="card flex flex-col items-center justify-center py-12 gap-2 text-center">
           <Package className="w-8 h-8 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">
@@ -105,7 +191,7 @@ export default function PackageLookup() {
       {/* A suffix hitting several packages is reported, never silently narrowed
           — picking one for the operator would be a guess about which customer
           they are on the phone with. */}
-      {data?.ambiguous && (
+      {!loading && data?.ambiguous && (
         <div className="flex items-start gap-2 px-4 py-2.5 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
           <span>
@@ -115,19 +201,44 @@ export default function PackageLookup() {
         </div>
       )}
 
-      {(data?.results ?? []).map(pkg => <TimelineCard key={pkg.tba_number} pkg={pkg} />)}
+      {!loading && (data?.results ?? []).map(pkg => (
+        <TimelineCard key={pkg.tba_number} pkg={pkg} />
+      ))}
     </div>
   );
 }
 
 function TimelineCard({ pkg }: { pkg: PackageTimeline }) {
   const hasException = (pkg.exceptions?.length ?? 0) > 0;
+  const [copied, setCopied] = useState(false);
+
+  /** Copy the TBA — the operator is usually pasting it into Amazon's portal or
+   *  a message to the walker, and re-reading 15 characters off screen invites
+   *  transcription errors. */
+  const copyTba = async () => {
+    try {
+      await navigator.clipboard.writeText(pkg.tba_number);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked (insecure context) — the number is still on screen */
+    }
+  };
 
   return (
     <div className="card space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
-          <p className="font-mono text-sm text-foreground break-all">{pkg.tba_number}</p>
+          <button
+            onClick={copyTba}
+            className="font-mono text-sm text-foreground break-all hover:text-primary transition-colors flex items-center gap-1.5 text-left"
+            title="Copy tracking number"
+          >
+            {pkg.tba_number}
+            {copied
+              ? <Check className="w-3.5 h-3.5 text-success shrink-0" />
+              : <Copy className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+          </button>
           {pkg.current_holder_name ? (
             <p className="text-lg font-bold text-foreground mt-1 flex items-center gap-1.5">
               <User className="w-4 h-4 text-primary shrink-0" />
@@ -178,6 +289,26 @@ function TimelineCard({ pkg }: { pkg: PackageTimeline }) {
             />
           ))}
         </Section>
+      )}
+
+      {/* Actions. Deliberately NOT deep-linking to a walker: neither
+          /walker-performance nor /incidents reads a URL param today, so a link
+          would land on the page without selecting anyone — worse than no link.
+          Revisit if those pages gain param support. */}
+      {pkg.current_holder_name && (
+        <div className="flex items-center gap-2 flex-wrap pt-1">
+          <Link
+            to="/crew-status"
+            className="text-xs text-primary hover:underline"
+          >
+            Crew status →
+          </Link>
+          {hasException && (
+            <Link to="/incidents" className="text-xs text-primary hover:underline">
+              Incidents →
+            </Link>
+          )}
+        </div>
       )}
 
       {hasException && (
