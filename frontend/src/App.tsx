@@ -55,6 +55,7 @@ import WorkerView from './components/dashboard/WorkerView';
 import { Users, Calendar } from 'lucide-react';
 import CompanyStandingCard from './components/CompanyStandingCard';
 import ScorecardAppeals from './pages/ScorecardAppeals';
+import ScorecardRoster from './pages/ScorecardRoster';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -433,6 +434,15 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'driver', 'trainer']}>
                   <CrewStatus />
+                </ProtectedRoute>
+              }
+            />
+            {/* Tier 3 — individual scorecards; dispatch excluded (ADR-242) */}
+            <Route
+              path="/scorecard-roster"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <ScorecardRoster />
                 </ProtectedRoute>
               }
             />

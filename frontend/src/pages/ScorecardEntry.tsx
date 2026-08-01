@@ -4,6 +4,7 @@ import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { Award, Plus, Trash2, Save, Upload } from 'lucide-react';
 import type { Employee, ScorecardMetric, ScorecardCrossCheck } from '../api/types';
+import { Link } from 'react-router-dom';
 
 /** Management: enter an Amazon weekly scorecard (ADR-204 Phase B, structured entry).
  *  Phase C will add file upload + auto-extract that pre-fills this same form. */
@@ -45,6 +46,61 @@ export default function ScorecardEntry() {
   const [saving, setSaving] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [crossCheck, setCrossCheck] = useState<ScorecardCrossCheck | null>(null);
+  // ADR-243: which contestable metrics to carry into an appeal. Pre-selected
+  // from the backend's `contestable` flag — the manager can deselect, but the
+  // default is what our own records actually dispute.
+  const [appealPick, setAppealPick] = useState<Set<string>>(new Set());
+  const [appealBusy, setAppealBusy] = useState(false);
+  const [appealId, setAppealId] = useState<string | null>(null);
+
+/** Open a draft appeal from the cross-check.
+   *
+   * Values are SNAPSHOTTED into the appeal now rather than referenced: a
+   * corrected scorecard re-upload clears and rewrites scorecard_metrics, which
+   * would otherwise silently rewrite the evidence the appeal was built on.
+   * The RTS reason counts travel as per-item evidence, since that is the
+   * substance of a delivery-defect dispute.
+   */
+  const createAppeal = async () => {
+    if (!crossCheck) return;
+    setAppealBusy(true);
+    setError(null);
+    try {
+      const items = crossCheck.items
+        .filter(i => appealPick.has(i.metric))
+        .map((i, idx) => ({
+          metric_key: i.metric,
+          metric_label: i.metric.replace(/_/g, ' '),
+          amazon_value: i.amazon_value != null ? String(i.amazon_value) : null,
+          our_value: i.our_value != null ? String(i.our_value) : null,
+          delta: i.delta,
+          evidence: {
+            rts_reasons: crossCheck.rts_evidence,
+            our_delivered: crossCheck.our_delivered,
+            our_rts: crossCheck.our_rts,
+            our_missing: crossCheck.our_missing,
+            week_start: crossCheck.week_start,
+            week_end: crossCheck.week_end,
+          },
+          claim: i.note || null,
+          sort_order: idx,
+        }));
+      const { data } = await axiosClient.post('/scorecard-appeals', {
+        scorecard_id: crossCheck.scorecard_id,
+        title: `Week ${crossCheck.week} — ${items.length} contested metric${items.length === 1 ? '' : 's'}`,
+        rationale: null,
+        items,
+      });
+      setAppealId(data.id);
+    } catch (err) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      // Surfaces the 409 "an open appeal already exists" rather than a generic
+      // failure, since that guard has a specific and actionable explanation.
+      setError(e.response?.data?.detail ?? 'Could not open an appeal.');
+    } finally {
+      setAppealBusy(false);
+    }
+  };
 
   // Phase C: upload the Amazon scorecard image → Textract draft pre-fills the form.
   // The manager reviews/edits before Save (a misparse never saves unreviewed).
@@ -106,6 +162,8 @@ export default function ScorecardEntry() {
       if (scope === 'individual' && data?.id) {
         try {
           const xc = await axiosClient.get<ScorecardCrossCheck>(`/scorecards/${data.id}/cross-check`);
+          setAppealPick(new Set(xc.data.items.filter(i => i.contestable).map(i => i.metric)));
+          setAppealId(null);
           setCrossCheck(xc.data);
         } catch { /* cross-check is best-effort */ }
       }
@@ -138,8 +196,23 @@ export default function ScorecardEntry() {
               <div key={it.metric}
                    className={`rounded-lg border p-3 ${it.contestable ? 'border-amber-400/50 bg-amber-50' : 'border-border bg-background'}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-foreground capitalize">{it.metric.replace(/_/g, ' ')}</span>
-                  {it.contestable && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">CONTESTABLE</span>}
+                  <label className="flex items-center gap-2 min-w-0 cursor-pointer">
+                    {/* Any metric may be contested, not only the flagged ones —
+                        the flag is our data's opinion, not a gate. */}
+                    <input
+                      type="checkbox"
+                      checked={appealPick.has(it.metric)}
+                      disabled={!!appealId}
+                      onChange={e => setAppealPick(prev => {
+                        const next = new Set(prev);
+                        e.target.checked ? next.add(it.metric) : next.delete(it.metric);
+                        return next;
+                      })}
+                      className="shrink-0"
+                    />
+                    <span className="text-sm font-semibold text-foreground capitalize truncate">{it.metric.replace(/_/g, ' ')}</span>
+                  </label>
+                  {it.contestable && <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded shrink-0">CONTESTABLE</span>}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   Amazon: <span className="font-medium text-foreground">{it.amazon_value ?? '—'}</span>
@@ -163,6 +236,37 @@ export default function ScorecardEntry() {
               </ul>
             </div>
           )}
+
+          {/* Appeal creation — the entry point the appeals page tells users to
+              start from. Without this, /scorecard-appeals had no way to create
+              anything. */}
+          <div className="border-t border-border pt-3">
+            {appealId ? (
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="text-xs text-emerald-700">
+                  Draft appeal opened with {appealPick.size} metric{appealPick.size === 1 ? '' : 's'}.
+                </p>
+                <Link to="/scorecard-appeals" className="text-xs text-primary hover:underline">
+                  Open in Appeals →
+                </Link>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="text-xs text-muted-foreground">
+                  {appealPick.size === 0
+                    ? 'Select at least one metric to contest.'
+                    : `${appealPick.size} metric${appealPick.size === 1 ? '' : 's'} selected. Values and RTS evidence are copied into the draft.`}
+                </p>
+                <button
+                  onClick={createAppeal}
+                  disabled={appealBusy || appealPick.size === 0}
+                  className="btn-primary text-sm disabled:opacity-40"
+                >
+                  {appealBusy ? 'Opening…' : 'Open draft appeal'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
