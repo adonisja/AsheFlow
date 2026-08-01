@@ -56,6 +56,7 @@ import { Users, Calendar } from 'lucide-react';
 import CompanyStandingCard from './components/CompanyStandingCard';
 import ScorecardAppeals from './pages/ScorecardAppeals';
 import ScorecardRoster from './pages/ScorecardRoster';
+import Scorecards from './pages/Scorecards';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -434,6 +435,17 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'driver', 'trainer']}>
                   <CrewStatus />
+                </ProtectedRoute>
+              }
+            />
+            {/* Consolidated Scorecards tab. The four sub-views keep their own
+                routes below so existing links and the "Open in Appeals" deep
+                link stay valid; only the NAV collapsed to one entry. */}
+            <Route
+              path="/scorecards"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin', 'dispatch']}>
+                  <Scorecards />
                 </ProtectedRoute>
               }
             />

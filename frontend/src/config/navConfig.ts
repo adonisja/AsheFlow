@@ -38,22 +38,21 @@ export interface NavContext {
 const ALL_FIELD: Role[] = ['driver', 'walker', 'trainer', 'trainee'];
 
 /**
- * Canonical nav items, alphabetical within the list (the Navbar groups by role
- * and orders alphabetically). Each `roles` array is the authoritative access
- * set for that path — App.tsx gates derive from it.
+ * Canonical nav items. Each `roles` array is the authoritative access set for
+ * that path — App.tsx gates derive from it.
+ *
+ * Display order is NOT this literal's order: navItemsForGroups sorts by label,
+ * so an entry may be appended anywhere. The Navbar prepends the role's
+ * Dashboard as the first tab, which is why no dashboard route appears here.
  */
 export const NAV_ITEMS: NavItem[] = [
   { path: '/dispatch',              label: 'Assignments',       icon: ClipboardCheck, roles: ['admin', 'dispatch'] },
-  { path: '/scorecard-roster',      label: 'Crew Scorecards',   icon: Users,          roles: ['admin', 'management'] },
-  { path: '/scorecard-appeals',     label: 'Appeals',           icon: Gavel,          roles: ['admin', 'management'] },
-  { path: '/operations-analytics',  label: 'Scorecard',         icon: BarChart2,      roles: ['admin', 'dispatch', 'management'] },
   { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver'] },
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
   { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
-  { path: '/scorecard-entry',       label: 'Scorecards',        icon: Star,           roles: ['admin', 'management'] },
   // /dispatch-home has NO tab: it is dispatch's Dashboard landing
   // (homeRouteForGroups), and every role has its own scoped home dashboard —
   // admin lands on /admin and doesn't need dispatch's. Route access is gated
@@ -68,6 +67,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/my-quiz',               label: 'Quiz',              icon: ClipboardCheck, roles: ['trainee'], when: c => c.hasActiveQuiz },
   { path: '/phase4-observation',    label: 'Phase 4',           icon: ClipboardCheck, roles: ['admin', 'trainer'], when: c => c.trainerPhase === 4 },
   { path: '/preferences',           label: 'Preferences',       icon: Settings,       roles: ['driver', 'walker', 'trainer', 'trainee'] },
+  { path: '/scorecards',            label: 'Scorecards',        icon: Star,           roles: ['admin', 'dispatch', 'management'] },
   { path: '/schedule',              label: 'Schedule',          icon: Calendar,       roles: ['admin', 'management', ...ALL_FIELD] },
   { path: '/schedule-changes',      label: 'Schedule Changes',  icon: RefreshCw,      roles: ['admin', 'dispatch', 'driver', 'trainer', 'trainee', 'walker'] },
   { path: '/settings',              label: 'Settings',          icon: Settings,       roles: ['admin'] },
@@ -91,11 +91,17 @@ export function routeRoles(path: string): Role[] {
  * Admin is shown its own curated set (it does not inherit every role's tabs). */
 export function navItemsForGroups(groups: string[], ctx: NavContext): NavItem[] {
   const roleSet = new Set(groups as Role[]);
-  return NAV_ITEMS.filter(item => {
-    if (!item.roles.some(r => roleSet.has(r))) return false;
-    if (item.when && !item.when(ctx)) return false;
-    return true;
-  });
+  return NAV_ITEMS
+    .filter(item => {
+      if (!item.roles.some(r => roleSet.has(r))) return false;
+      if (item.when && !item.when(ctx)) return false;
+      return true;
+    })
+    // Sorted HERE rather than relying on the literal's order. The list was
+    // documented as alphabetical and had drifted — nothing enforced it, so
+    // every append landed wherever it was pasted. The Dashboard tab is
+    // prepended separately by the Navbar and is deliberately not part of this.
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** Role-specific landing route for the Dashboard link. */
