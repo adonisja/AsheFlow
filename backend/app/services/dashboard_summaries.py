@@ -20,7 +20,7 @@ Reference implementations followed:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, date, timezone
+from datetime import datetime, timedelta, date, time, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -143,6 +143,33 @@ def _shift_end(db: Session, company_id: UUID):
     )
 
 
+def _ts_window(db: Session, company_id: UUID, start: date, end: date) -> tuple[datetime, datetime]:
+    """Half-open [start, end+1day) in the COMPANY'S timezone, as UTC-aware bounds.
+
+    The dates come from _company_today, which is company-local — but the columns
+    being filtered are UTC timestamps. Stamping those local dates as UTC drops
+    the tail of the final local day: for a UTC-5 company at 22:56 local it is
+    already 03:56 UTC the NEXT day, so an inspection submitted "today" lands
+    after a window whose end was built as local-midnight-labelled-UTC.
+
+    That is not hypothetical — it is the bug that made
+    test_failed_items_read_real_jsonb fail: submitted_at 2026-08-01T02:56Z
+    against a win_end of 2026-08-01T00:00Z, for a company whose local date was
+    still 2026-07-31.
+
+    Converting through the company's tzinfo makes the boundary mean what the
+    caller intends: the start of their day to the start of their next day.
+    """
+    try:
+        from app.services.local_date import company_tz
+        tz = company_tz(db, company_id)
+    except Exception:
+        tz = timezone.utc
+    lo = datetime.combine(start, time.min, tzinfo=tz)
+    hi = datetime.combine(end + timedelta(days=1), time.min, tzinfo=tz)
+    return lo.astimezone(timezone.utc), hi.astimezone(timezone.utc)
+
+
 def _employee_names(db: Session, company_id: UUID, ids) -> dict:
     ids = [i for i in ids if i]
     if not ids:
@@ -163,7 +190,7 @@ def _package_totals(db: Session, company_id: UUID, start: date, end: date) -> di
     DeliveryStop.completed_at is a timestamp, so the upper bound is exclusive
     on end+1 day. All 7 DeliveryStop columns used here were verified present.
     """
-    end_exclusive = end + timedelta(days=1)
+    win_start, win_end = _ts_window(db, company_id, start, end)
     row = (
         db.query(
             func.coalesce(func.sum(DeliveryStop.packages_delivered), 0).label("delivered"),
@@ -174,8 +201,8 @@ def _package_totals(db: Session, company_id: UUID, start: date, end: date) -> di
         )
         .filter(
             DeliveryStop.company_id == company_id,
-            DeliveryStop.completed_at >= start,
-            DeliveryStop.completed_at < end_exclusive,
+            DeliveryStop.completed_at >= win_start,
+            DeliveryStop.completed_at < win_end,
         )
         .first()
     )
@@ -187,8 +214,8 @@ def _package_totals(db: Session, company_id: UUID, start: date, end: date) -> di
         )
         .filter(
             DeliveryStop.company_id == company_id,
-            DeliveryStop.completed_at >= start,
-            DeliveryStop.completed_at < end_exclusive,
+            DeliveryStop.completed_at >= win_start,
+            DeliveryStop.completed_at < win_end,
             DeliveryStop.started_at.isnot(None),
         )
         .scalar()
@@ -431,7 +458,7 @@ def _training_oversight(db: Session, company_id: UUID) -> dict:
 
 def _inspection_pass_rate(db: Session, company_id: UUID, start: date,
                           end: date) -> tuple[Optional[float], int]:
-    end_exclusive = end + timedelta(days=1)
+    win_start, win_end = _ts_window(db, company_id, start, end)
     row = (
         db.query(
             func.count(VehicleInspection.id).label("total"),
@@ -439,8 +466,8 @@ def _inspection_pass_rate(db: Session, company_id: UUID, start: date,
         )
         .filter(
             VehicleInspection.company_id == company_id,
-            VehicleInspection.submitted_at >= start,
-            VehicleInspection.submitted_at < end_exclusive,
+            VehicleInspection.submitted_at >= win_start,
+            VehicleInspection.submitted_at < win_end,
         )
         .first()
     )
@@ -454,13 +481,13 @@ def _failed_items(db: Session, company_id: UUID, start: date,
 
     Phase 2 returned a hardcoded [{'Tires',3},{'Lights',2}].
     """
-    end_exclusive = end + timedelta(days=1)
+    win_start, win_end = _ts_window(db, company_id, start, end)
     rows = (
         db.query(VehicleInspection.items)
         .filter(
             VehicleInspection.company_id == company_id,
-            VehicleInspection.submitted_at >= start,
-            VehicleInspection.submitted_at < end_exclusive,
+            VehicleInspection.submitted_at >= win_start,
+            VehicleInspection.submitted_at < win_end,
             VehicleInspection.has_failures == True,   # noqa: E712
         )
         .all()
@@ -714,7 +741,7 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
         for eid, c in sorted(ncns_counts.items(), key=lambda kv: kv[1], reverse=True)
     ]
 
-    end_exclusive = end + timedelta(days=1)
+    win_start, win_end = _ts_window(db, company_id, start, end)
     rating_rows = (
         db.query(WalkerRating.ratee_id,
                  func.avg(WalkerRating.stars).label("avg_stars"),
@@ -728,8 +755,8 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
         db.query(DeliveryStop.walker_id,
                  func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
         .filter(DeliveryStop.company_id == company_id,
-                DeliveryStop.completed_at >= start,
-                DeliveryStop.completed_at < end_exclusive,
+                DeliveryStop.completed_at >= win_start,
+                DeliveryStop.completed_at < win_end,
                 DeliveryStop.walker_id.isnot(None))
         .group_by(DeliveryStop.walker_id)
         .all()

@@ -78,6 +78,7 @@ from app.models.truck_assignment import TruckAssignment  # noqa: E402
 from app.models.walker_route import Route  # noqa: E402
 from app.services.dashboard_summaries import (  # noqa: E402
     _company_today,
+    _ts_window,
     _pct,
     _trend,
     get_admin_dashboard_summary,
@@ -615,3 +616,42 @@ class TestTrainingOversightScope:
 
         crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
         assert sum(p.trainee_count for p in crew.trainee_phases) == 1
+
+
+# ── timezone boundary ─────────────────────────────────────────────────────────
+
+class TestTimestampWindow:
+    """The window bounds UTC timestamp columns, but its dates come from
+    _company_today, which is COMPANY-LOCAL.
+
+    Stamping those local dates as UTC drops the tail of the final local day. For
+    a UTC-5 company at 22:56 local it is already 03:56 UTC the next day, so an
+    inspection submitted "today" lands after a window whose end was built as
+    local-midnight-labelled-UTC. That silently emptied
+    failed_items_trending — the metric read as "no failures" when there were
+    three, which is exactly the fabrication this module exists to prevent.
+    """
+
+    def test_window_is_utc_aware(self, db):
+        lo, hi = _ts_window(db, COMPANY, date(2026, 7, 24), date(2026, 7, 31))
+        assert lo.tzinfo is not None and hi.tzinfo is not None
+
+    def test_window_is_half_open_across_the_full_end_day(self, db):
+        """end is INCLUSIVE as a day, so the bound is the start of end+1."""
+        lo, hi = _ts_window(db, COMPANY, date(2026, 7, 31), date(2026, 7, 31))
+        assert (hi - lo).total_seconds() == 24 * 3600
+
+    def test_late_evening_row_falls_inside_today(self, db):
+        """The regression. A row stamped after local midnight-in-UTC terms must
+        still count as today for the company."""
+        _config(db)
+        today = _company_today(db, COMPANY)
+        lo, hi = _ts_window(db, COMPANY, today, today)
+        # 23:30 company-local on `today`, expressed in UTC
+        from app.services.local_date import company_tz
+        tz = company_tz(db, COMPANY)
+        local_late = datetime.combine(today, time(23, 30), tzinfo=tz)
+        as_utc = local_late.astimezone(timezone.utc)
+        assert lo <= as_utc < hi, (
+            "a row recorded late in the company's day fell outside 'today'"
+        )
