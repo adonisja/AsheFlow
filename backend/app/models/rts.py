@@ -48,6 +48,13 @@ class RTSPackage(Base):
     is_reattemptable    = Column(Boolean,     nullable=False, server_default="false")
     walker_id           = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     walker_name         = Column(String(100), nullable=True)
+    # ADR-244: two DISTINCT actors. walker_id is the route's executor — the
+    # walker whose route this was, which is the improvement baseline. recorded_by
+    # is who actually submitted the row, which is the accountability fact. They
+    # are equal when a walker self-submits and differ when a trainer or
+    # dispatcher submits on their behalf, which the RTS write path permits.
+    recorded_by         = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    recorded_by_name    = Column(String(100), nullable=True)
     recorded_at         = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     delivery_stop_id    = Column(UUID(as_uuid=True), ForeignKey("delivery_stops.id", ondelete="SET NULL"), nullable=True)
 
@@ -74,6 +81,13 @@ class MissingPackage(Base):
     normalised_address  = Column(String(200), nullable=True, index=True)
     walker_id           = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     walker_name         = Column(String(100), nullable=True)
+    # ADR-244: two DISTINCT actors. walker_id is the route's executor — the
+    # walker whose route this was, which is the improvement baseline. recorded_by
+    # is who actually submitted the row, which is the accountability fact. They
+    # are equal when a walker self-submits and differ when a trainer or
+    # dispatcher submits on their behalf, which the RTS write path permits.
+    recorded_by         = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    recorded_by_name    = Column(String(100), nullable=True)
     reported_at         = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolution_status   = Column(String(30),  nullable=False, server_default="unresolved", index=True)
     misroute_flag_id    = Column(UUID(as_uuid=True), ForeignKey("misrouted_package_flags.id", ondelete="SET NULL"), nullable=True)
