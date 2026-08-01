@@ -37,6 +37,14 @@ class DeliveryStop(Base):
     walker_id            = Column(UUID(as_uuid=True), ForeignKey("employees.id",         ondelete="SET NULL"), nullable=True)
     walker_name          = Column(String(100), nullable=True)
 
+    # ADR-244 amendment: walker_id is the route's EXECUTOR — the walker the stop
+    # belongs to, which is what get_my_performance, cross_check_scorecard and the
+    # management dashboard all mean by it. recorded_by is whoever actually
+    # completed it, which differs during trainer supervision and during peer
+    # coverage (one walker finishing another's stop in an emergency).
+    recorded_by          = Column(UUID(as_uuid=True), ForeignKey("employees.id",         ondelete="SET NULL"), nullable=True)
+    recorded_by_name     = Column(String(100), nullable=True)
+
     normalised_address   = Column(String(200), nullable=True)   # ADR-219: nulled 48h post-route (block_key kept)
     block_key            = Column(String(100), nullable=False)
     tba_numbers          = Column(ARRAY(String(50)), nullable=False, default=list)

@@ -13,6 +13,7 @@ rather than a bare count.
 import inspect
 
 import app.routers.rts as rts
+from app.models.delivery_stop import DeliveryStop
 from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
 
 
@@ -98,3 +99,45 @@ class TestWritePaths:
             src = self._src(fn)
             assert "walker_id           = caller.id" not in src, \
                 f"{fn.__name__} reintroduced the executor/recorder conflation"
+
+
+class TestDeliveryStopAttribution:
+    """ADR-244 amendment. delivery_stops had the same conflation, and it matters
+    more: walker_id feeds get_my_performance (a driver's own stats on mobile),
+    cross_check_scorecard's our_delivered (the figure we appeal Amazon with), and
+    the management top-walker rankings.
+
+    Two real workflows produce a mismatch — a trainer completing a trainee's stop
+    during supervision, and a walker covering another's stop in an emergency.
+    """
+
+    def test_delivery_stop_has_both_actors(self):
+        cols = {c.key for c in DeliveryStop.__table__.columns}
+        assert "walker_id" in cols
+        assert "recorded_by" in cols
+        assert "recorded_by_name" in cols
+
+    def test_recorded_by_is_nullable(self):
+        """Stops predating the migration cannot distinguish the two actors."""
+        assert DeliveryStop.__table__.columns["recorded_by"].nullable
+
+    def test_complete_stamps_executor_and_completer_separately(self):
+        src = inspect.getsource(rts.complete_delivery_stop)
+        assert "stop.walker_id          = _stop_exec[0]" in src, \
+            "walker_id must be the route's executor, not the caller"
+        assert "stop.recorded_by        = caller.id" in src, \
+            "recorded_by must be whoever completed the stop"
+
+    def test_start_stamps_executor_and_starter_separately(self):
+        src = inspect.getsource(rts.start_delivery_stop)
+        assert "stop.walker_id   = _stop_exec[0]" in src
+        assert "stop.recorded_by      = caller.id" in src
+
+    def test_neither_stop_path_stamps_walker_id_from_caller(self):
+        """The defect, pinned directly in both handlers."""
+        for fn in (rts.complete_delivery_stop, rts.start_delivery_stop):
+            src = inspect.getsource(fn)
+            assert "stop.walker_id          = caller.id" not in src, \
+                f"{fn.__name__} reintroduced the conflation"
+            assert "stop.walker_id  = caller.id" not in src, \
+                f"{fn.__name__} reintroduced the conflation"

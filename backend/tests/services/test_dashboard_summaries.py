@@ -78,6 +78,7 @@ from app.models.truck_assignment import TruckAssignment  # noqa: E402
 from app.models.walker_route import Route  # noqa: E402
 from app.services.dashboard_summaries import (  # noqa: E402
     _company_today,
+    _period_bounds,
     _ts_window,
     _pct,
     _trend,
@@ -101,6 +102,35 @@ def db():
     yield session
     session.close()
     engine.dispose()
+
+
+def _seed_day(db) -> date:
+    """Company-local TODAY — inside every period window by construction.
+
+    The suite previously hardcoded 2026-07-20 and asserted period="month": that
+    passed all July and failed on 1 August, when the month window became
+    [Aug 1, Aug 1] and the fixture fell outside it. A test correct for 28 days a
+    month is not a test.
+
+    Today, not month-start: tests that seed several CONSECUTIVE days walk
+    backwards from here (see _seed_days), which stays in-window on the 1st.
+    Anchoring forward from month-start would run past today and out of it.
+    """
+    return _company_today(db, COMPANY)
+
+
+def _seed_days(db, n: int, period: str = "month") -> list[date]:
+    """`n` consecutive days that all fall inside `period`'s window.
+
+    Walking back from today is not enough: on the 1st of a month the "month"
+    window is a SINGLE day, so any multi-day fixture falls out of it. Clamping
+    to the window start keeps every seeded day queryable, and the caller must
+    pass the same period it asserts on.
+    """
+    today = _company_today(db, COMPANY)
+    start, _ = _period_bounds(period, today)
+    days = [today - timedelta(days=i) for i in range(n - 1, -1, -1)]
+    return [d for d in days if d >= start] or [today]
 
 
 def _config(db, shift_end: time | None = time(18, 0)):
@@ -154,7 +184,7 @@ def _stop(db, route, *, delivered, total, rts=0, missing=0, when=None,
         block_key=f"BLK{seq}", tba_numbers=[], status=status,
         stop_sequence=seq, packages_total=total, packages_delivered=delivered,
         rts_count=rts, missing_count=missing,
-        started_at=started, completed_at=when or datetime(2026, 7, 20, 12, 0),
+        started_at=started, completed_at=when or datetime.combine(_seed_day(db), time(12, 0)),
     )
     db.add(s)
     db.commit()
@@ -198,7 +228,7 @@ class TestPackageDenominatedRates:
         Stop-denominated (the original bug) would give 75/2 = 3750%.
         """
         _config(db)
-        r = _route(db, date(2026, 7, 20))
+        r = _route(db, _seed_day(db))
         _stop(db, r, delivered=50, total=60, seq=1)
         _stop(db, r, delivered=25, total=40, seq=2)
 
@@ -209,7 +239,7 @@ class TestPackageDenominatedRates:
 
     def test_rework_rate_uses_packages(self, db):
         _config(db)
-        r = _route(db, date(2026, 7, 20))
+        r = _route(db, _seed_day(db))
         _stop(db, r, delivered=90, total=100, rts=7, missing=3)
 
         s = get_management_dashboard_summary(db, COMPANY, period="month")
@@ -285,9 +315,9 @@ class TestOnTimeDefinition:
     def test_none_when_shift_end_unconfigured(self, db):
         """No reference time means on-time is unknowable — not 0%."""
         _config(db, shift_end=None)
-        _route(db, date(2026, 7, 20),
-               departed=datetime(2026, 7, 20, 9, 0),
-               returned=datetime(2026, 7, 20, 17, 0))
+        _route(db, _seed_day(db),
+               departed=datetime.combine(_seed_day(db), time(9, 0)),
+               returned=datetime.combine(_seed_day(db), time(17, 0)))
 
         s = get_management_dashboard_summary(db, COMPANY, period="month")
         assert s.operational.on_time_rate_pct is None
@@ -295,12 +325,12 @@ class TestOnTimeDefinition:
 
     def test_returned_before_shift_end_is_on_time(self, db):
         _config(db, shift_end=time(18, 0))
-        _route(db, date(2026, 7, 20), number=1,
-               departed=datetime(2026, 7, 20, 9, 0),
-               returned=datetime(2026, 7, 20, 17, 30))
-        _route(db, date(2026, 7, 20), number=2,
-               departed=datetime(2026, 7, 20, 9, 0),
-               returned=datetime(2026, 7, 20, 19, 15))   # late
+        _route(db, _seed_day(db), number=1,
+               departed=datetime.combine(_seed_day(db), time(9, 0)),
+               returned=datetime.combine(_seed_day(db), time(17, 30)))
+        _route(db, _seed_day(db), number=2,
+               departed=datetime.combine(_seed_day(db), time(9, 0)),
+               returned=datetime.combine(_seed_day(db), time(19, 15)))   # late
 
         s = get_management_dashboard_summary(db, COMPANY, period="month")
         assert s.operational.on_time_rate_pct == 50.0
@@ -309,12 +339,12 @@ class TestOnTimeDefinition:
     def test_completion_and_on_time_are_distinct(self, db):
         """Both routes complete, one returns late: completion 100%, on-time 50%."""
         _config(db, shift_end=time(18, 0))
-        _route(db, date(2026, 7, 20), number=1, status="completed",
-               departed=datetime(2026, 7, 20, 9, 0),
-               returned=datetime(2026, 7, 20, 17, 0))
-        _route(db, date(2026, 7, 20), number=2, status="completed",
-               departed=datetime(2026, 7, 20, 9, 0),
-               returned=datetime(2026, 7, 20, 20, 0))
+        _route(db, _seed_day(db), number=1, status="completed",
+               departed=datetime.combine(_seed_day(db), time(9, 0)),
+               returned=datetime.combine(_seed_day(db), time(17, 0)))
+        _route(db, _seed_day(db), number=2, status="completed",
+               departed=datetime.combine(_seed_day(db), time(9, 0)),
+               returned=datetime.combine(_seed_day(db), time(20, 0)))
 
         op = get_management_dashboard_summary(db, COMPANY, period="month").operational
         assert op.completion_rate_pct == 100.0
@@ -328,9 +358,9 @@ class TestRouteTiming:
         """TruckAssignment has neither created_at nor updated_at; the original
         subtracted those two non-existent columns."""
         _config(db)
-        _route(db, date(2026, 7, 20),
-               departed=datetime(2026, 7, 20, 8, 0),
-               returned=datetime(2026, 7, 20, 14, 30))
+        _route(db, _seed_day(db),
+               departed=datetime.combine(_seed_day(db), time(8, 0)),
+               returned=datetime.combine(_seed_day(db), time(14, 30)))
 
         fleet = get_management_dashboard_summary(db, COMPANY, period="month").fleet
         assert fleet.route_avg_duration_hours == 6.5
@@ -338,7 +368,7 @@ class TestRouteTiming:
 
     def test_untimed_routes_excluded(self, db):
         _config(db)
-        _route(db, date(2026, 7, 20), departed=None, returned=None)
+        _route(db, _seed_day(db), departed=None, returned=None)
         fleet = get_management_dashboard_summary(db, COMPANY, period="month").fleet
         assert fleet.route_avg_duration_hours is None
         assert fleet.routes_with_timing == 0
@@ -352,16 +382,15 @@ class TestRollCallAttendance:
         (ADR-200/201)."""
         _config(db)
         w = _employee(db, "Absent Walker", "walker")
-        for d, status in [(date(2026, 7, 20), "ncns"),
-                          (date(2026, 7, 21), "ncns"),
-                          (date(2026, 7, 22), "late"),
-                          (date(2026, 7, 23), "present")]:
+        # Distinct days: ShiftRollCall is unique per (employee, date).
+        days = _seed_days(db, 4, period="week")
+        for d, status in zip(days, ["ncns", "ncns", "late", "present"]):
             db.add(ShiftRollCall(id=uuid.uuid4(), company_id=COMPANY,
                                  employee_id=w.id, submitted_by_id=w.id,
                                  date=d, status=status, confirmed=True))
         db.commit()
 
-        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        crew = get_management_dashboard_summary(db, COMPANY, period="week").crew
         assert [(n.employee_name, n.count) for n in crew.no_shows_this_period] == \
                [("Absent Walker", 2)]
         trouble = {t.employee_name: t for t in crew.trouble_walkers}
@@ -371,14 +400,14 @@ class TestRollCallAttendance:
     def test_confirmed_pct(self, db):
         _config(db)
         w = _employee(db)
-        for d, conf in [(date(2026, 7, 20), True), (date(2026, 7, 21), True),
-                        (date(2026, 7, 22), False), (date(2026, 7, 23), False)]:
+        days = _seed_days(db, 4, period="week")
+        for d, conf in zip(days, [True, True, False, False]):
             db.add(ShiftRollCall(id=uuid.uuid4(), company_id=COMPANY,
                                  employee_id=w.id, submitted_by_id=w.id,
                                  date=d, status="present", confirmed=conf))
         db.commit()
 
-        crew = get_management_dashboard_summary(db, COMPANY, period="month").crew
+        crew = get_management_dashboard_summary(db, COMPANY, period="week").crew
         assert crew.roll_call_total == 4
         assert crew.roll_call_confirmed_pct == 50.0
 
@@ -405,10 +434,10 @@ class TestGraduationDefinition:
 class TestCompanyScoping:
     def test_other_company_data_never_leaks(self, db):
         _config(db)
-        mine = _route(db, date(2026, 7, 20), packages=10, company=COMPANY)
+        mine = _route(db, _seed_day(db), packages=10, company=COMPANY)
         _stop(db, mine, delivered=10, total=10, company=COMPANY, seq=1)
 
-        theirs = _route(db, date(2026, 7, 20), packages=999,
+        theirs = _route(db, _seed_day(db), packages=999,
                         company=OTHER_COMPANY, number=99)
         _stop(db, theirs, delivered=999, total=999, company=OTHER_COMPANY, seq=2)
 
@@ -423,9 +452,9 @@ class TestCompanyScoping:
                              (OTHER_COMPANY, "warning")]:
             r = _employee(db, f"R-{company}-{sev}", "driver", company=company)
             db.add(Incident(id=uuid.uuid4(), company_id=company, reporter_id=r.id,
-                            date=date(2026, 7, 20), category="vehicle",
+                            date=_seed_day(db), category="vehicle",
                             severity=sev, description="x", resolved=False,
-                            created_at=datetime(2026, 7, 20, 10, 0)))
+                            created_at=datetime.combine(_seed_day(db), time(10, 0))))
         db.commit()
 
         inc = get_management_dashboard_summary(db, COMPANY, period="month").incidents
@@ -441,26 +470,26 @@ class TestDispatchSnapshot:
         result per-truck."""
         _config(db)
         # Exactly one active truck, so per-truck vs per-stop is unambiguous.
-        ta = _assignment(db, date(2026, 7, 20), status="active")
-        r = _route(db, date(2026, 7, 20), assignment=ta)
+        ta = _assignment(db, _seed_day(db), status="active")
+        r = _route(db, _seed_day(db), assignment=ta)
         for i in range(4):
             _stop(db, r, delivered=25, total=25, seq=i + 1,
-                  when=datetime(2026, 7, 20, 12, 0))
+                  when=datetime.combine(_seed_day(db), time(12, 0)))
 
-        snap = get_dispatch_dashboard_summary(db, COMPANY, "2026-07-20").fleet_snapshot
+        snap = get_dispatch_dashboard_summary(db, COMPANY, _seed_day(db).isoformat()).fleet_snapshot
         assert snap.trucks_active == 1
         assert snap.packages_delivered == 100
         assert snap.avg_packages_per_active_truck == 100.0   # per-stop would be 25
 
     def test_no_trucks_yields_none_not_zero(self, db):
         _config(db)
-        snap = get_dispatch_dashboard_summary(db, COMPANY, "2026-07-20").fleet_snapshot
+        snap = get_dispatch_dashboard_summary(db, COMPANY, _seed_day(db).isoformat()).fleet_snapshot
         assert snap.trucks_active == 0
         assert snap.avg_packages_per_active_truck is None
 
     def test_baseline_none_without_history(self, db):
         _config(db)
-        perf = get_dispatch_dashboard_summary(db, COMPANY, "2026-07-20").performance
+        perf = get_dispatch_dashboard_summary(db, COMPANY, _seed_day(db).isoformat()).performance
         assert perf.baseline_minutes_per_package is None
         assert perf.baseline_sample_size == 0
 
@@ -469,7 +498,7 @@ class TestDispatchSnapshot:
         block_keys is an ARRAY, which is why per-block attribution was rejected.
         """
         _config(db)
-        target = date(2026, 7, 20)
+        target = _seed_day(db)
         # 2h for 100 packages and 4h for 200 both = 1.2 min/package
         _route(db, target - timedelta(days=2), packages=100, number=1,
                departed=datetime(2026, 7, 18, 9, 0),
@@ -486,15 +515,28 @@ class TestDispatchSnapshot:
 # ── paid hours source ─────────────────────────────────────────────────────────
 
 class TestPaidHours:
+    """Seeded on the service's OWN window, never a hardcoded date.
+
+    These previously seeded 2026-07-20 and asserted period="month" — which
+    passed all July and failed on 1 August, when the month window became
+    [Aug 1, Aug 1] and the fixture fell outside it. Deriving the day from
+    _period_bounds makes the test independent of the calendar.
+    """
+
+    def _seed_day(self, db):
+        start, _ = _period_bounds("month", _company_today(db, COMPANY))
+        return start
+
     def test_falls_back_to_departures_and_reports_source(self, db):
         """Source is reported so the client can disclose provenance rather than
         implying payroll-grade hours."""
         _config(db)
+        day = self._seed_day(db)
         e = _employee(db, "Driver", "driver")
         db.add(Departure(id=uuid.uuid4(), company_id=COMPANY, employee_id=e.id,
-                         date=date(2026, 7, 20),
-                         departed_at=datetime(2026, 7, 20, 8, 0, tzinfo=timezone.utc),
-                         returned_at=datetime(2026, 7, 20, 16, 0, tzinfo=timezone.utc)))
+                         date=day,
+                         departed_at=datetime.combine(day, time(8, 0), tzinfo=timezone.utc),
+                         returned_at=datetime.combine(day, time(16, 0), tzinfo=timezone.utc)))
         db.commit()
 
         op = get_management_dashboard_summary(db, COMPANY, period="month").operational
@@ -503,14 +545,16 @@ class TestPaidHours:
 
     def test_packages_per_hour_derived_from_hours(self, db):
         _config(db)
+        day = self._seed_day(db)
         e = _employee(db, "Driver", "driver")
         db.add(Departure(id=uuid.uuid4(), company_id=COMPANY, employee_id=e.id,
-                         date=date(2026, 7, 20),
-                         departed_at=datetime(2026, 7, 20, 8, 0, tzinfo=timezone.utc),
-                         returned_at=datetime(2026, 7, 20, 18, 0, tzinfo=timezone.utc)))
+                         date=day,
+                         departed_at=datetime.combine(day, time(8, 0), tzinfo=timezone.utc),
+                         returned_at=datetime.combine(day, time(18, 0), tzinfo=timezone.utc)))
         db.commit()
-        r = _route(db, date(2026, 7, 20))
-        _stop(db, r, delivered=150, total=150)
+        r = _route(db, day)
+        _stop(db, r, delivered=150, total=150,
+              when=datetime.combine(day, time(12, 0), tzinfo=timezone.utc))
 
         op = get_management_dashboard_summary(db, COMPANY, period="month").operational
         assert op.total_paid_hours == 10.0
@@ -535,7 +579,7 @@ class TestTrainingOversightScope:
             tr = _employee(db, f"Trainee {name}", "trainee")
             db.add(TrainingRecord(
                 id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
-                trainer_id=t.id, record_date=date(2026, 7, 20),
+                trainer_id=t.id, record_date=_seed_day(db),
                 current_day_number=phase,
             ))
         db.commit()
@@ -593,7 +637,7 @@ class TestTrainingOversightScope:
             tr = _employee(db, f"Trainee {name}", "trainee")
             db.add(TrainingRecord(
                 id=uuid.uuid4(), company_id=COMPANY, trainee_id=tr.id,
-                trainer_id=trainer.id, record_date=date(2026, 7, 20),
+                trainer_id=trainer.id, record_date=_seed_day(db),
                 current_day_number=1,
             ))
         db.commit()
@@ -609,7 +653,7 @@ class TestTrainingOversightScope:
         for tr, company in [(mine, COMPANY), (theirs, OTHER_COMPANY)]:
             db.add(TrainingRecord(
                 id=uuid.uuid4(), company_id=company, trainee_id=tr.id,
-                trainer_id=t.id, record_date=date(2026, 7, 20),
+                trainer_id=t.id, record_date=_seed_day(db),
                 current_day_number=1,
             ))
         db.commit()
@@ -633,7 +677,7 @@ class TestTimestampWindow:
     """
 
     def test_window_is_utc_aware(self, db):
-        lo, hi = _ts_window(db, COMPANY, date(2026, 7, 24), date(2026, 7, 31))
+        lo, hi = _ts_window(db, COMPANY, _seed_day(db), date(2026, 7, 31))
         assert lo.tzinfo is not None and hi.tzinfo is not None
 
     def test_window_is_half_open_across_the_full_end_day(self, db):
