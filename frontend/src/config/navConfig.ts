@@ -1,7 +1,7 @@
 import {
   Home, ClipboardCheck, BarChart2, Users, ScrollText, Building2, ClipboardList,
   MapPin, MessageSquare, Shield, ShoppingBag, AlertTriangle, Route, Calendar,
-  RefreshCw, Settings, Activity, ShieldAlert, Star, Gavel,
+  RefreshCw, Settings, Activity, ShieldAlert, Star, Gavel, Package,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -66,6 +66,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/my-training',           label: 'My Training',       icon: ClipboardCheck, roles: ['trainee'] },
   { path: '/my-quiz',               label: 'Quiz',              icon: ClipboardCheck, roles: ['trainee'], when: c => c.hasActiveQuiz },
   { path: '/phase4-observation',    label: 'Phase 4',           icon: ClipboardCheck, roles: ['admin', 'trainer'], when: c => c.trainerPhase === 4 },
+  { path: '/package-lookup',        label: 'Package Lookup',    icon: Package,        roles: ['admin', 'dispatch', 'management'] },
   { path: '/preferences',           label: 'Preferences',       icon: Settings,       roles: ['driver', 'walker', 'trainer', 'trainee'] },
   { path: '/scorecards',            label: 'Scorecards',        icon: Star,           roles: ['admin', 'dispatch', 'management'] },
   { path: '/schedule',              label: 'Schedule',          icon: Calendar,       roles: ['admin', 'management', ...ALL_FIELD] },

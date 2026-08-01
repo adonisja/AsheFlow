@@ -1739,3 +1739,61 @@ export interface AppealStats {
   most_won_metrics?: MetricTally[];
 }
 
+
+// ── Package lookup (ADR-245) — GENERATED from the backend OpenAPI schema ────
+// Operational TBA tracking for dispatch. Distinct from the Tier 3 appeal
+// evidence search; no address fields by design (Dimension 7 / ADR-219).
+
+export interface AssignmentTrace {
+  route_id: string;
+  route_number?: number | null;
+  route_date: string;
+  route_status?: string | null;
+  walker_id?: string | null;
+  walker_name?: string | null;
+  truck_name?: string | null;
+}
+
+export interface DeliveryTrace {
+  stop_id: string;
+  status: string;
+  stop_sequence?: number | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  walker_id?: string | null;
+  walker_name?: string | null;
+  recorded_by_name?: string | null;
+  packages_delivered?: number | null;
+}
+
+export interface ExceptionTrace {
+  source: string;
+  recorded_at?: string | null;
+  route_date?: string | null;
+  walker_name?: string | null;
+  recorded_by_name?: string | null;
+  rts_type?: string | null;
+  rts_explanation?: string | null;
+  is_reattemptable?: boolean | null;
+  resolution_status?: string | null;
+  damage_stage?: string | null;
+  notes?: string | null;
+}
+
+export interface PackageTimeline {
+  tba_number: string;
+  current_holder_name?: string | null;
+  current_holder_id?: string | null;
+  holder_basis?: string | null;
+  assignments?: AssignmentTrace[];
+  deliveries?: DeliveryTrace[];
+  exceptions?: ExceptionTrace[];
+}
+
+export interface PackageLookupResponse {
+  query: string;
+  matched_on: string;
+  ambiguous?: boolean;
+  results?: PackageTimeline[];
+}
+

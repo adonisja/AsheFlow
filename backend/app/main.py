@@ -11,7 +11,7 @@ from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, dashboards
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, dashboards
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -117,6 +117,7 @@ api_v1_router.include_router(roll_call.router,                      dependencies
 api_v1_router.include_router(crew_status.router,                    dependencies=_configured)
 api_v1_router.include_router(scorecards.router,                     dependencies=_configured)
 api_v1_router.include_router(scorecard_appeals.router,              dependencies=_configured)
+api_v1_router.include_router(package_lookup.router,                 dependencies=_configured)
 api_v1_router.include_router(dashboards.router,                     dependencies=_configured)
 api_v1_router.include_router(companies.router,                      dependencies=_configured)
 # Exempt — must be reachable before and during setup

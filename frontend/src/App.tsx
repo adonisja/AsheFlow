@@ -57,6 +57,7 @@ import CompanyStandingCard from './components/CompanyStandingCard';
 import ScorecardAppeals from './pages/ScorecardAppeals';
 import ScorecardRoster from './pages/ScorecardRoster';
 import Scorecards from './pages/Scorecards';
+import PackageLookup from './pages/PackageLookup';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -435,6 +436,16 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'driver', 'trainer']}>
                   <CrewStatus />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-245 — operational package tracking, so dispatch is included
+                (unlike the Tier 3 appeal-evidence search). */}
+            <Route
+              path="/package-lookup"
+              element={
+                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
+                  <PackageLookup />
                 </ProtectedRoute>
               }
             />
