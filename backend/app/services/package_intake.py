@@ -23,6 +23,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.company import CompanyZone
+from app.models.delivery_stop import DeliveryStop
+from app.models.employee import Employee
 from app.models.walker_route import Route
 
 
@@ -208,6 +210,111 @@ def find_best_fit(
         f"best_fit_in_progress:{top.route_number}" if fallback else "no_accepting_route"
     )
     return assessment
+
+
+# ── duplicate guard ───────────────────────────────────────────────────────────
+
+@dataclass
+class DuplicateVerdict:
+    """Whether this TBA is already known, and to whom."""
+    is_duplicate: bool
+    holder_name: Optional[str] = None
+    route_number: Optional[int] = None
+    route_id: Optional[UUID] = None
+    basis: Optional[str] = None       # route_manifest | delivery_stop
+
+
+def check_duplicate(
+    db: Session,
+    company_id: UUID,
+    tba: str,
+    route_date: date,
+) -> DuplicateVerdict:
+    """Is this package already registered? If so, who has it?
+
+    **Never create a second delivery record for one TBA** (ADR-246). Two records
+    for one physical package corrupt both the walker's metrics and the Amazon
+    reconciliation, and the check is cheap and easy to omit.
+
+    Returning the holder is the point, not a bonus. A bare refusal sends the
+    walker off to discover who has it; naming them lets the field resolve it
+    directly — and two people holding the same TBA is itself a real signal (a
+    mislabelled package, or one already delivered).
+
+    Scoped to `route_date`, not all time: the same TBA legitimately recurs
+    across days (Amazon reuses them, and a redelivery is a new package-day).
+    A global check would refuse today's package because it was delivered a
+    fortnight ago.
+
+    ### Why this is not `/packages/lookup` (ADR-245)
+
+    That endpoint answers a different question — the *full timeline* across five
+    sources, with suffix matching and ambiguity handling, for a dispatcher on a
+    phone call. This needs one exact-match yes/no plus a name, on one date, as a
+    precondition inside a write path. Reusing it would mean either an internal
+    HTTP call or extracting a 150-line handler mid-flight; a scoped query is
+    honest about needing less. The response shapes are deliberately unrelated.
+    """
+    needle = tba.strip().upper()
+    if not needle:
+        return DuplicateVerdict(is_duplicate=False)
+
+    # Route manifest — the package is assigned but not yet delivered.
+    route = (
+        db.query(Route)
+        .filter(
+            Route.company_id == company_id,
+            Route.route_date == route_date,
+            Route.tba_numbers.any(needle),
+        )
+        .first()
+    )
+    if route is not None:
+        holder = None
+        if route.executor_id:
+            emp = (
+                db.query(Employee)
+                .filter(Employee.id == route.executor_id,
+                        Employee.company_id == company_id)
+                .first()
+            )
+            holder = emp.name if emp else None
+        return DuplicateVerdict(
+            is_duplicate=True,
+            holder_name=holder,
+            route_number=route.route_number,
+            route_id=route.id,
+            basis="route_manifest",
+        )
+
+    # Delivery stop — a stop already covers it, possibly already delivered.
+    #
+    # DeliveryStop carries no date of its own (verified against the model), so
+    # the day comes from its Route via the join. An unrouted stop cannot be
+    # date-scoped and is therefore not considered here; the route-manifest check
+    # above is the one that matters for a same-day duplicate.
+    row = (
+        db.query(DeliveryStop, Route.route_number)
+        .join(Route, Route.id == DeliveryStop.route_id)
+        .filter(
+            DeliveryStop.company_id == company_id,
+            Route.company_id == company_id,
+            Route.route_date == route_date,
+            DeliveryStop.tba_numbers.any(needle),
+        )
+        .first()
+    )
+    if row is not None:
+        stop, route_number = row
+        return DuplicateVerdict(
+            is_duplicate=True,
+            holder_name=stop.walker_name,
+            route_number=route_number,
+            route_id=stop.route_id,
+            basis="delivery_stop",
+        )
+
+    return DuplicateVerdict(is_duplicate=False)
 
 
 # ── write path ────────────────────────────────────────────────────────────────

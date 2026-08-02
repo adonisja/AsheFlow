@@ -14,7 +14,9 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import ARRAY as GA, create_engine
+from sqlalchemy import ARRAY as GA, create_engine, event
+from sqlalchemy.engine import Engine
+from sqlalchemy.sql.elements import BinaryExpression, CollectionAggregate
 from sqlalchemy.dialects.postgresql import ARRAY as PA, JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
@@ -45,6 +47,53 @@ for _T in (GA, PA, JSONB):
     _T.bind_processor = _bind
     _T.result_processor = _result
 
+
+@event.listens_for(Engine, "connect")
+def _register_json_contains(dbapi_conn, _rec):
+    """Membership helper for the `.any()` shim below.
+
+    Arrays round-trip as JSON strings under the processors above, so testing
+    membership is a parse plus an `in`.
+    """
+    import json
+
+    def _contains(haystack, needle):
+        if haystack is None:
+            return False
+        try:
+            values = json.loads(haystack) if isinstance(haystack, (str, bytes)) else haystack
+        except (ValueError, TypeError):
+            return False
+        return needle in (values or [])
+
+    dbapi_conn.create_function("_json_contains", 2, _contains)
+
+
+@compiles(BinaryExpression, "sqlite")
+def _compile_any_for_sqlite(element, compiler, **kw):
+    """Rewrite Postgres `x = ANY(col)` into a SQLite membership call.
+
+    `Route.tba_numbers.any(needle)` is the right production construct — it is
+    native Postgres and can use a GIN index, unlike the
+    `array_to_string(...) ILIKE` trick package_lookup uses to get suffix
+    matching. But it compiles to `? = ANY(tba_numbers)`, which SQLite cannot
+    parse: the tests here raise OperationalError rather than returning a wrong
+    answer, so the duplicate guard would otherwise be untestable.
+
+    Note the arity trap: `ANY` takes the *column* as its only argument and the
+    needle sits on the other side of the `=`, so registering a two-argument
+    SQLite function named ANY fails with "wrong number of arguments". The
+    rewrite has to happen at compile time, where both operands are visible.
+
+    This changes only what the TEST database runs. Production still emits
+    `= ANY(...)`, and that SQL is exercised for real only against Postgres.
+    """
+    if isinstance(element.right, CollectionAggregate):
+        needle = compiler.process(element.left, **kw)
+        column = compiler.process(element.right.element, **kw)
+        return f"_json_contains({column}, {needle})"
+    return compiler.visit_binary(element, **kw)
+
 from app.models.base import Base  # noqa: E402
 from app.models.company import Company, CompanyZone  # noqa: E402
 from app.models.employee import Employee  # noqa: E402
@@ -54,8 +103,8 @@ from app.models.walker_route import Route, RouteParticipant  # noqa: E402
 from app.models.delivery_stop import DeliveryStop  # noqa: E402
 from app.models.tote_ops import PackageRemoval  # noqa: E402
 from app.services.package_intake import (  # noqa: E402
-    _ACCEPTING_STATUSES, attach_to_route, check_zone, create_foreign_removal,
-    find_best_fit, load_company_boundary,
+    _ACCEPTING_STATUSES, attach_to_route, check_duplicate, check_zone,
+    create_foreign_removal, find_best_fit, load_company_boundary,
 )
 
 COMPANY = uuid.UUID("a0000000-0000-0000-0000-000000000001")
@@ -432,3 +481,95 @@ class TestForeignRemoval:
         mine = db.query(PackageRemoval).filter(
             PackageRemoval.company_id == COMPANY).all()
         assert len(mine) == 1
+
+
+class TestDuplicateGuard:
+    """Never create a second delivery record for one TBA (ADR-246).
+
+    Two records for one physical package corrupt both the walker's metrics and
+    the Amazon reconciliation. The guard must also NAME the holder — a bare
+    refusal sends the walker off to find out who has it, and two people holding
+    the same TBA is itself a signal worth surfacing.
+    """
+
+    def test_unknown_tba_is_not_a_duplicate(self, db):
+        _route(db, date(2026, 8, 2), blocks=["B1"])
+        v = check_duplicate(db, COMPANY, "TBA999", date(2026, 8, 2))
+        assert v.is_duplicate is False
+        assert v.holder_name is None
+
+    def test_tba_on_a_route_manifest_is_a_duplicate(self, db):
+        w = _walker(db, name="M. Rivera")
+        r = _route(db, date(2026, 8, 2), number=7, executor=w)
+        r.tba_numbers = ["TBA447"]
+        db.commit()
+
+        v = check_duplicate(db, COMPANY, "TBA447", date(2026, 8, 2))
+        assert v.is_duplicate is True
+        assert v.basis == "route_manifest"
+        assert v.holder_name == "M. Rivera"      # names them, does not just refuse
+        assert v.route_number == 7
+
+    def test_holder_is_reported_even_with_no_executor(self, db):
+        """An unassigned route still blocks the duplicate; the name is simply
+        unknown. Refusing to report the duplicate because nobody is on the
+        route would let a second record through."""
+        r = _route(db, date(2026, 8, 2), number=3)
+        r.tba_numbers = ["TBA447"]
+        db.commit()
+
+        v = check_duplicate(db, COMPANY, "TBA447", date(2026, 8, 2))
+        assert v.is_duplicate is True
+        assert v.route_number == 3
+        assert v.holder_name is None
+
+    def test_match_is_case_insensitive_and_trimmed(self, db):
+        r = _route(db, date(2026, 8, 2))
+        r.tba_numbers = ["TBA447"]
+        db.commit()
+        assert check_duplicate(db, COMPANY, "  tba447 ", date(2026, 8, 2)).is_duplicate
+
+    def test_empty_tba_is_not_a_duplicate(self, db):
+        assert check_duplicate(db, COMPANY, "   ", date(2026, 8, 2)).is_duplicate is False
+
+    # ── the two scoping properties ──────────────────────────────────────────
+
+    def test_another_companys_package_is_not_a_duplicate(self, db):
+        """Dimension 1. A cross-tenant match would leak that another company
+        holds the TBA, and would block a legitimate delivery."""
+        other = uuid.uuid4()
+        r = _route(db, date(2026, 8, 2), company=other)
+        r.tba_numbers = ["TBA447"]
+        db.commit()
+
+        assert check_duplicate(db, COMPANY, "TBA447", date(2026, 8, 2)).is_duplicate is False
+
+    def test_same_tba_on_a_different_day_is_not_a_duplicate(self, db):
+        """TBAs recur across days — Amazon reuses them, and a redelivery is a
+        new package-day. An all-time check would refuse today's package because
+        it was delivered a fortnight ago."""
+        r = _route(db, date(2026, 7, 20))
+        r.tba_numbers = ["TBA447"]
+        db.commit()
+
+        assert check_duplicate(db, COMPANY, "TBA447", date(2026, 8, 2)).is_duplicate is False
+        assert check_duplicate(db, COMPANY, "TBA447", date(2026, 7, 20)).is_duplicate is True
+
+    def test_a_delivered_stop_also_counts_as_a_duplicate(self, db):
+        """The package may already be recorded as delivered rather than merely
+        assigned. Adding it again would double-count it."""
+        r = _route(db, date(2026, 8, 2), number=4)
+        db.add(DeliveryStop(
+            id=uuid.uuid4(), company_id=COMPANY, route_id=r.id,
+            truck_assignment_id=r.truck_assignment_id,
+            walker_id=uuid.uuid4(), walker_name="D. Chen",
+            normalised_address="1 MAIN ST", block_key="B1",
+            tba_numbers=["TBA447"], status="completed", stop_sequence=1,
+        ))
+        db.commit()
+
+        v = check_duplicate(db, COMPANY, "TBA447", date(2026, 8, 2))
+        assert v.is_duplicate is True
+        assert v.basis == "delivery_stop"
+        assert v.holder_name == "D. Chen"
+        assert v.route_number == 4
