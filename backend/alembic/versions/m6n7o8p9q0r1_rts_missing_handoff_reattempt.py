@@ -130,49 +130,66 @@ def upgrade() -> None:
     op.add_column("station_handoffs",
         sa.Column("missing_count", sa.Integer, nullable=False, server_default="0"))
 
-    # ── building_profiles: operating hours ────────────────────────────────────
-    op.add_column("building_profiles", sa.Column("opens_at",         sa.Time, nullable=True))
-    op.add_column("building_profiles", sa.Column("closes_at",        sa.Time, nullable=True))
-    op.add_column("building_profiles", sa.Column("break_start",      sa.Time, nullable=True))
-    op.add_column("building_profiles", sa.Column("break_end",        sa.Time, nullable=True))
-    op.add_column("building_profiles", sa.Column("days_open",        ARRAY(sa.String(10)), nullable=True))
-    op.add_column("building_profiles", sa.Column("hours_timezone",   sa.String(50), nullable=True))
-    op.add_column("building_profiles", sa.Column("hours_verified",   sa.Boolean, nullable=False, server_default="false"))
-    op.add_column("building_profiles", sa.Column("hours_verified_by",   UUID(as_uuid=True),
-                  sa.ForeignKey("employees.id", ondelete="SET NULL"), nullable=True))
-    op.add_column("building_profiles", sa.Column("hours_verified_by_name", sa.String(100), nullable=True))
-    op.add_column("building_profiles", sa.Column("hours_verified_at",      sa.DateTime(timezone=True), nullable=True))
+    # ── building_profiles / library: operating hours ──────────────────────────
+    #
+    # Both tables are created at chain position 97 by b2c3d4e5f6a7 — FOURTEEN
+    # revisions AFTER this one. On staging and prod they already existed, so
+    # these ALTERs found their target; on a fresh database they do not, and
+    # this failed with UndefinedTable. The guards make a from-scratch run skip
+    # them, and b2c3d4e5f6a7 declares the hours columns itself, so both paths
+    # converge on the same schema. See alembic/_shared/routes_ddl.py for the
+    # same ordering problem on `routes`.
+    _insp = sa.inspect(op.get_bind())
 
-    # ── building_profile_library: operating hours ─────────────────────────────
-    op.add_column("building_profile_library", sa.Column("opens_at",       sa.Time, nullable=True))
-    op.add_column("building_profile_library", sa.Column("closes_at",      sa.Time, nullable=True))
-    op.add_column("building_profile_library", sa.Column("break_start",    sa.Time, nullable=True))
-    op.add_column("building_profile_library", sa.Column("break_end",      sa.Time, nullable=True))
-    op.add_column("building_profile_library", sa.Column("days_open",      ARRAY(sa.String(10)), nullable=True))
-    op.add_column("building_profile_library", sa.Column("hours_timezone", sa.String(50), nullable=True))
-    op.add_column("building_profile_library", sa.Column("hours_verified", sa.Boolean, nullable=False, server_default="false"))
-    op.add_column("building_profile_library", sa.Column("hours_verified_by",      UUID(as_uuid=True), nullable=True))
-    op.add_column("building_profile_library", sa.Column("hours_verified_by_name", sa.String(100), nullable=True))
-    op.add_column("building_profile_library", sa.Column("hours_verified_at",      sa.DateTime(timezone=True), nullable=True))
+    if _insp.has_table("building_profiles"):
+        op.add_column("building_profiles", sa.Column("opens_at",         sa.Time, nullable=True))
+        op.add_column("building_profiles", sa.Column("closes_at",        sa.Time, nullable=True))
+        op.add_column("building_profiles", sa.Column("break_start",      sa.Time, nullable=True))
+        op.add_column("building_profiles", sa.Column("break_end",        sa.Time, nullable=True))
+        op.add_column("building_profiles", sa.Column("days_open",        ARRAY(sa.String(10)), nullable=True))
+        op.add_column("building_profiles", sa.Column("hours_timezone",   sa.String(50), nullable=True))
+        op.add_column("building_profiles", sa.Column("hours_verified",   sa.Boolean, nullable=False, server_default="false"))
+        op.add_column("building_profiles", sa.Column("hours_verified_by",   UUID(as_uuid=True),
+                      sa.ForeignKey("employees.id", ondelete="SET NULL"), nullable=True))
+        op.add_column("building_profiles", sa.Column("hours_verified_by_name", sa.String(100), nullable=True))
+        op.add_column("building_profiles", sa.Column("hours_verified_at",      sa.DateTime(timezone=True), nullable=True))
+
+    if _insp.has_table("building_profile_library"):
+        op.add_column("building_profile_library", sa.Column("opens_at",       sa.Time, nullable=True))
+        op.add_column("building_profile_library", sa.Column("closes_at",      sa.Time, nullable=True))
+        op.add_column("building_profile_library", sa.Column("break_start",    sa.Time, nullable=True))
+        op.add_column("building_profile_library", sa.Column("break_end",      sa.Time, nullable=True))
+        op.add_column("building_profile_library", sa.Column("days_open",      ARRAY(sa.String(10)), nullable=True))
+        op.add_column("building_profile_library", sa.Column("hours_timezone", sa.String(50), nullable=True))
+        op.add_column("building_profile_library", sa.Column("hours_verified", sa.Boolean, nullable=False, server_default="false"))
+        op.add_column("building_profile_library", sa.Column("hours_verified_by",      UUID(as_uuid=True), nullable=True))
+        op.add_column("building_profile_library", sa.Column("hours_verified_by_name", sa.String(100), nullable=True))
+        op.add_column("building_profile_library", sa.Column("hours_verified_at",      sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
+    # Guarded for the same reason as upgrade(): on a fresh database these
+    # tables are not created until fourteen revisions later.
+    _insp = sa.inspect(op.get_bind())
+
     # building_profile_library hours
-    for col in ("hours_verified_at", "hours_verified_by_name", "hours_verified_by",
-                "hours_verified", "hours_timezone", "days_open",
-                "break_end", "break_start", "closes_at", "opens_at"):
-        op.drop_column("building_profile_library", col)
+    if _insp.has_table("building_profile_library"):
+        for col in ("hours_verified_at", "hours_verified_by_name", "hours_verified_by",
+                    "hours_verified", "hours_timezone", "days_open",
+                    "break_end", "break_start", "closes_at", "opens_at"):
+            op.drop_column("building_profile_library", col)
 
     # building_profiles hours
-    op.drop_column("building_profiles", "hours_verified_at")
-    op.drop_column("building_profiles", "hours_verified_by_name")
-    op.drop_column("building_profiles", "hours_verified_by")
-    op.drop_column("building_profiles", "hours_verified")
-    op.drop_column("building_profiles", "hours_timezone")
-    op.drop_column("building_profiles", "days_open")
-    op.drop_column("building_profiles", "break_end")
-    op.drop_column("building_profiles", "break_start")
-    op.drop_column("building_profiles", "closes_at")
+    if _insp.has_table("building_profiles"):
+        op.drop_column("building_profiles", "hours_verified_at")
+        op.drop_column("building_profiles", "hours_verified_by_name")
+        op.drop_column("building_profiles", "hours_verified_by")
+        op.drop_column("building_profiles", "hours_verified")
+        op.drop_column("building_profiles", "hours_timezone")
+        op.drop_column("building_profiles", "days_open")
+        op.drop_column("building_profiles", "break_end")
+        op.drop_column("building_profiles", "break_start")
+        op.drop_column("building_profiles", "closes_at")
     op.drop_column("building_profiles", "opens_at")
 
     # station_handoffs

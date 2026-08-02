@@ -29,12 +29,12 @@ def upgrade():
     op.add_column("routes", sa.Column("effort_score", sa.Float(), nullable=True))
     op.add_column("routes", sa.Column("coverage_pct", sa.Float(), nullable=True))
 
-    op.add_column("company_config", sa.Column("effort_time_factor",     sa.Float(), nullable=True))
-    op.add_column("company_config", sa.Column("effort_physical_factor", sa.Float(), nullable=True))
+    op.add_column("company_configs", sa.Column("effort_time_factor",     sa.Float(), nullable=True))
+    op.add_column("company_configs", sa.Column("effort_physical_factor", sa.Float(), nullable=True))
 
 
 def downgrade():
     op.drop_column("routes", "effort_score")
     op.drop_column("routes", "coverage_pct")
-    op.drop_column("company_config", "effort_time_factor")
-    op.drop_column("company_config", "effort_physical_factor")
+    op.drop_column("company_configs", "effort_time_factor")
+    op.drop_column("company_configs", "effort_physical_factor")

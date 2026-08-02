@@ -70,17 +70,56 @@ _LIBRARY_DROP = [
 
 
 def upgrade():
+    # location_profiles / location_profile_library are created one revision
+    # LATER (pos 99) on a fresh chain — this simplification predates them.
+    # Existing databases have the pre-simplification shape and need these
+    # drops; a fresh database creates the tables already simplified, so the
+    # whole body is a no-op there rather than an UndefinedTable crash.
+    _insp = sa.inspect(op.get_bind())
+    if not _insp.has_table("location_profiles"):
+        return
+
+    def _has(table: str, name: str) -> bool:
+        """Is this constraint present RIGHT NOW?
+
+        Guarding on the TABLE alone was not enough: location_profiles exists at
+        this point but earlier revisions have already reshaped it, so the
+        pre-simplification constraints and columns may be gone. Dropping
+        something already absent is the desired end state, not an error.
+
+        A FRESH inspector each call, deliberately: sa.inspect() caches its
+        reflection, so one built at the top of upgrade() still reports columns
+        and constraints that statements later in this same transaction have
+        dropped — the guard then passes and the DROP fails anyway. That cost a
+        full debug cycle here.
+        """
+        insp = sa.inspect(op.get_bind())
+        names = {c["name"] for c in insp.get_unique_constraints(table)}
+        names |= {c["name"] for c in insp.get_foreign_keys(table) if c.get("name")}
+        names |= {i["name"] for i in insp.get_indexes(table) if i.get("unique")}
+        return name in names
+
+    def _has_col(table: str, name: str) -> bool:
+        insp = sa.inspect(op.get_bind())
+        return name in {c["name"] for c in insp.get_columns(table)}
+
     # Drop FK constraints before dropping columns (Postgres requires this)
-    op.drop_constraint("location_profiles_note_verified_by_fkey",  "location_profiles", type_="foreignkey")
-    op.drop_constraint("location_profiles_submitted_by_fkey",       "location_profiles", type_="foreignkey")
-    op.drop_constraint("location_profiles_verified_by_fkey",        "location_profiles", type_="foreignkey")
-    op.drop_constraint("location_profiles_created_by_fkey",         "location_profiles", type_="foreignkey")
+    if _has("location_profiles", "location_profiles_note_verified_by_fkey"):
+        op.drop_constraint("location_profiles_note_verified_by_fkey",  "location_profiles", type_="foreignkey")
+    if _has("location_profiles", "location_profiles_submitted_by_fkey"):
+        op.drop_constraint("location_profiles_submitted_by_fkey",       "location_profiles", type_="foreignkey")
+    if _has("location_profiles", "location_profiles_verified_by_fkey"):
+        op.drop_constraint("location_profiles_verified_by_fkey",        "location_profiles", type_="foreignkey")
+    if _has("location_profiles", "location_profiles_created_by_fkey"):
+        op.drop_constraint("location_profiles_created_by_fkey",         "location_profiles", type_="foreignkey")
 
     for col in _LOCATION_PROFILE_DROP:
-        op.drop_column("location_profiles", col)
+        if _has_col("location_profiles", col):
+            op.drop_column("location_profiles", col)
 
     # Also drop the now-redundant unique constraint that included building_type
-    op.drop_constraint("uq_location_profiles_company_block_type", "location_profiles", type_="unique")
+    if _has("location_profiles", "uq_location_profiles_company_block_type"):
+        op.drop_constraint("uq_location_profiles_company_block_type", "location_profiles", type_="unique")
     # Add the new simpler unique constraint: one row per (company, block_key)
     op.create_unique_constraint(
         "uq_location_profiles_company_block",
@@ -89,16 +128,17 @@ def upgrade():
     )
 
     for col in _LIBRARY_DROP:
-        op.drop_column("location_profile_library", col)
+        if _has_col("location_profile_library", col):
+            op.drop_column("location_profile_library", col)
 
     # Drop the building_type from the library unique constraint and rebuild
-    op.drop_constraint("uq_location_profile_library_block_type", "location_profile_library", type_="unique")
+    if _has("location_profile_library", "uq_location_profile_library_block_type"):
+        op.drop_constraint("uq_location_profile_library_block_type", "location_profile_library", type_="unique")
     op.create_unique_constraint(
         "uq_location_profile_library_block",
         "location_profile_library",
         ["block_key"],
     )
-
 
 def downgrade():
     # Restore location_profile_library columns
