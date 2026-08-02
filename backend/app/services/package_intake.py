@@ -375,10 +375,12 @@ def attach_to_route(
 ):
     """Attach an unregistered package to a route, and open its stop.
 
-    ARRAY and JSONB columns are REASSIGNED, never appended in place. There is no
-    MutableList on these models, so `route.tba_numbers.append(x)` is silently
-    discarded at commit — the bug this pattern exists to avoid
-    (walker_routes.py:2589 documents the same rule).
+    ARRAY and JSONB columns are REASSIGNED rather than appended in place. Since
+    ADR-247 Route's columns carry MutableList, so in-place mutation would now
+    persist correctly too — but reassignment stays: it is the idiom the rest of
+    this file and walker_routes use, and it is the one that keeps working if a
+    wrapper is ever dropped. `_merge_stop` returns new dicts for the same reason
+    (MutableList does not track mutation of dicts held inside the list).
 
     Capacity is deliberately NOT checked: the package is already physically in
     the tote, so its capacity was consumed at load. Re-checking capacity_limit
