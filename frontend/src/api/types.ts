@@ -522,13 +522,31 @@ export interface AssignmentChangeRequest {
 // Walker Sort / Route Model
 // ---------------------------------------------------------------------------
 
+/** Sort-time DTO — emitted by route_sort BEFORE any flag row exists, so it
+ *  deliberately has no `id`. For a PERSISTED flag (which is what
+ *  RouteResponse.misrouted_packages carries) use MisroutedPackageFlagResponse. */
 export interface MisroutedPackageOut {
-  id?: string;
   tba_number: string;
   current_bag_id: string;
   destination_block_key: string | null;
   normalised_address?: string | null;
   suggested_route_number: number | null;
+}
+
+/** A persisted misroute flag. This — not MisroutedPackageOut — is what
+ *  RouteResponse.misrouted_packages contains; `id` is what
+ *  PATCH /walker-routes/routes/{routeId}/misroutes/{id}/resolve needs. */
+export interface MisroutedPackageFlagResponse {
+  id: string;
+  route_id: string;
+  tba_number: string;
+  current_bag_id: string;
+  destination_block_key: string | null;
+  normalised_address: string | null;
+  suggested_route_id: string | null;
+  resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: string | null;
 }
 
 /** One delivery stop — a unique address with its packages (ADR-194).
@@ -597,8 +615,11 @@ export interface RouteResponse {
   status: 'unassigned' | 'assigned' | 'in_progress' | 'completed';
   departed_at: string | null;
   returned_at: string | null;
+  /** Stamped by POST /request-help (ADR-229) — gates the captain's
+   *  emergency split. Idempotent re-stamp. */
+  help_requested_at: string | null;
   created_at: string;
-  misrouted_packages: MisroutedPackageOut[];
+  misrouted_packages: MisroutedPackageFlagResponse[];
 }
 
 export interface WalkerRouteResponse {
@@ -878,6 +899,11 @@ export interface CrewStatusMember {
   paired_trainee_id: string | null;
   paired_trainee_name: string | null;
   orphaned: boolean;
+  current_stop_sequence: number | null;
+  current_stop_total: number | null;
+  /** Present on the wire for the crew map. Do not render or log it —
+   *  Dimension 7 keeps addresses out of surfaces that outlive the shift. */
+  current_stop_address: string | null;
 }
 
 export interface CrewStatusTruck {
@@ -1797,3 +1823,65 @@ export interface PackageLookupResponse {
   results?: PackageTimeline[];
 }
 
+
+// ---------------------------------------------------------------------------
+// Unregistered package intake (ADR-246)
+// ---------------------------------------------------------------------------
+
+export interface IntakeCandidate {
+  route_id: string;
+  route_number: number | null;
+  walker_name: string | null;
+  status: string | null;
+  can_accept: boolean;
+  /** address | block_key | none — how strongly the route matched. */
+  match: string;
+  is_adders_route: boolean;
+}
+
+export interface IntakeAssessmentOut {
+  in_zone: boolean;
+  /** False when we lack coords or a boundary. Distinct from in_zone=false:
+   *  we cannot prove the package is foreign, so it escalates to dispatch. */
+  decidable: boolean;
+  zone_reason: string | null;
+  best_fit: IntakeCandidate | null;
+  adders_route: IntakeCandidate | null;
+  candidates: IntakeCandidate[];
+  absorbed_reason: string | null;
+}
+
+export type IntakeOutcome = 'added' | 'duplicate' | 'removal' | 'needs_dispatch';
+
+export interface PackageIntakeResponse {
+  outcome: IntakeOutcome;
+  tba: string;
+  route_id: string | null;
+  route_number: number | null;
+  walker_name: string | null;
+  stop_id: string | null;
+  removal_id: string | null;
+  reason: string | null;
+  /** Set on outcome="duplicate" — the holder is named rather than the caller
+   *  simply being refused (ADR-246). */
+  existing_holder: string | null;
+  existing_route_number: number | null;
+  assessment: IntakeAssessmentOut | null;
+}
+
+export interface FieldAddedPackage {
+  tba: string;
+  route_id: string | null;
+  route_number: number | null;
+  walker_name: string | null;
+  added_by_name: string | null;
+  added_at: string;
+  outcome: string;
+  is_unplanned: boolean;
+}
+
+export interface FieldAddedResponse {
+  route_date: string;
+  total: number;
+  packages: FieldAddedPackage[];
+}

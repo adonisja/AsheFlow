@@ -78,6 +78,9 @@ class SortRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 class MisroutedPackageOut(BaseModel):
+    # Sort-time DTO: route_sort emits these BEFORE any MisroutedPackageFlag row
+    # exists, so there is deliberately no id here. The persisted read path uses
+    # MisroutedPackageFlagResponse, which carries id/resolved/resolved_by.
     tba_number: Optional[str] = None
     current_bag_id: Optional[str] = None
     destination_block_key: Optional[str] = None        # block_key it belongs to

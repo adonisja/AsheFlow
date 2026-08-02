@@ -9,11 +9,15 @@ import PageHeader from '@components/ui/PageHeader';
 
 import MyRouteScreen          from '@screens/Trainee/MyRouteScreen';
 import WalkerPerformanceScreen from './WalkerPerformanceScreen';
+import FoundPackageScreen     from './FoundPackageScreen';
 
-type Tab = 'myroute' | 'performance';
+type Tab = 'myroute' | 'found' | 'performance';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: 'myroute',     label: 'My Route',    icon: '🗺️' },
+  // A walker finds an unregistered package WHILE working the route, so this
+  // sits beside My Route rather than in a separate tab (ADR-246).
+  { key: 'found',       label: 'Found',       icon: '📦' },
   { key: 'performance', label: 'Performance', icon: '📊' },
 ];
 
@@ -54,6 +58,7 @@ export default function WalkerDashboard() {
 
       <View style={{ flex: 1 }}>
         {activeTab === 'myroute'     && <MyRouteScreen />}
+        {activeTab === 'found'       && <FoundPackageScreen />}
         {activeTab === 'performance' && <WalkerPerformanceScreen />}
       </View>
     </SafeAreaView>

@@ -58,6 +58,7 @@ import ScorecardAppeals from './pages/ScorecardAppeals';
 import ScorecardRoster from './pages/ScorecardRoster';
 import Scorecards from './pages/Scorecards';
 import PackageLookup from './pages/PackageLookup';
+import FieldPackages from './pages/FieldPackages';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -446,6 +447,17 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
                   <PackageLookup />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-246 — field-added package oversight + manual assignment.
+                Dispatch-readable BY DESIGN: GET /audit is management+admin, so
+                pointing dispatch at the audit log would not actually work. */}
+            <Route
+              path="/field-packages"
+              element={
+                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
+                  <FieldPackages />
                 </ProtectedRoute>
               }
             />

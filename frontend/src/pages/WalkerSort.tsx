@@ -598,7 +598,7 @@ function RouteCard({
                       </div>
                       {isOperational && canReassign && onResolveMisroute && (
                         <button
-                          onClick={() => onResolveMisroute(route.id, m.id ?? '', m.tba_number, suggested?.route_number ?? null)}
+                          onClick={() => onResolveMisroute(route.id, m.id, m.tba_number, suggested?.route_number ?? null)}
                           className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
                           title={suggested ? `Move to route #${suggested.route_number}` : 'Pick destination route'}
                         >

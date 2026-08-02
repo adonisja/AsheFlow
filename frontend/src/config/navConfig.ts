@@ -60,6 +60,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/driver-surveys',        label: 'Driver Surveys',    icon: ClipboardList,  roles: ['admin', 'management'] },
   { path: '/feedback',              label: 'Feedback',          icon: MessageSquare,  roles: ['admin'] },
   { path: '/field-ops',             label: 'Field Ops',         icon: Shield,         roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
+  { path: '/field-packages',        label: 'Field Packages',    icon: Package,        roles: ['admin', 'dispatch', 'management'] },
   { path: '/gear',                  label: 'Gear',              icon: ShoppingBag,    roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/incidents',             label: 'Incidents',         icon: AlertTriangle,  roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/my-route',              label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'] },
