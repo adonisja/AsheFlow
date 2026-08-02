@@ -205,3 +205,34 @@ class TestCrossCheck:
         with pytest.raises(HTTPException) as exc:
             _run_xc(db)
         assert exc.value.status_code == 400
+
+
+class TestUnplannedExcludedFromCrossCheck:
+    """ADR-246: a field-added package must not enter our_delivered.
+
+    It was never manifested to Amazon, so counting it inflates OUR number,
+    makes Amazon's look too low, and manufactures a discrepancy against
+    ourselves in an appeal we are the ones filing. The comparison is only
+    meaningful across packages both sides know about.
+
+    Asserted on the compiled SQL rather than through the mocked Session in
+    _xc_db, which cannot see a filter at all — the bug this pins is a MISSING
+    filter, so a mock that ignores filters would pass either way.
+    """
+
+    def test_delivered_query_filters_out_unplanned_stops(self):
+        import inspect as _inspect
+        from app.routers import scorecards as sc_mod
+
+        src = _inspect.getsource(sc_mod.cross_check_scorecard)
+        delivered_block = src.split("delivered = db.query(")[1].split(".scalar()")[0]
+        assert "is_unplanned" in delivered_block, (
+            "cross_check's delivered count no longer excludes unplanned stops — "
+            "field-added packages (ADR-246) will inflate our_delivered and "
+            "invert the appeal against us"
+        )
+
+    def test_the_flag_still_exists_on_the_model(self):
+        """If is_unplanned is ever renamed, the filter above must move with it."""
+        from app.models.delivery_stop import DeliveryStop
+        assert "is_unplanned" in DeliveryStop.__table__.columns

@@ -207,9 +207,16 @@ def cross_check_scorecard(
     week_start, week_end = rng
     emp = sc.employee_id
 
+    # Unplanned stops are EXCLUDED (ADR-197 flag, ADR-246 rule). A package a
+    # walker found in their tote was never manifested to Amazon, so counting it
+    # here inflates our_delivered, makes Amazon's count look too low, and
+    # manufactures a discrepancy against ourselves in an appeal we are the ones
+    # filing. The comparison is only meaningful across packages BOTH sides know
+    # about.
     delivered = db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0)).filter(
         DeliveryStop.walker_id == emp, DeliveryStop.company_id == cid,
         DeliveryStop.status == "completed", DeliveryStop.completed_at.isnot(None),
+        DeliveryStop.is_unplanned.is_(False),
         func.date(DeliveryStop.completed_at) >= week_start,
         func.date(DeliveryStop.completed_at) <= week_end,
     ).scalar() or 0

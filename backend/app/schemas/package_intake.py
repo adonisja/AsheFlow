@@ -1,9 +1,17 @@
 """Unregistered package intake (ADR-246).
 
-No address fields anywhere in a response. Dimension 7 forbids addresses in
-output schemas, and ADR-219 nulls them 48h post-route regardless — the TBA and
-the route number are what an operator needs to act. Addresses are accepted on
-*input* (the walker read one off a label) but never returned.
+Dimension 7: no address is returned by any schema that describes a ROUTE or a
+STOP. ADR-219 nulls those 48h post-route regardless, and the TBA plus the route
+number are what an operator needs to act on. Addresses are accepted on *input*
+and never echoed back by the intake or oversight responses.
+
+The one exception is `LabelReadResponse`, and it is deliberate: it hands back
+the text just OCR'd from a photo the caller took seconds earlier, to the same
+caller, so they can correct it before anything is written. It is not persisted,
+not audited, and not logged — the address exists only for the life of that one
+request, which is the ephemeral case Dimension 7 allows. `lines` carries the
+other label text for the same reason, so a bad read can be fixed without a
+second Textract call. Nothing here may be stored without revisiting that.
 """
 from datetime import date, datetime
 from typing import List, Optional
