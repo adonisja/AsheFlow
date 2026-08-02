@@ -1,6 +1,7 @@
 import uuid
 from sqlalchemy import Column, Integer, Date, DateTime, String, Boolean, Float, ForeignKey, Text, UniqueConstraint, Index, text
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.models.base import Base
@@ -22,16 +23,27 @@ class Route(Base):
     route_date            = Column(Date(), nullable=False, index=True)
     route_number          = Column(Integer(), nullable=False)
 
+    # These five are wrapped in MutableList/MutableDict so in-place mutation
+    # (.append/.pop/[i]=x) is tracked and persisted. Without it SQLAlchemy
+    # compares by identity, sees the same object, and emits no UPDATE — the
+    # write is silently discarded. That cost us a real bug: the pair-split path
+    # did `route.tote_ids.pop()`, which left the bag on the trainee's route
+    # while also adding it to the trainer's, duplicating a tote and corrupting
+    # both routes' counts. See ADR-247 and tests/services/test_array_persistence.py.
+    #
     # Geographic identity — persisted so zone maps work after Redis TTL expires
-    block_keys            = Column(ARRAY(Text()), nullable=False, default=list)
+    block_keys            = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
 
     # Tote and package lists
-    tote_ids              = Column(ARRAY(Text()), nullable=False, default=list)
-    tba_numbers           = Column(ARRAY(Text()), nullable=False, default=list)
-    normalised_addresses  = Column(ARRAY(Text()), nullable=False, default=list)
+    tote_ids              = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    tba_numbers           = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    normalised_addresses  = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
     # Delivered-set drill-down: [{block_key, address, tba_numbers}] (ADR-194).
     # NULL on rows that predate the column — clients fall back to the flat lists.
-    stops                 = Column(JSONB(), nullable=True)
+    # MutableList tracks append/pop and replacement of whole elements; mutating a
+    # dict *inside* a stop (stops[0]["x"] = y) is NOT tracked — reassign the
+    # element or the whole list for those.
+    stops                 = Column(MutableList.as_mutable(JSONB()), nullable=True)
     package_count         = Column(Integer(), nullable=False, default=0)
 
     # Capacity in half-slots (scale ×2: standard=12, heavy=8, paired=18/12)

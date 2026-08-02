@@ -93,28 +93,38 @@ def _route(db, totes, number=1):
     return r
 
 
-class TestInPlaceMutationIsDiscarded:
-    """Pins the trap itself, so the reassignment idiom is not 'cleaned up'
-    into a simpler-looking in-place call by a future reader."""
+class TestInPlaceMutationPersists:
+    """ADR-247: these columns carry MutableList, so in-place mutation is tracked
+    and persisted. Before ADR-247 these writes were silently DISCARDED — the
+    inverse of these tests is what this file originally pinned. If one of these
+    starts failing, the MutableList wrapper was dropped from the model and every
+    in-place mutation in the codebase is silently losing writes again."""
 
-    def test_pop_does_not_persist(self, db):
+    def test_pop_persists(self, db):
         r = _route(db, ["B1", "B2", "B3"])
         r.tote_ids.pop()
         db.commit()
         db.expire_all()
 
         reloaded = db.query(Route).filter(Route.id == r.id).first()
-        assert reloaded.tote_ids == ["B1", "B2", "B3"], (
-            "in-place pop unexpectedly persisted — if this now passes, a "
-            "MutableList was added and the reassignment idiom can be relaxed"
+        assert reloaded.tote_ids == ["B1", "B2"], (
+            "in-place pop was discarded — MutableList is missing from "
+            "Route.tote_ids"
         )
 
-    def test_append_does_not_persist(self, db):
+    def test_append_persists(self, db):
         r = _route(db, ["B1"])
         r.tote_ids.append("B2")
         db.commit()
         db.expire_all()
-        assert db.query(Route).filter(Route.id == r.id).first().tote_ids == ["B1"]
+        assert db.query(Route).filter(Route.id == r.id).first().tote_ids == ["B1", "B2"]
+
+    def test_index_assignment_persists(self, db):
+        r = _route(db, ["B1", "B2"])
+        r.tote_ids[0] = "B9"
+        db.commit()
+        db.expire_all()
+        assert db.query(Route).filter(Route.id == r.id).first().tote_ids == ["B9", "B2"]
 
 
 class TestReassignmentPersists:
@@ -157,12 +167,53 @@ class TestReassignmentPersists:
 
 
 class TestJsonbSameRule:
-    def test_stops_in_place_append_is_discarded(self, db):
+    def test_stops_in_place_append_persists(self, db):
         r = _route(db, ["B1"])
         r.stops.append({"address": "1 MAIN ST", "tba_numbers": []})
         db.commit()
         db.expire_all()
-        assert db.query(Route).filter(Route.id == r.id).first().stops == []
+        assert len(db.query(Route).filter(Route.id == r.id).first().stops) == 1
+
+    def test_mutating_a_dict_inside_stops_is_STILL_discarded(self, db):
+        """The limit of MutableList, and the one trap ADR-247 does NOT close.
+
+        MutableList tracks the list — appends, pops, element replacement. It
+        does NOT recurse into the dicts held in that list, so mutating a stop's
+        own key is invisible and silently dropped. Reassign the element (or the
+        whole list) instead. This is exactly the shape `_merge_stops` handles by
+        rebuilding rather than editing in place.
+        """
+        r = _route(db, ["B1"])
+        r.stops = [{"address": "1 MAIN ST", "tba_numbers": []}]
+        db.commit()
+        db.expire_all()
+
+        r2 = db.query(Route).filter(Route.id == r.id).first()
+        r2.stops[0]["tba_numbers"].append("TBA123")   # nested — NOT tracked
+        db.commit()
+        db.expire_all()
+
+        assert db.query(Route).filter(Route.id == r.id).first().stops[0]["tba_numbers"] == [], (
+            "nested dict mutation persisted — MutableDict may have been added "
+            "recursively; if so this constraint is lifted and the docstring in "
+            "models/walker_route.py should be updated"
+        )
+
+    def test_replacing_a_stop_element_persists(self, db):
+        """The correct idiom for the case above."""
+        r = _route(db, ["B1"])
+        r.stops = [{"address": "1 MAIN ST", "tba_numbers": []}]
+        db.commit()
+        db.expire_all()
+
+        r2 = db.query(Route).filter(Route.id == r.id).first()
+        stop = dict(r2.stops[0])
+        stop["tba_numbers"] = stop["tba_numbers"] + ["TBA123"]
+        r2.stops[0] = stop                            # element replacement — tracked
+        db.commit()
+        db.expire_all()
+
+        assert db.query(Route).filter(Route.id == r.id).first().stops[0]["tba_numbers"] == ["TBA123"]
 
     def test_stops_reassignment_persists(self, db):
         r = _route(db, ["B1"])
