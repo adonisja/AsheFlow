@@ -42,6 +42,7 @@ class TestAccess:
         expected = {
             "/packages/intake": FIELD,
             "/packages/intake/preview": FIELD,
+            "/packages/intake/read-label": FIELD,
             "/packages/intake/assign": DISPATCH,
             "/packages/intake/field-added": DISPATCH,
         }
@@ -111,3 +112,39 @@ class TestAuditContract:
         src = inspect.getsource(pi.field_added_packages)
         assert 'after_snapshot or {}' in src
         assert '.get("detail")' not in src
+
+
+class TestLabelRead:
+    """OCR is an assist, never a gate (ADR-246)."""
+
+    def test_the_walker_who_holds_the_package_can_scan_it(self):
+        route = next(r for r in pi.router.routes
+                     if r.path == "/packages/intake/read-label")
+        gate = next(d.call for d in route.dependant.dependencies
+                    if isinstance(d.call, RoleChecker))
+        assert set(gate.allowed_roles) == FIELD
+
+    def test_a_failed_read_is_200_not_an_error(self):
+        """The client must treat 'could not read it' as a normal outcome that
+        falls back to typing. Returning 4xx/5xx would surface an error banner
+        for something the walker resolves by using the form that is already
+        on screen."""
+        import inspect
+        src = inspect.getsource(pi.read_label)
+        # The except branch returns a response rather than re-raising.
+        assert "needs_manual_entry=True" in src
+        assert "ocr_unavailable" in src
+        assert "raise" not in src.split("except Exception:")[1]
+
+    def test_ocr_failure_does_not_leak_the_exception(self):
+        """Dimension 6 — no str(e) reaching the client."""
+        import inspect
+        src = inspect.getsource(pi.read_label)
+        assert "str(e)" not in src
+        assert "str(exc)" not in src
+
+    def test_upload_is_bounded(self):
+        """Textract bills per page, and this accepts uploads from the field."""
+        assert pi._MAX_LABEL_BYTES == 10 * 1024 * 1024
+        assert "application/pdf" in pi._ALLOWED_LABEL_TYPES
+        assert "image/jpeg" in pi._ALLOWED_LABEL_TYPES

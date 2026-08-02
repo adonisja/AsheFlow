@@ -19,12 +19,16 @@
  * delivery that costs nothing or be rubber-stamped.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { PackagePlus, Inbox, AlertTriangle, CheckCircle2, MapPinOff, HelpCircle } from 'lucide-react';
+import {
+  PackagePlus, Inbox, AlertTriangle, CheckCircle2, MapPinOff, HelpCircle,
+  ScanLine,
+} from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type {
   FieldAddedResponse, FieldAddedPackage, PackageIntakeResponse,
+  LabelReadResponse,
 } from '../api/types';
 
 type Tab = 'feed' | 'assign';
@@ -216,6 +220,42 @@ function AssignForm() {
   const [result, setResult] = useState<PackageIntakeResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState<string | null>(null);
+
+  /**
+   * OCR assists the form; it never replaces it. Both fields stay editable and a
+   * failed read leaves what was already typed alone — the walker/dispatcher is
+   * looking at the label either way (ADR-246).
+   */
+  const scanLabel = useCallback(async (f: File) => {
+    setScanning(true);
+    setScanNote(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const res = await axiosClient.post<LabelReadResponse>(
+        '/packages/intake/read-label', fd,
+      );
+      const r = res.data;
+      if (r.tba) setTba(r.tba);
+      if (r.address_line) setAddress(r.address_line);
+
+      if (r.needs_manual_entry) {
+        setScanNote('Could not read the whole label — fill in the rest by hand.');
+      } else if (r.confidence !== null && r.confidence < 0.85) {
+        // A confident-looking wrong read is the failure that matters, so a
+        // shaky score asks for eyes rather than staying silent.
+        setScanNote('Low-confidence read — check both fields before assigning.');
+      } else {
+        setScanNote('Read from the label. Check it before assigning.');
+      }
+    } catch {
+      setScanNote('Scan unavailable — enter the details by hand.');
+    } finally {
+      setScanning(false);
+    }
+  }, []);
 
   const submit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -252,6 +292,26 @@ function AssignForm() {
         field without an address we could place. Leave the route blank to let the
         system pick the best fit.
       </p>
+
+      <div className="flex items-center gap-3">
+        <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-sm cursor-pointer hover:bg-accent">
+          <ScanLine className="w-4 h-4" />
+          {scanning ? 'Reading…' : 'Scan label'}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,application/pdf"
+            capture="environment"
+            className="hidden"
+            disabled={scanning}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void scanLabel(f);
+              e.target.value = '';   // so the same photo can be retried
+            }}
+          />
+        </label>
+        {scanNote && <span className="text-xs text-muted-foreground">{scanNote}</span>}
+      </div>
 
       <Field label="Tracking number (TBA)" required>
         <input

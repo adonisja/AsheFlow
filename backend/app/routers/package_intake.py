@@ -16,7 +16,9 @@ from datetime import date
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter, Depends, File, HTTPException, Query, UploadFile, status,
+)
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
@@ -26,8 +28,8 @@ from app.models.employee import Employee
 from app.models.walker_route import Route
 from app.schemas.package_intake import (
     DispatchAssignRequest, FieldAddedPackage, FieldAddedResponse,
-    IntakeAssessmentOut, IntakeCandidate, PackageIntakeRequest,
-    PackageIntakeResponse,
+    IntakeAssessmentOut, IntakeCandidate, LabelReadResponse,
+    PackageIntakeRequest, PackageIntakeResponse,
 )
 from app.services.audit import write_audit
 from app.services.local_date import company_today
@@ -354,4 +356,64 @@ def field_added_packages(
 
     return FieldAddedResponse(
         route_date=when, total=len(packages), packages=packages,
+    )
+
+
+# A phone photo is ~1-5 MB. 10 covers a high-res capture without letting an
+# unbounded upload reach Textract, which bills per page.
+_MAX_LABEL_BYTES = 10 * 1024 * 1024
+_ALLOWED_LABEL_TYPES = {"image/jpeg", "image/jpg", "image/png", "application/pdf"}
+
+
+@router.post("/read-label", response_model=LabelReadResponse)
+async def read_label(
+    file: UploadFile = File(...),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_field),
+):
+    """OCR a label photo into a TBA and an address — a SUGGESTION, not a write.
+
+    Nothing is persisted. The walker confirms both fields, and manual entry is
+    always available: a scan that fails must never block someone standing in
+    front of the package (ADR-246). That is why a failed read returns 200 with
+    `needs_manual_entry=true` rather than an error status — an error would make
+    the client treat a normal outcome as a fault.
+
+    Textract is only reached through LabelIngestor's injectable client, so this
+    endpoint is the only place the real AWS call is made.
+    """
+    from app.services.label_ingestor import LabelIngestor
+
+    if file.content_type not in _ALLOWED_LABEL_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Upload a JPEG, PNG or PDF of the label",
+        )
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(payload) > _MAX_LABEL_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Label image is too large (max 10 MB)",
+        )
+
+    try:
+        read = LabelIngestor(payload).read()
+    except Exception:
+        # OCR is best-effort. Textract being down, throttled, or handed an
+        # unreadable photo all mean the same thing to the walker: type it in.
+        # The exception text is deliberately not surfaced (Dimension 6).
+        return LabelReadResponse(
+            needs_manual_entry=True, warnings=["ocr_unavailable"],
+        )
+
+    return LabelReadResponse(
+        tba=read.tba,
+        address_line=read.address_line,
+        confidence=read.confidence,
+        needs_manual_entry=read.needs_manual_entry,
+        lines=read.lines,
+        warnings=read.warnings,
     )

@@ -85,6 +85,22 @@ class PackageIntakeResponse(BaseModel):
     assessment: Optional[IntakeAssessmentOut] = None
 
 
+class LabelReadResponse(BaseModel):
+    """What OCR thinks is on the label — a SUGGESTION, never a commitment.
+
+    The walker confirms both fields before anything is written. `confidence`
+    and `needs_manual_entry` exist so the UI can flag a shaky read instead of
+    presenting it as fact, and `lines` lets them pick a different line without
+    a second Textract call.
+    """
+    tba: Optional[str] = None
+    address_line: Optional[str] = None
+    confidence: Optional[float] = None
+    needs_manual_entry: bool
+    lines: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
 class FieldAddedPackage(BaseModel):
     """One field-added package, for dispatch oversight."""
     tba: str

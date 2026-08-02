@@ -1869,6 +1869,18 @@ export interface PackageIntakeResponse {
   assessment: IntakeAssessmentOut | null;
 }
 
+/** OCR of a label photo — a SUGGESTION. Both fields stay editable, and
+ *  needs_manual_entry / confidence let the UI ask for eyes rather than
+ *  presenting a shaky read as fact (ADR-246). */
+export interface LabelReadResponse {
+  tba: string | null;
+  address_line: string | null;
+  confidence: number | null;
+  needs_manual_entry: boolean;
+  lines: string[];
+  warnings: string[];
+}
+
 export interface FieldAddedPackage {
   tba: string;
   route_id: string | null;
