@@ -204,7 +204,10 @@ def create_appeal(
             company_id=cid,         # stamped, not inherited (Dimension 1)
             metric_key=it.metric_key, metric_label=it.metric_label,
             amazon_value=it.amazon_value, our_value=it.our_value, delta=it.delta,
-            evidence=it.evidence, claim=it.claim, sort_order=it.sort_order,
+            # evidence is a validated model now (ADR-243 tightening) — JSONB
+            # needs a plain dict, not the model object.
+            evidence=it.evidence.model_dump() if it.evidence else None,
+            claim=it.claim, sort_order=it.sort_order,
         ))
 
     write_audit(
@@ -261,8 +264,9 @@ def update_appeal(
                 company_id=caller.company_id,
                 metric_key=it.metric_key, metric_label=it.metric_label,
                 amazon_value=it.amazon_value, our_value=it.our_value,
-                delta=it.delta, evidence=it.evidence, claim=it.claim,
-                sort_order=it.sort_order,
+                delta=it.delta,
+                evidence=it.evidence.model_dump() if it.evidence else None,
+                claim=it.claim, sort_order=it.sort_order,
             ))
 
     db.flush()

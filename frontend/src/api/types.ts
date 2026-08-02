@@ -1657,13 +1657,21 @@ export interface IndividualRosterResponse {
   employees_without_scorecards?: number;
 }
 
+/** Evidence attached to one appeal item.
+ *  Mirrors the backend's AppealEvidence, which is `extra="forbid"` — an
+ *  unrecognised key is a 422, not a silent write. Was Record<string, unknown>
+ *  on both sides; the shape was always known, the latitude was accidental. */
+export interface AppealEvidence {
+  rts_reasons: { rts_type: string; count: number }[];
+}
+
 export interface AppealItemIn {
   metric_key: string;
   metric_label: string;
   amazon_value?: string | null;
   our_value?: string | null;
   delta?: number | null;
-  evidence?: Record<string, unknown> | null;
+  evidence?: AppealEvidence | null;
   claim?: string | null;
   sort_order?: number;
 }
@@ -1674,7 +1682,7 @@ export interface AppealItemOut {
   amazon_value?: string | null;
   our_value?: string | null;
   delta?: number | null;
-  evidence?: Record<string, unknown> | null;
+  evidence?: AppealEvidence | null;
   claim?: string | null;
   sort_order?: number;
   id: string;

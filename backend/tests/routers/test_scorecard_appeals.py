@@ -195,3 +195,59 @@ class TestWinRateHonesty:
         """None, not 0.0 — 'nothing resolved yet' is not 'we lose everything'."""
         from app.schemas.scorecard_appeal import AppealStats
         assert AppealStats().win_rate_pct is None
+
+
+class TestEvidenceIsTyped:
+    """`evidence` was Dict[str, Any] written straight into JSONB.
+
+    Not SQL injection — SQLAlchemy parameterises — but an unbounded write: any
+    shape, any depth, any size, echoed back into the appeals UI. `Any` also
+    meant a mistyped key was silently persisted instead of rejected.
+    """
+
+    def _item(self, **kw):
+        from app.schemas.scorecard_appeal import AppealItemIn
+        return AppealItemIn(metric_key="k", metric_label="l", **kw)
+
+    def test_the_real_payload_still_works(self):
+        """ScorecardEntry.tsx sends exactly this — tightening must not break it."""
+        it = self._item(evidence={"rts_reasons": [{"rts_type": "UTA", "count": 3}]})
+        assert it.evidence.rts_reasons[0].rts_type == "UTA"
+        assert it.evidence.rts_reasons[0].count == 3
+
+    def test_unknown_keys_are_rejected(self):
+        """extra='forbid' — an unrecognised key is a client bug worth a 422,
+        not something to persist silently."""
+        import pytest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            self._item(evidence={"rts_reasons": [], "smuggled": {"x": 1}})
+
+    def test_wrong_types_are_rejected(self):
+        import pytest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            self._item(evidence={"rts_reasons": "not-a-list"})
+
+    def test_negative_counts_are_rejected(self):
+        import pytest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            self._item(evidence={"rts_reasons": [{"rts_type": "X", "count": -5}]})
+
+    def test_claim_is_bounded(self):
+        """It was the one free-text field with no max_length, and it is
+        operator prose that lands in the appeal record."""
+        import pytest
+        from pydantic import ValidationError
+        assert self._item(claim="x" * 2000).claim
+        with pytest.raises(ValidationError):
+            self._item(claim="x" * 2001)
+
+    def test_evidence_is_serialised_to_a_dict_for_jsonb(self):
+        """The column is JSONB — passing the Pydantic model itself would store
+        an object, not JSON. Both write sites must call model_dump()."""
+        import inspect
+        from app.routers import scorecard_appeals as ap
+        src = inspect.getsource(ap)
+        assert src.count("evidence=it.evidence.model_dump() if it.evidence else None") == 2

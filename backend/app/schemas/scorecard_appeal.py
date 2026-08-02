@@ -1,12 +1,39 @@
 """Scorecard appeal schemas (ADR-243)."""
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── line items ───────────────────────────────────────────────────────────────
+
+class RtsReasonEvidenceIn(BaseModel):
+    """One RTS reason count, as copied from the cross-check."""
+    rts_type: str = Field(..., max_length=50)
+    count: int = Field(..., ge=0)
+
+
+class AppealEvidence(BaseModel):
+    """The evidence an appeal item carries.
+
+    Was `Dict[str, Any]`, which accepted arbitrary client JSON straight into a
+    JSONB column — unbounded in size and nesting, and echoed back into the
+    appeals UI. Not a SQL-injection risk (SQLAlchemy parameterises), but an
+    unbounded-write one, and `Any` meant a typo in a key was stored rather than
+    rejected.
+
+    `ScorecardEntry.tsx` is the only producer and sends exactly
+    `{rts_reasons: [...]}`, so the shape was already known — the latitude was
+    accidental, not required.
+
+    `extra="forbid"`: an unrecognised key is a client bug worth a 422, not
+    something to persist silently.
+    """
+    rts_reasons: List[RtsReasonEvidenceIn] = Field(default_factory=list, max_length=50)
+
+    model_config = ConfigDict(extra="forbid")
+
 
 class AppealItemIn(BaseModel):
     metric_key: str = Field(..., max_length=50)
@@ -16,8 +43,10 @@ class AppealItemIn(BaseModel):
     amazon_value: Optional[str] = Field(None, max_length=50)
     our_value: Optional[str] = Field(None, max_length=50)
     delta: Optional[float] = None
-    evidence: Optional[Dict[str, Any]] = None
-    claim: Optional[str] = None
+    evidence: Optional[AppealEvidence] = None
+    # Bounded like its siblings — it was the one free-text field with no cap,
+    # and it is operator-written prose that lands in the appeal record.
+    claim: Optional[str] = Field(None, max_length=2000)
     sort_order: int = 0
 
 
