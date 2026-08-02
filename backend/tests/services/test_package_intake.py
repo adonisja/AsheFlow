@@ -51,8 +51,11 @@ from app.models.employee import Employee  # noqa: E402
 from app.models.truck import Truck  # noqa: E402
 from app.models.truck_assignment import TruckAssignment  # noqa: E402
 from app.models.walker_route import Route, RouteParticipant  # noqa: E402
+from app.models.delivery_stop import DeliveryStop  # noqa: E402
+from app.models.tote_ops import PackageRemoval  # noqa: E402
 from app.services.package_intake import (  # noqa: E402
-    _ACCEPTING_STATUSES, check_zone, find_best_fit, load_company_boundary,
+    _ACCEPTING_STATUSES, attach_to_route, check_zone, create_foreign_removal,
+    find_best_fit, load_company_boundary,
 )
 
 COMPANY = uuid.UUID("a0000000-0000-0000-0000-000000000001")
@@ -266,3 +269,166 @@ class TestAdderContext:
         assert a.best_fit.walker_name == "Theirs"
         assert a.adders_route.walker_name == "Mine"
         assert not a.best_fit.is_adders_route
+
+
+
+class TestAttachToRoute:
+    """The write path. ARRAY and JSONB columns must be REASSIGNED — these models
+    have no MutableList, so an in-place append is silently discarded at commit.
+    """
+
+    def _attach(self, db, route, tba="TBA999", block="BLK1", addr="1 MAIN ST"):
+        w = _walker(db, "Executor")
+        rec = _walker(db, "Recorder")
+        return attach_to_route(
+            db, route, tba=tba, block_key=block, normalised_address=addr,
+            company_id=COMPANY, executor_id=w.id, executor_name=w.name,
+            recorded_by=rec.id, recorded_by_name=rec.name,
+        )
+
+    def test_tba_lands_on_the_route_after_commit(self, db):
+        """The regression that matters: an in-place append would pass in memory
+        and vanish on reload."""
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        self._attach(db, r)
+        db.commit()
+        db.expire_all()
+
+        reloaded = db.query(Route).filter(Route.id == r.id).first()
+        assert "TBA999" in reloaded.tba_numbers
+
+    def test_package_count_increments(self, db):
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        before = r.package_count
+        self._attach(db, r)
+        db.commit()
+        assert r.package_count == before + 1
+
+    def test_geography_is_attached(self, db):
+        """Without this the stop exists but the route card never shows it."""
+        r = _route(db, date(2026, 8, 1), blocks=[], addresses=[])
+        self._attach(db, r, block="BLK7", addr="9 NEW ST")
+        db.commit()
+        db.expire_all()
+
+        reloaded = db.query(Route).filter(Route.id == r.id).first()
+        assert "BLK7" in reloaded.block_keys
+        assert "9 NEW ST" in reloaded.normalised_addresses
+        assert any(s["address"] == "9 NEW ST" for s in reloaded.stops)
+
+    def test_second_package_at_same_address_merges_the_stop(self, db):
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        self._attach(db, r, tba="TBA1", addr="1 MAIN ST")
+        self._attach(db, r, tba="TBA2", addr="1 MAIN ST")
+        db.commit()
+        db.expire_all()
+
+        reloaded = db.query(Route).filter(Route.id == r.id).first()
+        entries = [s for s in reloaded.stops if s["address"] == "1 MAIN ST"]
+        assert len(entries) == 1, "same address should merge, not duplicate"
+        assert set(entries[0]["tba_numbers"]) == {"TBA1", "TBA2"}
+
+    def test_existing_stop_is_reused_not_duplicated(self, db):
+        """delivery_stops is UNIQUE on (route_id, normalised_address) — one stop
+        per building per route. Inserting blindly raises IntegrityError, which
+        is how this guard was found."""
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        first = self._attach(db, r, tba="TBA1", addr="1 MAIN ST")
+        db.commit()
+        second = self._attach(db, r, tba="TBA2", addr="1 MAIN ST")
+        db.commit()
+
+        assert second.id == first.id, "should join the existing stop"
+        assert set(second.tba_numbers) == {"TBA1", "TBA2"}
+        assert second.packages_total == 2
+        assert db.query(DeliveryStop).filter(
+            DeliveryStop.route_id == r.id).count() == 1
+
+    def test_constraint_exists_so_the_guard_is_required(self):
+        """Pins WHY the reuse branch exists — if this constraint were dropped
+        the guard would look like dead code."""
+        names = {c.name for c in DeliveryStop.__table__.constraints if c.name}
+        assert "uq_delivery_stops_route_address" in names
+
+    def test_stop_is_flagged_unplanned(self, db):
+        """is_unplanned keeps it out of Amazon reconciliation (ADR-197/246):
+        the package was never manifested, so counting it in our_delivered would
+        manufacture a discrepancy against ourselves."""
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        stop = self._attach(db, r)
+        db.commit()
+        assert stop.is_unplanned is True
+        assert stop.status == "planned"
+
+    def test_both_actors_are_recorded(self, db):
+        """ADR-244: the executor owns the stop, the enterer is recorded."""
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        stop = self._attach(db, r)
+        db.commit()
+        assert stop.walker_name == "Executor"
+        assert stop.recorded_by_name == "Recorder"
+        assert stop.walker_id != stop.recorded_by
+
+    def test_stop_sequence_continues_from_existing(self, db):
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        first = self._attach(db, r, tba="TBA1", addr="1 A ST")
+        second = self._attach(db, r, tba="TBA2", addr="2 B ST")
+        db.commit()
+        assert second.stop_sequence == first.stop_sequence + 1
+
+    def test_capacity_is_not_checked(self, db):
+        """The package is already in the tote — its capacity was consumed at
+        load. Rejecting it here would apply a planning rule to a fact on the
+        ground (ADR-246)."""
+        r = _route(db, date(2026, 8, 1), blocks=["BLK1"])
+        r.package_count = 999
+        r.capacity_limit = 10          # already far over
+        db.commit()
+
+        stop = self._attach(db, r)     # must not raise
+        db.commit()
+        assert stop is not None
+
+
+class TestForeignRemoval:
+    def test_creates_a_flagged_anchor_point_removal(self, db):
+        """Reuses ADR-176 rather than inventing a mechanism: same row shape
+        persist_zones writes for station finds, with pull_point marking that
+        this one came from the field."""
+        w = _walker(db, "Finder")
+        rem = create_foreign_removal(
+            db, company_id=COMPANY, tba="TBA_ALIEN",
+            removal_date=date(2026, 8, 1),
+            removed_by=w.id, removed_by_name=w.name,
+        )
+        db.commit()
+
+        assert rem.reason == "out_of_zone"
+        assert rem.pull_point == "anchor_point"
+        assert rem.status == "flagged"
+        assert rem.whole_tote is False
+        assert rem.package_count == 1
+
+    def test_custody_chain_starts_pending(self, db):
+        """Dispatch approving the removal is not custody — the walker->driver->
+        station legs transition this field."""
+        w = _walker(db, "Finder")
+        rem = create_foreign_removal(
+            db, company_id=COMPANY, tba="TBA_ALIEN",
+            removal_date=date(2026, 8, 1),
+            removed_by=w.id, removed_by_name=w.name,
+        )
+        db.commit()
+        assert rem.handoff_status == "pending"
+        assert rem.handed_over_at is None
+        assert rem.received_at is None
+
+    def test_removal_is_company_scoped(self, db):
+        w = _walker(db, "Finder")
+        create_foreign_removal(db, company_id=COMPANY, tba="T1",
+                               removal_date=date(2026, 8, 1),
+                               removed_by=w.id, removed_by_name=w.name)
+        db.commit()
+        mine = db.query(PackageRemoval).filter(
+            PackageRemoval.company_id == COMPANY).all()
+        assert len(mine) == 1

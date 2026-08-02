@@ -208,3 +208,186 @@ def find_best_fit(
         f"best_fit_in_progress:{top.route_number}" if fallback else "no_accepting_route"
     )
     return assessment
+
+
+# ── write path ────────────────────────────────────────────────────────────────
+
+@dataclass
+class IntakeResult:
+    """What a completed intake actually did."""
+    outcome: str                     # added | removal | needs_dispatch | duplicate
+    route_id: Optional[UUID] = None
+    route_number: Optional[int] = None
+    walker_name: Optional[str] = None
+    stop_id: Optional[UUID] = None
+    removal_id: Optional[UUID] = None
+    reason: Optional[str] = None
+    # Set when the package was already registered — the operator is told WHO has
+    # it rather than just being refused (ADR-246).
+    existing_holder: Optional[str] = None
+    existing_route_number: Optional[int] = None
+
+
+def _merge_stop(stops: list | None, block_key: str, address: str, tba: str) -> list[dict]:
+    """Add a package to a stop list, combining with an existing address entry.
+
+    Returns a NEW list of NEW dicts: JSONB columns need reassignment, not
+    in-place mutation, for SQLAlchemy change detection. Mirrors _merge_stops in
+    walker_routes (ADR-194); reimplemented rather than imported because that
+    module is proprietary and this service is public.
+    """
+    merged = [dict(s) for s in (stops or [])]
+    for entry in merged:
+        if entry.get("address") == address:
+            entry["tba_numbers"] = list(dict.fromkeys(
+                (entry.get("tba_numbers") or []) + [tba]
+            ))
+            return merged
+    merged.append({
+        "block_key": block_key,
+        "address": address,
+        "tba_numbers": [tba],
+        # Loose find: it rode in someone's tote, so there is no bag of record.
+        "bags": [{"bag_id": "(loose)", "bag_color": None, "tba_numbers": [tba]}],
+    })
+    return merged
+
+
+def attach_to_route(
+    db: Session,
+    route: Route,
+    *,
+    tba: str,
+    block_key: Optional[str],
+    normalised_address: Optional[str],
+    company_id: UUID,
+    executor_id: Optional[UUID],
+    executor_name: Optional[str],
+    recorded_by: UUID,
+    recorded_by_name: Optional[str],
+):
+    """Attach an unregistered package to a route, and open its stop.
+
+    ARRAY and JSONB columns are REASSIGNED, never appended in place. There is no
+    MutableList on these models, so `route.tba_numbers.append(x)` is silently
+    discarded at commit — the bug this pattern exists to avoid
+    (walker_routes.py:2589 documents the same rule).
+
+    Capacity is deliberately NOT checked: the package is already physically in
+    the tote, so its capacity was consumed at load. Re-checking capacity_limit
+    would apply a planning rule to a fact on the ground (ADR-246).
+
+    Does NOT commit — the caller owns the transaction so the audit row lands
+    with the change.
+    """
+    from app.models.delivery_stop import DeliveryStop
+
+    route.tba_numbers = list(route.tba_numbers or []) + [tba]
+    route.package_count = (route.package_count or 0) + 1
+
+    if block_key and block_key not in (route.block_keys or []):
+        route.block_keys = list(route.block_keys or []) + [block_key]
+    if normalised_address and normalised_address not in (route.normalised_addresses or []):
+        route.normalised_addresses = list(route.normalised_addresses or []) + [normalised_address]
+    if block_key and normalised_address:
+        route.stops = _merge_stop(route.stops, block_key, normalised_address, tba)
+
+    # DeliveryStop is unique on (route_id, normalised_address) — one stop per
+    # building per route. A second unregistered package at an address the route
+    # already visits joins the EXISTING stop rather than creating a duplicate;
+    # inserting blindly raises IntegrityError.
+    existing = None
+    if normalised_address:
+        existing = (
+            db.query(DeliveryStop)
+            .filter(DeliveryStop.route_id == route.id,
+                    DeliveryStop.company_id == company_id,
+                    DeliveryStop.normalised_address == normalised_address)
+            .first()
+        )
+    if existing is not None:
+        existing.tba_numbers = list(dict.fromkeys(
+            list(existing.tba_numbers or []) + [tba]
+        ))
+        existing.packages_total = (existing.packages_total or 0) + 1
+        # A planned stop that gains a found package stays planned; a COMPLETED
+        # stop is not reopened — the walker is already past it, and the package
+        # needs its own handling rather than a silent revival.
+        db.flush()
+        return existing
+
+    # is_unplanned=True (ADR-197) is what keeps this out of Amazon
+    # reconciliation: the package was never manifested, so counting it in
+    # our_delivered would manufacture a discrepancy against ourselves.
+    seq = (
+        db.query(DeliveryStop)
+        .filter(DeliveryStop.route_id == route.id,
+                DeliveryStop.company_id == company_id)
+        .count()
+    ) + 1
+
+    stop = DeliveryStop(
+        company_id=company_id,
+        route_id=route.id,
+        truck_assignment_id=route.truck_assignment_id,
+        block_key=block_key or "UNKNOWN",
+        normalised_address=normalised_address,
+        tba_numbers=[tba],
+        status="planned",
+        is_unplanned=True,
+        stop_sequence=seq,
+        packages_total=1,
+        # ADR-244: the route's executor owns the stop; whoever entered it is
+        # recorded separately. A dispatcher adding for a walker is exactly the
+        # delegated case that ADR fixed.
+        walker_id=executor_id,
+        walker_name=executor_name,
+        recorded_by=recorded_by,
+        recorded_by_name=recorded_by_name,
+    )
+    db.add(stop)
+    db.flush()
+    return stop
+
+
+def create_foreign_removal(
+    db: Session,
+    *,
+    company_id: UUID,
+    tba: str,
+    removal_date: date,
+    removed_by: UUID,
+    removed_by_name: Optional[str],
+    reason: str = "out_of_zone",
+):
+    """A package that is not ours becomes a PackageRemoval, not a delivery.
+
+    Reuses ADR-176 exactly: persist_zones writes this same row shape for
+    out-of-zone packages found at the station. pull_point='anchor_point'
+    distinguishes a field find, and the row carries the
+    pending -> handed_over -> received custody chain the operator asked for —
+    approval is not custody, so the walker->driver->station legs are recorded
+    on this row rather than assumed.
+
+    Does NOT commit.
+    """
+    from app.models.tote_ops import PackageRemoval
+
+    removal = PackageRemoval(
+        company_id=company_id,
+        removal_date=removal_date,
+        bag_id="(loose)",
+        tba=tba,
+        tba_numbers=None,
+        package_count=1,
+        whole_tote=False,
+        reason=reason,
+        status="flagged",
+        pull_point="anchor_point",
+        removed_by=removed_by,
+        removed_by_name=removed_by_name,
+        handoff_status="pending",
+    )
+    db.add(removal)
+    db.flush()
+    return removal
