@@ -23,6 +23,37 @@ on:
     branches: [master, staging]
 
 jobs:
+  # ── 0. DESIGN TOKENS ───────────────────────────────────────────────────────
+  # Pure stdlib, ~60ms, no services and no pip install — so it has no `needs`
+  # and fails in seconds rather than after the dependency audit.
+  #
+  # Guards three failures that all shipped before this existed:
+  #   * five WCAG contrast failures nobody had measured (plan §2.2)
+  #   * web/mobile palettes drifting apart (#3C64DD vs #4F6BF4, plan §2.7)
+  #   * a token whose ROLE changed under 305 call sites, repainting the whole
+  #     admin UI while every other check stayed green (plan §2.9)
+  design-tokens:
+    name: Design tokens
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Contrast + CVD separation for every pairing, both themes.
+      - name: Palette meets its contrast targets
+        run: python design/check_contrast.py
+
+      # Regenerates in memory and diffs the committed output. Catches a stale
+      # build AND someone hand-editing a generated file, which is the failure
+      # mode that let the two platforms drift in the first place.
+      - name: Generated tokens are in sync
+        run: python design/build_tokens.py --check
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
@@ -236,7 +267,7 @@ jobs:
   deploy-staging:
     name: Deploy → STAGING
     runs-on: ubuntu-latest
-    needs: [test, migrations]
+    needs: [test, migrations, design-tokens]
     if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
     environment: staging
     env:
@@ -483,7 +514,7 @@ jobs:
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
-    needs: [test, migrations]
+    needs: [test, migrations, design-tokens]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
     env:
