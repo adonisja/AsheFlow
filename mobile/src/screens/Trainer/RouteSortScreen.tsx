@@ -11,6 +11,7 @@ import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 import { Badge, Button, Avatar } from '@components/ui/primitives';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -1257,8 +1258,9 @@ function RouteRow({ route, c, s }: { route: RouteResp; c: ThemeColors; s: Return
   const stops = route.stops ?? null;
   const chipBlocks = stops ? [...new Set(stops.map(st => st.block_key))] : route.block_keys;
 
+  const animateNext = useLayoutTransition();
   const toggle = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    animateNext();
     setExpanded(e => !e);
   };
 
@@ -1329,8 +1331,9 @@ function ProposalRow({
   const [expanded, setExpanded] = useState(false);
   const chipBlocks = stops ? [...new Set(stops.map(st => st.block_key))] : blockKeys;
 
+  const animateNext = useLayoutTransition();
   const toggle = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    animateNext();
     setExpanded(e => !e);
   };
 

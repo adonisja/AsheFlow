@@ -7,6 +7,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 
 type Task = { id: string; topic_title: string; description?: string; is_completed: boolean; is_training_debt?: boolean };
 type TodayData = {
@@ -269,12 +270,13 @@ function ReadOnlyGroup({ label, accentColor, tasks, c, debt }: {
 
 function ReadOnlyTaskRow({ task, c, debt, last }: { task: Task; c: ThemeColors; debt?: boolean; last?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const animateNext = useLayoutTransition();
   const hasDesc = !!task.description;
 
   return (
     <TouchableOpacity
       style={[gs.row, !last && { borderBottomWidth: 1, borderBottomColor: c.border }, debt && gs.debtRow]}
-      onPress={() => hasDesc && setExpanded(e => !e)}
+      onPress={() => { if (hasDesc) { animateNext(); setExpanded(e => !e); } }}
       activeOpacity={hasDesc ? 0.6 : 1}
     >
       {debt && <View style={[gs.debtAccent, { backgroundColor: c.danger }]} />}

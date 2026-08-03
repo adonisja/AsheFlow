@@ -17,6 +17,7 @@ import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 
 /** Walker/trainee route execution — rebuilt on the CURRENT API (the previous
  * version called /walker-routes/assignment + /trips which no longer exist, so
@@ -407,6 +408,7 @@ function RouteTerritorySection({ blockKeys, addresses, routeStops, c }: {
   blockKeys: string[]; addresses: string[]; routeStops: RouteStop[] | null; c: ThemeColors;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const animateNext = useLayoutTransition();
 
   // Delivered stops (ADR-194) drive the territory; flat lists are the
   // fallback for routes that predate the stops column.
@@ -416,7 +418,7 @@ function RouteTerritorySection({ blockKeys, addresses, routeStops, c }: {
   return (
     <View style={{ marginTop: spacing.sm, borderTopWidth: 1, borderTopColor: c.border + '88', paddingTop: spacing.sm }}>
       <TouchableOpacity
-        onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setExpanded(e => !e); }}
+        onPress={() => { animateNext(); setExpanded(e => !e); }}
         style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
         activeOpacity={0.7}
       >
@@ -536,6 +538,7 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
   c: ThemeColors;
 }) {
   const [expanded, setExpanded] = useState(!!featured);
+  const animateNext = useLayoutTransition();
   const topSignal = stop.signals?.[0] ?? null;
 
   return (
@@ -543,7 +546,7 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
       cs.card,
       { backgroundColor: c.card, borderColor: featured ? c.primary + '77' : c.border, borderWidth: featured ? 1.5 : 1 },
     ]}>
-      <TouchableOpacity style={cs.header} onPress={() => setExpanded(e => !e)} activeOpacity={0.7}>
+      <TouchableOpacity style={cs.header} onPress={() => { animateNext(); setExpanded(e => !e); }} activeOpacity={0.7}>
         <View style={{ flex: 1 }}>
           {featured && (
             <Text style={[cs.nextLabel, { color: started ? c.success : c.primary }]}>

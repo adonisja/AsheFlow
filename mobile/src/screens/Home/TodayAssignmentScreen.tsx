@@ -9,6 +9,7 @@ import { errorText } from '@api/errorText';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 import { Badge, Button, Avatar } from '@components/ui/primitives';
 
 type CrewMember = {
@@ -85,6 +86,7 @@ export default function TodayAssignmentScreen() {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded,   setExpanded]   = useState<Record<string, boolean>>({});
+  const animateNext = useLayoutTransition();
   const [responding, setResponding] = useState<ConfirmStatus | null>(null);
 
   const todayLocal = new Date();
@@ -483,7 +485,7 @@ export default function TodayAssignmentScreen() {
           <View key={role} style={s.section}>
             <TouchableOpacity
               style={s.sectionHeader}
-              onPress={() => setExpanded(prev => ({ ...prev, [role]: !open }))}
+              onPress={() => { animateNext(); setExpanded(prev => ({ ...prev, [role]: !open })); }}
               activeOpacity={0.7}
             >
               <View style={[s.roleDot, { backgroundColor: getRoleColor(role as FieldRole, c) }]} />

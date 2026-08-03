@@ -9,6 +9,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 
 type Record_ = {
   record_id: string;
@@ -32,6 +33,7 @@ export default function TraineeHistoryScreen() {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded,   setExpanded]   = useState<Set<string>>(new Set());
+  const animateNext = useLayoutTransition();
   const [reviewState, setReviewState] = useState<Record<string, { stars: number; comment: string; submitting: boolean }>>({});
 
   const fetch = useCallback(async () => {
@@ -77,8 +79,10 @@ export default function TraineeHistoryScreen() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  const toggle = (id: string) =>
+  const toggle = (id: string) => {
+    animateNext();
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
 
   const setStars = (id: string, stars: number) =>
     setReviewState(prev => ({ ...prev, [id]: { ...prev[id] ?? { stars: 0, comment: '', submitting: false }, stars } }));

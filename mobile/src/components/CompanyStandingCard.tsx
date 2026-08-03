@@ -40,7 +40,8 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, radius, fontSize, fontWeight, duration, spring, layoutSpring, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, spring, type ThemeColors } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 
 // LayoutAnimation is opt-in on Android (old architecture). Same guard
 // MyRouteScreen uses — harmless if another screen already set it.
@@ -82,22 +83,6 @@ function directionLabel(d: string | null, prev: string | null): string | null {
   return null;
 }
 
-/** iOS favours spring physics, Android material easing. Matching each platform's
- *  own idiom is what makes a transition read as native rather than generic. */
-const FOLD_ANIM = Platform.select({
-  ios: {
-    duration: duration.normal,
-    create:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-    update:  { type: LayoutAnimation.Types.spring, ...layoutSpring },
-    delete:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-  },
-  default: {
-    duration: duration.fast,
-    create:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-    update:  { type: LayoutAnimation.Types.easeInEaseOut },
-    delete:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-  },
-})!;
 
 export default function CompanyStandingCard() {
   const c = useColors();
@@ -110,6 +95,7 @@ export default function CompanyStandingCard() {
   const [reduceMotion, setReduceMotion] = useState(false);
 
   const chevron = useRef(new Animated.Value(0)).current;   // 0 folded, 1 open
+  const animateNext = useLayoutTransition();
 
   // Respect the OS accessibility setting. An animation that ignores
   // reduce-motion is a bug, not a flourish.
@@ -168,14 +154,14 @@ export default function CompanyStandingCard() {
 
   const toggle = useCallback(() => {
     const next = !folded;
-    if (!reduceMotion) LayoutAnimation.configureNext(FOLD_ANIM);
+    animateNext();   // reduce-motion handled inside the hook
     // A short tick confirms the tap without the user looking — useful with
     // gloves on in a van. Vibration is core RN, so no extra dependency.
     if (Platform.OS === 'android') Vibration.vibrate(10);
     setFolded(next);
     animateChevron(!next);
     void AsyncStorage.setItem(FOLD_KEY, String(next));
-  }, [folded, reduceMotion, animateChevron]);
+  }, [folded, animateNext, animateChevron]);
 
   if (loading) {
     return (
