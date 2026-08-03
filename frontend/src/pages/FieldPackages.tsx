@@ -222,6 +222,13 @@ function AssignForm() {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanNote, setScanNote] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [ocrLines, setOcrLines] = useState<string[]>([]);
+
+  // Object URLs leak until revoked; drop the previous one whenever it changes
+  // and on unmount.
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   /**
    * OCR assists the form; it never replaces it. Both fields stay editable and a
@@ -231,6 +238,11 @@ function AssignForm() {
   const scanLabel = useCallback(async (f: File) => {
     setScanning(true);
     setScanNote(null);
+    setOcrLines([]);
+    setPreview(prev => {
+      if (prev) URL.revokeObjectURL(prev);
+      return f.type.startsWith('image/') ? URL.createObjectURL(f) : null;
+    });
     try {
       const fd = new FormData();
       fd.append('file', f);
@@ -240,6 +252,9 @@ function AssignForm() {
       const r = res.data;
       if (r.tba) setTba(r.tba);
       if (r.address_line) setAddress(r.address_line);
+      // Every line OCR read, so a wrong pick is fixed by clicking the right one
+      // rather than re-scanning (and re-billing Textract).
+      setOcrLines(r.lines ?? []);
 
       if (r.needs_manual_entry) {
         setScanNote('Could not read the whole label — fill in the rest by hand.');
@@ -293,24 +308,100 @@ function AssignForm() {
         system pick the best fit.
       </p>
 
-      <div className="flex items-center gap-3">
-        <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border text-sm cursor-pointer hover:bg-accent">
-          <ScanLine className="w-4 h-4" />
-          {scanning ? 'Reading…' : 'Scan label'}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,application/pdf"
-            capture="environment"
-            className="hidden"
-            disabled={scanning}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void scanLabel(f);
-              e.target.value = '';   // so the same photo can be retried
-            }}
-          />
-        </label>
-        {scanNote && <span className="text-xs text-muted-foreground">{scanNote}</span>}
+      {/* Drop / paste / browse. Dispatch usually has the label as a photo a
+          walker messaged them, so paste-from-clipboard is the fastest path and
+          drag-and-drop is the next; the file picker is the fallback, not the
+          headline. Manual entry below always works regardless (ADR-246). */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f) void scanLabel(f);
+        }}
+        onPaste={(e) => {
+          const f = Array.from(e.clipboardData.files)[0];
+          if (f) void scanLabel(f);
+        }}
+        // Focusable so a paste lands here without the user clicking a field
+        // first — the browser only delivers clipboard events to focused nodes.
+        tabIndex={0}
+        className={`rounded-xl border-2 border-dashed p-4 transition-colors outline-none
+          focus-visible:ring-2 focus-visible:ring-primary/40 ${
+          dragging ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          {preview ? (
+            <img
+              src={preview}
+              alt=""
+              className="w-14 h-14 rounded-lg object-cover border border-border shrink-0"
+            />
+          ) : (
+            <ScanLine className="w-6 h-6 text-muted-foreground shrink-0" />
+          )}
+
+          <div className="min-w-0 flex-1">
+            <p className="text-sm">
+              {scanning ? 'Reading the label…' : 'Drop or paste a label image'}
+            </p>
+            <label className="text-xs text-primary hover:underline cursor-pointer">
+              or choose a file
+              <input
+                type="file"
+                accept="image/jpeg,image/png,application/pdf"
+                capture="environment"
+                className="hidden"
+                disabled={scanning}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void scanLabel(f);
+                  e.target.value = '';   // so the same photo can be retried
+                }}
+              />
+            </label>
+            {scanNote && (
+              <p className="text-xs text-muted-foreground mt-1">{scanNote}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Every line OCR read. A misassigned field is fixed by clicking the
+            right line rather than re-scanning — which would re-bill Textract
+            and, on a creased label, probably misread it the same way again. */}
+        {ocrLines.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-border">
+            <p className="text-xs text-muted-foreground mb-1.5">
+              Read from the label — click a line to use it:
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {ocrLines.map((line, i) => (
+                <span key={`${line}-${i}`} className="inline-flex items-center rounded-md border border-border overflow-hidden text-xs">
+                  <span className="px-2 py-1 font-mono truncate max-w-[16rem]">{line}</span>
+                  <button
+                    type="button"
+                    onClick={() => setTba(line.replace(/\s+/g, '').toUpperCase())}
+                    className="px-1.5 py-1 border-l border-border hover:bg-accent"
+                    title="Use as tracking number"
+                  >
+                    TBA
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddress(line)}
+                    className="px-1.5 py-1 border-l border-border hover:bg-accent"
+                    title="Use as address"
+                  >
+                    Addr
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <Field label="Tracking number (TBA)" required>

@@ -383,33 +383,46 @@ class TestRollCallAttendance:
         _config(db)
         w = _employee(db, "Absent Walker", "walker")
         # Distinct days: ShiftRollCall is unique per (employee, date).
+        # _seed_days CLAMPS to the window start, so early in a week/month it
+        # returns fewer than requested and zip() silently truncates the statuses
+        # with it. Assert against what was actually seeded, not a hardcoded 4 —
+        # this suite already learned that lesson on 1 August (see _seed_day).
+        statuses = ["ncns", "ncns", "late", "present"]
         days = _seed_days(db, 4, period="week")
-        for d, status in zip(days, ["ncns", "ncns", "late", "present"]):
+        statuses = statuses[:len(days)]
+        for d, status in zip(days, statuses):
             db.add(ShiftRollCall(id=uuid.uuid4(), company_id=COMPANY,
                                  employee_id=w.id, submitted_by_id=w.id,
                                  date=d, status=status, confirmed=True))
         db.commit()
 
+        want_ncns = statuses.count("ncns")
+        want_late = statuses.count("late")
+
         crew = get_management_dashboard_summary(db, COMPANY, period="week").crew
         assert [(n.employee_name, n.count) for n in crew.no_shows_this_period] == \
-               [("Absent Walker", 2)]
+               ([("Absent Walker", want_ncns)] if want_ncns else [])
         trouble = {t.employee_name: t for t in crew.trouble_walkers}
-        assert trouble["Absent Walker"].ncns_count == 2
-        assert trouble["Absent Walker"].late_count == 1
+        if want_ncns or want_late:
+            assert trouble["Absent Walker"].ncns_count == want_ncns
+            assert trouble["Absent Walker"].late_count == want_late
 
     def test_confirmed_pct(self, db):
         _config(db)
         w = _employee(db)
+        confs = [True, True, False, False]
         days = _seed_days(db, 4, period="week")
-        for d, conf in zip(days, [True, True, False, False]):
+        confs = confs[:len(days)]
+        for d, conf in zip(days, confs):
             db.add(ShiftRollCall(id=uuid.uuid4(), company_id=COMPANY,
                                  employee_id=w.id, submitted_by_id=w.id,
                                  date=d, status="present", confirmed=conf))
         db.commit()
 
         crew = get_management_dashboard_summary(db, COMPANY, period="week").crew
-        assert crew.roll_call_total == 4
-        assert crew.roll_call_confirmed_pct == 50.0
+        assert crew.roll_call_total == len(confs)
+        assert crew.roll_call_confirmed_pct == round(
+            confs.count(True) / len(confs) * 100, 1)
 
 
 # ── graduation, per the locked definition ─────────────────────────────────────
