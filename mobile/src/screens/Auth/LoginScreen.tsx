@@ -93,7 +93,7 @@ export default function LoginScreen() {
             <View style={s.labelRow}>
               <Text style={s.label}>Password</Text>
               <TouchableOpacity onPress={() => setShowPw(v => !v)} hitSlop={{ top: 8, bottom: 8, left: 12, right: 4 }}>
-                <Text style={[s.showHide, { color: c.primary }]}>{showPw ? 'Hide' : 'Show'}</Text>
+                <Text style={[s.showHide, { color: c.brandOutdoor }]}>{showPw ? 'Hide' : 'Show'}</Text>
               </TouchableOpacity>
             </View>
             <TextInput
@@ -118,7 +118,7 @@ export default function LoginScreen() {
 
           {/* Submit */}
           <TouchableOpacity
-            style={[s.btn, { backgroundColor: c.primary, opacity: loading ? 0.7 : 1 }]}
+            style={[s.btn, { backgroundColor: c.brand, opacity: loading ? 0.7 : 1 }]}
             onPress={handleLogin}
             disabled={loading || !!federatedLoading}
             activeOpacity={0.82}
@@ -182,7 +182,10 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   // Hero
   hero: {
-    backgroundColor: c.primary,
+    // Navy: this is brand/structure. It was c.primary, which in dark theme is
+    // the LIFTED navy (#7E95F1) — a full-bleed periwinkle field that made the
+    // page read as one giant button and left the violet unused.
+    backgroundColor: c.primaryStrong,
     alignItems: 'center',
     paddingTop: 80,
     paddingBottom: 48,
@@ -195,13 +198,15 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     marginBottom: spacing.md,
   },
   logoInner: {
+    // Deliberately a constant light disc: it carries c.primary letters and sits
+    // on the c.primary hero, so it must not flip with the theme.
     width: 56, height: 56, borderRadius: 28,
-    backgroundColor: '#fff',
+    backgroundColor: c.surface,
     alignItems: 'center', justifyContent: 'center',
   },
-  logoLetters:  { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: c.primary, letterSpacing: 0.5 },
-  brandName:    { fontSize: fontSize['2xl'], fontWeight: fontWeight.extrabold, color: '#fff', letterSpacing: -0.5 },
-  brandTagline: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.72)', marginTop: 4, fontWeight: fontWeight.medium },
+  logoLetters:  { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: c.primaryStrong, letterSpacing: 0.5 },
+  brandName:    { fontSize: fontSize['2xl'], fontWeight: fontWeight.extrabold, color: c.surface, letterSpacing: -0.5 },
+  brandTagline: { fontSize: fontSize.sm, color: c.surface, opacity: 0.78, marginTop: 4, fontWeight: fontWeight.medium },
 
   // Card
   card: {
@@ -224,6 +229,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   fieldGroup: { marginBottom: spacing.md },
   labelRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs },
   label:      { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground },
+  // brandOutdoor, not brand: `brand` is tuned against the BACKGROUND and only
+  // reaches 4.10:1 on the lighter card, short of the 4.5 this small text needs.
   showHide:   { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   input: {
     backgroundColor: c.surfaceMuted,
@@ -243,7 +250,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.sm + 6,
     alignItems: 'center',
   },
-  btnText: { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: 0.2 },
+  btnText: { color: c.brandForeground, fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: 0.2 },
 
   // Divider
   dividerRow:  { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg },
