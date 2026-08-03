@@ -60,6 +60,17 @@ type IntakeResult = {
   assessment: Assessment | null;
 };
 
+/** Mirrors the backend LabelReadResponse. A SUGGESTION — the walker confirms
+ *  both fields before anything is written (ADR-246). */
+type LabelRead = {
+  tba: string | null;
+  address_line: string | null;
+  confidence: number | null;
+  needs_manual_entry: boolean;
+  lines: string[];
+  warnings: string[];
+};
+
 // ── Outcome copy ──────────────────────────────────────────────────────────────
 
 /**
@@ -116,6 +127,75 @@ export default function FoundPackageScreen() {
   const [result, setResult] = useState<IntakeResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanNote, setScanNote] = useState<string | null>(null);
+
+  /**
+   * Photograph the label and let OCR fill the two fields.
+   *
+   * An ASSIST, never a gate (ADR-246): both fields stay editable, and every
+   * failure path — permission denied, cancelled, Textract down, unreadable
+   * photo — leaves whatever was already typed alone and says "type it in".
+   * The walker is standing in front of the package either way.
+   */
+  const scanLabel = useCallback(async () => {
+    setScanning(true);
+    setScanNote(null);
+    try {
+      const { launchCamera } = await import('react-native-image-picker');
+      const shot = await launchCamera({
+        mediaType: 'photo',
+        includeBase64: false,
+        // Full-resolution photos are several MB and the endpoint caps at 10.
+        // A label only needs enough pixels for the text to resolve.
+        maxWidth: 2000,
+        maxHeight: 2000,
+        quality: 0.8,
+        saveToPhotos: false,
+      });
+
+      if (shot.didCancel) { setScanning(false); return; }
+      const asset = shot.assets?.[0];
+      if (shot.errorCode || !asset?.uri) {
+        setScanNote(
+          shot.errorCode === 'permission'
+            ? 'Camera access is off — enter the details by hand.'
+            : 'Could not open the camera — enter the details by hand.',
+        );
+        setScanning(false);
+        return;
+      }
+
+      const form = new FormData();
+      form.append('file', {
+        uri: asset.uri,
+        type: asset.type ?? 'image/jpeg',
+        name: asset.fileName ?? 'label.jpg',
+      } as unknown as Blob);
+
+      const res = await apiClient.post<LabelRead>(
+        '/packages/intake/read-label', form,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      );
+      const r = res.data;
+      if (r.tba) { setTba(r.tba); setPreview(null); }
+      if (r.address_line) { setAddress(r.address_line); setPreview(null); }
+
+      if (r.needs_manual_entry) {
+        setScanNote('Could not read the whole label — fill in the rest by hand.');
+      } else if (r.confidence !== null && r.confidence < 0.85) {
+        // A confident-looking wrong read is the failure that matters, so a
+        // shaky score asks for eyes rather than staying quiet.
+        setScanNote('Low-confidence read — check both fields.');
+      } else {
+        setScanNote('Read from the label. Check it before adding.');
+      }
+    } catch {
+      setScanNote('Scan unavailable — enter the details by hand.');
+    } finally {
+      setScanning(false);
+    }
+  }, []);
 
   const body = useCallback((override: boolean) => ({
     tba: tba.trim().toUpperCase(),
@@ -157,6 +237,8 @@ export default function FoundPackageScreen() {
     setPreview(null);
     setResult(null);
     setError(null);
+    // Or "Read from the label" lingers over the next, blank form.
+    setScanNote(null);
   }, []);
 
   // A better-fit route exists that is not the walker's own. Advisory, not a
@@ -185,6 +267,17 @@ export default function FoundPackageScreen() {
                 A package in your tote that isn&apos;t on your route. We&apos;ll check
                 whether it&apos;s ours and where it belongs before anything is saved.
               </Text>
+
+              <TouchableOpacity
+                style={[s.scanBtn, scanning && s.btnDisabled]}
+                onPress={scanLabel}
+                disabled={scanning || busy}
+              >
+                <Text style={s.scanBtnText}>
+                  {scanning ? 'Reading label…' : '📷  Scan label'}
+                </Text>
+              </TouchableOpacity>
+              {scanNote && <Text style={s.scanNote}>{scanNote}</Text>}
 
               <Text style={s.label}>Tracking number (TBA)</Text>
               <TextInput
@@ -326,6 +419,12 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     fontSize: fontSize.base,
   },
   error: { color: c.danger, fontSize: fontSize.sm, marginTop: spacing.sm },
+  scanBtn: {
+    borderColor: c.border, borderWidth: 1, borderRadius: radius.md,
+    paddingVertical: spacing.sm, alignItems: 'center', marginTop: spacing.xs,
+  },
+  scanBtnText: { color: c.foreground, fontSize: fontSize.base },
+  scanNote: { color: c.mutedForeground, fontSize: fontSize.sm, marginTop: spacing.xs },
   spinner: { marginTop: spacing.md },
   card: {
     borderWidth: 1, borderRadius: radius.lg, padding: spacing.md,

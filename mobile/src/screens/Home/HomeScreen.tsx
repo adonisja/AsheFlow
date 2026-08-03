@@ -18,6 +18,7 @@ import {
   getRoleColor, getRoleLight, ROLE_LABELS, type ThemeColors,
 } from '@theme/index';
 import { Avatar, Skeleton } from '@components/ui/primitives';
+import CompanyStandingCard from '@components/CompanyStandingCard';
 
 function greet() {
   const h = new Date().getHours();
@@ -189,6 +190,11 @@ export default function HomeScreen() {
             </View>
           )}
         </View>
+
+        {/* ── Company standing (Tier 1: every role, no PII) ──
+            Renders nothing when no scorecard exists yet, so it cannot leave an
+            empty shell on a new company's home screen. */}
+        <CompanyStandingCard />
 
         {/* ── Quick actions ── */}
         <View style={s.quickRow}>
