@@ -153,3 +153,20 @@ export const generatedDark: GeneratedColors = {
   skeleton:               '#272C49',
   skeletonShimmer:        '#32385D',
 };
+
+
+/**
+ * Continuous urgency ramp. NOT semantic tokens — these are anchors that
+ * get interpolated between, which single-value success/warning/danger
+ * cannot express. Theme-constant on purpose: the ramp encodes time
+ * pressure, and it must mean the same thing in either theme.
+ */
+export const ramp = {
+  urgencyNone:        '#3B82F6',
+  urgencyFarDeep:     '#10B981',
+  urgencyFarPale:     '#34D399',
+  urgencyCautionPale: '#FBB830',
+  urgencyCautionDeep: '#F97316',
+  urgencyUrgent:      '#EF4444',
+  urgencyClosed:      '#450A0A',
+} as const;

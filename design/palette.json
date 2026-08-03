@@ -163,6 +163,37 @@
     "skeletonShimmer":   { "hsl": [231, 30, 28] }
   },
 
+  "ramp": {
+    "$comment": [
+      "Continuous gradient anchors for stop urgency (mobile stopUrgency.ts).",
+      "",
+      "NOT semantic tokens. success/warning/danger are single values; this is a",
+      "SCALE that gets interpolated between, so it needs its own named anchors.",
+      "These were the last consumers of the legacy hardcoded `palette` export in",
+      "mobile/src/theme/index.ts, which shipped a second competing source of",
+      "truth (including #4F6BF4, the very value task 0.2 was meant to remove).",
+      "",
+      "Theme-constant on purpose: the ramp encodes TIME PRESSURE, and a walker",
+      "reading it must get the same meaning from the same colour in either",
+      "theme. Contrast is not checked here because these are large fills behind",
+      "their own foreground, not text pairings.",
+      "",
+      "Stored as HEX, not HSL: these are exact values carried over from the",
+      "legacy palette, and a hex->integer-HSL->hex round-trip shifted every one",
+      "of them by 1-2 per channel. Imperceptible, but it is silent corruption of",
+      "deliberate values. Theme-constant anchors gain nothing from HSL, which",
+      "exists so Tailwind can compose alpha.",
+      "their own foreground, not text pairings."
+    ],
+    "urgencyNone": { "hex": "#3B82F6" },
+    "urgencyFarDeep": { "hex": "#10B981" },
+    "urgencyFarPale": { "hex": "#34D399" },
+    "urgencyCautionPale": { "hex": "#FBB830" },
+    "urgencyCautionDeep": { "hex": "#F97316" },
+    "urgencyUrgent": { "hex": "#EF4444" },
+    "urgencyClosed": { "hex": "#450A0A" }
+  },
+
   "cvd": {
     "$comment": [
       "Colour-vision deficiency. success vs danger measured 1.05:1 under",

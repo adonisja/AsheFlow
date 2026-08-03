@@ -14,7 +14,7 @@
 //
 // N = urgent window, M = caution window (minutes; both server-configurable).
 
-import { palette } from '@theme/index';
+import { ramp } from '@theme/generated-colors';
 
 export type CutoffState = 'none' | 'future' | 'on_break' | 'closed';
 
@@ -43,16 +43,19 @@ function mix(a: string, b: string, t: number): string {
   return rgbToHex(ar + (br - ar) * u, ag + (bg - ag) * u, ab + (bb - ab) * u);
 }
 
-// Anchors from the palette. "deep" = saturated/dark end, "pale" = light end.
-const BLUE        = palette.slate500;   // no cutoff
-const GREEN_DEEP  = palette.green500;   // far-future: confident deep green
-const GREEN_PALE  = palette.green400;   // green draining toward the caution edge
-const YELLOW_PALE = palette.amber400;   // caution: light at the far edge
-const YELLOW_DEEP = palette.orange500;  // caution intensifying toward urgent
-const RED_ON      = palette.red500;     // urgent: full on entry
-const RED_DEEP    = palette.red900;     // urgent deepening toward now
-const CLOSED      = palette.red900;     // past closing
-const ON_BREAK    = palette.orange500;  // on break — distinct, not-red (reopening pending)
+// Anchors from the GENERATED ramp (design/palette.json -> `ramp`).
+// These were the last consumers of the legacy hardcoded `palette` export, which
+// was a second competing source of truth alongside the generated tokens.
+// "deep" = saturated/dark end, "pale" = light end.
+const BLUE        = ramp.urgencyNone;         // no cutoff
+const GREEN_DEEP  = ramp.urgencyFarDeep;      // far-future: confident deep green
+const GREEN_PALE  = ramp.urgencyFarPale;      // green draining toward the caution edge
+const YELLOW_PALE = ramp.urgencyCautionPale;  // caution: light at the far edge
+const YELLOW_DEEP = ramp.urgencyCautionDeep;  // caution intensifying toward urgent
+const RED_ON      = ramp.urgencyUrgent;       // urgent: full on entry
+const RED_DEEP    = ramp.urgencyClosed;       // urgent deepening toward now
+const CLOSED      = ramp.urgencyClosed;       // past closing
+const ON_BREAK    = ramp.urgencyCautionDeep;  // on break — distinct, not-red
 
 // How far out (in multiples of the green band width) we treat as "fully deep
 // green". Beyond FLAT_MULT * greenWidth, the green stops getting deeper.

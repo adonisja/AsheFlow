@@ -115,6 +115,28 @@ def build_mobile(spec: dict) -> str:
     for name, hsl in dark:
         lines.append(f"  {(name + ':'):<{width}} '{hsl_to_hex(*hsl)}',")
     lines += ["};", ""]
+
+    # Gradient ramp anchors — theme-CONSTANT, so a single object rather than a
+    # light/dark pair. See the $comment in palette.json.
+    # Ramp anchors are stored as exact hex — see palette.json. Round-tripping
+    # them through integer HSL shifted every value by 1-2 per channel.
+    ramp = [(k, v["hex"]) for k, v in spec.get("ramp", {}).items()
+            if isinstance(v, dict) and "hex" in v]
+    if ramp:
+        rw = max(len(n) for n, _ in ramp) + 1
+        lines += [
+            "",
+            "/**",
+            " * Continuous urgency ramp. NOT semantic tokens — these are anchors that",
+            " * get interpolated between, which single-value success/warning/danger",
+            " * cannot express. Theme-constant on purpose: the ramp encodes time",
+            " * pressure, and it must mean the same thing in either theme.",
+            " */",
+            "export const ramp = {",
+        ]
+        for name, hexval in ramp:
+            lines.append(f"  {(name + ':'):<{rw}} '{hexval}',")
+        lines += ["} as const;", ""]
     return "\n".join(lines)
 
 

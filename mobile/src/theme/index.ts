@@ -6,78 +6,13 @@
 
 // ─── Raw palette ─────────────────────────────────────────────────────────────
 
-export const palette = {
-  // Brand — electric indigo (web is 225 70% 55%; mobile is lifted for saturation)
-  indigo500:  '#4F6BF4',   // primary action, interactive
-  indigo400:  '#7B8FF7',   // primary lifted (dark mode)
-  indigo100:  '#E8ECFE',   // primary tint fill (light)
-  indigo900:  '#1A2060',   // primary deep (dark mode tint fill)
-
-  // Accent — vivid amber (web gold is muted #D4A832; mobile is punchy)
-  amber500:   '#F59E0B',   // trainer role, gold accent
-  amber400:   '#FBB830',   // amber lifted (dark mode)
-  amber100:   '#FEF3C7',   // amber tint (light)
-  amber900:   '#3D2500',   // amber tint (dark)
-
-  // Role — teal (walker)
-  teal500:    '#0EA5A0',   // more saturated than web #0FA870
-  teal400:    '#2DD4BF',   // teal lifted (dark)
-  teal100:    '#CCFBF1',   // tint (light)
-  teal900:    '#062E2C',   // tint (dark)
-
-  // Role — slate (driver) — brighter than web's desaturated slate
-  slate500:   '#3B82F6',   // vibrant blue-slate
-  slate400:   '#60A5FA',
-  slate100:   '#DBEAFE',
-  slate900:   '#1E2D50',
-
-  // Role — neutral (admin/management)
-  neutral500: '#6B7280',
-  neutral400: '#9CA3AF',
-  neutral100: '#F3F4F6',
-  neutral900: '#1F2937',
-
-  // Semantic — calibrated for small-screen readability in sunlight
-  green500:   '#10B981',   // success (confirmed)
-  green400:   '#34D399',
-  green100:   '#D1FAE5',
-  green900:   '#064E3B',
-
-  orange500:  '#F97316',   // warning (pending) — distinct from amber
-  orange400:  '#FB923C',
-  orange100:  '#FFEDD5',
-  orange900:  '#431407',
-
-  red500:     '#EF4444',   // danger
-  red400:     '#F87171',
-  red100:     '#FEE2E2',
-  red900:     '#450A0A',
-
-  cyan500:    '#06B6D4',   // info (assigned)
-  cyan400:    '#22D3EE',
-  cyan100:    '#CFFAFE',
-  cyan900:    '#0C2A3A',
-
-  // Surfaces — light (Frost White, same family as web)
-  gray50:     '#F8FAFC',
-  gray100:    '#F1F5F9',
-  gray200:    '#E2E8F0',
-  gray400:    '#94A3B8',
-  gray500:    '#64748B',
-  gray700:    '#334155',
-  gray900:    '#0F172A',
-
-  // Surfaces — dark (Deep Space — darker/richer than web charcoal)
-  dark50:     '#0B0D14',
-  dark100:    '#111320',
-  dark200:    '#181B2E',
-  dark300:    '#1F2340',
-  dark400:    '#272C4A',
-  dark500:    '#343A5C',
-
-  white:      '#FFFFFF',
-  black:      '#000000',
-};
+// The legacy hardcoded `palette` export lived here — 51 raw values including
+// #4F6BF4, the exact mobile primary that task 0.2 was meant to eliminate. It
+// was a SECOND source of truth sitting directly above the generated tokens, so
+// "reconciled to one value" was only half true while it existed (plan §2.6).
+//
+// Colour now comes from design/palette.json via generated-colors.ts. Gradient
+// anchors that are not semantic tokens live in that file's `ramp` export.
 
 // ─── Semantic color maps ──────────────────────────────────────────────────────
 
