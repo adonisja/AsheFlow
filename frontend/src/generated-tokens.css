@@ -21,6 +21,8 @@
     --primary-strong: 229 60% 18%;
     --accent: 243 100% 97%;
     --accent-foreground: 225 70% 42%;
+    --brand-surface: 229 60% 22%;
+    --brand-surface-foreground: 0 0% 100%;
     --brand: 275 80% 46%;
     --brand-foreground: 0 0% 100%;
     --brand-light: 275 80% 96%;
@@ -69,6 +71,8 @@
     --primary-strong: 228 85% 80%;
     --accent: 225 35% 18%;
     --accent-foreground: 225 80% 75%;
+    --brand-surface: 229 60% 22%;
+    --brand-surface-foreground: 0 0% 100%;
     --brand: 272 75% 63%;
     --brand-foreground: 231 55% 10%;
     --brand-light: 272 40% 24%;

@@ -48,6 +48,8 @@
     "accent":            { "hsl": [243, 100, 97], "_note": "SURFACE tint — hover states, chips, muted fills. 305 usages depend on this being near-invisible. NOT the brand colour; see `brand`." },
     "accentForeground":  { "hsl": [225, 70, 42] },
 
+    "brandSurface":      { "hsl": [229, 60, 22], "_note": "Deep navy brand furniture — sign-in hero, marketing headers. CONSTANT across themes: it is brand identity, not a themed surface, so it must not lighten in dark mode the way primaryStrong does." },
+    "brandSurfaceForeground": { "hsl": [0, 0, 100], "_check": { "on": "brandSurface", "min": 4.5 } },
     "brand":            { "hsl": [275, 80, 46], "_check": { "on": "card", "min": 4.5 },
                            "_note": "violet #8517D3 — brand/interactive accent. 46° from navy, 46° from every status hue.",
                            "_why": "amber sat 0° from gold and 13° from warning (plan §2.4)" },
@@ -117,6 +119,8 @@
     "accent":            { "hsl": [225, 35, 18], "_note": "SURFACE tint — hover states, chips, muted fills. 305 usages depend on this being near-invisible. NOT the brand colour; see `brand`." },
     "accentForeground":  { "hsl": [225, 80, 75] },
 
+    "brandSurface":      { "hsl": [229, 60, 22] },
+    "brandSurfaceForeground": { "hsl": [0, 0, 100], "_check": { "on": "brandSurface", "min": 4.5 } },
     "brand":            { "hsl": [272, 75, 63], "_check": { "on": "background", "min": 4.5 },
                            "_note": "violet #A55AE7" },
     "brandForeground":  { "hsl": [231, 55, 10], "_check": { "on": "brand", "min": 4.5 } },

@@ -182,10 +182,14 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   // Hero
   hero: {
-    // Navy: this is brand/structure. It was c.primary, which in dark theme is
-    // the LIFTED navy (#7E95F1) — a full-bleed periwinkle field that made the
-    // page read as one giant button and left the violet unused.
-    backgroundColor: c.primaryStrong,
+    // brandSurface: a deep navy that is CONSTANT across themes.
+    //
+    // This was c.primary (the lifted #7E95F1 in dark), then primaryStrong —
+    // both wrong. `primaryStrong` means "more prominent than primary", which
+    // on a dark theme means LIGHTER (#A1B2F7), so the hero stayed periwinkle.
+    // The hero is brand furniture, like a marketing header: it should not flip
+    // with the theme at all.
+    backgroundColor: c.brandSurface,
     alignItems: 'center',
     paddingTop: 80,
     paddingBottom: 48,
@@ -198,15 +202,17 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     marginBottom: spacing.md,
   },
   logoInner: {
-    // Deliberately a constant light disc: it carries c.primary letters and sits
-    // on the c.primary hero, so it must not flip with the theme.
+    // Constant light disc. c.surface was WRONG: it is white in light theme but
+    // dark navy in dark theme, which dropped the navy letters on it to 1.12:1.
+    // The disc sits on the theme-constant hero, so it must be constant too —
+    // brandSurfaceForeground is white in both.
     width: 56, height: 56, borderRadius: 28,
-    backgroundColor: c.surface,
+    backgroundColor: c.brandSurfaceForeground,
     alignItems: 'center', justifyContent: 'center',
   },
-  logoLetters:  { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: c.primaryStrong, letterSpacing: 0.5 },
-  brandName:    { fontSize: fontSize['2xl'], fontWeight: fontWeight.extrabold, color: c.surface, letterSpacing: -0.5 },
-  brandTagline: { fontSize: fontSize.sm, color: c.surface, opacity: 0.78, marginTop: 4, fontWeight: fontWeight.medium },
+  logoLetters:  { fontSize: fontSize.md, fontWeight: fontWeight.extrabold, color: c.brandSurface, letterSpacing: 0.5 },
+  brandName:    { fontSize: fontSize['2xl'], fontWeight: fontWeight.extrabold, color: c.brandSurfaceForeground, letterSpacing: -0.5 },
+  brandTagline: { fontSize: fontSize.sm, color: c.brandSurfaceForeground, opacity: 0.78, marginTop: 4, fontWeight: fontWeight.medium },
 
   // Card
   card: {
