@@ -46,11 +46,17 @@ export const MIN_TARGET = 44;
  * rule 5).
  */
 function useReduceMotion() {
-  const [reduce, setReduce] = React.useState(false);
+  // A REF, not state. Nothing needs to re-render when this resolves — it is
+  // only read at animation time — and as state it recreates every callback
+  // that depends on it. In CompanyStandingCard that chain (animateChevron ->
+  // load -> the effect calling it) shifted the hook order mid-mount and
+  // crashed with "Rendered more hooks than during the previous render".
+  const reduce = useRef(false);
   React.useEffect(() => {
     let alive = true;
-    AccessibilityInfo.isReduceMotionEnabled().then(v => { if (alive) setReduce(v); });
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduce);
+    AccessibilityInfo.isReduceMotionEnabled().then(v => { if (alive) reduce.current = v; });
+    const sub = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged', v => { reduce.current = v; });
     return () => { alive = false; sub?.remove?.(); };
   }, []);
   return reduce;
@@ -74,12 +80,12 @@ function usePressScale(toScale = 0.96) {
   const reduceMotion = useReduceMotion();
 
   const onPressIn = () => {
-    if (reduceMotion) return;
+    if (reduceMotion.current) return;
     Animated.spring(scale, { toValue: toScale, useNativeDriver: true, ...spring.pressIn }).start();
   };
 
   const onPressOut = () => {
-    if (reduceMotion) return;
+    if (reduceMotion.current) return;
     Animated.spring(scale, { toValue: 1, useNativeDriver: true, ...spring.pressOut }).start();
   };
 
@@ -635,7 +641,7 @@ export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: 
   React.useEffect(() => {
     // A perpetual pulse is exactly what reduce-motion is for. Hold it at rest
     // rather than looping (plan §4 rule 5).
-    if (reduceMotion) { shimmer.setValue(0); return; }
+    if (reduceMotion.current) { shimmer.setValue(0); return; }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(shimmer, { toValue: 1, duration: duration.ambient, useNativeDriver: true }),
@@ -644,7 +650,7 @@ export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: 
     );
     loop.start();
     return () => loop.stop();
-  }, [shimmer, reduceMotion]);
+  }, [shimmer]);
 
   const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [1, 0.45] });
 

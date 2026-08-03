@@ -92,7 +92,11 @@ export default function CompanyStandingCard() {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [folded, setFolded] = useState(true);
-  const [reduceMotion, setReduceMotion] = useState(false);
+  // A REF, not state: as state this recreated animateChevron -> load -> the
+  // effect that calls it, changing the hook chain mid-mount and crashing with
+  // "Rendered more hooks than during the previous render". Nothing needs to
+  // re-render when this resolves — it is only read at animation time.
+  const reduceMotion = useRef(false);
 
   const chevron = useRef(new Animated.Value(0)).current;   // 0 folded, 1 open
   const animateNext = useLayoutTransition();
@@ -101,19 +105,20 @@ export default function CompanyStandingCard() {
   // reduce-motion is a bug, not a flourish.
   useEffect(() => {
     let alive = true;
-    AccessibilityInfo.isReduceMotionEnabled().then(v => { if (alive) setReduceMotion(v); });
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    AccessibilityInfo.isReduceMotionEnabled().then(v => { if (alive) reduceMotion.current = v; });
+    const sub = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged', v => { reduceMotion.current = v; });
     return () => { alive = false; sub?.remove?.(); };
   }, []);
 
   const animateChevron = useCallback((open: boolean) => {
-    if (reduceMotion) { chevron.setValue(open ? 1 : 0); return; }
+    if (reduceMotion.current) { chevron.setValue(open ? 1 : 0); return; }
     Animated.spring(chevron, {
       toValue: open ? 1 : 0,
       useNativeDriver: true,      // off the JS thread, like the rest of the app
       ...spring.subtle,
     }).start();
-  }, [chevron, reduceMotion]);
+  }, [chevron]);
 
   const load = useCallback(async () => {
     try {
