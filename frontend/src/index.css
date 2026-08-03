@@ -5,6 +5,12 @@
    display=swap prevents FOIT — shows system font until these load. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Sora:wght@600;700&family=JetBrains+Mono:wght@400&display=swap');
 
+/* Colour tokens, GENERATED from design/palette.json (plan §0.1).
+   MUST sit with the other @import rules, above @tailwind: CSS requires imports
+   to precede all other rules, and a later @import is silently discarded — the
+   build still succeeds and the tokens simply never ship. */
+@import './generated-tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -22,22 +28,12 @@
 @layer base {
   :root {
     /* ─── Surfaces — Frost White ──────────────────────── */
-    --background: 220 25% 98%;
-    --foreground: 224 35% 10%;
-    --surface: 0 0% 100%;
-    --surface-muted: 220 20% 96%;   /* receding fill — inputs, table alternates, disabled. Never use as card bg. */
-    --card: 0 0% 100%;
     --card-foreground: 224 35% 10%;
 
     /* ─── Brand — Blue Indigo (AA 4.9:1 on white) ──── */
-    --primary: 225 70% 55%;
-    --primary-foreground: 0 0% 100%;
-    --primary-light: 225 80% 96%;   /* tint fills */
     --primary-glow: 225 75% 65%;    /* hover lift */
-    --primary-strong: 225 70% 42%;  /* active / press */
 
     /* ─── Accent — Amber Gold (AA 4.7:1 on white) ──── */
-    --gold: 35 80% 38%;             /* trainer role, chart series #1 */
     --gold-foreground: 0 0% 100%;
     --gold-tint: 35 80% 96%;
 
@@ -45,25 +41,14 @@
     --secondary: 220 18% 96%;
     --secondary-foreground: 224 25% 25%;
     --muted: 220 18% 96%;
-    --muted-foreground: 220 10% 46%;
     /* Accent surface uses hue 243 (more violet-blue) — intentional.
        Gives hover/nav states a distinct interactive character. Do not "fix" this. */
-    --accent: 243 100% 97%;
-    --accent-foreground: 225 70% 42%;
-    --border: 220 14% 88%;
-    --border-strong: 220 14% 78%;
-    --ring: 225 70% 55%;
 
     /* ─── Semantic (≥4.5:1 on white) ─────────────────── */
-    --success: 158 65% 32%;         /* confirmed — 5.1:1 */
     --success-foreground: 0 0% 100%;
-    --warning: 22 90% 50%;          /* pending — distinct from gold */
     --warning-foreground: 0 0% 100%;
-    --danger: 4 70% 44%;            /* declined — 4.9:1 */
     --danger-foreground: 0 0% 100%;
-    --info: 210 75% 40%;            /* assigned — 5.4:1 */
     --info-foreground: 0 0% 100%;
-    --neutral: 220 10% 38%;         /* admin role, off-duty — 6.0:1 */
     --neutral-foreground: 0 0% 100%;
 
     /* ─── Extended palette (charts, roles) ───────────── */
@@ -119,22 +104,12 @@
 
   .dark {
     /* ─── Surfaces — Deep Charcoal ────────────────────── */
-    --background: 224 24% 6%;
-    --foreground: 210 25% 96%;
-    --surface: 224 22% 9%;
-    --surface-muted: 224 20% 12%;
-    --card: 224 22% 9%;
     --card-foreground: 210 25% 96%;
 
     /* ─── Brand — Blue Indigo (lifted for dark contrast) ─ */
-    --primary: 225 80% 68%;
-    --primary-foreground: 225 50% 10%;
-    --primary-light: 225 40% 18%;
     --primary-glow: 225 85% 75%;
-    --primary-strong: 225 70% 80%;
 
     /* ─── Accent — Amber Gold (brightened for dark) ───── */
-    --gold: 38 85% 62%;
     --gold-foreground: 224 30% 8%;
     --gold-tint: 38 60% 14%;
 
@@ -142,23 +117,12 @@
     --secondary: 224 18% 14%;
     --secondary-foreground: 210 20% 90%;
     --muted: 224 18% 14%;
-    --muted-foreground: 220 12% 65%;
-    --accent: 225 35% 18%;
-    --accent-foreground: 225 80% 75%;
-    --border: 224 15% 20%;
-    --border-strong: 224 15% 30%;
-    --ring: 38 85% 62%;
 
     /* ─── Semantic — calibrated for dark surfaces ─────── */
-    --success: 158 55% 58%;
     --success-foreground: 224 30% 8%;
-    --warning: 22 92% 60%;
     --warning-foreground: 224 30% 8%;
-    --danger: 4 75% 65%;
     --danger-foreground: 0 0% 100%;
-    --info: 210 75% 65%;
     --info-foreground: 224 30% 8%;
-    --neutral: 220 12% 70%;
     --neutral-foreground: 224 30% 8%;
 
     /* ─── Extended palette ───────────────────────────── */

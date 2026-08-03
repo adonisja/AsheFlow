@@ -81,157 +81,26 @@ export const palette = {
 
 // ─── Semantic color maps ──────────────────────────────────────────────────────
 
-export type ThemeColors = {
-  // Surfaces
-  background:       string;
-  surface:          string;
-  surfaceMuted:     string;
-  surfaceElevated:  string;
-  card:             string;
+import type { GeneratedColors } from './generated-colors';
+import { generatedLight, generatedDark } from './generated-colors';
 
-  // Text
-  foreground:       string;
-  mutedForeground:  string;
-  subtleForeground: string;
+/**
+ * Colour is GENERATED from design/palette.json (plan §0.1) — see
+ * design/build_tokens.py. Web and mobile drifted when both were hand-written
+ * (web primary #3C64DD vs mobile #4F6BF4); one source makes that impossible.
+ *
+ * To change a colour: edit design/palette.json, run the generator, commit the
+ * output. Contrast is verified before anything is written, so a failing value
+ * cannot reach this file.
+ *
+ * Spacing, radius, type and motion below stay hand-owned — they never drifted,
+ * and the generator has no opinion about layout.
+ */
+export type ThemeColors = GeneratedColors;
 
-  // Brand
-  primary:          string;
-  primaryLight:     string;
-  primaryForeground:string;
+export const lightColors: ThemeColors = generatedLight;
 
-  // Accent
-  gold:             string;
-  goldLight:        string;
-
-  // Semantic
-  success:          string;
-  successLight:     string;
-  warning:          string;
-  warningLight:     string;
-  danger:           string;
-  dangerLight:      string;
-  info:             string;
-  infoLight:        string;
-
-  // Role palette
-  driver:           string;
-  driverLight:      string;
-  walker:           string;
-  walkerLight:      string;
-  trainer:          string;
-  trainerLight:     string;
-  trainee:          string;
-  traineeLight:     string;
-  neutral:          string;
-  neutralLight:     string;
-
-  // Structure
-  border:           string;
-  borderStrong:     string;
-  ring:             string;
-
-  // Misc
-  tabBar:           string;
-  tabBarBorder:     string;
-  skeleton:         string;
-  skeletonShimmer:  string;
-};
-
-export const lightColors: ThemeColors = {
-  background:         palette.gray50,
-  surface:            palette.white,
-  surfaceMuted:       palette.gray100,
-  surfaceElevated:    palette.white,
-  card:               palette.white,
-
-  foreground:         palette.gray900,
-  mutedForeground:    palette.gray500,
-  subtleForeground:   palette.gray400,
-
-  primary:            palette.indigo500,
-  primaryLight:       palette.indigo100,
-  primaryForeground:  palette.white,
-
-  gold:               palette.amber500,
-  goldLight:          palette.amber100,
-
-  success:            palette.green500,
-  successLight:       palette.green100,
-  warning:            palette.orange500,
-  warningLight:       palette.orange100,
-  danger:             palette.red500,
-  dangerLight:        palette.red100,
-  info:               palette.cyan500,
-  infoLight:          palette.cyan100,
-
-  driver:             palette.slate500,
-  driverLight:        palette.slate100,
-  walker:             palette.teal500,
-  walkerLight:        palette.teal100,
-  trainer:            palette.amber500,
-  trainerLight:       palette.amber100,
-  trainee:            palette.cyan500,
-  traineeLight:       palette.cyan100,
-  neutral:            palette.neutral500,
-  neutralLight:       palette.neutral100,
-
-  border:             palette.gray200,
-  borderStrong:       '#CBD5E1',
-  ring:               palette.indigo500,
-
-  tabBar:             palette.white,
-  tabBarBorder:       palette.gray200,
-  skeleton:           palette.gray100,
-  skeletonShimmer:    'rgba(255,255,255,0.7)',
-};
-
-export const darkColors: ThemeColors = {
-  background:         palette.dark50,
-  surface:            palette.dark100,
-  surfaceMuted:       palette.dark200,
-  surfaceElevated:    palette.dark300,
-  card:               palette.dark100,
-
-  foreground:         '#EDF0F8',
-  mutedForeground:    '#8892B0',
-  subtleForeground:   '#5A6480',
-
-  primary:            palette.indigo400,
-  primaryLight:       palette.indigo900,
-  primaryForeground:  palette.white,
-
-  gold:               palette.amber400,
-  goldLight:          palette.amber900,
-
-  success:            palette.green400,
-  successLight:       palette.green900,
-  warning:            palette.orange400,
-  warningLight:       palette.orange900,
-  danger:             palette.red400,
-  dangerLight:        palette.red900,
-  info:               palette.cyan400,
-  infoLight:          palette.cyan900,
-
-  driver:             palette.slate400,
-  driverLight:        palette.slate900,
-  walker:             palette.teal400,
-  walkerLight:        palette.teal900,
-  trainer:            palette.amber400,
-  trainerLight:       palette.amber900,
-  trainee:            palette.cyan400,
-  traineeLight:       palette.cyan900,
-  neutral:            palette.neutral400,
-  neutralLight:       palette.neutral900,
-
-  border:             palette.dark400,
-  borderStrong:       palette.dark500,
-  ring:               palette.indigo400,
-
-  tabBar:             palette.dark100,
-  tabBarBorder:       palette.dark400,
-  skeleton:           palette.dark200,
-  skeletonShimmer:    'rgba(255,255,255,0.04)',
-};
+export const darkColors: ThemeColors = generatedDark;
 
 // ─── Spacing ─────────────────────────────────────────────────────────────────
 
