@@ -326,10 +326,15 @@ export default function SettingsHelpDrawer({ fieldKey, onClose }: SettingsHelpDr
                   </h2>
                 </div>
                 <button
+                  type="button"
                   onClick={onClose}
-                  className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+                  // Icon-only: without a label a screen reader announces just
+                  // "button". w-11/h-11 is 44px — the WCAG 2.5.5 minimum,
+                  // which w-8 (32px) missed.
+                  aria-label="Close help"
+                  className="flex items-center justify-center w-11 h-11 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
 
