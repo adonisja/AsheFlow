@@ -175,7 +175,7 @@ export default function HomeScreen() {
         <View style={[s.hero, { backgroundColor: c.card, borderColor: c.border }]}>
           <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.8} style={s.heroAvatarWrap}>
             <View style={[s.heroAvatarRing, { borderColor: roleColor }]}>
-              <Avatar initials={initials} role={primaryRole as any ?? 'driver'} size={80} />
+              <Avatar initials={initials} name={displayName} role={primaryRole as any ?? 'driver'} size={80} />
             </View>
           </TouchableOpacity>
           <Text style={[s.heroDate, { color: c.mutedForeground }]}>{formatTodayLong()}</Text>

@@ -949,7 +949,7 @@ export default function RouteSortScreen() {
                     onPress={() => memberRoute && nav.navigate('CrewMemberDetail', { routeId: memberRoute.id, memberName: name })}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
                   >
-                    <Avatar initials={initials} color={getRoleColor(m.role as FieldRole, c)} size={40} />
+                    <Avatar initials={initials} name={name} color={getRoleColor(m.role as FieldRole, c)} size={40} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, textDecorationLine: off ? 'line-through' : 'none' }}>
                         {name}

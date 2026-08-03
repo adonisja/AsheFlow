@@ -504,6 +504,7 @@ export default function TodayAssignmentScreen() {
               >
                 <Avatar
                   initials={m.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  name={m.name}
                   color={getRoleColor(role as FieldRole, c)} size={32} />
                 <Text style={[s.memberName, m.id === myId && { color: c.primary, fontWeight: fontWeight.semibold }]}>
                   {m.name}{m.id === myId ? ' (you)' : ''}

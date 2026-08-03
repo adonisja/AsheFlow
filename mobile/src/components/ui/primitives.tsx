@@ -371,16 +371,28 @@ interface AvatarProps {
   size?: number;
   /** Override color directly (skip role lookup) */
   color?: string;
+  /**
+   * The person's name. A screen reader spells initials letter-by-letter
+   * ("D-T"), which tells the user nothing — pass the name and it announces
+   * "Driver Test, driver" instead.
+   */
+  name?: string;
 }
 
-export function Avatar({ initials, role = 'driver', size = 36, color }: AvatarProps) {
+export function Avatar({ initials, role = 'driver', size = 36, color, name }: AvatarProps) {
   const c = useColors();
   const fg  = color ?? getRoleColor(role, c);
   const bg  = color ? color + '20' : getRoleLight(role, c);
   const textFontSize = size <= 28 ? 9 : size <= 36 ? 11 : size <= 44 ? 13 : 15;
 
   return (
-    <View style={[
+    <View
+      accessibilityRole="image"
+      accessibilityLabel={name ? `${name}, ${ROLE_LABELS[role] ?? role}` : undefined}
+      // No name given: hide it entirely rather than spelling out initials.
+      accessibilityElementsHidden={!name}
+      importantForAccessibility={name ? 'yes' : 'no-hide-descendants'}
+      style={[
       styles.avatar,
       {
         width: size, height: size, borderRadius: size / 2,
@@ -515,7 +527,12 @@ export function StatCard({ label, value, icon, tone = 'primary', hint, onPress }
     return (
       <Animated.View style={{ transform: [{ scale }] }}>
         <TouchableOpacity
-          onPress={onPress}
+          onPress={() => { tick(); onPress(); }}
+          // Derived from props rather than required as a new one: a screen
+          // reader hears "Active employees, 206" instead of two loose strings.
+          accessibilityRole="button"
+          accessibilityLabel={`${label}, ${value}`}
+          accessibilityHint={hint || undefined}
           onPressIn={onPressIn}
           onPressOut={onPressOut}
           activeOpacity={1}
@@ -547,7 +564,7 @@ export function SectionHeader({ eyebrow, title, description, actions, style }: S
         {eyebrow && (
           <Text style={[styles.eyebrow, { color: c.mutedForeground }]}>{eyebrow.toUpperCase()}</Text>
         )}
-        <Text style={[styles.sectionTitle, { color: c.foreground }]}>{title}</Text>
+        <Text accessibilityRole="header" style={[styles.sectionTitle, { color: c.foreground }]}>{title}</Text>
         {description && (
           <Text style={[styles.sectionDesc, { color: c.mutedForeground }]}>{description}</Text>
         )}
@@ -582,7 +599,8 @@ export function Divider({ label, style, inset = 0 }: DividerProps) {
   const c = useColors();
   if (label) {
     return (
-      <View style={[styles.dividerRow, style]}>
+      // The LABEL is content; the rules either side are decoration.
+      <View accessibilityRole="header" style={[styles.dividerRow, style]}>
         <View style={[styles.dividerLine, { backgroundColor: c.border, marginLeft: inset }]} />
         <Text style={[styles.dividerLabel, { color: c.mutedForeground }]}>{label}</Text>
         <View style={[styles.dividerLine, { backgroundColor: c.border, marginRight: inset }]} />
@@ -611,9 +629,13 @@ interface SkeletonProps {
 
 export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: SkeletonProps) {
   const c = useColors();
+  const reduceMotion = useReduceMotion();
   const shimmer = useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
+    // A perpetual pulse is exactly what reduce-motion is for. Hold it at rest
+    // rather than looping (plan §4 rule 5).
+    if (reduceMotion) { shimmer.setValue(0); return; }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
@@ -622,12 +644,17 @@ export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: 
     );
     loop.start();
     return () => loop.stop();
-  }, [shimmer]);
+  }, [shimmer, reduceMotion]);
 
   const opacity = shimmer.interpolate({ inputRange: [0, 1], outputRange: [1, 0.45] });
 
   return (
     <Animated.View
+      // Announce that content is COMING. Without this the screen reads as an
+      // empty region and the user assumes there is nothing there.
+      accessibilityRole="progressbar"
+      accessibilityLabel="Loading"
+      accessibilityState={{ busy: true }}
       style={[
         { width, height, borderRadius: r, backgroundColor: c.skeleton, opacity },
         style,
@@ -675,7 +702,7 @@ export function EmptyState({ icon, title, message, action }: EmptyStateProps) {
   return (
     <View style={styles.emptyState}>
       {icon && <View style={styles.emptyIcon}>{icon}</View>}
-      <Text style={[styles.emptyTitle, { color: c.foreground }]}>{title}</Text>
+      <Text accessibilityRole="header" style={[styles.emptyTitle, { color: c.foreground }]}>{title}</Text>
       {message && (
         <Text style={[styles.emptyMessage, { color: c.mutedForeground }]}>{message}</Text>
       )}
@@ -700,7 +727,13 @@ export function Chip({ label, selected = false, onPress }: ChipProps) {
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        onPress={onPress}
+        onPress={() => { tick(); onPress?.(); }}
+        // A filter chip is a toggle, not a button: without accessibilityState
+        // a screen reader cannot tell an active filter from an inactive one,
+        // which is the ONLY thing the colour communicates.
+        accessibilityRole="checkbox"
+        accessibilityLabel={label}
+        accessibilityState={{ checked: selected }}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
         hitSlop={hitSlop}
