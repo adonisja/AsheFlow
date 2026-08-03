@@ -29,7 +29,7 @@ import {
 } from 'react-native';
 import { useColors, useTheme } from '@contexts/ThemeContext';
 import {
-  spacing, radius, fontSize, fontWeight, shadow, hitSlop, elevate,
+  spacing, radius, fontSize, fontWeight, shadow, hitSlop, elevate, duration, spring,
   type ElevationLevel,
   type ThemeColors, type FieldRole,
   getRoleColor, getRoleLight, ROLE_LABELS,
@@ -75,12 +75,12 @@ function usePressScale(toScale = 0.96) {
 
   const onPressIn = () => {
     if (reduceMotion) return;
-    Animated.spring(scale, { toValue: toScale, useNativeDriver: true, speed: 40, bounciness: 4 }).start();
+    Animated.spring(scale, { toValue: toScale, useNativeDriver: true, ...spring.pressIn }).start();
   };
 
   const onPressOut = () => {
     if (reduceMotion) return;
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, ...spring.pressOut }).start();
   };
 
   return { scale, onPressIn, onPressOut };
@@ -638,8 +638,8 @@ export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: 
     if (reduceMotion) { shimmer.setValue(0); return; }
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
-        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 1, duration: duration.ambient, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: duration.ambient, useNativeDriver: true }),
       ])
     );
     loop.start();

@@ -40,7 +40,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, duration, spring, layoutSpring, type ThemeColors } from '@theme/index';
 
 // LayoutAnimation is opt-in on Android (old architecture). Same guard
 // MyRouteScreen uses — harmless if another screen already set it.
@@ -86,13 +86,13 @@ function directionLabel(d: string | null, prev: string | null): string | null {
  *  own idiom is what makes a transition read as native rather than generic. */
 const FOLD_ANIM = Platform.select({
   ios: {
-    duration: 260,
+    duration: duration.normal,
     create:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-    update:  { type: LayoutAnimation.Types.spring, springDamping: 0.85 },
+    update:  { type: LayoutAnimation.Types.spring, ...layoutSpring },
     delete:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
   },
   default: {
-    duration: 200,
+    duration: duration.fast,
     create:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
     update:  { type: LayoutAnimation.Types.easeInEaseOut },
     delete:  { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
@@ -125,8 +125,7 @@ export default function CompanyStandingCard() {
     Animated.spring(chevron, {
       toValue: open ? 1 : 0,
       useNativeDriver: true,      // off the JS thread, like the rest of the app
-      speed: 20,
-      bounciness: 6,
+      ...spring.subtle,
     }).start();
   }, [chevron, reduceMotion]);
 

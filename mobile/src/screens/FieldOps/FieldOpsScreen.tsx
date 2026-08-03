@@ -46,7 +46,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
-import { spacing, radius, fontSize, fontWeight, shadow, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, shadow, duration, type ThemeColors } from '@theme/index';
 import { Button, Badge } from '@components/ui/primitives';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -869,9 +869,9 @@ export default function FieldOpsScreen() {
   const goToStep = (next: number) => {
     if (next === cursor || next < 0 || next > liveIndex) return;
     reviewingRef.current = next < liveIndex;
-    Animated.timing(fade, { toValue: 0, duration: 120, useNativeDriver: true }).start(() => {
+    Animated.timing(fade, { toValue: 0, duration: duration.fast, useNativeDriver: true }).start(() => {
       setCursor(next);
-      Animated.timing(fade, { toValue: 1, duration: 160, useNativeDriver: true }).start();
+      Animated.timing(fade, { toValue: 1, duration: duration.fast, useNativeDriver: true }).start();
     });
   };
 

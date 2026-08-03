@@ -64,6 +64,27 @@ export const radius = {
 // ─── Type scale ───────────────────────────────────────────────────────────────
 // Slightly larger than web — thumb-friendly tap targets, outdoor legibility
 
+/**
+ * Type scale (plan 1.4).
+ *
+ * These are UNSCALED point sizes. React Native multiplies them by the OS font
+ * scale automatically, and `allowFontScaling` is left at its default `true`
+ * everywhere — verified: the codebase sets it to false in zero places, so
+ * accessibility font settings already work.
+ *
+ * THE RISK IS LAYOUT, NOT TYPE. At the largest accessibility sizes text grows
+ * ~2x, and anything in a container with a fixed `height` clips silently. The
+ * rule:
+ *
+ *   height: 44      <- clips scaled text
+ *   minHeight: 44   <- grows with it
+ *
+ * Fixed `height` is correct for icons and avatars, which do not contain text
+ * (verified: 60 of the 66 width+height pairs in the app are square, i.e.
+ * icon/avatar dimensions). Reserve it for those.
+ *
+ * Not yet tested at large sizes on a device — plan §5.3.
+ */
 export const fontSize = {
   xs:   11,
   sm:   13,
@@ -177,11 +198,59 @@ export function elevate(
 
 // ─── Animation durations ──────────────────────────────────────────────────────
 
+/**
+ * Motion vocabulary (plan 1.1).
+ *
+ * `duration` existed before with three values and ZERO consumers, while six
+ * hardcoded timings and six spring values sat across three files — the same
+ * shape as `surfaceElevated` and `brand`: a token nobody reached for. The
+ * values below are the ones ACTUALLY in use, named, so adopting them is not a
+ * redesign.
+ *
+ * Spring vs timing is a real distinction, not a preference:
+ *   - `spring` for anything the finger drives (press, drag). Physical response
+ *     to a physical input.
+ *   - `timing` for state changes the user did not physically cause (fade,
+ *     shimmer). A spring there reads as a bounce nobody asked for.
+ *
+ * ALL of these must be skipped under reduce-motion — `usePressScale` and
+ * `Skeleton` do this centrally so components do not have to remember
+ * (plan §4 rule 5).
+ */
 export const duration = {
+  /** Tap feedback, cross-fades between adjacent states. */
   fast:   150,
+  /** The default for entering/leaving content. */
   normal: 220,
+  /** Larger surfaces — sheets, expanding cards. */
   slow:   350,
+  /** Looping ambient motion (skeleton shimmer). Deliberately unhurried: a
+   *  fast pulse reads as an error state rather than "loading". */
+  ambient: 900,
 } as const;
+
+/**
+ * Spring configs for React Native's Animated.spring.
+ *
+ * Higher `speed` = snappier. Higher `bounciness` = more overshoot.
+ * Press-IN is faster than press-OUT on purpose: the response to touch should
+ * feel immediate, the release more relaxed.
+ */
+export const spring = {
+  /** Finger goes down — snappy, minimal overshoot. */
+  pressIn:  { speed: 40, bounciness: 4 },
+  /** Finger lifts — softer return. */
+  pressOut: { speed: 30, bounciness: 6 },
+  /** Chevrons, disclosure indicators — visible but not springy. */
+  subtle:   { speed: 20, bounciness: 6 },
+} as const;
+
+/**
+ * LayoutAnimation damping for height/position changes.
+ * iOS gets spring physics, Android material easing — matching each platform's
+ * own idiom is what makes a transition read as native rather than generic.
+ */
+export const layoutSpring = { springDamping: 0.85 } as const;
 
 // ─── Hit slop (WCAG 2.5.5 minimum 44×44pt touch target) ─────────────────────
 
