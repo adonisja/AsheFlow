@@ -54,6 +54,13 @@ jobs:
       - name: Generated tokens are in sync
         run: python design/build_tokens.py --check
 
+      # The repo carried two conflicting identities: the real mark on the OLD
+      # indigo/amber, plus an unrelated purple lightning bolt wired into the
+      # browser tab. Generating the SVGs keeps them from drifting from the
+      # palette the way the two theme files did.
+      - name: Brand assets match the palette
+        run: python design/build_brand_assets.py --check
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
