@@ -5,7 +5,7 @@ psycopg2-binary
 pydantic[email]
 pydantic-settings==2.2.1
 pyjwt==2.13.0
-cryptography==48.0.1
+cryptography==50.0.0
 alembic
 boto3
 redis[asyncio]==5.0.1
