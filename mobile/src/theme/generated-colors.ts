@@ -19,8 +19,10 @@ export type GeneratedColors = {
   primaryStrong:     string;
   accent:            string;
   accentForeground:  string;
-  accentLight:       string;
-  accentOutdoor:     string;
+  brand:             string;
+  brandForeground:   string;
+  brandLight:        string;
+  brandOutdoor:      string;
   gold:              string;
   goldLight:         string;
   success:           string;
@@ -63,10 +65,12 @@ export const generatedLight: GeneratedColors = {
   primaryForeground: '#FFFFFF',
   primaryLight:      '#EBEDFA',
   primaryStrong:     '#121C49',
-  accent:            '#8517D3',
-  accentForeground:  '#FFFFFF',
-  accentLight:       '#F6EDFD',
-  accentOutdoor:     '#740FBD',
+  accent:            '#F0F0FF',
+  accentForeground:  '#2046B6',
+  brand:             '#8517D3',
+  brandForeground:   '#FFFFFF',
+  brandLight:        '#F6EDFD',
+  brandOutdoor:      '#740FBD',
   gold:              '#A35F00',
   goldLight:         '#FFF4E5',
   success:           '#066B4C',
@@ -109,10 +113,12 @@ export const generatedDark: GeneratedColors = {
   primaryForeground: '#0B1028',
   primaryLight:      '#1F2951',
   primaryStrong:     '#A1B2F7',
-  accent:            '#A55AE7',
-  accentForeground:  '#0B1028',
-  accentLight:       '#3F2556',
-  accentOutdoor:     '#CA97F7',
+  accent:            '#1E263E',
+  accentForeground:  '#8CA6F2',
+  brand:             '#A55AE7',
+  brandForeground:   '#0B1028',
+  brandLight:        '#3F2556',
+  brandOutdoor:      '#CA97F7',
   gold:              '#F5A524',
   goldLight:         '#594422',
   success:           '#59CFAB',

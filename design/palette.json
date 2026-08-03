@@ -45,12 +45,15 @@
     "primaryLight":      { "hsl": [229, 60, 95], "_note": "tint fill" },
     "primaryStrong":     { "hsl": [229, 60, 18], "_note": "active / press" },
 
-    "accent":            { "hsl": [275, 80, 46], "_check": { "on": "card", "min": 4.5 },
-                           "_note": "violet #8517D3 — INTERACTIVE only. 46° from navy, 46° from every status hue.",
+    "accent":            { "hsl": [243, 100, 97], "_note": "SURFACE tint — hover states, chips, muted fills. 305 usages depend on this being near-invisible. NOT the brand colour; see `brand`." },
+    "accentForeground":  { "hsl": [225, 70, 42] },
+
+    "brand":            { "hsl": [275, 80, 46], "_check": { "on": "card", "min": 4.5 },
+                           "_note": "violet #8517D3 — brand/interactive accent. 46° from navy, 46° from every status hue.",
                            "_why": "amber sat 0° from gold and 13° from warning (plan §2.4)" },
-    "accentForeground":  { "hsl": [0, 0, 100], "_check": { "on": "accent", "min": 4.5 } },
-    "accentLight":       { "hsl": [275, 80, 96] },
-    "accentOutdoor":     { "hsl": [275, 85, 40], "_check": { "on": "card", "min": 7.0 },
+    "brandForeground":  { "hsl": [0, 0, 100], "_check": { "on": "brand", "min": 4.5 } },
+    "brandLight":       { "hsl": [275, 80, 96] },
+    "brandOutdoor":     { "hsl": [275, 85, 40], "_check": { "on": "card", "min": 7.0 },
                            "_note": "#740FBD — for anything read in sunlight (plan §4 rule 2)" },
 
     "gold":              { "hsl": [35, 100, 32], "_check": { "on": "card", "min": 4.5 },
@@ -111,11 +114,14 @@
     "primaryLight":      { "hsl": [228, 45, 22] },
     "primaryStrong":     { "hsl": [228, 85, 80] },
 
-    "accent":            { "hsl": [272, 75, 63], "_check": { "on": "background", "min": 4.5 },
+    "accent":            { "hsl": [225, 35, 18], "_note": "SURFACE tint — hover states, chips, muted fills. 305 usages depend on this being near-invisible. NOT the brand colour; see `brand`." },
+    "accentForeground":  { "hsl": [225, 80, 75] },
+
+    "brand":            { "hsl": [272, 75, 63], "_check": { "on": "background", "min": 4.5 },
                            "_note": "violet #A55AE7" },
-    "accentForeground":  { "hsl": [231, 55, 10], "_check": { "on": "accent", "min": 4.5 } },
-    "accentLight":       { "hsl": [272, 40, 24] },
-    "accentOutdoor":     { "hsl": [272, 85, 78], "_check": { "on": "background", "min": 7.0 },
+    "brandForeground":  { "hsl": [231, 55, 10], "_check": { "on": "brand", "min": 4.5 } },
+    "brandLight":       { "hsl": [272, 40, 24] },
+    "brandOutdoor":     { "hsl": [272, 85, 78], "_check": { "on": "background", "min": 7.0 },
                            "_note": "lifted to clear 7:1 for sunlight reads on dark" },
 
     "gold":              { "hsl": [37, 91, 55], "_check": { "on": "card", "min": 4.5 },
@@ -177,11 +183,11 @@
       "$metric": "Perceptual distance in Lab under simulated CVD, NOT contrast ratio. Contrast is luminance-only and cannot see hue: it scores violet (#4D4DD2 under deuteranopia) against olive (#6F6F01) at 1.09:1 despite them being obviously different colours. 25 = comfortably distinguishable.",
       "min": 25,
       "pairs": [
-        ["accent", "success"],
-        ["accent", "danger"]
+        ["brand", "success"],
+        ["brand", "danger"]
       ],
       "$excluded": {
-        "accent-vs-primary-dark": [
+        "brand-vs-primary-dark": [
           "ACCEPTED 2026-08-03 at 12.9 (threshold 25), dark theme only.",
           "Light theme measures 39.3 and passes.",
           "",
@@ -208,7 +214,7 @@
         ["success", "danger"],
         ["success", "warning"],
         ["danger", "warning"],
-        ["accent", "warning"]
+        ["brand", "warning"]
       ]
     }
   }

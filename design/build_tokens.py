@@ -118,6 +118,37 @@ def build_mobile(spec: dict) -> str:
     return "\n".join(lines)
 
 
+# Tokens that already existed with established semantics before the palette was
+# generated. Redefining one of these silently repaints every consumer.
+#
+# `accent` cost us this: it was a near-white SURFACE tint used by ~305
+# hover/chip/muted-fill classes, and generating a saturated violet into it
+# turned every passive surface loud purple across the whole admin UI. The
+# contrast gate passed the entire time — the value was perfectly legible, it
+# was just the wrong role. Only looking at the app caught it.
+FROZEN_ROLES = {
+    "accent": ("surface tint", 90, 100),   # (role, min lightness light-theme, max)
+}
+
+
+def check_frozen_roles(spec: dict) -> list[str]:
+    """Guard tokens whose ROLE predates the generator."""
+    problems = []
+    for token, (role, lo, hi) in FROZEN_ROLES.items():
+        meta = spec["light"].get(token)
+        if not meta or "hsl" not in meta:
+            continue
+        light = meta["hsl"][2]
+        if not (lo <= light <= hi):
+            problems.append(
+                f"light.{token} has lightness {light}% but is a {role} — "
+                f"expected {lo}-{hi}%. Redefining it repaints every consumer. "
+                f"If the role really changed, update FROZEN_ROLES and audit the "
+                f"call sites first."
+            )
+    return problems
+
+
 def main(check_only: bool = False) -> int:
     sys.path.insert(0, str(ROOT))
     from check_contrast import check
@@ -128,6 +159,14 @@ def main(check_only: bool = False) -> int:
         return 1
 
     spec = json.loads(SPEC.read_text())
+
+    frozen = check_frozen_roles(spec)
+    if frozen:
+        print("\nTOKEN ROLE CHANGED:\n")
+        for f in frozen:
+            print(f"  {f}")
+        return 1
+
     outputs = {WEB_OUT: build_web(spec), MOBILE_OUT: build_mobile(spec)}
 
     if check_only:
