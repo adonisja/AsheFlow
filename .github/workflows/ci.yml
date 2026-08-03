@@ -130,14 +130,97 @@ jobs:
           INTERNAL_SECRET: ci-test-secret-not-real
           CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
 
-  # ── 3. DEPLOY TO STAGING ───────────────────────────────────────────────────
+  # ── 3. FRESH-DATABASE MIGRATIONS ───────────────────────────────────────────
+  # `alembic upgrade head` had NEVER worked from an empty database (ADR-248):
+  # six revisions altered or FK-referenced tables that a later revision created,
+  # which staging and prod never hit because those tables predated the
+  # migrations touching them. Only a from-scratch run walks the chain in
+  # declaration order, and nothing in CI did that — so it regressed silently for
+  # months.
+  #
+  # This job is that missing run. It gates deploys because a chain that cannot
+  # build a database from scratch blocks every new environment, CI included, and
+  # disaster recovery.
+  migrations:
+    name: Fresh-database migrations
+    runs-on: ubuntu-latest
+    needs: audit
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    services:
+      postgres:
+        # Match staging/prod. SQLite would not exercise any of this — the faults
+        # were UndefinedTable and UndefinedObject from real DDL ordering.
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: asheflow_fresh
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      # The whole point: an EMPTY database, walked in declaration order.
+      - name: alembic upgrade head (from empty)
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
+        run: alembic upgrade head
+
+      # A green migration is not a correct schema. Guarding a premature ALTER
+      # fixed the crash and left those columns absent on the fresh path, with
+      # `upgrade head` green on BOTH paths — only the model diff caught it.
+      - name: Schema matches the ORM models
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
+        run: python scripts/check_schema_matches_models.py
+
+      # A redeploy re-runs the chain against an already-migrated database. This
+      # must be a clean no-op, which is a different code path from the first run
+      # (every existence guard flips).
+      - name: Re-run is idempotent
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
+        run: alembic upgrade head
+
+      # Multiple heads make stamping fragile and are how the chain forks
+      # unnoticed (CLAUDE.md alembic rules).
+      - name: Exactly one head
+        working-directory: backend
+        run: |
+          HEADS=$(python -c "
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          print(' '.join(ScriptDirectory.from_config(Config('alembic.ini')).get_heads()))
+          ")
+          echo "heads: $HEADS"
+          [ "$(echo $HEADS | wc -w)" -eq 1 ] || { echo "ERROR: expected exactly one head"; exit 1; }
+
+
+  # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
   # Triggers on staging branch pushes only, after audit + test pass.
   # Starts the staging EC2 (stopped by default), deploys backend via SSM,
   # builds frontend with staging secrets, syncs to staging S3, invalidates CDN.
   deploy-staging:
     name: Deploy → STAGING
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, migrations]
     if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
     environment: staging
     env:
@@ -377,14 +460,14 @@ jobs:
             --distribution-id ${{ secrets.STAGING_CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
 
-  # ── 4. DEPLOY TO PROD ──────────────────────────────────────────────────────
+  # ── 5. DEPLOY TO PROD ──────────────────────────────────────────────────────
   # Triggers on master pushes only, after audit + test pass.
   # Deploys backend via SSM, builds frontend with prod secrets,
   # syncs to prod S3, invalidates CDN.
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, migrations]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
     env:
