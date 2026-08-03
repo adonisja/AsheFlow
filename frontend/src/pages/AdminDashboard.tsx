@@ -154,6 +154,8 @@ export default function AdminDashboard() {
   const roleRows = ROLE_ORDER
     .filter(r => roleGroups[r])
     .map(r => ({ role: r, count: roleGroups[r] }));
+  // Bars scale against the biggest role, not total headcount — see the chart.
+  const maxRoleCount = Math.max(1, ...roleRows.map(r => r.count));
 
   // ---------------------------------------------------------------------------
   // Confirm-all tool (temporary dev aid)
@@ -587,10 +589,22 @@ export default function AdminDashboard() {
               <div key={role} className="flex items-center justify-between">
                 <span className="text-sm capitalize text-foreground">{role}</span>
                 <div className="flex items-center gap-2">
+                  {/* Scaled to the LARGEST role, not the total headcount.
+                      Against the total, Admin (2 of 206) rendered 0.9px wide on a
+                      96px track and read as an empty bar — the contrast was fine
+                      at 11.8:1, the bar simply was not there. Relative scaling
+                      makes the comparison between roles legible, which is what
+                      the chart is for.
+                      min-width keeps any non-zero role visible: a role with one
+                      person must not look like a role with none. */}
                   <div className="w-24 h-2 rounded-full bg-accent overflow-hidden">
                     <div
                       className="h-full bg-primary rounded-full transition-all duration-500"
-                      style={{ width: `${Math.min((count / employees.length) * 100, 100)}%` }}
+                      style={{
+                        width: count > 0
+                          ? `max(6px, ${Math.min((count / maxRoleCount) * 100, 100)}%)`
+                          : '0%',
+                      }}
                     />
                   </div>
                   <span className="text-sm font-semibold text-foreground w-6 text-right">{count}</span>
