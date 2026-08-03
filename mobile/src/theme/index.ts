@@ -157,7 +157,20 @@ export const fontWeight = {
 };
 
 // ─── Shadows ─────────────────────────────────────────────────────────────────
-// Elevation levels for React Native shadow props
+// ─── Elevation ────────────────────────────────────────────────────────────────
+//
+// Two mechanisms, because they work on opposite surfaces (plan 0.6):
+//
+//   LIGHT theme — a cast shadow. Something above a white page occludes light.
+//   DARK  theme — a lighter SURFACE. A black shadow on a #0E132F background is
+//                 the background; it contributes nothing. Physical light models
+//                 break down on dark UI, so material that is "closer" is
+//                 lighter instead.
+//
+// `shadow` below is the light-theme ladder. `elevate(level, colors)` picks the
+// right mechanism for the active theme, and is what components should call —
+// reaching for `shadow.md` directly is correct only if you know the surface is
+// light.
 
 export const shadow = {
   sm: {
@@ -181,7 +194,7 @@ export const shadow = {
     shadowRadius: 20,
     elevation: 10,
   },
-  // Colored glow — pass shadowColor separately
+  // Coloured glow — pass shadowColor separately.
   glow: {
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.30,
@@ -189,6 +202,43 @@ export const shadow = {
     elevation: 8,
   },
 } as const;
+
+export type ElevationLevel = 0 | 1 | 2 | 3;
+
+/**
+ * Elevation for the ACTIVE theme.
+ *
+ *   0  flush with the page      1  card        2  raised / menu      3  modal
+ *
+ * Returns a style object to spread. On light surfaces that is a cast shadow;
+ * on dark surfaces it is a lighter background plus a hairline border, because
+ * a shadow the colour of the background is not an effect.
+ *
+ *   <View style={[s.card, elevate(1, c, isDark)]} />
+ *
+ * `isDark` is passed rather than inferred so this stays a pure function — the
+ * caller already has it from useColors()/useTheme().
+ */
+export function elevate(
+  level: ElevationLevel,
+  colors: { card: string; surfaceElevated: string; border: string; borderStrong: string },
+  isDark: boolean,
+) {
+  if (level === 0) return {};
+
+  if (isDark) {
+    // Lightness carries the depth. The steps are deliberately small (~1.06:1
+    // between rungs): elevation should read as the same material lifted, not
+    // as a different component.
+    return {
+      backgroundColor: level >= 2 ? colors.surfaceElevated : colors.card,
+      borderWidth: 1,
+      borderColor: level >= 3 ? colors.borderStrong : colors.border,
+    };
+  }
+
+  return level === 1 ? shadow.sm : level === 2 ? shadow.md : shadow.lg;
+}
 
 // ─── Animation durations ──────────────────────────────────────────────────────
 
