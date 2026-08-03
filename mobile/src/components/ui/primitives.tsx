@@ -5,8 +5,17 @@
  * Key differences from web:
  *  - No CSS classes — StyleSheet.create() only
  *  - Animated.Value for press feedback (spring, not CSS transition)
- *  - All touch targets ≥ 44pt (WCAG 2.5.5)
+ *  - All touch targets ≥ 44pt (WCAG 2.5.5), enforced by MIN_TARGET below —
+ *    this was previously claimed here but not true: Button size="sm" was 36pt
+ *    and IconButton defaulted to 40pt.
  *  - Vibrant/saturated palette for outdoor legibility
+ *
+ * ACCESSIBILITY IS PART OF THE API, not an optional prop (plan §4 rule 4).
+ * Interactive primitives REQUIRE an accessibilityLabel when their content is
+ * not plain text, and set accessibilityRole/State themselves so a screen
+ * reader gets them without the caller remembering. Measured before this
+ * change: 0 of 16 primitives had any a11y prop, which is where the app's 5%
+ * coverage comes from.
  *
  * Import pattern:
  *   import { Button, Badge, Card, Avatar, StatCard } from '@components/ui/primitives';
@@ -15,34 +24,79 @@
 import React, { useRef } from 'react';
 import {
   View, Text, TouchableOpacity, Animated,
-  StyleSheet, ActivityIndicator,
+  StyleSheet, ActivityIndicator, AccessibilityInfo, Platform, Vibration,
   type ViewStyle, type TextStyle, type StyleProp,
 } from 'react-native';
-import { useColors } from '@contexts/ThemeContext';
+import { useColors, useTheme } from '@contexts/ThemeContext';
 import {
-  spacing, radius, fontSize, fontWeight, shadow, hitSlop,
+  spacing, radius, fontSize, fontWeight, shadow, hitSlop, elevate,
+  type ElevationLevel,
   type ThemeColors, type FieldRole,
   getRoleColor, getRoleLight, ROLE_LABELS,
 } from '@theme/index';
+
+/** WCAG 2.5.5. Nothing interactive may be smaller than this. */
+export const MIN_TARGET = 44;
+
+/**
+ * Does the OS want motion suppressed?
+ *
+ * Read once here rather than per-component so no primitive has to remember —
+ * an animation that ignores this setting is a bug, not a flourish (plan §4
+ * rule 5).
+ */
+function useReduceMotion() {
+  const [reduce, setReduce] = React.useState(false);
+  React.useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled().then(v => { if (alive) setReduce(v); });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduce);
+    return () => { alive = false; sub?.remove?.(); };
+  }, []);
+  return reduce;
+}
+
+/**
+ * A short tick on commit. Android only: iOS needs Haptics from a native module
+ * we do not depend on, and Vibration there is a blunt buzz that users dislike.
+ * Silence is the correct degradation — this is confirmation, never the signal
+ * itself.
+ */
+function tick() {
+  if (Platform.OS === 'android') Vibration.vibrate(10);
+}
 
 // ─── Press animation hook ─────────────────────────────────────────────────────
 // Spring-backed scale on press — mirrors web --ease-spring on transform
 
 function usePressScale(toScale = 0.96) {
   const scale = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useReduceMotion();
 
-  const onPressIn = () =>
+  const onPressIn = () => {
+    if (reduceMotion) return;
     Animated.spring(scale, { toValue: toScale, useNativeDriver: true, speed: 40, bounciness: 4 }).start();
+  };
 
-  const onPressOut = () =>
+  const onPressOut = () => {
+    if (reduceMotion) return;
     Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
+  };
 
   return { scale, onPressIn, onPressOut };
 }
 
 // ─── Button ───────────────────────────────────────────────────────────────────
 
-type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'success' | 'ghost' | 'outline';
+/**
+ * `primary` is the BRAND violet — the interactive colour (plan §4.0).
+ * `structural` is the navy, for the rare button that is page furniture rather
+ * than an action. Navy at 13:1 is a text/heading colour; using it for every
+ * button made the UI read as uniformly heavy.
+ */
+type ButtonVariant =
+  | 'primary' | 'structural' | 'secondary'
+  | 'danger' | 'success' | 'ghost' | 'outline';
 type ButtonSize    = 'sm' | 'md' | 'lg';
 
 interface ButtonProps {
@@ -54,45 +108,59 @@ interface ButtonProps {
   disabled?: boolean;
   fullWidth?: boolean;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Required when `children` is not plain text — an icon-only or composed
+   * button is unlabelled to a screen reader otherwise.
+   */
+  accessibilityLabel?: string;
+  /** What happens on activation, when that is not obvious from the label. */
+  accessibilityHint?: string;
 }
 
 export function Button({
   onPress, children, variant = 'primary', size = 'md',
   loading = false, disabled = false, fullWidth = false, style,
+  accessibilityLabel, accessibilityHint,
 }: ButtonProps) {
   const c = useColors();
   const { scale, onPressIn, onPressOut } = usePressScale();
 
   const bgColor: Record<ButtonVariant, string> = {
-    primary:   c.primary,
-    secondary: c.surfaceMuted,
-    danger:    c.danger,
-    success:   c.success,
-    ghost:     'transparent',
-    outline:   'transparent',
+    primary:    c.brand,
+    structural: c.primary,
+    secondary:  c.surfaceMuted,
+    danger:     c.danger,
+    success:    c.success,
+    ghost:      'transparent',
+    outline:    'transparent',
   };
 
+  // Foregrounds come from the token layer. `danger`/`success` were hardcoded
+  // '#fff', which is a token bypass and would not follow a palette change.
   const textColor: Record<ButtonVariant, string> = {
-    primary:   c.primaryForeground,
-    secondary: c.foreground,
-    danger:    '#fff',
-    success:   '#fff',
-    ghost:     c.primary,
-    outline:   c.primary,
+    primary:    c.brandForeground,
+    structural: c.primaryForeground,
+    secondary:  c.foreground,
+    danger:     c.primaryForeground,
+    success:    c.primaryForeground,
+    ghost:      c.brand,
+    outline:    c.brand,
   };
 
   const borderColor: Record<ButtonVariant, string | undefined> = {
-    primary:   undefined,
-    secondary: c.border,
-    danger:    undefined,
-    success:   undefined,
-    ghost:     undefined,
-    outline:   c.primary,
+    primary:    undefined,
+    structural: undefined,
+    secondary:  c.border,
+    danger:     undefined,
+    success:    undefined,
+    ghost:      undefined,
+    outline:    c.brand,
   };
 
   const sizePad: Record<ButtonSize, { paddingVertical: number; paddingHorizontal: number; minHeight: number }> = {
-    sm: { paddingVertical: 8,  paddingHorizontal: 14, minHeight: 36 },
-    md: { paddingVertical: 12, paddingHorizontal: 20, minHeight: 44 },
+    // 44 is the floor, not a target — WCAG 2.5.5. `sm` was 36pt.
+    sm: { paddingVertical: 8,  paddingHorizontal: 14, minHeight: MIN_TARGET },
+    md: { paddingVertical: 12, paddingHorizontal: 20, minHeight: MIN_TARGET },
     lg: { paddingVertical: 16, paddingHorizontal: 28, minHeight: 52 },
   };
 
@@ -102,14 +170,22 @@ export function Button({
     lg: fontSize.md,
   };
 
-  const glowShadow = (variant === 'primary' || variant === 'danger' || variant === 'success')
+  const glowShadow = (variant === 'primary' || variant === 'structural'
+                      || variant === 'danger' || variant === 'success')
     ? { ...shadow.glow, shadowColor: bgColor[variant] }
     : {};
 
   return (
     <Animated.View style={[{ transform: [{ scale }] }, fullWidth && { width: '100%' }]}>
       <TouchableOpacity
-        onPress={onPress}
+        onPress={() => { tick(); onPress(); }}
+        // Set by the component, not left to the caller — this is what makes
+        // the button announce itself at all.
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel
+          ?? (typeof children === 'string' ? children : undefined)}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={{ disabled: disabled || loading, busy: loading }}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
         disabled={disabled || loading}
@@ -131,8 +207,7 @@ export function Button({
         {loading ? (
           <ActivityIndicator
             size="small"
-            color={variant === 'secondary' || variant === 'ghost' || variant === 'outline'
-              ? c.primary : '#fff'}
+            color={textColor[variant]}
           />
         ) : (
           <Text style={[styles.btnText, { color: textColor[variant], fontSize: textSize[size] }]}>
@@ -154,10 +229,17 @@ interface IconButtonProps {
   size?: number;
   color?: string;
   style?: StyleProp<ViewStyle>;
+  /**
+   * REQUIRED — an icon has no text for a screen reader to fall back on, so
+   * without this the control is announced as an unlabelled button.
+   */
+  accessibilityLabel: string;
+  accessibilityHint?: string;
 }
 
 export function IconButton({
-  onPress, children, badge, variant = 'default', size = 40, color, style,
+  onPress, children, badge, variant = 'default', size = MIN_TARGET, color, style,
+  accessibilityLabel, accessibilityHint,
 }: IconButtonProps) {
   const c = useColors();
   const { scale, onPressIn, onPressOut } = usePressScale(0.92);
@@ -171,7 +253,12 @@ export function IconButton({
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        onPress={onPress}
+        onPress={() => { tick(); onPress(); }}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={accessibilityHint}
+        // A badge is a visible count that a screen reader would otherwise miss.
+        accessibilityValue={badge ? { text: `${badge}` } : undefined}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
         hitSlop={hitSlop}
@@ -190,7 +277,9 @@ export function IconButton({
         {children}
         {badge != null && badge > 0 && (
           <View style={[styles.iconBadge, { backgroundColor: c.danger }]}>
-            <Text style={styles.iconBadgeText}>{badge > 9 ? '9+' : badge}</Text>
+            <Text style={[styles.iconBadgeText, { color: c.dangerLight }]}>
+              {badge > 9 ? '9+' : badge}
+            </Text>
           </View>
         )}
       </TouchableOpacity>
@@ -317,15 +406,28 @@ interface CardProps {
   style?: StyleProp<ViewStyle>;
   /** Accent bar on left edge (pass a hex color) */
   accent?: string;
+  /** 0 flush · 1 card · 2 raised · 3 modal. See elevate() in the theme. */
+  elevation?: ElevationLevel;
+  /** Required when `pressable` — a tappable card is a button to a screen reader. */
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }
 
-export function Card({ children, padding = 16, pressable = false, onPress, style, accent }: CardProps) {
+export function Card({
+  children, padding = 16, pressable = false, onPress, style, accent,
+  elevation = 1, accessibilityLabel, accessibilityHint,
+}: CardProps) {
   const c = useColors();
+  const { isDark } = useTheme();
   const { scale, onPressIn, onPressOut } = usePressScale(0.985);
 
   const cardStyle = [
     styles.card,
     { backgroundColor: c.card, borderColor: c.border, padding },
+    // elevate() picks the mechanism for the active theme: a cast shadow on
+    // light surfaces, a lighter surface + border on dark, where a black shadow
+    // is the background and reads as nothing (plan 0.6).
+    elevate(elevation, c, isDark),
     accent && { borderLeftWidth: 3, borderLeftColor: accent },
     style,
   ];
@@ -334,7 +436,12 @@ export function Card({ children, padding = 16, pressable = false, onPress, style
     return (
       <Animated.View style={{ transform: [{ scale }] }}>
         <TouchableOpacity
-          onPress={onPress}
+          onPress={() => { tick(); onPress(); }}
+          // A pressable card IS a button to a screen reader. Without this it
+          // is announced as inert text and the interaction is invisible.
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel}
+          accessibilityHint={accessibilityHint}
           onPressIn={onPressIn}
           onPressOut={onPressOut}
           activeOpacity={1}
@@ -655,7 +762,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   iconBadgeText: {
-    color: '#fff',
+    // Colour comes from the theme at the usage site — StyleSheet.create is
+    // static and cannot reach useColors().
     fontSize: 9,
     fontWeight: fontWeight.bold,
   },
