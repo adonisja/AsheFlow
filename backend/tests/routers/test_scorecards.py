@@ -236,3 +236,32 @@ class TestUnplannedExcludedFromCrossCheck:
         """If is_unplanned is ever renamed, the filter above must move with it."""
         from app.models.delivery_stop import DeliveryStop
         assert "is_unplanned" in DeliveryStop.__table__.columns
+
+
+class TestUnplannedPolicyDiffersByConsumer:
+    """The two `packages_delivered` consumers must NOT be made consistent.
+
+    cross_check compares against AMAZON'S manifest -> exclude unplanned, or we
+    manufacture a discrepancy against ourselves.
+    _package_totals measures OUR throughput -> include them, or we understate
+    work a walker actually did.
+
+    Pinned because "these two queries disagree" reads like a bug, and making
+    them agree silently breaks whichever one gets changed.
+    """
+
+    def test_cross_check_excludes_unplanned(self):
+        import inspect
+        from app.routers import scorecards as sc
+        block = inspect.getsource(sc.cross_check_scorecard).split("delivered = db.query(")[1]
+        assert "is_unplanned" in block.split(".scalar()")[0]
+
+    def test_dashboard_totals_include_unplanned(self):
+        import inspect
+        from app.services import dashboard_summaries as ds
+        src = inspect.getsource(ds._package_totals)
+        assert "is_unplanned" not in src, (
+            "_package_totals now filters unplanned stops — if that was "
+            "deliberate, update the docstring and this test; it measures our "
+            "own throughput, where a found-and-delivered package counts"
+        )

@@ -189,6 +189,19 @@ def _package_totals(db: Session, company_id: UUID, start: date, end: date) -> di
 
     DeliveryStop.completed_at is a timestamp, so the upper bound is exclusive
     on end+1 day. All 7 DeliveryStop columns used here were verified present.
+
+    Unplanned stops (ADR-246 field-added packages) are deliberately INCLUDED
+    here, unlike in cross_check_scorecard which must exclude them. The two ask
+    different questions:
+
+      * the cross-check compares us against AMAZON'S manifest, so a package
+        Amazon never manifested would manufacture a discrepancy against
+        ourselves;
+      * this measures OUR OWN throughput, and a walker who delivered a package
+        they found really did deliver it — excluding it understates real work.
+
+    Both packages_total and packages_delivered count it, so the completion
+    ratio stays honest. Do not "fix" this to match the scorecard.
     """
     win_start, win_end = _ts_window(db, company_id, start, end)
     row = (
