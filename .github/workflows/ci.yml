@@ -147,6 +147,28 @@ jobs:
     needs: audit
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # alembic/env.py imports app.core.config, which instantiates Settings() at
+      # module load — so every step here needs the full config, not just a
+      # DATABASE_URL. The first CI run failed on exactly this: four required
+      # fields with no defaults (aws_region, the two cognito ids, and
+      # credential_encryption_key). It passed locally only because the dev
+      # container already had them exported.
+      #
+      # Job-level rather than per-step: all four steps run alembic and need the
+      # identical config.
+      #
+      # These are placeholders. This job never authenticates and never encrypts
+      # anything — it builds a schema and throws it away — so the real secret is
+      # deliberately NOT used, keeping it out of a job that does not need it.
+      APP_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
+      AWS_REGION: us-east-1
+      AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+      AWS_COGNITO_APP_CLIENT_ID: test-client-id
+      INTERNAL_SECRET: ci-migrations-not-real
+      # Valid Fernet key shape (32 url-safe base64 bytes) so anything that
+      # constructs a Fernet at import does not choke on a malformed value.
+      CREDENTIAL_ENCRYPTION_KEY: dGVzdC1rZXktZm9yLWNpLW1pZ3JhdGlvbnMtb25seS0xMg=
     services:
       postgres:
         # Match staging/prod. SQLite would not exercise any of this — the faults
@@ -177,8 +199,6 @@ jobs:
       # The whole point: an EMPTY database, walked in declaration order.
       - name: alembic upgrade head (from empty)
         working-directory: backend
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
         run: alembic upgrade head
 
       # A green migration is not a correct schema. Guarding a premature ALTER
@@ -186,8 +206,6 @@ jobs:
       # `upgrade head` green on BOTH paths — only the model diff caught it.
       - name: Schema matches the ORM models
         working-directory: backend
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
         run: python scripts/check_schema_matches_models.py
 
       # A redeploy re-runs the chain against an already-migrated database. This
@@ -195,8 +213,6 @@ jobs:
       # (every existence guard flips).
       - name: Re-run is idempotent
         working-directory: backend
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
         run: alembic upgrade head
 
       # Multiple heads make stamping fragile and are how the chain forks
