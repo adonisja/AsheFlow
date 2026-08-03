@@ -61,6 +61,14 @@ jobs:
       - name: Brand assets match the palette
         run: python design/build_brand_assets.py --check
 
+      # Fails on NEW raw colour literals only. ~390 already exist (plan §2.6),
+      # so the baseline is per-file and ratchets DOWN during the Phase 4 sweep —
+      # the count can never grow. A literal does not follow a palette change and
+      # is invisible to the contrast gate above, which is exactly how a 2.82:1
+      # button label shipped.
+      - name: No new raw colour literals
+        run: python design/check_colour_literals.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
