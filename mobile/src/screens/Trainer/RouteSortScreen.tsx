@@ -741,7 +741,7 @@ export default function RouteSortScreen() {
               <Text style={s.cardSub}>{zonePkgs} packages zoned to this truck by station sort.</Text>
               <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={commitSort} disabled={committing}>
                 {committing
-                  ? <ActivityIndicator color="#fff" />
+                  ? <ActivityIndicator color={c.primaryForeground} />
                   : <Text style={s.primaryBtnText}>Commit Sort — build routes</Text>}
               </TouchableOpacity>
             </>
@@ -765,7 +765,7 @@ export default function RouteSortScreen() {
           {unassigned.length > 0 && (
             <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={propose} disabled={proposing}>
               {proposing
-                ? <ActivityIndicator color="#fff" />
+                ? <ActivityIndicator color={c.primaryForeground} />
                 : <Text style={s.primaryBtnText}>⚡ Distribute Wave ({unassigned.length} route{unassigned.length === 1 ? '' : 's'} waiting)</Text>}
             </TouchableOpacity>
           )}
@@ -1444,7 +1444,11 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   misrouteRow:{ borderRadius: radius.md, borderWidth: 1, padding: spacing.md, marginTop: spacing.sm },
   cardSub:    { fontSize: fontSize.sm, color: c.mutedForeground, marginTop: 2, marginBottom: spacing.sm },
   primaryBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
-  primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  // `primaryForeground`, not '#fff'. On dark theme `primary` is a LIGHT navy
+  // (#7E95F1), so white text measures 2.82:1 — a WCAG failure on the button
+  // that commits the sort. The token is 6.66:1 and follows the theme.
+  // Found on device 2026-08-04.
+  primaryBtnText: { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   summaryRow: { flexDirection: 'row', marginBottom: spacing.sm },
 
   sectionLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground, letterSpacing: 0.8, marginBottom: spacing.xs, marginTop: spacing.xs },
