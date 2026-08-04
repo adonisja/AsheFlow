@@ -284,7 +284,7 @@ function ReadOnlyTaskRow({ task, c, debt, last }: { task: Task; c: ThemeColors; 
         ? { backgroundColor: c.success, borderColor: c.success }
         : { borderColor: debt ? c.danger : c.border }
       ]}>
-        {task.is_completed && <Text style={gs.checkMark}>✓</Text>}
+        {task.is_completed && <Text style={[gs.checkMark, { color: c.primaryForeground }]}>✓</Text>}
       </View>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -341,7 +341,7 @@ const s = (c: ThemeColors) => StyleSheet.create({
   starRow:       { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: spacing.sm },
   star:          { fontSize: 26 },
   starSubmit:    { marginLeft: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.full },
-  starSubmitText:{ color: '#fff', fontSize: fontSize.xs, fontWeight: fontWeight.bold },
+  starSubmitText:{ color: c.primaryForeground, fontSize: fontSize.xs, fontWeight: fontWeight.bold },
   continueBtn:   { borderWidth: 1.5, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center', marginTop: spacing.xs },
   continueBtnText:{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });

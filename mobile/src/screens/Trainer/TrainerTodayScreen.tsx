@@ -280,7 +280,7 @@ export default function TrainerTodayScreen() {
                 onPress={() => respondContinuation(req, 'accept')}
                 disabled={continuationBusy === req.id}
               >
-                <Text style={{ color: '#fff', fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Accept</Text>
+                <Text style={{ color: c.primaryForeground, fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Accept</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 1 }}
@@ -528,8 +528,8 @@ function TaskRow({ task, done, completing, onToggle, c, debt, last, readOnly }: 
         disabled={readOnly}
       >
         {completing
-          ? <ActivityIndicator size="small" color={done ? '#fff' : c.mutedForeground} />
-          : done ? <Text style={gs.checkMark}>✓</Text> : null
+          ? <ActivityIndicator size="small" color={done ? c.primaryForeground : c.mutedForeground} />
+          : done ? <Text style={[gs.checkMark, { color: c.primaryForeground }]}>✓</Text> : null
         }
       </TouchableOpacity>
       <View style={{ flex: 1 }}>
@@ -624,7 +624,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   existingNoteText:  { fontSize: fontSize.sm, lineHeight: 20 },
   textArea:      { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.sm, minHeight: 96, marginBottom: spacing.sm },
   btn:           { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.lg },
-  btnText:       { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:       { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   handoffCard:   { borderRadius: radius.lg, borderWidth: 1.5, padding: spacing.md, marginTop: spacing.sm, marginBottom: spacing.lg },
   handoffHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },

@@ -239,7 +239,7 @@ function Segmented<T extends string | boolean>({ options, value, onChange, tone,
               justifyContent: 'center', paddingVertical: spacing.sm,
               backgroundColor: sel ? fill : 'transparent', borderColor: sel ? fill : c.border }}>
             <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold,
-              color: sel ? '#fff' : c.mutedForeground }}>{o.label}</Text>
+              color: sel ? c.primaryForeground : c.mutedForeground }}>{o.label}</Text>
           </TouchableOpacity>
         );
       })}
@@ -340,7 +340,7 @@ function CompletedRow({ num, title, summary, c }: {
       paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, marginBottom: spacing.xs }}>
       <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: c.success,
         alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <Text style={{ color: '#fff', fontSize: 10, fontWeight: fontWeight.bold }}>✓</Text>
+        <Text style={{ color: c.primaryForeground, fontSize: 10, fontWeight: fontWeight.bold }}>✓</Text>
       </View>
       <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, flex: 1 }} numberOfLines={1}>
         <Text style={{ fontWeight: fontWeight.semibold, color: c.foreground }}>{title}</Text>
@@ -422,7 +422,7 @@ function TimePickerModal({ visible, initial, onConfirm, onCancel, c }: {
             </TouchableOpacity>
             <TouchableOpacity onPress={() => onConfirm(hour, minute)} style={{ flex: 1, padding: spacing.sm,
               borderRadius: radius.md, backgroundColor: c.primary, alignItems: 'center' }}>
-              <Text style={{ fontSize: fontSize.sm, color: '#fff', fontWeight: fontWeight.semibold }}>Set</Text>
+              <Text style={{ fontSize: fontSize.sm, color: c.primaryForeground, fontWeight: fontWeight.semibold }}>Set</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -491,7 +491,7 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
                     backgroundColor: val === pass ? (pass ? c.success : c.danger) : 'transparent',
                     borderColor: val === pass ? (pass ? c.success : c.danger) : c.border }}>
                   <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold,
-                    color: val === pass ? '#fff' : c.mutedForeground }}>{pass ? 'Pass' : 'Fail'}</Text>
+                    color: val === pass ? c.primaryForeground : c.mutedForeground }}>{pass ? 'Pass' : 'Fail'}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1128,7 +1128,7 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
               opacity: acting === 'declining' ? 0.3 : 1 }}>
             {acting === 'confirming'
               ? <ActivityIndicator size="small" color="#fff" />
-              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: '#fff' }}>✓  Confirm Attendance</Text>}
+              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.primaryForeground }}>✓  Confirm Attendance</Text>}
           </TouchableOpacity>
         </View>
 
@@ -1301,7 +1301,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
                 borderColor: missing[item] ? c.danger : c.border,
                 backgroundColor: missing[item] ? c.danger : 'transparent',
                 alignItems: 'center', justifyContent: 'center' }}>
-                {missing[item] && <Text style={{ color: '#fff', fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
+                {missing[item] && <Text style={{ color: c.primaryForeground, fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
               </View>
               <Text style={{ fontSize: fontSize.sm, color: c.foreground }}>{STAGING_LABELS[item]}</Text>
             </TouchableOpacity>
@@ -1491,8 +1491,8 @@ function ToteRow({ tote: t, toggling, disabled, onPress, c }: {
         backgroundColor: t.checked ? c.success : 'transparent',
         alignItems: 'center', justifyContent: 'center' }}>
         {toggling
-          ? <ActivityIndicator size="small" color={t.checked ? '#fff' : c.primary} />
-          : t.checked ? <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>✓</Text> : null}
+          ? <ActivityIndicator size="small" color={t.checked ? c.primaryForeground : c.primary} />
+          : t.checked ? <Text style={{ color: c.primaryForeground, fontSize: 14, fontWeight: '700' }}>✓</Text> : null}
       </View>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
@@ -1570,7 +1570,7 @@ function StepWalkerHandoffs({ summary, onDone, c }: { summary: RTSSummary; onDon
                     paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}>
                   {confirmingId === r.route_id
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: '#fff' }}>Confirm</Text>}
+                    : <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primaryForeground }}>Confirm</Text>}
                 </TouchableOpacity>
               </View>
             )}
@@ -2117,7 +2117,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
                     borderColor: selected ? c.warning : c.border,
                     backgroundColor: selected ? c.warning : 'transparent',
                     alignItems: 'center', justifyContent: 'center', marginRight: spacing.md }}>
-                    {selected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
+                    {selected && <Text style={{ color: c.primaryForeground, fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground }}>{m.name}</Text>
@@ -2136,7 +2136,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
                 style={{ flex: 2, padding: spacing.md, borderRadius: radius.md,
                   backgroundColor: leftEarly.size === leftCount ? c.primary : c.border, alignItems: 'center' }}>
                 <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold,
-                  color: leftEarly.size === leftCount ? '#fff' : c.mutedForeground }}>
+                  color: leftEarly.size === leftCount ? c.primaryForeground : c.mutedForeground }}>
                   Confirm & Submit
                 </Text>
               </TouchableOpacity>

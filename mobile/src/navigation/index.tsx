@@ -217,7 +217,11 @@ const tabBarStyles = (c: ThemeColors) => StyleSheet.create({
   tabActive:   {},
   icon:        { fontSize: 20, marginBottom: 2 },
   iconActive:  {},
-  label:       { fontSize: 10, color: '#9CA3AF', fontWeight: '500' },
+  // `mutedForeground`, not a fixed grey. #9CA3AF measured 2.54:1 on the LIGHT
+  // tab bar — every inactive label in the app's primary navigation, below the
+  // 4.5 floor. A fixed grey cannot serve both themes: it was picked against the
+  // dark bar (6.75:1) and never rechecked against white. 5.27 / 8.04 now.
+  label:       { fontSize: 10, color: c.mutedForeground, fontWeight: '500' },
   labelActive: { color: c.primary, fontWeight: '600' },
   indicator:   {
     position: 'absolute', top: 0,

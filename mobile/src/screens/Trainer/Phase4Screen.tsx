@@ -196,7 +196,7 @@ function ObsRow({ task, observed, onToggle, c }: {
       activeOpacity={0.7}
     >
       <View style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: observed ? c.success : c.border, backgroundColor: observed ? c.success : 'transparent', alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
-        {observed && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+        {observed && <Text style={{ color: c.primaryForeground, fontSize: 12, fontWeight: '700' }}>✓</Text>}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium }}>{task.topic}</Text>

@@ -236,7 +236,7 @@ export default function AccountSettingsScreen() {
                 >
                   {emailBusy
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[s.editBtnText, { color: '#fff' }]}>Send Code</Text>}
+                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Send Code</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -272,7 +272,7 @@ export default function AccountSettingsScreen() {
                 >
                   {emailBusy
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[s.editBtnText, { color: '#fff' }]}>Confirm</Text>}
+                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Confirm</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -365,7 +365,7 @@ export default function AccountSettingsScreen() {
                 >
                   {pwBusy
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[s.editBtnText, { color: '#fff' }]}>Update Password</Text>}
+                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Update Password</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -390,7 +390,7 @@ export default function AccountSettingsScreen() {
                   onPress={() => pickTheme(opt)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[s.themeSegmentText, { color: active ? '#fff' : c.mutedForeground }]}>
+                  <Text style={[s.themeSegmentText, { color: active ? c.primaryForeground : c.mutedForeground }]}>
                     {label}
                   </Text>
                 </TouchableOpacity>

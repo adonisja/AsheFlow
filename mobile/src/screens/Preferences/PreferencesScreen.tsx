@@ -355,7 +355,7 @@ export default function PreferencesScreen() {
                   style={[s.filterChip, filterType === t && { backgroundColor: t === 'fav' ? c.success : c.danger, borderColor: t === 'fav' ? c.success : c.danger }]}
                   onPress={() => setFilterType(t)}
                 >
-                  <Text style={[s.filterChipText, filterType === t && { color: '#fff' }]}>
+                  <Text style={[s.filterChipText, filterType === t && { color: c.primaryForeground }]}>
                     {t === 'fav' ? '★ Favorites' : '⊘ Blocked'}
                   </Text>
                 </TouchableOpacity>
@@ -570,7 +570,7 @@ export default function PreferencesScreen() {
                   style={[s.filterChip, addType === t && { backgroundColor: t === 'fav' ? c.success : c.danger, borderColor: t === 'fav' ? c.success : c.danger }]}
                   onPress={() => setAddType(t)}
                 >
-                  <Text style={[s.filterChipText, addType === t && { color: '#fff' }]}>
+                  <Text style={[s.filterChipText, addType === t && { color: c.primaryForeground }]}>
                     {t === 'fav' ? '★ Fav' : '⊘ Block'}
                   </Text>
                 </TouchableOpacity>
@@ -642,7 +642,7 @@ export default function PreferencesScreen() {
                 onPress={submitReassign}
                 disabled={reassigning}
               >
-                {reassigning ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                {reassigning ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: c.primaryForeground }]}>Submit</Text>}
               </TouchableOpacity>
             </View>
           </View>

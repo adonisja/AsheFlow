@@ -11,6 +11,11 @@ import { Linking } from 'react-native';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
 import { getValidIdToken, touchLastActive, clearTokens } from '../api/tokenRefresh';
+import { generatedLight } from '@theme/generated-colors';
+
+/** OAuth hosted-UI chrome. Theme-constant on purpose — see usage below. */
+const OAUTH_BAR    = generatedLight.brandSurface;
+const OAUTH_BAR_FG = generatedLight.brandSurfaceForeground;
 
 const USER_POOL_ID    = COGNITO_USER_POOL_ID ?? '';
 const CLIENT_ID       = COGNITO_CLIENT_ID ?? '';
@@ -111,15 +116,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await InAppBrowser.openAuth(authUrl, REDIRECT_URI, {
       // iOS
       dismissButtonStyle: 'cancel',
-      preferredBarTintColor: '#5B21B6',
-      preferredControlTintColor: '#ffffff',
+      // `brandSurface` is theme-CONSTANT by design: the OAuth browser is a
+        // separate process that cannot follow an in-app theme change mid-flow,
+        // and it is the same navy as the sign-in hero. Was '#5B21B6' — a third
+        // violet matching neither `brand` nor `primary`.
+        preferredBarTintColor: OAUTH_BAR,
+      preferredControlTintColor: OAUTH_BAR_FG,
       readerMode: false,
       animated: true,
       modalEnabled: true,
       enableBarCollapsing: false,
       // Android
       showTitle: false,
-      toolbarColor: '#5B21B6',
+      toolbarColor: OAUTH_BAR,
       secondaryToolbarColor: 'black',
       navigationBarColor: 'black',
       navigationBarDividerColor: 'white',

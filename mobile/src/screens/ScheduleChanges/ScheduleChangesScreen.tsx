@@ -200,7 +200,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
                   onPress={() => toggleDay(day)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[s.dayChipText, active && { color: '#fff' }]}>{day.slice(0, 3)}</Text>
+                  <Text style={[s.dayChipText, active && { color: c.primaryForeground }]}>{day.slice(0, 3)}</Text>
                 </TouchableOpacity>
               );
             })}

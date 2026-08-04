@@ -163,7 +163,7 @@ export default function LocationProfilesScreen() {
               returnKeyType="search"
             />
             <TouchableOpacity onPress={handleSearch} style={[s.searchBtn, { backgroundColor: c.primary }]}>
-              <Text style={{ color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>Search</Text>
+              <Text style={{ color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>Search</Text>
             </TouchableOpacity>
           </View>
 

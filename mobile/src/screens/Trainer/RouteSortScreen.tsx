@@ -1214,7 +1214,7 @@ export default function RouteSortScreen() {
                 <TouchableOpacity style={[ms.sendBtn, { backgroundColor: c.primary }]} onPress={sendWave} disabled={sending}>
                   {sending
                     ? <ActivityIndicator color={c.primaryForeground} size="small" />
-                    : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Send Wave</Text>}
+                    : <Text style={{ color: c.primaryForeground, fontWeight: '700', fontSize: 13 }}>Send Wave</Text>}
                 </TouchableOpacity>
               </View>
             </View>

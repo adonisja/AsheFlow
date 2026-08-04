@@ -280,7 +280,7 @@ function GearCard({ item, meta, selected, size, onToggle, onSizeChange, c, s }: 
       {/* Selection badge */}
       {selected && (
         <View style={[s.selectedBadge, { backgroundColor: meta.color }]}>
-          <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>✓</Text>
+          <Text style={{ color: c.primaryForeground, fontSize: 10, fontWeight: '800' }}>✓</Text>
         </View>
       )}
 

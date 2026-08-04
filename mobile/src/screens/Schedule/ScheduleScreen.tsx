@@ -268,13 +268,13 @@ export default function ScheduleScreen() {
 
                 if (isSelected && isToday) {
                   circleStyle = { backgroundColor: c.primary };
-                  textColor   = '#fff';
+                  textColor   = c.primaryForeground;
                 } else if (isSelected) {
                   circleStyle = { backgroundColor: c.primary + '22', borderWidth: 1.5, borderColor: c.primary };
                   textColor   = c.primary;
                 } else if (isToday) {
                   circleStyle = { backgroundColor: c.primary };
-                  textColor   = '#fff';
+                  textColor   = c.primaryForeground;
                 } else if (isPtoApp || isOff) {
                   circleStyle = { borderWidth: 1, borderColor: c.danger + '60', backgroundColor: c.danger + '12' };
                   textColor   = c.danger;
@@ -380,7 +380,7 @@ export default function ScheduleScreen() {
               >
                 {ptoSubmitting
                   ? <ActivityIndicator color={c.primaryForeground} />
-                  : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                  : <Text style={[s.modalBtnText, { color: c.primaryForeground }]}>Submit</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -402,7 +402,7 @@ export default function ScheduleScreen() {
                     style={[s.chip, scrType === t && { backgroundColor: c.primary, borderColor: c.primary }]}
                     onPress={() => setScrType(t)}
                   >
-                    <Text style={[s.chipText, { color: scrType === t ? '#fff' : c.foreground }]}>{SCR_TYPE_LABELS[t]}</Text>
+                    <Text style={[s.chipText, { color: scrType === t ? c.primaryForeground : c.foreground }]}>{SCR_TYPE_LABELS[t]}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -435,7 +435,7 @@ export default function ScheduleScreen() {
                   style={[s.modalBtn, { backgroundColor: c.primary, borderColor: c.primary, opacity: scrSubmitting ? 0.6 : 1 }]}
                   onPress={submitSCR} disabled={scrSubmitting}
                 >
-                  {scrSubmitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                  {scrSubmitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: c.primaryForeground }]}>Submit</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -552,7 +552,7 @@ function DayPicker({ selected, onToggle, c }: { selected: string[]; onToggle: (d
             style={{ paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.full, borderWidth: 1, borderColor: on ? c.primary : c.border, backgroundColor: on ? c.primary : c.card }}
             onPress={() => onToggle(day)}
           >
-            <Text style={{ fontSize: fontSize.xs, color: on ? '#fff' : c.foreground, fontWeight: on ? fontWeight.semibold : fontWeight.regular }}>
+            <Text style={{ fontSize: fontSize.xs, color: on ? c.primaryForeground : c.foreground, fontWeight: on ? fontWeight.semibold : fontWeight.regular }}>
               {day.slice(0, 3)}
             </Text>
           </TouchableOpacity>

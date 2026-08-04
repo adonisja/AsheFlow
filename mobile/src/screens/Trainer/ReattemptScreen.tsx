@@ -320,7 +320,7 @@ export default function ReattemptScreen() {
                 >
                   {assigning
                     ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Assign</Text>}
+                    : <Text style={{ color: c.primaryForeground, fontWeight: '700', fontSize: 13 }}>Assign</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -400,7 +400,7 @@ function BundleCard({ bundle, c, s, onAssign }: {
           style={{ backgroundColor: c.primary, borderRadius: radius.md, paddingHorizontal: spacing.sm + 4, paddingVertical: spacing.sm, alignSelf: 'flex-start' }}
           onPress={onAssign}
         >
-          <Text style={{ color: '#fff', fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Assign</Text>
+          <Text style={{ color: c.primaryForeground, fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Assign</Text>
         </TouchableOpacity>
       </View>
     </View>

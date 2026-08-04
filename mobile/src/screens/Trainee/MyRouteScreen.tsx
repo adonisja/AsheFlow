@@ -517,7 +517,7 @@ function BuildingProfileModal({ stop, c, onClose }: {
             <TouchableOpacity style={[ms.submitBtn, { backgroundColor: c.primary }]} onPress={submit} disabled={submitting}>
               {submitting
                 ? <ActivityIndicator color={c.primaryForeground} size="small" />
-                : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Submit</Text>}
+                : <Text style={{ color: c.primaryForeground, fontWeight: '700', fontSize: 13 }}>Submit</Text>}
             </TouchableOpacity>
           </View>
         </View>
@@ -633,7 +633,7 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
           >
             {completing
               ? <ActivityIndicator color={c.primaryForeground} size="small" />
-              : <Text style={cs.completeBtnText}>✓ Delivered — Complete Stop</Text>}
+              : <Text style={[cs.completeBtnText, { color: c.primaryForeground }]}>✓ Delivered — Complete Stop</Text>}
           </TouchableOpacity>
           {/* Only offer the report when no verified profile exists yet */}
           {!stop.building_type && (
@@ -738,7 +738,7 @@ function FlagModal({ target, c, onClose, onSubmitRts, onSubmitMissing }: {
             <TouchableOpacity style={[ms.submitBtn, { backgroundColor: kind === 'missing' ? c.warning : c.danger }]} onPress={submit} disabled={submitting}>
               {submitting
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                : <Text style={{ color: c.primaryForeground, fontWeight: '700', fontSize: 13 }}>
                     {kind === 'missing' ? 'Report Missing' : 'Flag RTS'}
                   </Text>}
             </TouchableOpacity>

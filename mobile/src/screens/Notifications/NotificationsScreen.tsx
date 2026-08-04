@@ -368,7 +368,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
                   }]}>
                   {acting === 'confirming'
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[ms.btnText, { color: '#fff' }]}>Confirm Attendance</Text>
+                    : <Text style={[ms.btnText, { color: c.primaryForeground }]}>Confirm Attendance</Text>
                   }
                 </TouchableOpacity>
               </View>

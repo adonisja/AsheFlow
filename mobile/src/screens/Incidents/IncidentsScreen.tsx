@@ -163,7 +163,7 @@ export default function IncidentsScreen() {
                   style={[s.chip, category === cat && { backgroundColor: c.primary, borderColor: c.primary }]}
                   onPress={() => setCategory(cat)}
                 >
-                  <Text style={[s.chipText, category === cat && { color: '#fff' }]}>{CATEGORY_LABELS[cat]}</Text>
+                  <Text style={[s.chipText, category === cat && { color: c.primaryForeground }]}>{CATEGORY_LABELS[cat]}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -194,7 +194,7 @@ export default function IncidentsScreen() {
                       style={[s.boolBtn, medAttn === val && { backgroundColor: c.primary, borderColor: c.primary }]}
                       onPress={() => setMedAttn(val)}
                     >
-                      <Text style={[s.boolText, medAttn === val && { color: '#fff' }]}>{val ? 'Yes' : 'No'}</Text>
+                      <Text style={[s.boolText, medAttn === val && { color: c.primaryForeground }]}>{val ? 'Yes' : 'No'}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>

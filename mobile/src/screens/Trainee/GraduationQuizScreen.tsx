@@ -279,7 +279,7 @@ function QuestionBlock({
             activeOpacity={0.7}
           >
             <View style={[s.checkBox, { borderColor: selected ? c.primary : c.border, backgroundColor: selected ? c.primary : 'transparent' }]}>
-              {selected && <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>✓</Text>}
+              {selected && <Text style={{ color: c.primaryForeground, fontSize: 11, fontWeight: '700' }}>✓</Text>}
             </View>
             <Text style={[s.choiceText, { color: c.foreground }]}>{choice}</Text>
           </TouchableOpacity>
