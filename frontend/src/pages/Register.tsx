@@ -31,11 +31,23 @@ function toE164Phone(formatted: string): string {
   return digits.length === 10 ? `+1${digits}` : formatted;
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  driver:  'bg-sky-100 text-sky-700',
-  trainee: 'bg-amber-100 text-amber-700',
-  walker:  'bg-emerald-100 text-emerald-700',
-  trainer: 'bg-violet-100 text-violet-700',
+/**
+ * Role chip colours, from the generated token layer (ADR-253).
+ *
+ * These were raw Tailwind literals (`bg-amber-100`) that mapped trainee->amber
+ * and trainer->violet — the exact INVERSE of the token palette, so a trainer
+ * saw violet while registering and amber everywhere after signing in. Inline
+ * `hsl(var(--token))` matches `components/ui/Avatar.tsx`, which is the pattern
+ * the rest of the app's role colouring already uses.
+ *
+ * The role name renders as text inside the chip, so colour is never the sole
+ * carrier of meaning — see the usage rule on `getRoleColor` in mobile theme.
+ */
+const ROLE_COLORS: Record<string, { background: string; color: string }> = {
+  driver:  { background: 'hsl(var(--driver) / 0.15)',  color: 'hsl(var(--driver))'  },
+  walker:  { background: 'hsl(var(--walker) / 0.15)',  color: 'hsl(var(--walker))'  },
+  trainer: { background: 'hsl(var(--trainer) / 0.15)', color: 'hsl(var(--trainer))' },
+  trainee: { background: 'hsl(var(--trainee) / 0.15)', color: 'hsl(var(--trainee))' },
 };
 
 export default function Register() {
@@ -196,7 +208,8 @@ export default function Register() {
   }
 
   // ── Shared layout wrapper ─────────────────────────────────────────────────
-  const roleColorClass = ROLE_COLORS[tokenInfo!.role] ?? 'bg-accent text-foreground';
+  const roleChipStyle = ROLE_COLORS[tokenInfo!.role]
+    ?? { background: 'hsl(var(--neutral) / 0.15)', color: 'hsl(var(--neutral))' };
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center px-4 py-12">
@@ -232,7 +245,10 @@ export default function Register() {
                 { label: 'Name',  value: tokenInfo!.name },
                 { label: 'Email', value: tokenInfo!.email },
                 { label: 'Role',  value: (
-                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${roleColorClass}`}>
+                  <span
+                    className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold capitalize"
+                    style={roleChipStyle}
+                  >
                     {tokenInfo!.role}
                   </span>
                 )},

@@ -262,6 +262,25 @@ export const hitSlop = {
 
 export type FieldRole = 'driver' | 'walker' | 'trainer' | 'trainee' | 'admin' | 'management' | 'dispatch';
 
+/**
+ * Role colours deliberately reuse status/brand values (ADR-253). They are NOT
+ * free to re-hue: the palette has no room left. Measured 2026-08-03 — with
+ * five statuses, brand, primary and the focus ring already placed, the only
+ * values clearing every reserved token under deuteranopic and protanopic
+ * vision are a near-black maroon, two indistinguishable indigos, and
+ * highlighter yellow. `trainer` sits 4.8 Lab from `danger` even after moving
+ * it off `gold`, so warm-band role colour is ambiguous no matter what value
+ * it takes.
+ *
+ * The constraint that keeps this safe is therefore about USE, not value:
+ *
+ *   Role colour must never be the ONLY carrier of meaning, and must never
+ *   appear as a status on the same surface as a role.
+ *
+ * Every call site pairs it with a text label or a role initial. Enforced for
+ * palette values by `design/check_contrast.py` (ALLOWED_ALIASES documents each
+ * deliberate alias); enforced for usage by review of this rule.
+ */
 export function getRoleColor(role: FieldRole, colors: ThemeColors): string {
   switch (role) {
     case 'driver':     return colors.driver;

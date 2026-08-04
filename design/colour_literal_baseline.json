@@ -10,7 +10,7 @@
     "",
     "Do not hand-edit. Run --baseline after genuinely removing literals."
   ],
-  "total": 289,
+  "total": 282,
   "files": {
     "frontend/src/components/CrewStatusPanel.tsx": 13,
     "frontend/src/components/MyPerformanceCard.tsx": 6,
@@ -24,7 +24,7 @@
     "frontend/src/pages/FieldOps.tsx": 1,
     "frontend/src/pages/FieldPackages.tsx": 21,
     "frontend/src/pages/Preferences.tsx": 1,
-    "frontend/src/pages/Register.tsx": 8,
+    "frontend/src/pages/Register.tsx": 1,
     "frontend/src/pages/ReturnsManifestPrint.tsx": 5,
     "frontend/src/pages/ScorecardEntry.tsx": 8,
     "frontend/src/pages/TrainingCurriculum.tsx": 2,

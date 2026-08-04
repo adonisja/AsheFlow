@@ -88,7 +88,10 @@
 
     "border":            { "hsl": [220, 16, 88] },
     "borderStrong":      { "hsl": [220, 14, 76] },
-    "ring":              { "hsl": [275, 80, 46] },
+    "ring":              { "hsl": [185, 75, 36],
+                           "_was": [275, 80, 46],
+                           "_note": "cyan #1795A1 — dedicated focus indicator, used for NOTHING else. Was byte-identical to brand AND trainee, so on a trainee's screen a focused control was the same colour as role chrome. Focus must never be ambiguous (WCAG 2.4.11). Lab distance >=31 from every role, status and brand token under normal, deuteranopic and protanopic vision.",
+                           "_check": { "on": "background", "min": 3.0 } },
 
     "tabBar":            { "hsl": [0, 0, 100] },
     "tabBarBorder":      { "hsl": [220, 16, 88] },
@@ -155,7 +158,10 @@
 
     "border":            { "hsl": [231, 25, 26] },
     "borderStrong":      { "hsl": [231, 20, 38] },
-    "ring":              { "hsl": [272, 75, 63] },
+    "ring":              { "hsl": [195, 90, 78],
+                           "_was": [272, 75, 63],
+                           "_note": "cyan #94E0F9 — dedicated focus indicator, used for NOTHING else. See light theme. Lab distance >=29 from every role, status and brand token under normal, deuteranopic and protanopic vision.",
+                           "_check": { "on": "background", "min": 3.0 } },
 
     "tabBar":            { "hsl": [231, 40, 14] },
     "tabBarBorder":      { "hsl": [231, 25, 26] },
