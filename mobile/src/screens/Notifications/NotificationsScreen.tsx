@@ -685,7 +685,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   headerRight:     { width: 64, alignItems: 'flex-end' },
   pageTitle:       { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: c.foreground, letterSpacing: -0.3 },
   unreadBadge:     { minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  unreadBadgeText: { color: '#fff', fontSize: 11, fontWeight: fontWeight.bold },
+  unreadBadgeText: { color: c.primaryForeground, fontSize: 11, fontWeight: fontWeight.bold },
   markAllText:     { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   center:          { flex: 1, justifyContent: 'center', alignItems: 'center' },
 

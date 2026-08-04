@@ -642,7 +642,7 @@ export default function PreferencesScreen() {
                 onPress={submitReassign}
                 disabled={reassigning}
               >
-                {reassigning ? <ActivityIndicator color="#fff" /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                {reassigning ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -668,7 +668,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   filterChip:     { paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.full, borderWidth: 1, borderColor: c.border, backgroundColor: c.card },
   filterChipText: { fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium },
   addBtn:         { marginLeft: 'auto', borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2 },
-  addBtnText:     { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  addBtnText:     { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   hint:           { fontSize: fontSize.xs, marginBottom: spacing.sm },
   relCard:        { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.sm },
   roleTag:        { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
@@ -679,7 +679,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   emptyCard:      { backgroundColor: c.surfaceMuted, borderRadius: radius.lg, padding: spacing.xl, alignItems: 'center', marginTop: spacing.sm },
   emptyText:      { fontSize: fontSize.base, color: c.mutedForeground },
   primaryBtn:     { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.md },
-  primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  primaryBtnText: { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   statusBadge:    { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
   statusText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   // Performance

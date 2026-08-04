@@ -170,7 +170,7 @@ export default function Phase4Screen() {
         onPress={doPreview}
         disabled={previewing}
       >
-        {previewing ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Preview Score</Text>}
+        {previewing ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Preview Score</Text>}
       </TouchableOpacity>
 
       {preview && (
@@ -179,7 +179,7 @@ export default function Phase4Screen() {
           onPress={doSubmit}
           disabled={submitting}
         >
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Submit Final Record</Text>}
+          {submitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Submit Final Record</Text>}
         </TouchableOpacity>
       )}
     </ScreenShell>
@@ -215,7 +215,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   previewMeta:  { fontSize: fontSize.sm, color: '#666', marginTop: 4 },
   previewFailed:{ fontSize: fontSize.xs, marginTop: 4 },
   btn:          { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
-  btnText:      { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:      { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   resultCard:   { borderWidth: 1.5, borderRadius: radius.xl, padding: spacing.xl, alignItems: 'center', marginTop: spacing.xl },
   resultTitle:  { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, marginBottom: spacing.sm },
   resultMsg:    { fontSize: fontSize.base, textAlign: 'center', lineHeight: 24, color: '#555' },

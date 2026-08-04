@@ -468,7 +468,10 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   notifPreview:  { fontSize: fontSize.xs },
 
   unreadBadge: { paddingHorizontal: spacing.sm, height: 20, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center' },
-  unreadText:  { color: '#fff', fontSize: 10, fontWeight: fontWeight.bold },
+  // `primaryForeground`, not '#fff': this sits on `c.danger`, which is a LIGHT
+  // red in dark theme — white measures 3.12:1 there. The token is 6.01:1 and
+  // tracks the theme. Same class as the Commit Sort button (ADR-255).
+  unreadText:  { color: c.primaryForeground, fontSize: 10, fontWeight: fontWeight.bold },
 
   chevron: { fontSize: 22, paddingLeft: spacing.xs },
 });

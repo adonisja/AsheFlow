@@ -467,7 +467,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   // Review buttons
   reviewBtns:        { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   reviewBtn:         { flex: 1, paddingVertical: spacing.xs + 2, borderRadius: radius.md, alignItems: 'center' },
-  reviewBtnText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: '#fff' },
+  reviewBtnText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.primaryForeground },
 
   // Empty
   emptyText:         { fontSize: fontSize.sm, color: c.mutedForeground, textAlign: 'center', paddingVertical: spacing.md },

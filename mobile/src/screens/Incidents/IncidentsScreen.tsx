@@ -233,7 +233,7 @@ export default function IncidentsScreen() {
               onPress={submitIncident}
               disabled={submitting}
             >
-              {submitting ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Submit Report</Text>}
+              {submitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Submit Report</Text>}
             </TouchableOpacity>
           </>
         ) : (
@@ -294,7 +294,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   boolText:      { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground },
   textArea:      { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.sm, minHeight: 110, marginBottom: spacing.md },
   btn:           { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.lg },
-  btnText:       { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:       { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   incCard:       { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm },
   incHeader:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   sevDot:        { width: 8, height: 8, borderRadius: 4 },

@@ -136,6 +136,23 @@ def failures_for(path: pathlib.Path) -> list[tuple]:
                        src[:m.start()].count("\n") + 1)
             break   # the first text style inside is the label
 
+    # 1b. Inline fill: style={[s.badge, { backgroundColor: c.danger }]} with the
+    # label's colour living in a separate style. The fill is not in the
+    # StyleSheet at all, so pass 1 cannot see it — this is how a 3.12:1 unread
+    # badge survived the first version of this gate.
+    for m in re.finditer(
+        r"style=\{\[([^\]]*?)\{[^}]*?backgroundColor:\s*c\.(\w+)[^}]*\}\s*\]", src
+    ):
+        refs = re.findall(r"s\.(\w+)", m.group(1))
+        bg_token = m.group(2)
+        chunk = src[m.end():m.end() + 400]
+        for tm in re.finditer(r"style=\{\[?\s*s\.(\w+)", chunk):
+            child = styles.get(tm.group(1)) or {}
+            if (fg := child.get("fg_hex")) and is_white(fg):
+                record(refs[0] if refs else f"inline:{bg_token}", bg_token, fg,
+                       src[:m.start()].count("\n") + 1)
+            break
+
     # 2. Sibling names: Xbtn + XText / XBtnText
     for name, entry in styles.items():
         if "bg_token" not in entry:

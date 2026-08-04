@@ -316,5 +316,5 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   choiceText:    { fontSize: fontSize.sm, flex: 1 },
 
   submitBtn:     { borderRadius: radius.md, padding: spacing.md, alignItems: 'center', marginTop: spacing.sm },
-  submitBtnText: { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  submitBtnText: { color: c.primaryForeground, fontSize: fontSize.base, fontWeight: fontWeight.bold },
 });

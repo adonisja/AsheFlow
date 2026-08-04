@@ -176,7 +176,7 @@ export default function TraineeHistoryScreen() {
                       disabled={rv.submitting}
                     >
                       {rv.submitting
-                        ? <ActivityIndicator color="#fff" />
+                        ? <ActivityIndicator color={c.primaryForeground} />
                         : <Text style={s.btnText}>Submit Review</Text>
                       }
                     </TouchableOpacity>
@@ -221,7 +221,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   starBtn:    { fontSize: 28 },
   textArea:   { borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, fontSize: fontSize.sm, minHeight: 70 },
   btn:        { borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' },
-  btnText:    { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:    { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   emptyCard:  { backgroundColor: c.surfaceMuted, borderRadius: radius.lg, padding: spacing.xl, alignItems: 'center' },
   emptyText:  { fontSize: fontSize.base, color: c.mutedForeground },
 });

@@ -379,7 +379,7 @@ export default function ScheduleScreen() {
                 onPress={submitPTO} disabled={ptoSubmitting}
               >
                 {ptoSubmitting
-                  ? <ActivityIndicator color="#fff" />
+                  ? <ActivityIndicator color={c.primaryForeground} />
                   : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
               </TouchableOpacity>
             </View>
@@ -435,7 +435,7 @@ export default function ScheduleScreen() {
                   style={[s.modalBtn, { backgroundColor: c.primary, borderColor: c.primary, opacity: scrSubmitting ? 0.6 : 1 }]}
                   onPress={submitSCR} disabled={scrSubmitting}
                 >
-                  {scrSubmitting ? <ActivityIndicator color="#fff" /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                  {scrSubmitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -631,7 +631,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   emptyCard:   { backgroundColor: c.surfaceMuted, borderRadius: radius.lg, padding: spacing.xl, alignItems: 'center', marginBottom: spacing.sm },
   emptyText:   { fontSize: fontSize.sm, color: c.mutedForeground },
   newBtn:      { borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center', marginBottom: spacing.md },
-  newBtnText:  { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  newBtnText:  { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalCard:    { width: '85%', borderRadius: radius.xl, padding: spacing.lg, gap: spacing.sm },

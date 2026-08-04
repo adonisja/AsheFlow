@@ -217,7 +217,7 @@ export default function GearRequestsScreen() {
       {cartCount > 0 && (
         <TouchableOpacity style={[s.submitBtn, { backgroundColor: c.primary }]} onPress={submit} disabled={submitting}>
           {submitting
-            ? <ActivityIndicator color="#fff" />
+            ? <ActivityIndicator color={c.primaryForeground} />
             : <Text style={s.submitBtnText}>Submit Order · {cartCount} item{cartCount === 1 ? '' : 's'}</Text>}
         </TouchableOpacity>
       )}
@@ -355,7 +355,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   // Submit
   submitBtn:       { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.md },
-  submitBtnText:   { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  submitBtnText:   { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
   // Orders
   orderCard:       { borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, marginBottom: spacing.sm },

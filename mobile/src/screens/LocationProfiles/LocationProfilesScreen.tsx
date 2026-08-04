@@ -327,5 +327,5 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   protocolBox:  { borderWidth: 1, borderRadius: radius.sm, padding: spacing.sm },
   protocolHint: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   submitBtn:    { borderRadius: radius.md, padding: spacing.md, alignItems: 'center' },
-  submitBtnText:{ color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  submitBtnText:{ color: c.primaryForeground, fontSize: fontSize.base, fontWeight: fontWeight.bold },
 });

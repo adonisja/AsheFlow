@@ -310,17 +310,17 @@ export default function MyRouteScreen() {
 
           {route.status === 'assigned' && (
             <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={() => patchStatus('in_progress')} disabled={acting}>
-              {acting ? <ActivityIndicator color="#fff" /> : <Text style={s.primaryBtnText}>Start Route</Text>}
+              {acting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.primaryBtnText}>Start Route</Text>}
             </TouchableOpacity>
           )}
           {allDelivered && (
             <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.success }]} onPress={() => patchStatus('completed')} disabled={acting}>
-              {acting ? <ActivityIndicator color="#fff" /> : <Text style={s.primaryBtnText}>✓ All delivered — Complete Route</Text>}
+              {acting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.primaryBtnText}>✓ All delivered — Complete Route</Text>}
             </TouchableOpacity>
           )}
           {route.status === 'completed' && !route.returned_at && (
             <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={backAtTruck} disabled={acting}>
-              {acting ? <ActivityIndicator color="#fff" /> : <Text style={s.primaryBtnText}>🚚 Back at Truck</Text>}
+              {acting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.primaryBtnText}>🚚 Back at Truck</Text>}
             </TouchableOpacity>
           )}
           {route.returned_at && (
@@ -516,7 +516,7 @@ function BuildingProfileModal({ stop, c, onClose }: {
             </TouchableOpacity>
             <TouchableOpacity style={[ms.submitBtn, { backgroundColor: c.primary }]} onPress={submit} disabled={submitting}>
               {submitting
-                ? <ActivityIndicator color="#fff" size="small" />
+                ? <ActivityIndicator color={c.primaryForeground} size="small" />
                 : <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Submit</Text>}
             </TouchableOpacity>
           </View>
@@ -632,7 +632,7 @@ function StopCard({ stop, featured, completing, started, onStart, onComplete, on
             disabled={completing}
           >
             {completing
-              ? <ActivityIndicator color="#fff" size="small" />
+              ? <ActivityIndicator color={c.primaryForeground} size="small" />
               : <Text style={cs.completeBtnText}>✓ Delivered — Complete Stop</Text>}
           </TouchableOpacity>
           {/* Only offer the report when no verified profile exists yet */}
@@ -806,7 +806,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   effortChip: { paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full },
   effortChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   primaryBtn: { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
-  primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  primaryBtnText: { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   doneBanner: { borderRadius: radius.md, padding: spacing.sm, alignItems: 'center' },
   doneBannerText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textAlign: 'center' },
   helpBtn:    { borderWidth: 1.5, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center', marginTop: spacing.sm },
