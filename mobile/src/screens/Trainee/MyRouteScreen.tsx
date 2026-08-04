@@ -1,12 +1,12 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-  Alert, Modal, TextInput, ScrollView, LayoutAnimation, Platform, UIManager,
+  Alert, Modal, TextInput, ScrollView, LayoutAnimation,
 } from 'react-native';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// The old-architecture LayoutAnimation opt-in was removed here: it is a no-op
+// under the New Architecture and logged a warning on every launch. See
+// hooks/useLayoutTransition.ts for the full reasoning.
 import { useFocusEffect } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
 import RouteStopsList, { type RouteStop } from '@components/route/RouteStopsList';

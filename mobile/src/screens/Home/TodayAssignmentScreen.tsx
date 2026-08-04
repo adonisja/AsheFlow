@@ -443,10 +443,11 @@ export default function TodayAssignmentScreen() {
                 </Button>
               </View>
               <View style={{ flex: 1 }}>
-                {/* `secondary`, not `outline`: outline is brand violet, which read
-                    as the promoted choice sitting beside the green confirm. A
-                    decline must be visually subordinate to the action we want. */}
-                <Button variant="secondary" fullWidth
+                {/* `danger`, not `outline`: outline is brand violet, which read as
+                    the promoted choice beside the green confirm. `secondary` fixed
+                    the hierarchy but made a real action a driver needs too quiet.
+                    Red is honest about the negative path and stays findable. */}
+                <Button variant="danger" fullWidth
                   loading={responding === 'declined'} disabled={responding !== null}
                   onPress={() => respond('declined')}>
                   Can't make it

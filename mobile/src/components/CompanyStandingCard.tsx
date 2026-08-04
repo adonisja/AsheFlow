@@ -27,15 +27,15 @@
  *
  * `LayoutAnimation` rather than Reanimated: the app has no Reanimated
  * dependency and adding a native module + Babel plugin for one height change is
- * not worth it. LayoutAnimation runs on the native thread, and MyRouteScreen
- * already established the Android-flag idiom this follows. Motion is tuned per
+ * not worth it. LayoutAnimation runs on the native thread and works under the
+ * New Architecture via `configureNextLayoutAnimation`. Motion is tuned per
  * platform — iOS springs, Android eases — and skipped entirely when the user
- * has asked for reduced motion.
+ * has asked for reduced motion, all inside `useLayoutTransition`.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo, ActivityIndicator, Animated, LayoutAnimation, Platform,
-  StyleSheet, Text, TouchableOpacity, UIManager, Vibration, View,
+  StyleSheet, Text, TouchableOpacity, Vibration, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '@api/client';
@@ -43,11 +43,9 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, spring, type ThemeColors } from '@theme/index';
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
 
-// LayoutAnimation is opt-in on Android (old architecture). Same guard
-// MyRouteScreen uses — harmless if another screen already set it.
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// The old-architecture LayoutAnimation opt-in was removed here: it is a no-op
+// under the New Architecture and logged a warning on every launch. See
+// hooks/useLayoutTransition.ts for the full reasoning.
 
 const SEEN_KEY = 'asheflow.companyStanding.seenWeek';
 const FOLD_KEY = 'asheflow.companyStanding.folded';

@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-  Alert, Modal, ScrollView, LayoutAnimation, Platform, UIManager,
+  Alert, Modal, ScrollView, LayoutAnimation,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import ScreenShell from '@components/ui/ScreenShell';
@@ -14,9 +14,9 @@ import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, 
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
 import { Badge, Button, Avatar } from '@components/ui/primitives';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// The old-architecture LayoutAnimation opt-in was removed here: it is a no-op
+// under the New Architecture and logged a warning on every launch. See
+// hooks/useLayoutTransition.ts for the full reasoning.
 
 /** AP Sort — mobile-first (drivers and trainers run this AT the anchor point).
  *

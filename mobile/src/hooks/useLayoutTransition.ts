@@ -36,14 +36,21 @@
  * which is the correct behaviour, not a degraded one.
  */
 import { useCallback, useEffect, useRef } from 'react';
-import { AccessibilityInfo, LayoutAnimation, Platform, UIManager } from 'react-native';
+import { AccessibilityInfo, LayoutAnimation, Platform } from 'react-native';
 import { duration, layoutSpring } from '@theme/index';
 
-// LayoutAnimation is opt-in on Android's old architecture. Harmless if another
-// module already enabled it.
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// NO `UIManager.setLayoutAnimationEnabledExperimental(true)` here.
+//
+// That call was the old-architecture opt-in. This app runs the New
+// Architecture (`newArchEnabled=true`, and the runtime reports `fabric:true`),
+// where BridgelessUIManager makes it a no-op and logs a warning for every
+// module that calls it — four of them, on every launch.
+//
+// LayoutAnimation itself still works: `configureNext` has a Fabric branch
+// (`nativeFabricUIManager.configureNextLayoutAnimation`), and whether it runs
+// is governed by the `isLayoutAnimationEnabled` feature flag, not by this
+// call. Verified on an Android emulator — the fold animates with the call
+// removed.
 
 /**
  * iOS springs, Android eases. Matching each platform's own idiom is what makes
