@@ -228,6 +228,17 @@ export default function AnchorPointsScreen() {
                 ? 'Dispatch has not published today\'s crew list yet. Check back after dispatch runs.'
                 : 'Confirm your attendance in Field Ops first. This page unlocks once your assignment is confirmed.'}
             </Text>
+            {/* An empty state that names where to go should take you there. The
+                crew-list case has nowhere to send you — waiting on dispatch is
+                the only action — so the button appears only when there is one.
+                Matches the `Go to Crew Roster` idiom in FieldOpsScreen. */}
+            {crewPublished && (
+              <View style={s.lockedAction}>
+                <Button variant="outline" size="sm" onPress={() => switchTab('FieldOps')}>
+                  Go to Field Ops
+                </Button>
+              </View>
+            )}
           </View>
         </View>
       ) : (
@@ -512,6 +523,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   lockedIcon:      { fontSize: 40 },
   lockedTitle:     { fontSize: fontSize.lg, fontWeight: fontWeight.bold, textAlign: 'center' },
   lockedBody:      { fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
+  lockedAction:    { marginTop: spacing.md, alignSelf: 'stretch' },
   actionRow:       { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
   activeCard:      { borderWidth: 2, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, backgroundColor: c.card },
   activeCardHeader:{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.xs },
