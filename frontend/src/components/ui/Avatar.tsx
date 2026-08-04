@@ -2,7 +2,7 @@ import React from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 
 /**
- * Field roles read from the generated role tokens (ADR-253) rather than from
+ * Field roles read from the generated role tokens (ADR-254) rather than from
  * `--slate`/`--teal`/`--warning`, which disagreed with both the token palette
  * and `pages/Register.tsx` — three systems, three different answers for what
  * colour a trainee is. `--trainee` was previously mapped to `--warning`, so a

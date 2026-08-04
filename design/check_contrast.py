@@ -139,7 +139,7 @@ def theme_hexes(theme: dict) -> dict[str, str]:
 # Contrast and provenance checks cannot see this: a role token aliasing a status
 # token is perfectly legible and perfectly wrong.
 #
-# Found on device 2026-08-03 (ADR-253): every role token was an exact alias of a
+# Found on device 2026-08-03 (ADR-254): every role token was an exact alias of a
 # status or brand token, so a Trainer's whole screen rendered amber (== `gold`)
 # and a Driver's rendered blue (== `info`). Amber then meant both "your role"
 # and "warning" on the same screen. All four colour gates passed.
@@ -166,7 +166,7 @@ ALLOWED_ALIASES: dict[frozenset[str], str] = {
         "same way, so the ambiguity is not misleading.",
     frozenset({"trainer", "gold"}):
         "Trainer amber == gold. This is the collision that made a Trainer's "
-        "whole Home screen render amber (found on device, ADR-253). Re-huing "
+        "whole Home screen render amber (found on device, ADR-254). Re-huing "
         "was measured and rejected: with five statuses, brand, primary and ring "
         "already placed, `trainer` lands 4.8 Lab from `danger` even AFTER "
         "moving off gold, so warm-band role colour is ambiguous at any value. "

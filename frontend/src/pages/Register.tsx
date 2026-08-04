@@ -32,7 +32,7 @@ function toE164Phone(formatted: string): string {
 }
 
 /**
- * Role chip colours, from the generated token layer (ADR-253).
+ * Role chip colours, from the generated token layer (ADR-254).
  *
  * These were raw Tailwind literals (`bg-amber-100`) that mapped trainee->amber
  * and trainer->violet — the exact INVERSE of the token palette, so a trainer

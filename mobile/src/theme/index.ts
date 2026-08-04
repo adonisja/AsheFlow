@@ -263,7 +263,7 @@ export const hitSlop = {
 export type FieldRole = 'driver' | 'walker' | 'trainer' | 'trainee' | 'admin' | 'management' | 'dispatch';
 
 /**
- * Role colours deliberately reuse status/brand values (ADR-253). They are NOT
+ * Role colours deliberately reuse status/brand values (ADR-254). They are NOT
  * free to re-hue: the palette has no room left. Measured 2026-08-03 — with
  * five statuses, brand, primary and the focus ring already placed, the only
  * values clearing every reserved token under deuteranopic and protanopic
