@@ -442,7 +442,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   // Submit
   submitBtn:         { backgroundColor: c.primary, borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.xs },
   submitBtnDisabled: { opacity: 0.5 },
-  submitBtnText:     { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  // `primaryForeground`, not '#fff' — 2.82:1 on dark `primary` (ADR-255).
+  submitBtnText:     { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   hintText:          { fontSize: fontSize.xs, textAlign: 'center', marginBottom: spacing.md },
   errorText:         { fontSize: fontSize.xs, color: c.danger, marginBottom: spacing.sm },
 

@@ -69,6 +69,13 @@ jobs:
       - name: No new raw colour literals
         run: python design/check_colour_literals.py
 
+      # The palette gate above checks pairs DECLARED in palette.json. It cannot
+      # see a screen that hardcodes color:'#fff' on a token fill — which shipped
+      # three times at 2.82:1, all on `c.primary`, all invisible in light theme
+      # because dark-theme fills are the LIGHT ones (ADR-255).
+      - name: Text on button fills meets AA
+        run: python design/check_text_on_fill.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit

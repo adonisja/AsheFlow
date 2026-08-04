@@ -10,7 +10,7 @@
     "",
     "Do not hand-edit. Run --baseline after genuinely removing literals."
   ],
-  "total": 280,
+  "total": 279,
   "files": {
     "frontend/src/components/CrewStatusPanel.tsx": 13,
     "frontend/src/components/MyPerformanceCard.tsx": 6,
@@ -39,7 +39,7 @@
     "mobile/src/navigation/index.tsx": 1,
     "mobile/src/screens/AnchorPoints/AnchorPointsScreen.tsx": 1,
     "mobile/src/screens/Auth/LoginScreen.tsx": 3,
-    "mobile/src/screens/DriverSurvey/DriverSurveyScreen.tsx": 2,
+    "mobile/src/screens/DriverSurvey/DriverSurveyScreen.tsx": 1,
     "mobile/src/screens/FieldOps/FieldOpsScreen.tsx": 15,
     "mobile/src/screens/Gear/GearRequestsScreen.tsx": 12,
     "mobile/src/screens/Home/HomeScreen.tsx": 1,
