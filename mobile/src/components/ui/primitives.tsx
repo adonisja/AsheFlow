@@ -67,9 +67,22 @@ function useReduceMotion() {
  * we do not depend on, and Vibration there is a blunt buzz that users dislike.
  * Silence is the correct degradation — this is confirmation, never the signal
  * itself.
+ *
+ * The try/catch is not defensive padding. `Vibration.vibrate()` throws a
+ * SecurityException when VIBRATE is missing from the manifest, and that
+ * crashed the app on "Mark As Present" (2026-08-04). The permission is now
+ * declared, but a haptic is decoration on top of a real action — an OEM that
+ * restricts it, or a manifest that loses the line in a merge, must not be able
+ * to take down a commit. Feedback that can break the thing it confirms is
+ * worse than no feedback.
  */
-function tick() {
-  if (Platform.OS === 'android') Vibration.vibrate(10);
+export function tick() {
+  if (Platform.OS !== 'android') return;
+  try {
+    Vibration.vibrate(10);
+  } catch {
+    // Silence is the documented degradation.
+  }
 }
 
 // ─── Press animation hook ─────────────────────────────────────────────────────

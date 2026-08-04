@@ -34,14 +34,15 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AccessibilityInfo, ActivityIndicator, Animated, LayoutAnimation, Platform,
-  StyleSheet, Text, TouchableOpacity, Vibration, View,
+  AccessibilityInfo, ActivityIndicator, Animated,
+  StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, spring, type ThemeColors } from '@theme/index';
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
+import { tick } from '@components/ui/primitives';
 
 // The old-architecture LayoutAnimation opt-in was removed here: it is a no-op
 // under the New Architecture and logged a warning on every launch. See
@@ -159,8 +160,10 @@ export default function CompanyStandingCard() {
     const next = !folded;
     animateNext();   // reduce-motion handled inside the hook
     // A short tick confirms the tap without the user looking — useful with
-    // gloves on in a van. Vibration is core RN, so no extra dependency.
-    if (Platform.OS === 'android') Vibration.vibrate(10);
+    // gloves on in a van. Shared `tick()` rather than a second raw
+    // Vibration.vibrate: unguarded, it throws when VIBRATE is unavailable and
+    // takes the toggle down with it (crashed "Mark As Present", 2026-08-04).
+    tick();
     setFolded(next);
     animateChevron(!next);
     void AsyncStorage.setItem(FOLD_KEY, String(next));

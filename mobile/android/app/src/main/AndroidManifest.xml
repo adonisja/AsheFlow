@@ -5,6 +5,11 @@
          so the app must degrade gracefully when this is denied. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Haptic confirmation tick on commit actions (ADR-252). Normal-level
+         permission: granted at install, no runtime prompt. Without it
+         Vibration.vibrate() throws a SecurityException that crashes the app —
+         which is what happened on "Mark As Present" before this was declared. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
       android:name=".MainApplication"
