@@ -193,16 +193,29 @@ for f in "${TESTS[@]}"; do
 done
 
 # ── Docs (PII-scrubbed ADRs, journals, guides) ───────────────────────────────
+# MIRROR, not append. `cp -r` into a persistent clone never removes a file that
+# was deleted or renamed locally, so the private repo silently accumulated
+# orphans: ADR-107-graduation-quiz.md and ADR-119-Sort-Pipeline-Web-Frontend.md
+# both survived a local renumber and re-created duplicate ADR numbers in the
+# backup. --delete makes the private copy a true mirror of local docs/.
+#
+# .obsidian/ is excluded: per-machine editor state, not documentation. The vault
+# has its own git repo (docs/.git) for history; this sync is a backup mirror.
 echo ""
 echo "Copying docs..."
-cp -r "$PUBLIC_ROOT/docs/decisions/." "docs/decisions/"
-cp -r "$PUBLIC_ROOT/docs/journals/." "docs/journals/"
-cp -r "$PUBLIC_ROOT/docs/templates/." "docs/templates/"
-# Top-level docs (LEARNING_GUIDE, ARCHITECTURE, etc.)
-for f in "$PUBLIC_ROOT/docs/"*.md; do
-  [ -f "$f" ] && cp "$f" "docs/$(basename "$f")"
-done
-echo "  ✓ docs/"
+# docs/business/ is NOT excluded from the mirror by accident — it is populated
+# further down from pricing_analysis_*.md at the repo root, which has no
+# counterpart under local docs/. Without this exclude, --delete would remove it
+# on every run and the block below would immediately re-create it.
+rsync -a --delete \
+  --exclude='.obsidian/' \
+  --exclude='.git/' \
+  --exclude='.githooks/' \
+  --exclude='.gitignore' \
+  --exclude='.DS_Store' \
+  --exclude='business/' \
+  "$PUBLIC_ROOT/docs/" "docs/"
+echo "  ✓ docs/ (mirrored)"
 
 # ── Design memory + business docs (gitignored from public, preserved here) ──
 echo ""
