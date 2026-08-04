@@ -99,7 +99,9 @@ export default function LoginScreen() {
             <TextInput
               ref={pwRef}
               style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
-              placeholder="••••••••••••"
+              // No bullet placeholder: `secureTextEntry` already renders bullets,
+              // so a bullet placeholder looks like an already-filled field and the
+              // user cannot tell whether they have typed anything (worse in dark).
               placeholderTextColor={c.mutedForeground}
               secureTextEntry={!showPw}
               value={password}

@@ -70,10 +70,12 @@ jobs:
         run: python design/check_colour_literals.py
 
       # The palette gate above checks pairs DECLARED in palette.json. It cannot
-      # see a screen that hardcodes color:'#fff' on a token fill — which shipped
-      # three times at 2.82:1, all on `c.primary`, all invisible in light theme
-      # because dark-theme fills are the LIGHT ones (ADR-255).
-      - name: Text on button fills meets AA
+      # see a screen that ignores the palette — which shipped 13 times on mobile
+      # (all invisible in light theme, because dark-theme fills are the LIGHT
+      # ones) and once on web. Covers BOTH platforms: mobile `color:'#fff'` on a c.<token> fill, and
+      # web `text-white` on a raw Tailwind palette utility. A bg-emerald-600
+      # roll-call button shipped at 3.77:1 on 12px text.
+      - name: Text on button fills meets AA (mobile + web)
         run: python design/check_text_on_fill.py
 
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────

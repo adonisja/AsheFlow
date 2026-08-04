@@ -255,8 +255,12 @@ function MemberRow({
           mark any crew member; the server derives early/present/late from the clock. */}
       {isDispatch && notArrived && (
         <div className="flex items-center gap-1">
+          {/* `success` token, not bg-emerald-600 + text-white: that pair is
+              3.77:1 on 12px text — an AA failure — and a raw palette utility
+              does not follow a theme change. Token is 6.53:1 light / 9.76:1
+              dark. Same class as the mobile fixes in ADR-255. */}
           <button
-            className="text-xs text-white bg-emerald-600 rounded px-2 py-1 hover:opacity-90 disabled:opacity-50"
+            className="text-xs text-success-foreground bg-success rounded px-2 py-1 hover:opacity-90 disabled:opacity-50"
             disabled={rollBusy}
             onClick={() => onRollCall(m, false)}
           >

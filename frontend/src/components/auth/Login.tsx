@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { Eye, EyeOff } from 'lucide-react';
 import logoFull from '../../assets/logo-full.svg';
+import logoFullLight from '../../assets/logo-full-light.svg';
 
 export default function Login() {
   const [username,               setUsername]               = useState('');
@@ -66,20 +67,29 @@ export default function Login() {
   };
 
   return (
-    <div
-      className="flex min-h-screen items-center justify-center px-4 relative overflow-hidden"
-      style={{ background: 'linear-gradient(135deg, hsl(225 70% 97%), hsl(220 20% 97%), hsl(35 80% 97%))' }}
-    >
-      {/* Decorative blobs */}
-      <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full opacity-20"
-           style={{ background: 'radial-gradient(circle, hsl(225 70% 55% / 0.3), transparent 70%)' }} />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[400px] h-[400px] rounded-full opacity-15"
-           style={{ background: 'radial-gradient(circle, hsl(35 80% 38% / 0.2), transparent 70%)' }} />
+    <div className="flex min-h-screen items-center justify-center px-4 relative overflow-hidden bg-background">
+      {/* `bg-background`, not an inline gradient. This page hardcoded three
+          near-white HSL stops in a `style` attribute, which CANNOT respond to
+          the `dark` class — so the card went dark while the page behind it
+          stayed white. The blob colours were also the RETIRED indigo/amber
+          identity (plan §2.7). Matches Layout.tsx / SuperAdminLayout.tsx.
+
+          Blobs are token-driven so they follow the theme; opacity is lifted in
+          dark, where the surface sits closer to them in tone. */}
+      <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full opacity-20 dark:opacity-25"
+           style={{ background: 'radial-gradient(circle, hsl(var(--primary) / 0.30), transparent 70%)' }} />
+      <div className="absolute bottom-[-20%] right-[-10%] w-[400px] h-[400px] rounded-full opacity-15 dark:opacity-20"
+           style={{ background: 'radial-gradient(circle, hsl(var(--brand) / 0.20), transparent 70%)' }} />
 
       <div className="w-full max-w-sm animate-slide-up relative z-10">
         {/* Logo */}
         <div className="flex items-center justify-center mb-10">
-          <img src={logoFull} alt="AsheFlow" className="h-10 w-auto" />
+          {/* The wordmark is a baked-SVG, so it cannot follow the theme. Its dark
+              text vanished on the navy background once this page started
+              honouring dark mode. `logo-full-light.svg` already existed for
+              exactly this and was wired up nowhere. */}
+          <img src={logoFull} alt="AsheFlow" className="h-10 w-auto dark:hidden" />
+          <img src={logoFullLight} alt="" aria-hidden className="h-10 w-auto hidden dark:block" />
         </div>
 
         <div className="card-elevated p-8 backdrop-blur-sm bg-card/90">
@@ -109,13 +119,16 @@ export default function Login() {
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">New Password</label>
                 <div className="relative">
+                  {/* Deliberately no placeholder: a password input masks its value with
+                      bullets, so a bullet PLACEHOLDER is indistinguishable from an
+                      already-entered password — the user cannot tell if the field is
+                      empty. Worse in dark mode, where the two sit closer in luminance. */}
                   <input
                     type={showNewPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
                     required
                     className="input-field pr-10"
-                    placeholder="••••••••"
                   />
                   <button
                     type="button"
@@ -149,7 +162,6 @@ export default function Login() {
                       onChange={e => setPassword(e.target.value)}
                       required
                       className="input-field pr-10"
-                      placeholder="••••••••"
                       autoComplete="current-password"
                     />
                     <button
@@ -207,7 +219,7 @@ export default function Login() {
                 </button>
               </div>
 
-              <p className="text-center text-xs text-muted-foreground mt-6">
+              <p className="text-center text-xs text-muted-foreground mt-6 text-balance">
                 Accounts are managed by your dispatcher.{' '}
                 <span className="text-foreground font-medium">No self-signup.</span>
               </p>

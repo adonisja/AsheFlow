@@ -167,6 +167,57 @@ def failures_for(path: pathlib.Path) -> list[tuple]:
     return sorted(found)
 
 
+"""Tailwind v3 defaults for the palette shades that appear in this codebase.
+
+Only the ones actually used — this is a gate, not a colour library. A
+`bg-<palette>-<shade>` utility bypasses the token layer exactly like a raw hex
+does, and `text-white` on one is the same defect the mobile side had.
+"""
+TW_FILLS = {
+    "amber-500": "#f59e0b", "amber-600": "#d97706",
+    "blue-500": "#3b82f6", "blue-600": "#2563eb",
+    "emerald-500": "#10b981", "emerald-600": "#059669",
+    "indigo-500": "#6366f1", "indigo-600": "#4f46e5",
+    "purple-500": "#a855f7", "purple-600": "#9333ea",
+    "red-500": "#ef4444", "red-600": "#dc2626",
+    "rose-500": "#f43f5e", "rose-600": "#e11d48",
+    "sky-500": "#0ea5e9", "sky-600": "#0284c7",
+    "teal-500": "#14b8a6", "teal-600": "#0d9488",
+    "green-500": "#22c55e", "green-600": "#16a34a",
+    "orange-500": "#f97316", "orange-600": "#ea580c",
+    "violet-500": "#8b5cf6", "violet-600": "#7c3aed",
+}
+WEB = ROOT.parent / "frontend" / "src"
+CLASSNAME_RE = re.compile(r'className="([^"]*)"')
+TW_FILL_RE = re.compile(r"\bbg-([a-z]+-\d{3})\b")
+# 12px/14px utilities are below WCAG's large-text threshold, so they need 4.5.
+SMALL_TEXT_RE = re.compile(r"\btext-(xs|sm|base)\b")
+
+
+def web_failures() -> list[tuple]:
+    """`text-white` on a raw Tailwind palette fill, in one className."""
+    out: list[tuple] = []
+    for f in sorted(WEB.rglob("*.tsx")):
+        # Print pages have no theme and map libraries take literal colours.
+        if f.stem in ("PrintLoadSheets", "ReturnsManifestPrint",
+                      "OperatingZoneMap", "ZoneDensityMap"):
+            continue
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            for m in CLASSNAME_RE.finditer(line):
+                cls = m.group(1)
+                if "text-white" not in cls:
+                    continue
+                fill = TW_FILL_RE.search(cls)
+                if not fill or fill.group(1) not in TW_FILLS:
+                    continue
+                ratio = cc.contrast(TW_FILLS[fill.group(1)], "#FFFFFF")
+                needed = 4.5 if SMALL_TEXT_RE.search(cls) else 3.0
+                if ratio < needed:
+                    out.append((str(f.relative_to(WEB)), round(ratio, 2),
+                                f"bg-{fill.group(1)}", i, needed))
+    return out
+
+
 def check(report: bool = False) -> int:
     rows: list[tuple] = []
     seen: set[tuple] = set()
@@ -182,14 +233,29 @@ def check(report: bool = False) -> int:
             seen.add(key)
             rows.append((rel,) + r)
 
+    web = web_failures()
+
     if report:
-        print(f"{len(rows)} text-on-fill pair(s) below {MIN_RATIO}:1\n")
+        print(f"{len(rows)} mobile + {len(web)} web pair(s) below target\n")
         for path, ratio, theme, holder, tok, line in rows:
             print(f"  {ratio:5.2f}:1  {theme:5}  {path}:{line}  s.{holder} on c.{tok}")
+        for path, ratio, fill, line, needed in web:
+            print(f"  {ratio:5.2f}:1  web    {path}:{line}  {fill} + text-white (needs {needed})")
         return 0
 
+    if web:
+        print(f"\nWEB TEXT-ON-FILL FAILURES ({len(web)}):\n")
+        for path, ratio, fill, line, needed in web:
+            print(f"  {ratio:5.2f}:1  {path}:{line}  {fill} + text-white "
+                  f"(needs {needed}:1)")
+        print(
+            "\nUse a semantic token pair (`bg-success text-success-foreground`)\n"
+            "instead of a raw palette utility. A `bg-<palette>-<shade>` class does\n"
+            "not follow a theme change and its contrast is nobody's decision."
+        )
+
     if rows:
-        print(f"\nTEXT-ON-FILL CONTRAST FAILURES ({len(rows)}):\n")
+        print(f"\nMOBILE TEXT-ON-FILL FAILURES ({len(rows)}):\n")
         for path, ratio, theme, holder, tok, line in rows:
             print(f"  {ratio:5.2f}:1  {theme:5}  {path}:{line}")
             print(f"         s.{holder} is c.{tok}; its label is hardcoded white")
@@ -198,9 +264,10 @@ def check(report: bool = False) -> int:
             "instead of '#fff'. Dark-theme fills are LIGHT, so white-on-fill is a\n"
             "light-theme habit that silently fails in dark mode."
         )
+    if rows or web:
         return 1
 
-    print("OK — no hardcoded white on a token fill below 4.5:1")
+    print("OK — no white-on-fill contrast failures (mobile + web)")
     return 0
 
 
