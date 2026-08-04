@@ -13,6 +13,7 @@ export type GeneratedColors = {
   foreground:             string;
   mutedForeground:        string;
   subtleForeground:       string;
+  brandText:              string;
   primary:                string;
   primaryForeground:      string;
   primaryLight:           string;
@@ -63,6 +64,7 @@ export const generatedLight: GeneratedColors = {
   foreground:             '#111522',
   mutedForeground:        '#656C7B',
   subtleForeground:       '#575D6B',
+  brandText:              '#8517D3',
   primary:                '#1B296A',
   primaryForeground:      '#FFFFFF',
   primaryLight:           '#EBEDFA',
@@ -113,6 +115,7 @@ export const generatedDark: GeneratedColors = {
   foreground:             '#F2F5F7',
   mutedForeground:        '#ABB2BF',
   subtleForeground:       '#8D95A5',
+  brandText:              '#B475EB',
   primary:                '#7E95F1',
   primaryForeground:      '#0B1028',
   primaryLight:           '#1F2951',

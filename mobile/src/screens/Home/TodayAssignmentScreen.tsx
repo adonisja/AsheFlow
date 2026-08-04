@@ -443,7 +443,10 @@ export default function TodayAssignmentScreen() {
                 </Button>
               </View>
               <View style={{ flex: 1 }}>
-                <Button variant="outline" fullWidth
+                {/* `secondary`, not `outline`: outline is brand violet, which read
+                    as the promoted choice sitting beside the green confirm. A
+                    decline must be visually subordinate to the action we want. */}
+                <Button variant="secondary" fullWidth
                   loading={responding === 'declined'} disabled={responding !== null}
                   onPress={() => respond('declined')}>
                   Can't make it

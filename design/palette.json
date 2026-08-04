@@ -38,6 +38,10 @@
     "subtleForeground":  { "hsl": [222, 10, 38], "_check": { "on": "card", "min": 4.5 },
                            "_was": "2.56:1 FAIL — darkened from gray400 (plan §2.2)" },
 
+    "brandText":         { "hsl": [275, 80, 46], "_check": { "on": "surfaceMuted", "min": 4.5 },
+                           "_note": "brand violet for TEXT/BORDERS on a surface. Identical to `brand` in this theme — light-theme brand already clears 4.5:1 on every surface (6.24-6.86), so no lift is needed. The token exists so call sites express INTENT (text vs fill) on both platforms rather than branching per theme; the dark theme is where the two values diverge. See the dark-theme note.",
+                           "_alias_of": "brand" },
+
     "primary":           { "hsl": [229, 60, 26], "_check": { "on": "background", "min": 4.5 },
                            "_note": "navy #1B2A6B — brand, headings, body. 13.2:1 on white.",
                            "_was": "web #3C64DD / mobile #4F6BF4 — reconciled (plan §2.7)" },
@@ -111,6 +115,10 @@
     "foreground":        { "hsl": [210, 25, 96], "_check": { "on": "background", "min": 4.5 } },
     "mutedForeground":   { "hsl": [220, 14, 71], "_check": { "on": "card", "min": 4.5 } },
     "subtleForeground":  { "hsl": [220, 12, 60], "_check": { "on": "card", "min": 4.5 } },
+
+    "brandText":         { "hsl": [272, 75, 69], "_check": { "on": "surfaceMuted", "min": 4.5 },
+                           "_note": "brand violet for TEXT/BORDERS on a surface. `brand` itself is L63, which clears 4.5:1 only on `background` (4.52) and fails on every card: card/surface 4.10, surfaceElevated 3.86, surfaceMuted 3.58. Found on device 2026-08-03 — the outline Button renders 13-17px semibold, below WCAG's large-text threshold, so it needs the full 4.5. `brand` is NOT lifted to this value because at L69 it collapses toward `primary` (Lab 12.9 -> 2.2) and `info` (19.0 -> 6.1); a fill colour and a text colour have different jobs. Use `brand` for fills, `brandText` for text and borders on any surface.",
+                           "_was": "outline/ghost Button used `brand` directly" },
 
     "primary":           { "hsl": [228, 80, 72], "_check": { "on": "background", "min": 4.5 },
                            "_note": "navy is too dark to read on a dark surface — lifted, same hue family" },

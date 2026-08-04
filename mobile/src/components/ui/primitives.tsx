@@ -149,8 +149,12 @@ export function Button({
     secondary:  c.foreground,
     danger:     c.primaryForeground,
     success:    c.primaryForeground,
-    ghost:      c.brand,
-    outline:    c.brand,
+    // `brandText`, not `brand`: these render violet ON a surface. Dark-theme
+    // `brand` is 4.10:1 on a card and 3.58:1 on surfaceMuted, and button
+    // labels are 13-17px semibold — under WCAG's large-text threshold, so
+    // they need the full 4.5:1. `brand` stays the fill colour.
+    ghost:      c.brandText,
+    outline:    c.brandText,
   };
 
   const borderColor: Record<ButtonVariant, string | undefined> = {
@@ -160,7 +164,7 @@ export function Button({
     danger:     undefined,
     success:    undefined,
     ghost:      undefined,
-    outline:    c.brand,
+    outline:    c.brandText,
   };
 
   const sizePad: Record<ButtonSize, { paddingVertical: number; paddingHorizontal: number; minHeight: number }> = {

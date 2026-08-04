@@ -15,6 +15,7 @@
     --foreground: 224 35% 10%;
     --muted-foreground: 222 10% 44%;
     --subtle-foreground: 222 10% 38%;
+    --brand-text: 275 80% 46%;
     --primary: 229 60% 26%;
     --primary-foreground: 0 0% 100%;
     --primary-light: 229 60% 95%;
@@ -65,6 +66,7 @@
     --foreground: 210 25% 96%;
     --muted-foreground: 220 14% 71%;
     --subtle-foreground: 220 12% 60%;
+    --brand-text: 272 75% 69%;
     --primary: 228 80% 72%;
     --primary-foreground: 231 55% 10%;
     --primary-light: 228 45% 22%;
