@@ -252,6 +252,19 @@
   .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
   .btn-primary:active { transform: translateY(0) scale(0.98); }
 
+  /* ── Page width ────────────────────────────────────────────────────────────
+     TWO widths, not five. 21 pages each wrapped themselves in their own
+     `max-w-{2,3,4,5,6}xl mx-auto` INSIDE main's max-w-7xl, so page content sat
+     64-304px narrower than the notification banner above it — visibly indented
+     — and the measure jumped on every navigation (1280 -> 1024 -> 672).
+
+     `main` no longer sets a width; the banner and the page each take one of
+     these, so they always agree. Pick by CONTENT:
+       layout-wide  tables, dashboards, dense data
+       layout-form  single-column forms and reading (~75ch at 16px) */
+  .layout-wide { @apply w-full max-w-7xl mx-auto; }
+  .layout-form { @apply w-full max-w-3xl mx-auto; }
+
   /* ── Brand gradients ───────────────────────────────────────────────────────
      These were USED but never DEFINED — `gradient-primary` at 6 call sites and
      `gradient-text-brand` at 1, including the navbar. An undefined utility is

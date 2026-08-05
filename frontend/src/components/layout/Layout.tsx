@@ -6,8 +6,35 @@ import FeedbackModal from '../FeedbackModal';
 import CommandPalette from '../CommandPalette';
 import NotificationBanner from '../NotificationBanner';
 
+/**
+ * Page width by route. TWO widths only (see `.layout-wide` / `.layout-form` in
+ * index.css). Anything not listed gets `layout-wide`.
+ *
+ * `layout-form` is for single-column forms and reading — stretching those to
+ * 1280px hurts legibility. Everything else is tables and dense operational
+ * data, which wants the room.
+ *
+ * This lives here rather than in each page so the NOTIFICATION BANNER can take
+ * the same width. That alignment is the whole point of the change: previously
+ * the banner used main's 1280px while pages used their own 672-1152px.
+ */
+const FORM_WIDTH_ROUTES = [
+  '/account',
+  '/preferences',
+  '/notifications-history',
+  '/schedule-changes',
+  '/field-ops',
+  '/scorecard-entry',
+  '/graduation-quiz',
+];
+
+function widthClassFor(pathname: string): string {
+  return FORM_WIDTH_ROUTES.some(r => pathname.startsWith(r)) ? 'layout-form' : 'layout-wide';
+}
+
 const Layout = () => {
   const location = useLocation();
+  const widthClass = widthClassFor(location.pathname);
 
   return (
     <div className="relative min-h-screen bg-background flex flex-col">
@@ -28,13 +55,18 @@ const Layout = () => {
 
       <Navbar />
 
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="mb-4">
+      {/* `main` no longer sets the width. Each page picks `layout-wide` or
+          `layout-form`, and the banner takes the SAME width so the two always
+          align — previously the banner used main's 1280px while pages used
+          their own 672-1152px, leaving content visibly indented from it. */}
+      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6">
+        <div className={`${widthClass} mb-4`}>
           <NotificationBanner />
         </div>
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}
+            className={widthClass}
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
