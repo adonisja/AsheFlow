@@ -30,12 +30,15 @@ const AVAIL_LABEL: Record<CrewStatusMember['availability'], string> = {
   done: 'Done',
   off_crew: 'Off crew',
 };
+/* Semantic tokens, not raw palette utilities: a `bg-emerald-50` pill keeps its
+   near-white fill in dark theme, and none of these follow a palette change.
+   The `/10` tint gives a quiet pill on both themes from one value. */
 const AVAIL_COLOR: Record<CrewStatusMember['availability'], string> = {
-  not_arrived: 'text-slate-600 bg-slate-100',
-  available: 'text-emerald-600 bg-emerald-50',
-  on_route_early: 'text-amber-600 bg-amber-50',
-  on_route_returning: 'text-sky-600 bg-sky-50',
-  done: 'text-emerald-600 bg-emerald-50',
+  not_arrived: 'text-muted-foreground bg-muted-foreground/10',
+  available: 'text-success bg-success/10',
+  on_route_early: 'text-warning bg-warning/10',
+  on_route_returning: 'text-info bg-info/10',
+  done: 'text-success bg-success/10',
   off_crew: 'text-muted-foreground bg-accent',
 };
 
@@ -222,77 +225,92 @@ function MemberRow({
   const notArrived = m.availability === 'not_arrived';
   const rollBusy = busy === m.employee_id;
   return (
-    <div className="flex items-center gap-3 py-2">
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm truncate ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
-          {m.name ?? m.employee_id.slice(0, 8)}
-        </p>
-        <p className="text-xs text-muted-foreground capitalize">
-          {m.role}
-          {m.role !== 'trainee' && m.paired_trainee_name ? ` · training ${m.paired_trainee_name}` : ''}
-          {m.role === 'trainee' && m.paired_trainer_name ? ` · trainer ${m.paired_trainer_name}` : ''}
-        </p>
+    /* Two rows, mirroring the mobile app (RouteSortScreen), where this problem
+       was already solved:
+         line 1 — identity + CURRENT STATE (a tag, never a button)
+         line 2 — ACTIONS, verb-labelled, only when there is one to take
+
+       Before, "Present" was both the state tag AND the button label sitting
+       inches apart, so a dispatcher could not tell what a row was reporting
+       from what it was offering. Labels are now verbs ("Mark Present"), and
+       actions live on their own line.
+
+       The name also no longer truncates: it had `truncate` inside a flex row
+       competing with up to three buttons, which clipped real names at 390px
+       ("Rashe…"). It now owns the full width of line 1. */
+    <div className="py-2.5 space-y-1.5">
+      {/* line 1 — identity and state */}
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className={`text-sm ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+            {m.name ?? m.employee_id.slice(0, 8)}
+          </p>
+          <p className="text-xs text-muted-foreground capitalize">
+            {m.role}
+            {m.role !== 'trainee' && m.paired_trainee_name ? ` · training ${m.paired_trainee_name}` : ''}
+            {m.role === 'trainee' && m.paired_trainer_name ? ` · trainer ${m.paired_trainer_name}` : ''}
+            {m.trip_count > 0 ? ` · ${m.trip_count} trip${m.trip_count === 1 ? '' : 's'}` : ''}
+          </p>
+        </div>
+
+        {/* State tags, right-aligned and visually quiet — pills, not buttons. */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {m.orphaned && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full text-danger bg-danger/10">
+              Trainer absent
+            </span>
+          )}
+          {m.role !== 'driver' && (
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${AVAIL_COLOR[m.availability]}`}>
+              {AVAIL_LABEL[m.availability]}
+              {m.route_completion_pct != null ? ` · ${Math.round(m.route_completion_pct * 100)}%` : ''}
+            </span>
+          )}
+        </div>
       </div>
 
-      {m.trip_count > 0 && (
-        <span className="text-xs text-muted-foreground whitespace-nowrap">
-          {m.trip_count} trip{m.trip_count === 1 ? '' : 's'}
-        </span>
-      )}
+      {/* line 2 — actions. Rendered only when one applies, so most rows stay
+          a single line and the list keeps its scan rhythm. */}
+      {isDispatch && (notArrived || m.orphaned || (!off && m.member_id && m.role !== 'driver')) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {notArrived && (
+            <>
+              <button
+                className="text-xs font-medium text-success-foreground bg-success rounded-md px-2.5 py-1 hover:opacity-90 disabled:opacity-50"
+                disabled={rollBusy}
+                onClick={() => onRollCall(m, false)}
+              >
+                {rollBusy ? '…' : 'Mark Present'}
+              </button>
+              <button
+                className="text-xs font-medium text-warning border border-warning/40 rounded-md px-2.5 py-1 hover:bg-warning/10 disabled:opacity-50"
+                disabled={rollBusy}
+                onClick={() => onRollCall(m, true)}
+              >
+                Mark Absent
+              </button>
+            </>
+          )}
 
-      {m.orphaned && (
-        <span className="text-xs font-medium px-2 py-0.5 rounded-full text-red-600 bg-red-50">Trainer absent</span>
-      )}
+          {m.orphaned && (
+            <button
+              onClick={onReassign}
+              className="text-xs font-medium text-primary-foreground bg-primary rounded-md px-2.5 py-1 hover:opacity-90"
+            >
+              Reassign trainer
+            </button>
+          )}
 
-      {m.role !== 'driver' && (
-        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${AVAIL_COLOR[m.availability]}`}>
-          {AVAIL_LABEL[m.availability]}
-          {m.route_completion_pct != null ? ` · ${Math.round(m.route_completion_pct * 100)}%` : ''}
-        </span>
-      )}
-
-      {/* Roll call: mark a not-arrived member in (Present) or absent. Dispatch can
-          mark any crew member; the server derives early/present/late from the clock. */}
-      {isDispatch && notArrived && (
-        <div className="flex items-center gap-1">
-          {/* `success` token, not bg-emerald-600 + text-white: that pair is
-              3.77:1 on 12px text — an AA failure — and a raw palette utility
-              does not follow a theme change. Token is 6.53:1 light / 9.76:1
-              dark. Same class as the mobile fixes in ADR-255. */}
-          <button
-            className="text-xs text-success-foreground bg-success rounded px-2 py-1 hover:opacity-90 disabled:opacity-50"
-            disabled={rollBusy}
-            onClick={() => onRollCall(m, false)}
-          >
-            {rollBusy ? '…' : 'Present'}
-          </button>
-          <button
-            className="text-xs text-amber-700 border border-amber-300 rounded px-2 py-1 hover:bg-amber-50 disabled:opacity-50"
-            disabled={rollBusy}
-            onClick={() => onRollCall(m, true)}
-          >
-            Absent
-          </button>
+          {!off && !notArrived && m.member_id && m.role !== 'driver' && (
+            <button
+              className="text-xs font-medium text-muted-foreground border border-border rounded-md px-2.5 py-1 hover:bg-accent disabled:opacity-50"
+              disabled={busy === m.member_id}
+              onClick={() => onDepart(m.member_id!)}
+            >
+              {busy === m.member_id ? '…' : 'Mark departed'}
+            </button>
+          )}
         </div>
-      )}
-
-      {isDispatch && m.orphaned && (
-        <button
-          onClick={onReassign}
-          className="text-xs text-white bg-primary rounded px-2 py-1 hover:opacity-90"
-        >
-          Reassign
-        </button>
-      )}
-
-      {isDispatch && !off && !notArrived && m.member_id && m.role !== 'driver' && (
-        <button
-          className="text-xs text-muted-foreground border border-border rounded px-2 py-1 hover:bg-accent disabled:opacity-50"
-          disabled={busy === m.member_id}
-          onClick={() => onDepart(m.member_id!)}
-        >
-          {busy === m.member_id ? '…' : 'Departed'}
-        </button>
       )}
     </div>
   );
