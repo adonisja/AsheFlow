@@ -225,54 +225,62 @@ function MemberRow({
   const notArrived = m.availability === 'not_arrived';
   const rollBusy = busy === m.employee_id;
   return (
-    /* Two rows, mirroring the mobile app (RouteSortScreen), where this problem
-       was already solved:
-         line 1 — identity + CURRENT STATE (a tag, never a button)
-         line 2 — ACTIONS, verb-labelled, only when there is one to take
+    /* ONE row on desktop; wraps to two only when the width forces it.
+         Rasheed Grant                 [Not Present]   [Mark Present] [Mark Absent]
+         Trainer
 
-       Before, "Present" was both the state tag AND the button label sitting
-       inches apart, so a dispatcher could not tell what a row was reporting
-       from what it was offering. Labels are now verbs ("Mark Present"), and
-       actions live on their own line.
+       An earlier version stacked actions onto their own line, copying the
+       mobile app. That was over-applying the pattern: mobile stacks because a
+       ~350px row cannot hold a name plus a state plus two buttons. Desktop has
+       ~1180px, so stacking there just doubles the height of every actionable
+       row and wastes the space that made the gap look wrong in the first place.
 
-       The name also no longer truncates: it had `truncate` inside a flex row
-       competing with up to three buttons, which clipped real names at 390px
-       ("Rashe…"). It now owns the full width of line 1. */
-    <div className="py-2.5 space-y-1.5">
-      {/* line 1 — identity and state */}
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <p className={`text-sm ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
-            {m.name ?? m.employee_id.slice(0, 8)}
-          </p>
-          <p className="text-xs text-muted-foreground capitalize">
-            {m.role}
-            {m.role !== 'trainee' && m.paired_trainee_name ? ` · training ${m.paired_trainee_name}` : ''}
-            {m.role === 'trainee' && m.paired_trainer_name ? ` · trainer ${m.paired_trainer_name}` : ''}
-            {m.trip_count > 0 ? ` · ${m.trip_count} trip${m.trip_count === 1 ? '' : 's'}` : ''}
-          </p>
-        </div>
+       What actually separates STATE from ACTION is styling and wording, not
+       the line break:
+         state   a quiet tinted pill, plain noun ("Not Present"), never clickable
+         action  a bordered/filled button, verb-first ("Mark Present")
 
-        {/* State tags, right-aligned and visually quiet — pills, not buttons. */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {m.orphaned && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full text-danger bg-danger/10">
-              Trainer absent
-            </span>
-          )}
-          {m.role !== 'driver' && (
-            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${AVAIL_COLOR[m.availability]}`}>
-              {AVAIL_LABEL[m.availability]}
-              {m.route_completion_pct != null ? ` · ${Math.round(m.route_completion_pct * 100)}%` : ''}
-            </span>
-          )}
-        </div>
+       `flex-wrap` handles narrow widths: name+state hold line 1 and the buttons
+       drop beneath, which is the mobile layout, reached by constraint rather
+       than by a hardcoded breakpoint. The name no longer carries `truncate`, so
+       real names are never clipped ("Rashe…" at 390px). */
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+      {/* `basis-64 grow-0` rather than `flex-1`: a growing name column would
+          stretch to ~870px and shove the state and actions to the far right,
+          which is the ~1000px gap this row had before. A fixed basis keeps the
+          three groups together on the left and gives every row the same
+          columns, so the list scans vertically. `max-w-full` lets it shrink
+          below 256px on a phone. */}
+      <div className="min-w-0 basis-64 grow-0 max-w-full">
+        <p className={`text-sm ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+          {m.name ?? m.employee_id.slice(0, 8)}
+        </p>
+        <p className="text-xs text-muted-foreground capitalize">
+          {m.role}
+          {m.role !== 'trainee' && m.paired_trainee_name ? ` · training ${m.paired_trainee_name}` : ''}
+          {m.role === 'trainee' && m.paired_trainer_name ? ` · trainer ${m.paired_trainer_name}` : ''}
+          {m.trip_count > 0 ? ` · ${m.trip_count} trip${m.trip_count === 1 ? '' : 's'}` : ''}
+        </p>
       </div>
 
-      {/* line 2 — actions. Rendered only when one applies, so most rows stay
-          a single line and the list keeps its scan rhythm. */}
+      {/* Current state — directly after the name, never interactive. */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {m.orphaned && (
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full text-danger bg-danger/10">
+            Trainer absent
+          </span>
+        )}
+        {m.role !== 'driver' && (
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${AVAIL_COLOR[m.availability]}`}>
+            {AVAIL_LABEL[m.availability]}
+            {m.route_completion_pct != null ? ` · ${Math.round(m.route_completion_pct * 100)}%` : ''}
+          </span>
+        )}
+      </div>
+
+      {/* Actions — verb-first, and only rendered when one applies. */}
       {isDispatch && (notArrived || m.orphaned || (!off && m.member_id && m.role !== 'driver')) && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {notArrived && (
             <>
               <button
