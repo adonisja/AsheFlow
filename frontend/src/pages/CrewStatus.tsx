@@ -22,6 +22,27 @@ import type {
  *  action wired to the Phase B endpoints. Name filter narrows the active tab.
  */
 
+/**
+ * ONE grid definition for the header and every row — if these were written
+ * twice they would drift, and a header that does not line up with its column
+ * is worse than no header.
+ *
+ *   name            status        trips  progress   pairing        actions
+ *   minmax(0,18rem) 8.5rem        4rem   7rem       minmax(0,12rem) max-content
+ *
+ * Fixed tracks (not `1fr`) are what keep the columns aligned down 197 rows.
+ * `justify-between` spreads the whole grid to the card's width, so the row
+ * uses the space instead of huddling left with ~490px empty — measured, that
+ * was the state before these columns existed.
+ *
+ * Trips / progress / pairing are empty pre-shift and fill as crews go out.
+ * An em dash is shown rather than a blank so an empty cell reads as "no value
+ * yet" rather than a rendering fault.
+ */
+const CREW_GRID =
+  'grid grid-cols-1 sm:grid-cols-[minmax(0,18rem)_8.5rem_4rem_7rem_minmax(0,12rem)_max-content] ' +
+  'items-center gap-x-4 gap-y-1';
+
 const AVAIL_LABEL: Record<CrewStatusMember['availability'], string> = {
   not_arrived: 'Not Present',
   available: 'Available',
@@ -170,6 +191,16 @@ export default function CrewStatus() {
               {truck.available_for_route} of {truck.active_crew} available for a route
             </span>
           </div>
+          {/* Column header — hidden below `sm`, where the grid collapses to one
+              column and headers would be meaningless. */}
+          <div className={`${CREW_GRID} hidden sm:grid pb-1.5 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-muted-foreground`}>
+            <span>Crew</span>
+            <span>Status</span>
+            <span className="text-right">Trips</span>
+            <span>Progress</span>
+            <span>Pairing</span>
+            <span className="text-right">Actions</span>
+          </div>
           <div className="divide-y divide-border">
             {truck.members.map(m => (
               <MemberRow
@@ -225,56 +256,27 @@ function MemberRow({
   const notArrived = m.availability === 'not_arrived';
   const rollBusy = busy === m.employee_id;
   return (
-    /* A GRID, not a flex row — this is a 33-row roster, so the same field must
-       land in the same place on every line. Three tracks:
+    /* Six cells, matching CREW_GRID's six header columns exactly. Fixed tracks
+       keep them aligned down 197 rows; `1fr` anywhere here reintroduces the
+       stretch that left ~490px of the card empty.
 
-         name (1fr)     state (140px)     actions (auto)
-         Rasheed Grant  Not Present       [Mark Present] [Mark Absent]
-         Trainer
+       Trips / Progress / Pairing are null pre-shift and fill as crews go out,
+       so each renders an em dash rather than nothing — an empty cell should
+       read as "no value yet", not as a broken render.
 
-       Three earlier attempts all failed on spacing, and each failure was the
-       same mistake — treating a table as a row of loose flex items:
-         · `flex-1` on the name stretched it to ~870px and pushed state and
-           actions to the far right, leaving a ~1000px gap mid-row;
-         · stacking actions onto a second line copied the MOBILE layout, where
-           it exists only because a ~350px row cannot fit the content;
-         · `basis-64` capped the name but left three cramped groups huddled at
-           the left of an otherwise empty row.
-       A fixed state track is what makes the column align regardless of label
-       length ("Not Present" vs "On route (early) · 40%"), and the name track is
-       CAPPED at 22rem rather than `1fr` — measured at 1180px, `1fr` handed the
-       name 953px for ~150px of text, which is the same dead space as `flex-1`
-       wearing a grid. 22rem fits the longest real label
-       ("Jerome Whitfield · training Akkeem Tyrell", ~330px) and lets the row
-       end where the content ends.
-
-       The actions track is `max-content`, not `auto`: measured on the rendered
-       page, `auto` stretched it to 690px for ~200px of buttons — the same dead
-       space, moved to the third column. `justify-start` stops the grid itself
-       filling the row.
-
-       STATE vs ACTION is carried by styling and wording, not by position:
+       STATE vs ACTION stays a styling distinction, not a positional one:
          state   quiet tinted pill, plain noun, not clickable
-         action  bordered/filled button, verb-first ("Mark Present")
-
-       Below `sm` the tracks collapse to one column and everything stacks —
-       the mobile layout, reached by constraint rather than a breakpoint guess.
-       The name never truncates, so real names are not clipped at 390px. */
-    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,22rem)_140px_max-content] justify-start items-center gap-x-4 gap-y-2 py-2.5">
+         action  bordered/filled button, verb-first ("Mark Present") */
+    <div className={`${CREW_GRID} py-2.5`}>
+      {/* 1 — crew member */}
       <div className="min-w-0">
         <p className={`text-sm ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
           {m.name ?? m.employee_id.slice(0, 8)}
         </p>
-        <p className="text-xs text-muted-foreground capitalize">
-          {m.role}
-          {m.role !== 'trainee' && m.paired_trainee_name ? ` · training ${m.paired_trainee_name}` : ''}
-          {m.role === 'trainee' && m.paired_trainer_name ? ` · trainer ${m.paired_trainer_name}` : ''}
-          {m.trip_count > 0 ? ` · ${m.trip_count} trip${m.trip_count === 1 ? '' : 's'}` : ''}
-        </p>
+        <p className="text-xs text-muted-foreground capitalize">{m.role}</p>
       </div>
 
-      {/* State track — always occupied so the actions column starts at the same
-          x on every row, even for a driver with no availability tag. */}
+      {/* 2 — status */}
       <div className="flex flex-wrap items-center gap-1.5">
         {m.orphaned && (
           <span className="text-xs font-medium px-2 py-0.5 rounded-full text-danger bg-danger/10">
@@ -284,13 +286,37 @@ function MemberRow({
         {m.role !== 'driver' && (
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${AVAIL_COLOR[m.availability]}`}>
             {AVAIL_LABEL[m.availability]}
-            {m.route_completion_pct != null ? ` · ${Math.round(m.route_completion_pct * 100)}%` : ''}
           </span>
         )}
       </div>
 
-      {/* Actions track — verb-first, and only rendered when one applies. */}
-      <div className="flex items-center gap-2">
+      {/* 3 — trips */}
+      <span className="text-xs tabular-nums text-right text-muted-foreground">
+        {m.trip_count > 0 ? m.trip_count : '—'}
+      </span>
+
+      {/* 4 — progress. Stop count and percent are the same fact at two
+             granularities; showing both would just be noise. */}
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {m.current_stop_sequence != null && m.current_stop_total
+          ? `${m.current_stop_sequence}/${m.current_stop_total}`
+          : m.route_completion_pct != null
+            ? `${Math.round(m.route_completion_pct * 100)}%`
+            : '—'}
+      </span>
+
+      {/* 5 — pairing. An arrow reads as direction (trainer → trainee) without
+             spending width on the words. */}
+      <span className="text-xs text-muted-foreground truncate">
+        {m.paired_trainee_name
+          ? `→ ${m.paired_trainee_name}`
+          : m.paired_trainer_name
+            ? `← ${m.paired_trainer_name}`
+            : '—'}
+      </span>
+
+      {/* 6 — actions */}
+      <div className="flex items-center justify-end gap-2">
         {isDispatch && notArrived && (
           <>
             <button
