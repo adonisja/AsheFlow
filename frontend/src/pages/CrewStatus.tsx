@@ -30,7 +30,12 @@ import type {
  *   name            status        trips  progress   pairing        actions
  *   minmax(0,18rem) 8.5rem        4rem   7rem       minmax(0,12rem) max-content
  *
- * Fixed tracks (not `1fr`) are what keep the columns aligned down 197 rows.
+ * Only PAIRING flexes (`minmax(12rem,1fr)`). Measured, the fixed tracks left
+ * 161px unused at the right of the card, so the actions column floated short
+ * of the edge. Letting the widest TEXT column absorb the slack pushes actions
+ * to the edge without reintroducing the mid-row stretch that a flexible FIRST
+ * track caused. Everything else stays fixed, which is what keeps 197 rows
+ * aligned. `gap-x-7` (28px) — 16px read as cramped for a six-column table.
  * `justify-between` spreads the whole grid to the card's width, so the row
  * uses the space instead of huddling left with ~490px empty — measured, that
  * was the state before these columns existed.
@@ -40,8 +45,8 @@ import type {
  * yet" rather than a rendering fault.
  */
 const CREW_GRID =
-  'grid grid-cols-1 sm:grid-cols-[minmax(0,18rem)_8.5rem_4rem_7rem_minmax(0,12rem)_max-content] ' +
-  'items-center gap-x-4 gap-y-1';
+  'grid grid-cols-1 sm:grid-cols-[minmax(0,18rem)_8.5rem_4rem_7rem_minmax(12rem,1fr)_max-content] ' +
+  'items-center gap-x-7 gap-y-1';
 
 const AVAIL_LABEL: Record<CrewStatusMember['availability'], string> = {
   not_arrived: 'Not Present',
@@ -305,15 +310,37 @@ function MemberRow({
             : '—'}
       </span>
 
-      {/* 5 — pairing. An arrow reads as direction (trainer → trainee) without
-             spending width on the words. */}
-      <span className="text-xs text-muted-foreground truncate">
-        {m.paired_trainee_name
-          ? `→ ${m.paired_trainee_name}`
-          : m.paired_trainer_name
-            ? `← ${m.paired_trainer_name}`
-            : '—'}
-      </span>
+      {/* 5 — pairing. A role-coloured initials chip plus the partner's name,
+             so the cell reads as a RELATIONSHIP at a glance rather than as a
+             string starting with an arrow character. The label above the name
+             says which direction the pairing runs, which "→ A. Tyrell" left the
+             reader to infer. Trainee violet / trainer amber are the same role
+             tokens the rest of the app uses (ADR-254). */}
+      {(() => {
+        const partner = m.paired_trainee_name ?? m.paired_trainer_name;
+        if (!partner) return <span className="text-xs text-muted-foreground">—</span>;
+        const isTrainee = Boolean(m.paired_trainee_name);
+        return (
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className="shrink-0 grid place-items-center rounded-full text-[10px] font-semibold w-6 h-6"
+              style={{
+                background: `hsl(var(--${isTrainee ? 'trainee' : 'trainer'}) / 0.15)`,
+                color: `hsl(var(--${isTrainee ? 'trainee' : 'trainer'}))`,
+              }}
+              aria-hidden
+            >
+              {partner.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[10px] uppercase tracking-wide text-muted-foreground leading-none">
+                {isTrainee ? 'Training' : 'Trainer'}
+              </span>
+              <span className="block text-xs text-foreground truncate leading-tight">{partner}</span>
+            </span>
+          </div>
+        );
+      })()}
 
       {/* 6 — actions */}
       <div className="flex items-center justify-end gap-2">
