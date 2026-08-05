@@ -262,8 +262,19 @@
      these, so they always agree. Pick by CONTENT:
        layout-wide  tables, dashboards, dense data
        layout-form  single-column forms and reading (~75ch at 16px) */
-  .layout-wide { @apply w-full max-w-7xl mx-auto; }
-  .layout-form { @apply w-full max-w-3xl mx-auto; }
+  .layout-wide { @apply w-full mx-auto; max-width: min(100%, 80rem); }
+
+  /* Dynamic rather than a single number. 768px was chosen because it was the
+     most common existing wrapper — a popularity argument, not a design one.
+     Measured at `text-sm`, 768px is already 87 characters per line, above the
+     45-75ch comfort band, so a bigger FIXED value would hurt prose while
+     helping card layouts.
+
+     `clamp` serves both: it tracks the viewport between a readable floor and a
+     ceiling, so a form breathes on a 1512px display without a paragraph
+     running to 116ch. Long prose blocks should still carry `max-w-prose`,
+     which caps the MEASURE independently of the container. */
+  .layout-form { @apply w-full mx-auto; max-width: clamp(20rem, 62vw, 56rem); }
 
   /* ── Brand gradients ───────────────────────────────────────────────────────
      These were USED but never DEFINED — `gradient-primary` at 6 call sites and

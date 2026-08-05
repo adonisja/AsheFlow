@@ -42,7 +42,7 @@ export default function Account() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <h1 className="page-title">My Account</h1>
 
       {/* Profile info */}

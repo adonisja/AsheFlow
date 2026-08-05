@@ -18,11 +18,13 @@ import NotificationBanner from '../NotificationBanner';
  * the same width. That alignment is the whole point of the change: previously
  * the banner used main's 1280px while pages used their own 672-1152px.
  */
+/* `/schedule-changes` was here and moved out: seen rendered, it is a KPI
+   dashboard — a 4-stat row plus side-by-side cards — which 768px cramps. The
+   lesson from that: classify from the RENDERED page, not the file name. */
 const FORM_WIDTH_ROUTES = [
   '/account',
   '/preferences',
-  '/notifications-history',
-  '/schedule-changes',
+  '/notifications',
   '/field-ops',
   '/scorecard-entry',
   '/graduation-quiz',

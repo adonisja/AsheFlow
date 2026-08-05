@@ -296,7 +296,7 @@ const ScheduleChanges = () => {
   // ---------------------------------------------------------------------------
   if (isPrivileged) {
     return (
-      <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+      <div className="space-y-6 animate-slide-up">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
             <BarChart2 className="w-5 h-5 text-muted-foreground" />
@@ -347,7 +347,7 @@ const ScheduleChanges = () => {
   // Field staff view — personal form + own request history
   // ---------------------------------------------------------------------------
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">

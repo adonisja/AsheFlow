@@ -93,7 +93,7 @@ export default function NotificationsHistory() {
   const unreadCount = all.filter(n => !n.is_read).length;
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>

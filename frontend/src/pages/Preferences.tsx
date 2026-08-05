@@ -563,7 +563,7 @@ const Preferences = () => {
   const recentRequests = changeRequests.slice(0, 5);
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <h1 className="page-title">Preferences</h1>
 
