@@ -248,6 +248,11 @@ function MemberRow({
        ("Jerome Whitfield · training Akkeem Tyrell", ~330px) and lets the row
        end where the content ends.
 
+       The actions track is `max-content`, not `auto`: measured on the rendered
+       page, `auto` stretched it to 690px for ~200px of buttons — the same dead
+       space, moved to the third column. `justify-start` stops the grid itself
+       filling the row.
+
        STATE vs ACTION is carried by styling and wording, not by position:
          state   quiet tinted pill, plain noun, not clickable
          action  bordered/filled button, verb-first ("Mark Present")
@@ -255,7 +260,7 @@ function MemberRow({
        Below `sm` the tracks collapse to one column and everything stacks —
        the mobile layout, reached by constraint rather than a breakpoint guess.
        The name never truncates, so real names are not clipped at 390px. */
-    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,22rem)_140px_auto] items-center gap-x-4 gap-y-2 py-2.5">
+    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,22rem)_140px_max-content] justify-start items-center gap-x-4 gap-y-2 py-2.5">
       <div className="min-w-0">
         <p className={`text-sm ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
           {m.name ?? m.employee_id.slice(0, 8)}
