@@ -225,33 +225,38 @@ function MemberRow({
   const notArrived = m.availability === 'not_arrived';
   const rollBusy = busy === m.employee_id;
   return (
-    /* ONE row on desktop; wraps to two only when the width forces it.
-         Rasheed Grant                 [Not Present]   [Mark Present] [Mark Absent]
+    /* A GRID, not a flex row — this is a 33-row roster, so the same field must
+       land in the same place on every line. Three tracks:
+
+         name (1fr)     state (140px)     actions (auto)
+         Rasheed Grant  Not Present       [Mark Present] [Mark Absent]
          Trainer
 
-       An earlier version stacked actions onto their own line, copying the
-       mobile app. That was over-applying the pattern: mobile stacks because a
-       ~350px row cannot hold a name plus a state plus two buttons. Desktop has
-       ~1180px, so stacking there just doubles the height of every actionable
-       row and wastes the space that made the gap look wrong in the first place.
+       Three earlier attempts all failed on spacing, and each failure was the
+       same mistake — treating a table as a row of loose flex items:
+         · `flex-1` on the name stretched it to ~870px and pushed state and
+           actions to the far right, leaving a ~1000px gap mid-row;
+         · stacking actions onto a second line copied the MOBILE layout, where
+           it exists only because a ~350px row cannot fit the content;
+         · `basis-64` capped the name but left three cramped groups huddled at
+           the left of an otherwise empty row.
+       A fixed state track is what makes the column align regardless of label
+       length ("Not Present" vs "On route (early) · 40%"), and the name track is
+       CAPPED at 22rem rather than `1fr` — measured at 1180px, `1fr` handed the
+       name 953px for ~150px of text, which is the same dead space as `flex-1`
+       wearing a grid. 22rem fits the longest real label
+       ("Jerome Whitfield · training Akkeem Tyrell", ~330px) and lets the row
+       end where the content ends.
 
-       What actually separates STATE from ACTION is styling and wording, not
-       the line break:
-         state   a quiet tinted pill, plain noun ("Not Present"), never clickable
-         action  a bordered/filled button, verb-first ("Mark Present")
+       STATE vs ACTION is carried by styling and wording, not by position:
+         state   quiet tinted pill, plain noun, not clickable
+         action  bordered/filled button, verb-first ("Mark Present")
 
-       `flex-wrap` handles narrow widths: name+state hold line 1 and the buttons
-       drop beneath, which is the mobile layout, reached by constraint rather
-       than by a hardcoded breakpoint. The name no longer carries `truncate`, so
-       real names are never clipped ("Rashe…" at 390px). */
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
-      {/* `basis-64 grow-0` rather than `flex-1`: a growing name column would
-          stretch to ~870px and shove the state and actions to the far right,
-          which is the ~1000px gap this row had before. A fixed basis keeps the
-          three groups together on the left and gives every row the same
-          columns, so the list scans vertically. `max-w-full` lets it shrink
-          below 256px on a phone. */}
-      <div className="min-w-0 basis-64 grow-0 max-w-full">
+       Below `sm` the tracks collapse to one column and everything stacks —
+       the mobile layout, reached by constraint rather than a breakpoint guess.
+       The name never truncates, so real names are not clipped at 390px. */
+    <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,22rem)_140px_auto] items-center gap-x-4 gap-y-2 py-2.5">
+      <div className="min-w-0">
         <p className={`text-sm ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
           {m.name ?? m.employee_id.slice(0, 8)}
         </p>
@@ -263,8 +268,9 @@ function MemberRow({
         </p>
       </div>
 
-      {/* Current state — directly after the name, never interactive. */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      {/* State track — always occupied so the actions column starts at the same
+          x on every row, even for a driver with no availability tag. */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {m.orphaned && (
           <span className="text-xs font-medium px-2 py-0.5 rounded-full text-danger bg-danger/10">
             Trainer absent
@@ -278,48 +284,46 @@ function MemberRow({
         )}
       </div>
 
-      {/* Actions — verb-first, and only rendered when one applies. */}
-      {isDispatch && (notArrived || m.orphaned || (!off && m.member_id && m.role !== 'driver')) && (
-        <div className="flex items-center gap-2 shrink-0">
-          {notArrived && (
-            <>
-              <button
-                className="text-xs font-medium text-success-foreground bg-success rounded-md px-2.5 py-1 hover:opacity-90 disabled:opacity-50"
-                disabled={rollBusy}
-                onClick={() => onRollCall(m, false)}
-              >
-                {rollBusy ? '…' : 'Mark Present'}
-              </button>
-              <button
-                className="text-xs font-medium text-warning border border-warning/40 rounded-md px-2.5 py-1 hover:bg-warning/10 disabled:opacity-50"
-                disabled={rollBusy}
-                onClick={() => onRollCall(m, true)}
-              >
-                Mark Absent
-              </button>
-            </>
-          )}
-
-          {m.orphaned && (
+      {/* Actions track — verb-first, and only rendered when one applies. */}
+      <div className="flex items-center gap-2">
+        {isDispatch && notArrived && (
+          <>
             <button
-              onClick={onReassign}
-              className="text-xs font-medium text-primary-foreground bg-primary rounded-md px-2.5 py-1 hover:opacity-90"
+              className="text-xs font-medium text-success-foreground bg-success rounded-md px-2.5 py-1 hover:opacity-90 disabled:opacity-50"
+              disabled={rollBusy}
+              onClick={() => onRollCall(m, false)}
             >
-              Reassign trainer
+              {rollBusy ? '…' : 'Mark Present'}
             </button>
-          )}
-
-          {!off && !notArrived && m.member_id && m.role !== 'driver' && (
             <button
-              className="text-xs font-medium text-muted-foreground border border-border rounded-md px-2.5 py-1 hover:bg-accent disabled:opacity-50"
-              disabled={busy === m.member_id}
-              onClick={() => onDepart(m.member_id!)}
+              className="text-xs font-medium text-warning border border-warning/40 rounded-md px-2.5 py-1 hover:bg-warning/10 disabled:opacity-50"
+              disabled={rollBusy}
+              onClick={() => onRollCall(m, true)}
             >
-              {busy === m.member_id ? '…' : 'Mark departed'}
+              Mark Absent
             </button>
-          )}
-        </div>
-      )}
+          </>
+        )}
+
+        {isDispatch && m.orphaned && (
+          <button
+            onClick={onReassign}
+            className="text-xs font-medium text-primary-foreground bg-primary rounded-md px-2.5 py-1 hover:opacity-90"
+          >
+            Reassign trainer
+          </button>
+        )}
+
+        {isDispatch && !off && !notArrived && m.member_id && m.role !== 'driver' && (
+          <button
+            className="text-xs font-medium text-muted-foreground border border-border rounded-md px-2.5 py-1 hover:bg-accent disabled:opacity-50"
+            disabled={busy === m.member_id}
+            onClick={() => onDepart(m.member_id!)}
+          >
+            {busy === m.member_id ? '…' : 'Mark departed'}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
