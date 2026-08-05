@@ -61,7 +61,12 @@ const Layout = () => {
           `layout-form`, and the banner takes the SAME width so the two always
           align — previously the banner used main's 1280px while pages used
           their own 672-1152px, leaving content visibly indented from it. */}
-      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-6">
+      {/* `pb-14` (56px), not `py-6`. 24px left the last control of a page flush
+          against the end of the document, which reads as content being cut off,
+          and the floating support widget sits in that corner covering it. 96px
+          was tried first and overshot — the page then ended in obvious dead
+          space. 56px clears the widget without looking empty. */}
+      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 pt-6 pb-14">
         <div className={`${widthClass} mb-4`}>
           <NotificationBanner />
         </div>
