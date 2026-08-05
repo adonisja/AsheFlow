@@ -527,7 +527,7 @@ export default function Incidents() {
   ] as { key: 'submit' | 'management'; label: string }[];
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <div>
         <h1 className="page-title">Incidents</h1>
         <p className="text-subtle mt-1">Report and track field incidents across your team.</p>
