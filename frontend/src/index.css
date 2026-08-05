@@ -252,6 +252,25 @@
   .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
   .btn-primary:active { transform: translateY(0) scale(0.98); }
 
+  /* ── Brand gradients ───────────────────────────────────────────────────────
+     These were USED but never DEFINED — `gradient-primary` at 6 call sites and
+     `gradient-text-brand` at 1, including the navbar. An undefined utility is
+     silently inert, so the navbar rendered a white icon on a transparent tile
+     (invisible on a light navbar) and a plain-black wordmark. Found by opening
+     the page, not by any gate: no build step errors on a class that does not
+     exist. Token-driven so they follow the theme. */
+  .gradient-primary {
+    background-image: linear-gradient(135deg,
+      hsl(var(--primary)), hsl(var(--brand)));
+  }
+  .gradient-text-brand {
+    background-image: linear-gradient(90deg,
+      hsl(var(--primary)), hsl(var(--brand)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
            bg-secondary text-secondary-foreground font-medium text-sm border border-border;
