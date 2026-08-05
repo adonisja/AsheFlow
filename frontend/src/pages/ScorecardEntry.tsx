@@ -173,7 +173,7 @@ export default function ScorecardEntry() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-5 animate-slide-up">
+    <div className="space-y-5 animate-slide-up">
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
           <Award className="w-4 h-4 text-primary" />

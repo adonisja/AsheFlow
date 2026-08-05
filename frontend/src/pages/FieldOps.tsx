@@ -1988,7 +1988,7 @@ export default function FieldOps() {
 
   if (!employeeId) {
     return (
-      <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+      <div className="space-y-6 animate-slide-up">
         <h1 className="page-title">Field Operations</h1>
         <div className="card text-center py-10 text-subtle text-sm">Loading your profile…</div>
       </div>
@@ -1996,7 +1996,7 @@ export default function FieldOps() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
       {isDriver    && <DriverFieldOpsView employeeId={employeeId} />}
       {isWalker    && <WalkerSelfPerformancePanel employeeId={employeeId} />}

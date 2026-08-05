@@ -18,14 +18,19 @@ import NotificationBanner from '../NotificationBanner';
  * the same width. That alignment is the whole point of the change: previously
  * the banner used main's 1280px while pages used their own 672-1152px.
  */
-/* `/schedule-changes` was here and moved out: seen rendered, it is a KPI
-   dashboard — a 4-stat row plus side-by-side cards — which 768px cramps. The
-   lesson from that: classify from the RENDERED page, not the file name. */
+/* `/schedule-changes` and `/field-ops` were both here and moved out: seen
+   rendered, each is a KPI dashboard — a 4-stat row plus data sections — not a
+   form. The lesson, twice over: classify from the RENDERED page, not the file
+   name or a guess about what the page "is".
+
+   `/scorecard-entry` stays on the list but is UNVERIFIED: it is gated to
+   admin/management and renders "Access Denied" for dispatch, so nobody has
+   seen its real layout. It is named "entry", which suggests a form; that is an
+   assumption, not an observation. */
 const FORM_WIDTH_ROUTES = [
   '/account',
   '/preferences',
   '/notifications',
-  '/field-ops',
   '/scorecard-entry',
   '/graduation-quiz',
 ];
