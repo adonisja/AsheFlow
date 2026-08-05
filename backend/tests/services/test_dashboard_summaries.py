@@ -421,8 +421,11 @@ class TestRollCallAttendance:
 
         crew = get_management_dashboard_summary(db, COMPANY, period="week").crew
         assert crew.roll_call_total == len(confs)
+        # 2dp, matching the shared `_pct` helper every percentage in
+        # dashboard_summaries.py goes through. This asserted 1dp and passed only
+        # while the ratio happened to be exact; 2/3 exposed it (66.67 vs 66.7).
         assert crew.roll_call_confirmed_pct == round(
-            confs.count(True) / len(confs) * 100, 1)
+            confs.count(True) / len(confs) * 100, 2)
 
 
 # ── graduation, per the locked definition ─────────────────────────────────────
