@@ -44,6 +44,10 @@ class TestAccess:
             "/packages/intake/preview": FIELD,
             "/packages/intake/read-label": FIELD,
             "/packages/intake/assign": DISPATCH,
+            # Dry run of /assign. Same gate as the write it previews: a preview
+            # that showed a wider audience which routes exist would leak the
+            # roster to field roles.
+            "/packages/intake/assign/preview": DISPATCH,
             "/packages/intake/field-added": DISPATCH,
         }
         for route in pi.router.routes:
@@ -74,6 +78,54 @@ class TestAccess:
             "dispatch can now read GET /audit — if that is intentional, this "
             "feed's justification changes and ADR-246 should be revisited"
         )
+
+
+class TestAssignPreview:
+    """The dry run must not be able to write, and must agree with the write."""
+
+    def test_preview_never_commits(self):
+        """`commit=False` plus a rollback in `finally`.
+
+        Asserted on the SOURCE rather than by calling it, because the failure
+        this guards against is someone later copying /assign's body into the
+        preview and losing the flag — which a happy-path call would not catch.
+        """
+        import inspect
+        src = inspect.getsource(pi.dispatch_assign_preview)
+        assert "commit=False" in src, "preview must not commit"
+        assert "db.rollback()" in src, "preview must roll back"
+        assert "finally:" in src, "rollback must be in finally, not the happy path"
+
+    def test_preview_is_not_201(self):
+        """A request that writes nothing must not share a status code with one
+        that does. /assign is 201 CREATED; the preview is a plain 200."""
+        preview = next(r for r in pi.router.routes
+                       if r.path == "/packages/intake/assign/preview")
+        assign = next(r for r in pi.router.routes
+                      if r.path == "/packages/intake/assign")
+        assert assign.status_code == 201
+        assert preview.status_code in (None, 200)
+
+    def test_preview_runs_the_same_resolver_as_assign(self):
+        """A preview that could disagree with the commit is worse than none."""
+        import inspect
+        assert "_resolve(" in inspect.getsource(pi.dispatch_assign_preview)
+        assert "_resolve(" in inspect.getsource(pi.dispatch_assign)
+
+    def test_preview_is_not_restricted_to_own_route(self):
+        """The reason this endpoint exists: /preview passes
+        `restrict_to_own_route=True`, and a dispatcher has no route of their
+        own, so it can never return the candidates a dispatcher chooses from.
+
+        Checks the CALL, not the whole source — the docstring names the flag to
+        explain why this endpoint exists, and a substring match on the file
+        would fail on its own explanation.
+        """
+        import inspect, re
+        src = inspect.getsource(pi.dispatch_assign_preview)
+        call = re.search(r"_resolve\((.*?)\)", src, re.S)
+        assert call, "preview must call _resolve"
+        assert "restrict_to_own_route" not in call.group(1)
 
 
 class TestRouteShadowing:

@@ -272,6 +272,39 @@ function AssignForm() {
     }
   }, []);
 
+  /* Ranked candidates from the dry run. `assessment.candidates` is ordered by
+     match strength (address > block_key > none) and each carries `status` and
+     `can_accept`, so a dispatcher can see that a nearby route is COMPLETED and
+     therefore not an option — rather than only being shown the one best fit.
+
+     NOTE: `match` is block/stop proximity, not a distance. The picker is
+     ordered by match strength; calling that "nearest" would overstate it. */
+  const [routePreview, setRoutePreview] = useState<PackageIntakeResponse | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  const runPreview = useCallback(async () => {
+    if (!tba.trim()) return;
+    setPreviewing(true);
+    setError(null);
+    try {
+      const res = await axiosClient.post<PackageIntakeResponse>(
+        '/packages/intake/assign/preview', {
+          tba: tba.trim().toUpperCase(),
+          normalised_address: address.trim() || null,
+          block_key: blockKey.trim() || null,
+          route_id: null,          // ask what the system WOULD pick
+        });
+      setRoutePreview(res.data);
+      // Adopt the suggestion only if the dispatcher has not already chosen.
+      if (!routeId && res.data.route_id) setRouteId(res.data.route_id);
+    } catch {
+      // A failed preview must not block assigning by hand.
+      setRoutePreview(null);
+    } finally {
+      setPreviewing(false);
+    }
+  }, [tba, address, blockKey, routeId]);
+
   const submit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -433,14 +466,81 @@ function AssignForm() {
             className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
           />
         </Field>
-        <Field label="Route ID">
-          <input
-            value={routeId}
-            onChange={(e) => setRouteId(e.target.value)}
-            placeholder="best fit if blank"
-            className="w-full border border-border rounded-lg px-3 py-2 bg-background font-mono text-xs"
-          />
-        </Field>
+      </div>
+
+      {/* Route: suggested first, then chosen from the ranked candidates. This
+          was a raw "Route ID" text box asking for a UUID — nobody knows a route
+          by its UUID, and the ranking, each route's status, and whether it can
+          still accept work were all on the wire already and never shown.
+
+          `can_accept: false` routes are RENDERED, disabled, with the reason.
+          Hiding them would leave a dispatcher wondering why the obvious nearby
+          route is missing.
+
+          `match` is block/stop proximity, not a distance — the label says
+          "address match" / "block match" rather than implying metres. */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Route</span>
+          <button
+            type="button"
+            onClick={runPreview}
+            disabled={previewing || tba.trim().length < 4}
+            className="text-xs font-medium text-brandText disabled:opacity-50"
+          >
+            {previewing ? 'Checking…' : 'Suggest a route'}
+          </button>
+        </div>
+
+        {!routePreview && (
+          <p className="text-xs text-muted-foreground">
+            Leave unset to let the system pick the best fit, or use
+            <span className="text-foreground"> Suggest a route</span> to see the options first.
+          </p>
+        )}
+
+        {routePreview?.assessment?.candidates?.length ? (
+          <ul className="space-y-1.5">
+            {routePreview.assessment.candidates.map((c) => {
+              const chosen = routeId === c.route_id;
+              const isBest = c.route_id === routePreview.assessment?.best_fit?.route_id;
+              return (
+                <li key={c.route_id}>
+                  <button
+                    type="button"
+                    disabled={!c.can_accept}
+                    onClick={() => setRouteId(chosen ? '' : c.route_id)}
+                    className={`w-full text-left rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      chosen ? 'border-brandText bg-brandText/5' : 'border-border hover:bg-accent'
+                    } ${c.can_accept ? '' : 'opacity-60 cursor-not-allowed'}`}
+                  >
+                    <span className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium">Route {c.route_number ?? '—'}</span>
+                      <span className="text-muted-foreground">{c.walker_name ?? 'unassigned'}</span>
+                      {isBest && (
+                        <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full text-success bg-success/10">
+                          Best fit
+                        </span>
+                      )}
+                      <span className="text-[11px] px-1.5 py-0.5 rounded-full text-muted-foreground bg-muted-foreground/10">
+                        {c.match === 'address' ? 'address match' : c.match === 'block_key' ? 'block match' : 'no match'}
+                      </span>
+                      <span className={`text-[11px] px-1.5 py-0.5 rounded-full ml-auto ${
+                        c.can_accept ? 'text-info bg-info/10' : 'text-warning bg-warning/10'
+                      }`}>
+                        {c.status ?? 'unknown'}{c.can_accept ? '' : ' · cannot accept'}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : routePreview ? (
+          <p className="text-xs text-warning">
+            No route can take this package — assigning will escalate it to dispatch review.
+          </p>
+        ) : null}
       </div>
 
       {error && <ErrorBanner message={error} />}

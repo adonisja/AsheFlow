@@ -297,6 +297,39 @@ def dispatch_assign(
     return _resolve(db, caller, payload, target_route_id=payload.route_id)
 
 
+@router.post("/assign/preview", response_model=PackageIntakeResponse)
+def dispatch_assign_preview(
+    payload: DispatchAssignRequest,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_dispatch),
+):
+    """Dry run of /assign: what would happen, writing nothing.
+
+    Dispatch cannot use /preview — that path passes `restrict_to_own_route=True`
+    and a dispatcher has no route of their own, so it can never return the
+    ranked candidates a dispatcher needs to choose from.
+
+    A separate endpoint rather than a `dry_run` flag on /assign: that route is
+    201 CREATED and creates a stop, and a request that writes nothing must not
+    share a status code with one that does.
+
+    Runs the SAME `_resolve` as the real assign, so `assessment.candidates` is
+    exactly the ranking the write would use — a preview that could disagree
+    with the commit would be worse than none.
+
+    Rolls back in `finally` so a preview can never leave a partial write.
+    """
+    try:
+        return _resolve(
+            db, caller, payload,
+            target_route_id=payload.route_id,
+            commit=False,
+        )
+    finally:
+        db.rollback()
+
+
 @router.get("/field-added", response_model=FieldAddedResponse)
 def field_added_packages(
     route_date: Optional[date] = Query(None),
