@@ -565,8 +565,23 @@ function AssignForm() {
             })}
           </ul>
         ) : routePreview ? (
+          /* Two different situations reach zero candidates, and telling them
+             apart is the whole value of showing anything here:
+
+               decidable=false  we could not LOCATE the address — the address
+                                is the problem, not the routes
+               decidable=true   located fine, but no route can accept it
+
+             Saying "no route can take this" for the first would send a
+             dispatcher to check routes when they need to fix the address. */
           <p className="text-xs text-warning">
-            No route can take this package — assigning will escalate it to dispatch review.
+            {routePreview.assessment?.decidable === false
+              ? routePreview.assessment?.zone_reason === 'no_coords'
+                ? 'Could not place this address — check it, or assign the route by hand.'
+                : routePreview.assessment?.zone_reason === 'outside'
+                  ? 'This address is outside the delivery zone — it will escalate to dispatch review.'
+                  : 'Not enough information to place this package — it will escalate to dispatch review.'
+              : 'No route can take this package — assigning will escalate it to dispatch review.'}
           </p>
         ) : null}
       </div>
