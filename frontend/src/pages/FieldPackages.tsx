@@ -52,28 +52,46 @@ type Tab = 'feed' | 'assign' | 'lookup';
  * exceptional — the caller reports it in words and manual entry always
  * remains (ADR-246).
  *
- * Returns the original file untouched when no conversion is needed, so the
- * common JPEG/PNG path is unaffected.
+ * It also DOWNSCALES. The first version returned any server-readable type
+ * untouched, which meant a 12 MP phone JPEG went up at full size and came back
+ * 413 — the format was never the only problem. Every image is now capped at
+ * MAX_EDGE, matching what mobile has always done on capture.
  */
+/** Longest edge sent to the server. Mobile already uses 2000 via
+ *  react-native-image-picker, for the same reason: a label only needs enough
+ *  pixels for OCR to resolve the text, and a 12 MP phone photo is mostly
+ *  packaging. Matching that number keeps the two platforms comparable. */
+const MAX_EDGE = 2000;
 const SERVER_READABLE = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
 
 async function toServerReadableImage(file: File): Promise<File> {
-  if (SERVER_READABLE.includes(file.type)) return file;
+  // PDFs cannot be canvas-processed and are already server-readable.
+  if (file.type === 'application/pdf') return file;
 
+  // An IMAGE always goes through, even a JPEG. The first version returned any
+  // server-readable type untouched, so a 12 MP phone photo was uploaded at full
+  // size and the endpoint rejected it with 413 — the format was never the only
+  // problem, the SIZE was.
   const bitmap = await createImageBitmap(file);   // throws if the OS cannot decode
+
+  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+
   const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('no 2d context');
-  ctx.drawImage(bitmap, 0, 0);
+  ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
 
   const blob: Blob = await new Promise((resolve, reject) => {
-    // 0.9 keeps label text legible; the endpoint caps at 10 MB and a re-encoded
-    // phone photo lands well under that.
+    // 0.85 rather than 0.9: measured, a 2000px label at 0.9 still ran to
+    // several MB, and the text stays legible at 0.85. The cap is 10 MB and a
+    // downscaled label lands around 0.3-0.8 MB.
     canvas.toBlob(b => (b ? resolve(b) : reject(new Error('encode failed'))),
-                  'image/jpeg', 0.9);
+                  'image/jpeg', 0.85);
   });
 
   return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg',
