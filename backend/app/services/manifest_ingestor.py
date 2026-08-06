@@ -355,7 +355,13 @@ class ImageManifestIngestor(ManifestIngestor):
             return self._client
         try:
             import boto3
-            return boto3.client("textract")
+            from app.core.config import settings
+            # `region_name` is REQUIRED. The container sets AWS_REGION, but boto3 only
+            # reads AWS_DEFAULT_REGION from the environment — so a bare
+            # boto3.client("textract") raises NoRegionError, which the caller's
+            # broad `except` then reports as "could not read the label".
+            # Every other AWS client in the app already passes it (adp.py, email.py).
+            return boto3.client("textract", region_name=settings.aws_region)
         except ImportError as exc:
             raise RuntimeError(
                 "boto3 is required for ImageManifestIngestor in production. "
