@@ -252,9 +252,6 @@ function AssignForm() {
       const r = res.data;
       if (r.tba) setTba(r.tba);
       if (r.address_line) setAddress(r.address_line);
-      // Reveal the fields the scan just wrote into — or, on a failed read,
-      // the ones the dispatcher now has to fill by hand.
-      setManualOpen(true);
       // Every line OCR read, so a wrong pick is fixed by clicking the right one
       // rather than re-scanning (and re-billing Textract).
       setOcrLines(r.lines ?? []);
@@ -272,6 +269,11 @@ function AssignForm() {
       setScanNote('Scan unavailable — enter the details by hand.');
     } finally {
       setScanning(false);
+      // In `finally`, not the try: a scan that FAILS is precisely when the
+      // fields are needed, and the catch branch already says "enter the
+      // details by hand" — telling someone to type into inputs that are
+      // still collapsed is worse than not offering the scan at all.
+      setManualOpen(true);
     }
   }, []);
 
@@ -390,21 +392,31 @@ function AssignForm() {
             <p className="text-sm">
               {scanning ? 'Reading the label…' : 'Drop or paste a label image'}
             </p>
-            <label className="text-xs text-primary hover:underline cursor-pointer">
+            {/* `htmlFor` + a SIBLING input, not a nested one. With the input inside
+                the label, a click is forwarded to the input, bubbles back up through
+                the label, and is forwarded again — opening the file chooser several
+                times per click (observed: 5 stacked choosers from one interaction).
+                An id/for pair means the label never contains its own target, so the
+                forwarded click cannot re-enter it. */}
+            <label
+              htmlFor="label-file-input"
+              className="text-xs text-primary hover:underline cursor-pointer"
+            >
               or choose a file
-              <input
-                type="file"
-                accept="image/jpeg,image/png,application/pdf"
-                capture="environment"
-                className="hidden"
-                disabled={scanning}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void scanLabel(f);
-                  e.target.value = '';   // so the same photo can be retried
-                }}
-              />
             </label>
+            <input
+              id="label-file-input"
+              type="file"
+              accept="image/jpeg,image/png,application/pdf"
+              capture="environment"
+              className="hidden"
+              disabled={scanning}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void scanLabel(f);
+                e.target.value = '';   // so the same photo can be retried
+              }}
+            />
             {scanNote && (
               <p className="text-xs text-muted-foreground mt-1">{scanNote}</p>
             )}
