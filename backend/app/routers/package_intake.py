@@ -35,7 +35,7 @@ from app.services.audit import write_audit
 from app.services.local_date import company_today
 from app.services.package_intake import (
     IntakeAssessment, attach_to_route, check_duplicate, check_zone,
-    create_foreign_removal, find_best_fit,
+    create_foreign_removal, find_best_fit, resolve_address,
 )
 
 router = APIRouter(prefix="/packages/intake", tags=["packages"])
@@ -117,9 +117,31 @@ def _resolve(
             reason=dup.basis,
         )
 
-    # ── 2. ours to deliver? Ownership is decided BEFORE routing. ──
-    zone = check_zone(db, cid, lat=payload.lat, lng=payload.lng)
+    # ── 2. work out where this actually is (ADR-259). ──
+    # Clients send the text off the label and nothing more; the server derives
+    # coords, the canonical address and the block key. Anything the caller DID
+    # send wins, so a corrected value is never silently overridden.
+    resolved = resolve_address(
+        db, cid, payload.normalised_address, tba,
+        lat=payload.lat, lng=payload.lng,
+        block_key=payload.block_key,
+        normalised_address=payload.normalised_address,
+    )
+
+    # ── 3. ours to deliver? Ownership is decided BEFORE routing. ──
+    zone = check_zone(db, cid, lat=resolved.lat, lng=resolved.lng)
     if zone.decidable and not zone.in_zone:
+        # Out-of-zone is terminal: the package is not ours, so no route is
+        # offered and the custody chain takes it (ADR-176).
+        #
+        # A dry run must NOT build the removal. create_foreign_removal + the
+        # audit row are a real write that only a rollback was undoing, and a
+        # preview that constructs a custody record is one missing `finally`
+        # away from persisting one (ADR-259).
+        if not commit:
+            return PackageIntakeResponse(
+                outcome="removal", tba=tba, reason="out_of_zone",
+            )
         removal = create_foreign_removal(
             db, company_id=cid, tba=tba, removal_date=when,
             removed_by=caller.id, removed_by_name=caller.name,
@@ -132,15 +154,14 @@ def _resolve(
             detail={"tba": tba, "outcome": "removal", "reason": "out_of_zone",
                     "route_date": when.isoformat()},
         )
-        if commit:
-            db.commit()
+        db.commit()
         return PackageIntakeResponse(
             outcome="removal", tba=tba, removal_id=removal.id,
             reason="out_of_zone",
         )
 
     assessment = find_best_fit(
-        db, cid, when, payload.block_key, payload.normalised_address,
+        db, cid, when, resolved.block_key, resolved.normalised_address,
         adder_employee_id=adder_id,
     )
     assessment.zone = zone
@@ -149,6 +170,10 @@ def _resolve(
     # Undecidable ownership escalates rather than guessing. Without coords we
     # cannot prove the package is foreign, and declaring it so would strand a
     # deliverable package (ADR-246).
+    #
+    # The ranked candidates ride along: the block key is derived offline, so a
+    # geocode failure still knows which routes cover the block. Dispatch gets
+    # something to act on instead of "could not place this address" (ADR-259).
     if not zone.decidable:
         return PackageIntakeResponse(
             outcome="needs_dispatch", tba=tba,
@@ -202,8 +227,11 @@ def _resolve(
 
     stop = attach_to_route(
         db, route, tba=tba,
-        block_key=payload.block_key,
-        normalised_address=payload.normalised_address,
+        # The resolved values, not the raw payload: the stop should carry the
+        # canonical address and derived block key, matching what enrichment
+        # writes for a manifested package (ADR-259).
+        block_key=resolved.block_key,
+        normalised_address=resolved.normalised_address,
         company_id=cid,
         executor_id=route.executor_id,
         executor_name=executor_name,

@@ -105,6 +105,7 @@ from app.models.tote_ops import PackageRemoval  # noqa: E402
 from app.services.package_intake import (  # noqa: E402
     _ACCEPTING_STATUSES, attach_to_route, check_duplicate, check_zone,
     create_foreign_removal, find_best_fit, load_company_boundary,
+    resolve_address,
 )
 
 COMPANY = uuid.UUID("a0000000-0000-0000-0000-000000000001")
@@ -573,3 +574,169 @@ class TestDuplicateGuard:
         assert v.basis == "delivery_stop"
         assert v.holder_name == "D. Chen"
         assert v.route_number == 4
+
+
+class TestResolveAddress:
+    """Deriving coords, canonical address and block key from label text (ADR-259).
+
+    Clients only ever send what the OCR read off the label. Before this, lat/lng
+    arrived null on every request, so `check_zone` answered `no_coords` every
+    time and the whole ownership tree of ADR-246 never ran.
+
+    The two derivations are deliberately independent: the block key is pure
+    string work, so a GeoClient outage must still leave routes rankable.
+    """
+
+    @staticmethod
+    def _geo(**kw):
+        from app.tasks.enrich_manifest import GeoClientResult
+        base = dict(
+            normalised_address="505 WEST 37 STREET", lat=40.756679, lng=-73.998177,
+            first_cross_street=None, second_cross_street=None, segment_id=None,
+            from_lion_node_id=None, to_lion_node_id=None,
+            x_low_address_end=None, y_low_address_end=None,
+            x_high_address_end=None, y_high_address_end=None,
+        )
+        base.update(kw)
+        return GeoClientResult(**base)
+
+    @pytest.fixture(autouse=True)
+    def _no_network(self, monkeypatch):
+        """Fail loudly if a test forgets to stub GeoClient.
+
+        A unit test that silently reaches the real API would pass locally, cost
+        400ms, and break in CI where no key is set.
+        """
+        import app.tasks.enrich_manifest as em
+
+        def _boom(*a, **kw):
+            raise AssertionError("unstubbed GeoClient call")
+
+        monkeypatch.setattr(em, "_geoclient_normalise", _boom)
+
+    def _stub(self, monkeypatch, fn):
+        import app.tasks.enrich_manifest as em
+        monkeypatch.setattr(em, "_geoclient_normalise", fn)
+
+    def test_block_key_is_derived_from_label_text(self, db, monkeypatch):
+        """The bug in one line: nothing derived this, so the block-match tier
+        could never fire."""
+        self._stub(monkeypatch, lambda *a, **kw: None)
+        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
+        assert r.block_key == "W_37_St_500"
+
+    def test_geocode_supplies_coords_and_canonical_address(self, db, monkeypatch):
+        self._stub(monkeypatch, lambda *a, **kw: self._geo())
+        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
+        assert (r.lat, r.lng) == (40.756679, -73.998177)
+        assert r.geocoded is True
+        # GeoClient's canonical form is what Route.normalised_addresses holds,
+        # so preferring it is what lets the exact-address tier match at all.
+        assert r.normalised_address == "505 WEST 37 STREET"
+
+    def test_block_key_survives_a_geocode_failure(self, db, monkeypatch):
+        """The reason the two derivations are independent: an outage costs the
+        ownership check, not the ability to rank routes."""
+        self._stub(monkeypatch, lambda *a, **kw: None)
+        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
+        assert r.geocoded is False
+        assert r.lat is None
+        assert r.block_key == "W_37_St_500"
+
+    def test_a_geoclient_exception_never_propagates(self, db, monkeypatch):
+        """Intake must reach dispatch even when geocoding is down — a network
+        error here would otherwise 500 a walker mid-route."""
+        def _raise(*a, **kw):
+            raise RuntimeError("connection reset")
+        self._stub(monkeypatch, _raise)
+
+        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1")
+        assert r.geocoded is False
+        assert r.block_key == "W_37_St_500"
+
+    def test_caller_supplied_coords_are_not_overridden(self, db, monkeypatch):
+        """Mobile may send a device fix, and a dispatcher may correct a bad
+        parse. Neither should be silently replaced — and no call is made."""
+        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1",
+                            lat=40.70, lng=-74.00)
+        assert (r.lat, r.lng) == (40.70, -74.00)
+        assert r.geocoded is True
+
+    def test_caller_supplied_block_key_is_not_overridden(self, db, monkeypatch):
+        self._stub(monkeypatch, lambda *a, **kw: None)
+        r = resolve_address(db, COMPANY, "505 W 37TH ST APT 4007", "TBA1",
+                            block_key="MANUAL_1")
+        assert r.block_key == "MANUAL_1"
+
+    def test_an_unparseable_address_yields_no_block_key(self, db, monkeypatch):
+        """derive_block_key returns UnparseableAddress for OCR mush. That is a
+        normal outcome carrying a reason, not a block key — and not a crash."""
+        self._stub(monkeypatch, lambda *a, **kw: None)
+        r = resolve_address(db, COMPANY, "no house number here", "TBA1")
+        assert r.block_key is None
+        assert r.geocoded is False
+
+    def test_no_address_at_all_is_handled(self, db):
+        """A radio report may carry only a TBA. No address means nothing to
+        derive and nothing to call — the autouse guard proves no call is made."""
+        r = resolve_address(db, COMPANY, None, "TBA1")
+        assert r.block_key is None
+        assert r.geocoded is False
+
+    def test_a_geocode_without_coords_is_not_treated_as_located(self, db, monkeypatch):
+        """GeoClient answers 200 with the street matched but the house number
+        out of range: a normalised name and NO coords. That is not a location,
+        and treating it as one would put the package in the wrong zone."""
+        self._stub(monkeypatch, lambda *a, **kw: self._geo(lat=None, lng=None))
+        r = resolve_address(db, COMPANY, "99999 W 37TH ST", "TBA1")
+        assert r.geocoded is False
+        assert r.lat is None
+
+    def test_borough_comes_from_company_config(self, db, monkeypatch):
+        """An operator outside Manhattan sets it on CompanyConfig; the default
+        is only a default. Passing the wrong borough silently geocodes to the
+        wrong city block."""
+        from app.models.company import CompanyConfig
+        db.add(CompanyConfig(id=uuid.uuid4(), company_id=COMPANY,
+                             geoclient_borough="brooklyn"))
+        db.commit()
+
+        seen = {}
+
+        def _capture(addr, borough="manhattan"):
+            seen["borough"] = borough
+            return None
+
+        self._stub(monkeypatch, _capture)
+        resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
+        assert seen["borough"] == "brooklyn"
+
+    def test_borough_defaults_to_manhattan(self, db, monkeypatch):
+        seen = {}
+
+        def _capture(addr, borough="manhattan"):
+            seen["borough"] = borough
+            return None
+
+        self._stub(monkeypatch, _capture)
+        resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
+        assert seen["borough"] == "manhattan"
+
+    def test_another_companys_config_does_not_apply(self, db, monkeypatch):
+        """Dimension 1: the borough lookup is company-scoped like every other
+        read. Without the filter, one tenant's borough would geocode another's
+        packages."""
+        from app.models.company import CompanyConfig
+        db.add(CompanyConfig(id=uuid.uuid4(), company_id=OTHER,
+                             geoclient_borough="queens"))
+        db.commit()
+
+        seen = {}
+
+        def _capture(addr, borough="manhattan"):
+            seen["borough"] = borough
+            return None
+
+        self._stub(monkeypatch, _capture)
+        resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
+        assert seen["borough"] == "manhattan"

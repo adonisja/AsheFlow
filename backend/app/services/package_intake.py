@@ -15,6 +15,7 @@ the gitignored sort services.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -23,6 +24,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.company import CompanyZone
+
+logger = logging.getLogger(__name__)
 from app.models.delivery_stop import DeliveryStop
 from app.models.employee import Employee
 from app.models.walker_route import Route
@@ -126,6 +129,112 @@ def check_zone(
         decidable=True,
         reason=None if inside else "outside",
     )
+
+
+@dataclass
+class ResolvedAddress:
+    """What the server worked out from the label text (ADR-259).
+
+    `geocoded` records whether GeoClient answered, which is what separates
+    "outside the zone" from "ownership unconfirmed" downstream. The block key is
+    derived offline, so it survives a GeoClient outage and the block-match tier
+    keeps working when the zone check cannot.
+    """
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    normalised_address: Optional[str] = None
+    block_key: Optional[str] = None
+    geocoded: bool = False
+
+
+def resolve_address(
+    db: Session,
+    company_id: UUID,
+    raw_address: Optional[str],
+    tba: str,
+    *,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    block_key: Optional[str] = None,
+    normalised_address: Optional[str] = None,
+) -> ResolvedAddress:
+    """Derive coords, a normalised address and a block key from label text.
+
+    Clients send what they read off the label; nothing operational depends on
+    them supplying coordinates. Anything the caller DID pass wins — mobile may
+    one day send a device fix, and a dispatcher may correct a bad parse by hand.
+
+    Two derivations, deliberately independent (ADR-259):
+
+      * `derive_block_key` is pure string work, so a GeoClient outage still
+        leaves routes rankable by block.
+      * `_geoclient_normalise` answers ownership AND supplies the normalised
+        address for the exact-building match tier, in one call.
+
+    Never raises: intake must reach dispatch even when geocoding fails, so a
+    GeoClient error degrades to `geocoded=False` and the caller escalates
+    (ADR-246).
+    """
+    out = ResolvedAddress(
+        lat=lat, lng=lng,
+        normalised_address=normalised_address,
+        block_key=block_key,
+        geocoded=lat is not None and lng is not None,
+    )
+
+    if not raw_address:
+        return out
+
+    if out.block_key is None:
+        from app.services.derive_block_key import derive_block_key
+        parsed = derive_block_key(raw_address, tba)
+        # UnparseableAddress is a normal outcome for a label the OCR mangled;
+        # it carries a reason, not a block key, and leaves the tier unmatched.
+        out.block_key = getattr(parsed, "block_key", None)
+
+    if out.lat is not None and out.lng is not None:
+        return out
+
+    borough = _company_borough(db, company_id)
+    try:
+        from app.tasks.enrich_manifest import _geoclient_normalise
+        geo = _geoclient_normalise(raw_address, borough=borough)
+    except Exception as exc:
+        # Network, timeout, malformed upstream payload. Ownership stays
+        # undecidable and the package escalates — never a 500 at the edge.
+        #
+        # Deliberately NOT exc_info=True: the traceback frames carry
+        # `raw_address`, a customer delivery address, straight into the logs
+        # (Dimension 7). The exception type is what identifies an outage; the
+        # address adds nothing an operator can act on.
+        logger.warning("intake geocode failed: %s", type(exc).__name__)
+        return out
+
+    if geo is None or geo.lat is None or geo.lng is None:
+        return out
+
+    out.lat, out.lng = geo.lat, geo.lng
+    out.geocoded = True
+    # GeoClient's canonical form is what Route.normalised_addresses holds, so
+    # preferring it is what makes the exact-address tier able to match at all.
+    if geo.normalised_address:
+        out.normalised_address = geo.normalised_address
+    return out
+
+
+def _company_borough(db: Session, company_id: UUID) -> str:
+    """Borough for GeoClient lookups: company config, else Manhattan.
+
+    Same resolution order as sort.py:774 — an operator outside Manhattan sets
+    it on CompanyConfig, and the default is only a default.
+    """
+    from app.models.company import CompanyConfig
+    cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    return (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
 
 
 def find_best_fit(

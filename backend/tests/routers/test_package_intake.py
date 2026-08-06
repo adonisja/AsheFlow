@@ -200,3 +200,127 @@ class TestLabelRead:
         assert pi._MAX_LABEL_BYTES == 10 * 1024 * 1024
         assert "application/pdf" in pi._ALLOWED_LABEL_TYPES
         assert "image/jpeg" in pi._ALLOWED_LABEL_TYPES
+
+
+class TestOutOfZoneIsTerminal:
+    """A dry run must not build a custody record (ADR-259).
+
+    `_resolve` calls `create_foreign_removal` AND `write_audit` on the
+    out-of-zone branch. Both previews pass `commit=False` and roll back in
+    `finally`, so nothing persisted — but the rows were being constructed and
+    an audit row emitted, undone only by the rollback.
+
+    This branch had never executed in production: no client ever sent
+    coordinates, so `check_zone` answered `no_coords` every time and ownership
+    was never decidable. Geocoding server-side makes it reachable for the first
+    time, which is exactly when an unexercised write path needs a test.
+
+    Reuses the service suite's in-memory harness rather than duplicating its
+    SQLite ARRAY/JSONB shims — importing it applies the compiler hooks.
+    """
+    import uuid as _uuid
+    from datetime import date as _date
+
+    @staticmethod
+    def _payload(tba="TBA999", **kw):
+        from app.schemas.package_intake import DispatchAssignRequest
+        # Coordinates well north of the test square: decidably outside.
+        base = dict(tba=tba, lat=40.90, lng=-73.90)
+        base.update(kw)
+        return DispatchAssignRequest(**base)
+
+    def _caller(self, db, company):
+        from app.models.employee import Employee
+        e = Employee(id=self._uuid.uuid4(), company_id=company, name="Dispatcher",
+                     role="dispatch", is_active=True,
+                     hr_system_id_adp=self._uuid.uuid4())
+        db.add(e)
+        db.commit()
+        return e
+
+    def test_preview_reports_removal_without_creating_one(self):
+        from tests.services.test_package_intake import COMPANY, _SQUARE
+        from app.models.company import Company, CompanyZone
+        from app.models.base import Base
+        from app.models.tote_ops import PackageRemoval
+        from app.models.audit_log import AuditLog
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        eng = create_engine("sqlite:///:memory:",
+                            connect_args={"check_same_thread": False})
+        Base.metadata.create_all(eng)
+        db = sessionmaker(bind=eng)()
+        db.add(Company(id=COMPANY, name="Test Co", slug="t", is_active=True))
+        db.add(CompanyZone(id=self._uuid.uuid4(), company_id=COMPANY, name="Z",
+                           bounds=_SQUARE, is_active=True))
+        db.commit()
+        caller = self._caller(db, COMPANY)
+
+        res = pi._resolve(db, caller, self._payload(), commit=False)
+
+        # The verdict is still reported — out-of-zone is a real answer.
+        assert res.outcome == "removal"
+        assert res.reason == "out_of_zone"
+        # ...but with no id, because nothing was created to have one.
+        assert res.removal_id is None
+
+        # Nothing constructed, not even pending in the session.
+        db.rollback()
+        assert db.query(PackageRemoval).count() == 0
+        assert db.query(AuditLog).count() == 0
+        db.close()
+        eng.dispose()
+
+    def test_the_committing_path_does_create_one(self):
+        """The guard must not have disabled the real behaviour — a genuine
+        out-of-zone assign still opens the custody chain (ADR-176)."""
+        from tests.services.test_package_intake import COMPANY, _SQUARE
+        from app.models.company import Company, CompanyZone
+        from app.models.base import Base
+        from app.models.tote_ops import PackageRemoval
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        eng = create_engine("sqlite:///:memory:",
+                            connect_args={"check_same_thread": False})
+        Base.metadata.create_all(eng)
+        db = sessionmaker(bind=eng)()
+        db.add(Company(id=COMPANY, name="Test Co", slug="t", is_active=True))
+        db.add(CompanyZone(id=self._uuid.uuid4(), company_id=COMPANY, name="Z",
+                           bounds=_SQUARE, is_active=True))
+        db.commit()
+        caller = self._caller(db, COMPANY)
+
+        res = pi._resolve(db, caller, self._payload(), commit=True)
+
+        assert res.outcome == "removal"
+        assert res.removal_id is not None
+        assert db.query(PackageRemoval).count() == 1
+        db.close()
+        eng.dispose()
+
+    def test_no_candidates_are_offered_when_the_package_is_not_ours(self):
+        """Out-of-zone is terminal: the package is not ours, so no route is
+        offered. Showing a picker would invite dispatch to deliver a package
+        that belongs to another carrier."""
+        from tests.services.test_package_intake import COMPANY, _SQUARE
+        from app.models.company import Company, CompanyZone
+        from app.models.base import Base
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        eng = create_engine("sqlite:///:memory:",
+                            connect_args={"check_same_thread": False})
+        Base.metadata.create_all(eng)
+        db = sessionmaker(bind=eng)()
+        db.add(Company(id=COMPANY, name="Test Co", slug="t", is_active=True))
+        db.add(CompanyZone(id=self._uuid.uuid4(), company_id=COMPANY, name="Z",
+                           bounds=_SQUARE, is_active=True))
+        db.commit()
+        caller = self._caller(db, COMPANY)
+
+        res = pi._resolve(db, caller, self._payload(), commit=False)
+        assert res.assessment is None
+        db.close()
+        eng.dispose()

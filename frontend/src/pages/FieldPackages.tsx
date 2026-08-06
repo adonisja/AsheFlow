@@ -644,8 +644,29 @@ function AssignForm() {
           </p>
         )}
 
-        {routePreview?.assessment?.candidates?.length ? (
-          <ul className="space-y-1.5">
+        {routePreview?.outcome === 'removal' ? (
+          /* Out-of-zone is TERMINAL (ADR-259). The package is not ours, so no
+             route is offered — showing a picker here would invite dispatch to
+             deliver another carrier's package. It leaves via the removal
+             custody chain (ADR-176) instead. */
+          <p className="text-xs text-warning">
+            Not ours to deliver — this address is outside the delivery zone.
+            Assigning will open a removal and start the custody chain.
+          </p>
+        ) : routePreview?.assessment?.candidates?.length ? (
+          <>
+            {routePreview.assessment.decidable === false && (
+              /* Candidates WITHOUT a confirmed zone. The block key is derived
+                 offline, so a geocode failure still knows which routes cover
+                 the block (ADR-259) — dispatch gets something to act on rather
+                 than a dead end. Saying so is the honest version: the routes
+                 are a real match, the ownership check simply did not run. */
+              <p className="text-xs text-warning">
+                Ownership could not be confirmed for this address, so this will
+                still go to dispatch review. These routes cover the block:
+              </p>
+            )}
+            <ul className="space-y-1.5">
             {routePreview.assessment.candidates.map((c) => {
               const chosen = routeId === c.route_id;
               const isBest = c.route_id === routePreview.assessment?.best_fit?.route_id;
@@ -680,25 +701,30 @@ function AssignForm() {
                 </li>
               );
             })}
-          </ul>
+            </ul>
+          </>
         ) : routePreview ? (
-          /* Two different situations reach zero candidates, and telling them
-             apart is the whole value of showing anything here:
+          /* Distinct situations reach zero candidates, and telling them apart
+             is the whole value of showing anything here:
 
-               decidable=false  we could not LOCATE the address — the address
-                                is the problem, not the routes
-               decidable=true   located fine, but no route can accept it
+               no_coords    we could not LOCATE the address — the address is
+                            the problem, not the routes
+               no_boundary  no delivery zone is configured — an admin fix, and
+                            nothing the dispatcher can do from this form
+               decidable    located fine, but no route covers that block
 
              Saying "no route can take this" for the first would send a
-             dispatcher to check routes when they need to fix the address. */
+             dispatcher to check routes when they need to fix the address.
+
+             `outside` is deliberately absent: it is only ever set when
+             decidable=true, and it now returns outcome="removal", which is
+             handled above as terminal. Testing for it here was unreachable. */
           <p className="text-xs text-warning">
             {routePreview.assessment?.decidable === false
-              ? routePreview.assessment?.zone_reason === 'no_coords'
-                ? 'Could not place this address — check it, or assign the route by hand.'
-                : routePreview.assessment?.zone_reason === 'outside'
-                  ? 'This address is outside the delivery zone — it will escalate to dispatch review.'
-                  : 'Not enough information to place this package — it will escalate to dispatch review.'
-              : 'No route can take this package — assigning will escalate it to dispatch review.'}
+              ? routePreview.assessment?.zone_reason === 'no_boundary'
+                ? 'No delivery zone is configured, so ownership cannot be confirmed — an admin needs to set one. Assign by hand to deliver it today.'
+                : 'Could not confirm this address, so ownership is unverified — check the spelling, or assign the route by hand.'
+              : 'No route covers this block today — assigning will escalate it to dispatch review.'}
           </p>
         ) : null}
       </div>
