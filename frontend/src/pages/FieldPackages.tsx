@@ -248,6 +248,13 @@ function AssignForm() {
       fd.append('file', f);
       const res = await axiosClient.post<LabelReadResponse>(
         '/packages/intake/read-label', fd,
+        // `undefined`, not 'multipart/form-data': axiosClient defaults every
+        // request to application/json, and FastAPI then cannot parse the body
+        // — the upload 422'd before reaching the handler's own checks.
+        // Setting the type by hand is just as wrong, because multipart needs a
+        // generated BOUNDARY; only the browser can supply it, and it does so
+        // exactly when the header is absent.
+        { headers: { 'Content-Type': undefined } },
       );
       const r = res.data;
       if (r.tba) setTba(r.tba);
