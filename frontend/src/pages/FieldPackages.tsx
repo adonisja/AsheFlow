@@ -344,8 +344,22 @@ function AssignForm() {
       // rather than re-scanning (and re-billing Textract).
       setOcrLines(r.lines ?? []);
 
-      if (r.needs_manual_entry) {
-        setScanNote('Could not read the whole label — fill in the rest by hand.');
+      // `warnings` distinguishes three outcomes that all set
+      // needs_manual_entry, and the UI used to flatten them into one
+      // message — so "the OCR service is down" and "OCR read your label
+      // but found no tracking number" were indistinguishable.
+      if (r.warnings?.includes('ocr_unavailable')) {
+        setScanNote('Label reading is unavailable right now — enter the details by hand.');
+      } else if (r.needs_manual_entry) {
+        const missing = [
+          r.warnings?.includes('no_tba_found') ? 'tracking number' : null,
+          r.warnings?.includes('no_address_found') ? 'address' : null,
+        ].filter(Boolean).join(' or ');
+        setScanNote(
+          missing
+            ? `Could not find the ${missing} on this label — check the lines below or type it in.`
+            : 'Could not read the whole label — fill in the rest by hand.',
+        );
       } else if (r.confidence !== null && r.confidence < 0.85) {
         // A confident-looking wrong read is the failure that matters, so a
         // shaky score asks for eyes rather than staying silent.
