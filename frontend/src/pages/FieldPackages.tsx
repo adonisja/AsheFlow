@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   PackagePlus, Inbox, AlertTriangle, CheckCircle2, MapPinOff, HelpCircle,
-  ScanLine,
+  ScanLine, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import ErrorBanner from '../components/ui/ErrorBanner';
@@ -252,6 +252,9 @@ function AssignForm() {
       const r = res.data;
       if (r.tba) setTba(r.tba);
       if (r.address_line) setAddress(r.address_line);
+      // Reveal the fields the scan just wrote into — or, on a failed read,
+      // the ones the dispatcher now has to fill by hand.
+      setManualOpen(true);
       // Every line OCR read, so a wrong pick is fixed by clicking the right one
       // rather than re-scanning (and re-billing Textract).
       setOcrLines(r.lines ?? []);
@@ -279,6 +282,12 @@ function AssignForm() {
 
      NOTE: `match` is block/stop proximity, not a distance. The picker is
      ordered by match strength; calling that "nearest" would overstate it. */
+  /* The scanner is the primary path; the typed fields are the fallback for a
+     radio call or a failed read. They start COLLAPSED so the scan drop-zone is
+     not competing with four inputs for attention — but they open automatically
+     the moment a scan populates them, because a read the dispatcher cannot see
+     is worse than no read at all. */
+  const [manualOpen, setManualOpen] = useState(false);
   const [routePreview, setRoutePreview] = useState<PackageIntakeResponse | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -437,36 +446,55 @@ function AssignForm() {
         )}
       </div>
 
-      <Field label="Tracking number (TBA)" required>
-        <input
-          value={tba}
-          onChange={(e) => setTba(e.target.value)}
-          placeholder="TBA303912345447"
-          className="w-full border border-border rounded-lg px-3 py-2 bg-background font-mono text-sm"
-          minLength={4}
-          required
-        />
-      </Field>
+        {/* Manual entry — collapsed by default so the scanner reads as THE way
+            in. Opens on request, and automatically once a scan has written into
+            these fields (see setManualOpen in the scan handler). */}
+        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={() => setManualOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-xs font-medium text-brandText"
+            aria-expanded={manualOpen}
+          >
+            {manualOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            {manualOpen ? "Hide manual entry" : "Enter the details by hand"}
+          </button>
 
-      <Field label="Address on the label">
-        <input
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="1 Main St"
-          className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
-        />
-      </Field>
-
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Block key">
+          {manualOpen && (
+            <div className="space-y-4">
+        <Field label="Tracking number (TBA)" required>
           <input
-            value={blockKey}
-            onChange={(e) => setBlockKey(e.target.value)}
-            placeholder="optional"
+            value={tba}
+            onChange={(e) => setTba(e.target.value)}
+            placeholder="TBA303912345447"
+            className="w-full border border-border rounded-lg px-3 py-2 bg-background font-mono text-sm"
+            minLength={4}
+            required
+          />
+        </Field>
+
+        <Field label="Address on the label">
+          <input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="1 Main St"
             className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
           />
         </Field>
-      </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Block key">
+            <input
+              value={blockKey}
+              onChange={(e) => setBlockKey(e.target.value)}
+              placeholder="optional"
+              className="w-full border border-border rounded-lg px-3 py-2 bg-background text-sm"
+            />
+          </Field>
+        </div>
+            </div>
+          )}
+        </div>
 
       {/* Route: suggested first, then chosen from the ranked candidates. This
           was a raw "Route ID" text box asking for a UUID — nobody knows a route
@@ -545,14 +573,33 @@ function AssignForm() {
 
       {error && <ErrorBanner message={error} />}
 
-      <button
-        type="submit"
-        disabled={busy || tba.trim().length < 4}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
-      >
-        <PackagePlus className="w-4 h-4" />
-        {busy ? 'Assigning…' : 'Assign package'}
-      </button>
+      <div className="space-y-1.5">
+        <button
+          type="submit"
+          disabled={busy || tba.trim().length < 4}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+        >
+          <PackagePlus className="w-4 h-4" />
+          {busy ? 'Assigning…' : 'Assign package'}
+        </button>
+
+        {/* Say WHY the button is dead. Collapsing manual entry made this
+            necessary: the TBA requirement is real, but with the field hidden
+            the only signal was a greyed-out button and no explanation. */}
+        {tba.trim().length < 4 && (
+          <p className="text-xs text-muted-foreground">
+            Scan a label, or{' '}
+            <button
+              type="button"
+              onClick={() => setManualOpen(true)}
+              className="text-brandText font-medium underline underline-offset-2"
+            >
+              enter a tracking number
+            </button>
+            {' '}to continue.
+          </p>
+        )}
+      </div>
 
       {result && summary && (
         <div className={`border rounded-xl p-4 text-sm ${toneCls}`}>
