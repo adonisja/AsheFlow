@@ -64,7 +64,18 @@ const BASIS_LABEL: Record<string, string> = {
   exception:   'last handled by',
 };
 
-export default function PackageLookup() {
+/**
+ * Package lookup, rendered as a TAB of Field Packages rather than its own page.
+ *
+ * The three package operations — see what came in from the field, assign one,
+ * find who has one — are one job for one person (dispatch), and were split
+ * across two nav entries with identical role gates. Someone holding a package
+ * and asking "whose is this?" had to leave the page they were already on.
+ *
+ * A named export, not a default: there is no standalone page any more, and a
+ * default export would invite one to be re-added.
+ */
+export function PackageLookupPanel() {
   const [tba, setTba] = useState('');
   const [data, setData] = useState<PackageLookupResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -130,15 +141,12 @@ export default function PackageLookup() {
   const clearRecent = () => { setRecent([]); saveRecent([]); };
 
   return (
-    <div className="space-y-8 animate-slide-up">
-      <div>
-        <h1 className="page-title flex items-center gap-2">
-          <Package className="w-5 h-5 text-primary" /> Package Lookup
-        </h1>
-        <p className="text-subtle mt-1">
-          Find who has a package from its tracking number.
-        </p>
-      </div>
+    <div className="space-y-6">
+      {/* No <h1>: as a tab, the tab label and the page title above it already
+          say where you are — a second heading would be noise. */}
+      <p className="text-subtle">
+        Find who has a package from its tracking number.
+      </p>
 
       <form onSubmit={search} className="card flex items-center gap-2">
         <Search className="w-4 h-4 text-muted-foreground shrink-0" />

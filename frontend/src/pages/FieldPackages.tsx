@@ -25,13 +25,14 @@ import {
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import { PackageLookupPanel } from './PackageLookup';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type {
   FieldAddedResponse, FieldAddedPackage, PackageIntakeResponse,
   LabelReadResponse,
 } from '../api/types';
 
-type Tab = 'feed' | 'assign';
+type Tab = 'feed' | 'assign' | 'lookup';
 
 function todayISO(): string {
   // Local date, not UTC — a UTC date rolls the feed over mid-evening for US
@@ -79,7 +80,7 @@ export default function FieldPackages() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
-        {([['feed', 'Added today'], ['assign', 'Assign a package']] as [Tab, string][]).map(([k, label]) => (
+        {([['feed', 'Added today'], ['assign', 'Assign a package'], ['lookup', 'Find a package']] as [Tab, string][]).map(([k, label]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
@@ -94,7 +95,9 @@ export default function FieldPackages() {
         ))}
       </div>
 
-      {tab === 'feed' ? <AddedFeed /> : <AssignForm />}
+      {tab === 'feed' ? <AddedFeed />
+        : tab === 'assign' ? <AssignForm />
+        : <PackageLookupPanel />}
     </div>
   );
 }

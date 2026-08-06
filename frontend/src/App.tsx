@@ -57,7 +57,6 @@ import CompanyStandingCard from './components/CompanyStandingCard';
 import ScorecardAppeals from './pages/ScorecardAppeals';
 import ScorecardRoster from './pages/ScorecardRoster';
 import Scorecards from './pages/Scorecards';
-import PackageLookup from './pages/PackageLookup';
 import FieldPackages from './pages/FieldPackages';
 
 
@@ -440,16 +439,11 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            {/* ADR-245 — operational package tracking, so dispatch is included
-                (unlike the Tier 3 appeal-evidence search). */}
-            <Route
-              path="/package-lookup"
-              element={
-                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
-                  <PackageLookup />
-                </ProtectedRoute>
-              }
-            />
+            {/* ADR-245 lookup now lives as a TAB of Field Packages — the three
+                package operations are one job for one person. Redirect rather than
+                delete: this path has been in the nav, so bookmarks and older links
+                exist and should land somewhere useful instead of a 404. */}
+            <Route path="/package-lookup" element={<Navigate to="/field-packages" replace />} />
             {/* ADR-246 — field-added package oversight + manual assignment.
                 Dispatch-readable BY DESIGN: GET /audit is management+admin, so
                 pointing dispatch at the audit log would not actually work. */}
