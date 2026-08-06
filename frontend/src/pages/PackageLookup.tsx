@@ -20,7 +20,7 @@ import {
 import axiosClient from '../api/axiosClient';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import { SkeletonCard } from '../components/ui/Skeleton';
-import type { PackageLookupResponse, PackageTimeline } from '../api/types';
+import type { PackageLookupResponse, PackageTimeline, FieldAddedResponse } from '../api/types';
 import { shortDate } from '../utils/metric';
 import { Link } from 'react-router-dom';
 
@@ -70,6 +70,25 @@ export default function PackageLookup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
+
+  /* Today's field-added packages, shown when there is nothing else on screen.
+     The page used to open as a title and one input — no indication of what a
+     result contains, and nothing to act on if you did not already have a TBA
+     in hand. These are exactly the packages most likely to be asked about:
+     added from the field today, so not on the original manifest.
+
+     Reuses the endpoint behind Field Packages' "Added today" tab — no new
+     backend, and the two views cannot disagree. */
+  const [fieldAdded, setFieldAdded] = useState<FieldAddedResponse | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    axiosClient
+      .get<FieldAddedResponse>('/packages/intake/field-added')
+      .then(r => { if (alive) setFieldAdded(r.data); })
+      .catch(() => { /* a starting point is a convenience — never block search */ });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => { setRecent(loadRecent()); }, []);
 
@@ -139,6 +158,18 @@ export default function PackageLookup() {
         </button>
       </form>
 
+      {/* The minimum was enforced but never stated: below 4 characters the
+          button simply went dead with no reason given. A suffix search on
+          fewer characters would match half the depot, so the rule is real —
+          it just has to be visible while someone is typing. */}
+      {tba.trim().length > 0 && tba.trim().length < MIN_CHARS && (
+        <p className="text-xs text-subtle">
+          {MIN_CHARS - tba.trim().length} more character
+          {MIN_CHARS - tba.trim().length === 1 ? '' : 's'} — a shorter suffix would
+          match too many packages to be useful.
+        </p>
+      )}
+
       {/* Recent lookups — dispatch fields several calls in a row, and a TBA is
           long enough that re-typing it is a real cost. */}
       {recent.length > 0 && !loading && (
@@ -175,6 +206,55 @@ export default function PackageLookup() {
         </div>
       )}
 
+      {/* Starting point: today's field-added packages. Only while nothing else
+          is on screen — once a search runs, the result is the subject. These are
+          the packages most likely to be asked about, since they were added from
+          the field today and are not on the original manifest. */}
+      {!loading && !data && !error && (fieldAdded?.packages?.length ?? 0) > 0 && (
+        <div className="card">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-semibold">Added from the field today</h2>
+            <span className="text-xs text-subtle">{fieldAdded!.total} package
+              {fieldAdded!.total === 1 ? '' : 's'}</span>
+          </div>
+          <ul className="divide-y divide-border">
+            {fieldAdded!.packages.slice(0, 8).map(pkg => (
+              <li key={pkg.tba}>
+                <button
+                  type="button"
+                  onClick={() => { setTba(pkg.tba); void runSearch(pkg.tba); }}
+                  className="w-full text-left py-2 flex items-center gap-3 hover:bg-accent rounded-md px-2 -mx-2"
+                >
+                  <span className="font-mono text-xs">{pkg.tba}</span>
+                  <span className="text-xs text-muted-foreground truncate">
+                    {pkg.route_number != null ? `Route ${pkg.route_number}` : 'no route'}
+                    {pkg.walker_name ? ` · ${pkg.walker_name}` : ''}
+                  </span>
+                  <span className="text-xs text-subtle ml-auto shrink-0">
+                    added by {pkg.added_by_name ?? 'unknown'}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Nothing field-added today is the COMMON case early in a shift, and the
+          page would otherwise fall back to a bare input — the very thing the
+          starting point exists to avoid. Say what the page does instead. */}
+      {!loading && !data && !error && (fieldAdded?.packages?.length ?? 0) === 0 && (
+        <div className="card flex flex-col items-center justify-center py-10 gap-2 text-center">
+          <Package className="w-8 h-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            Search a tracking number to see who is holding a package.
+          </p>
+          <p className="text-xs text-subtle max-w-md">
+            The full TBA or its last {MIN_CHARS}+ characters both work. Packages added
+            from the field today will appear here as a starting point.
+          </p>
+        </div>
+      )}
       {!loading && data && data.matched_on === 'none' && (
         <div className="card flex flex-col items-center justify-center py-12 gap-2 text-center">
           <Package className="w-8 h-8 text-muted-foreground" />
