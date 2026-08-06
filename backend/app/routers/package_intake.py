@@ -395,6 +395,11 @@ def field_added_packages(
 # A phone photo is ~1-5 MB. 10 covers a high-res capture without letting an
 # unbounded upload reach Textract, which bills per page.
 _MAX_LABEL_BYTES = 10 * 1024 * 1024
+# Deliberately NOT widened to include HEIC. Textract's DetectDocumentText reads
+# JPEG, PNG, PDF and TIFF only, so accepting HEIC here would move the failure
+# from a clear 415 to an opaque AWS error. The web client re-encodes to JPEG in
+# the browser (see toServerReadableImage), which needs no server dependency;
+# mobile never sends HEIC because react-native-image-picker converts on capture.
 _ALLOWED_LABEL_TYPES = {"image/jpeg", "image/jpg", "image/png", "application/pdf"}
 
 
@@ -420,7 +425,11 @@ async def read_label(
     if file.content_type not in _ALLOWED_LABEL_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Upload a JPEG, PNG or PDF of the label",
+            detail=(
+                "Upload a JPEG, PNG or PDF of the label. HEIC (the iPhone "
+                "default) is not readable by the OCR service — the web client "
+                "converts it before upload; a direct API caller must convert it."
+            ),
         )
 
     payload = await file.read()

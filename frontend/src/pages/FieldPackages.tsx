@@ -34,6 +34,52 @@ import type {
 
 type Tab = 'feed' | 'assign' | 'lookup';
 
+/**
+ * Re-encode an image the server cannot read into a JPEG it can.
+ *
+ * iPhones shoot HEIC by default, and neither Textract nor the endpoint's
+ * allowlist accepts it. Before this, picking one off a Mac or an iPhone meant
+ * the file greyed out in the picker with no explanation — the worst of the
+ * possible failures, because nothing told the user what was wrong.
+ *
+ * Converted in the BROWSER rather than on the server: server-side would mean
+ * adding pillow + pillow-heif and a native libheif to the image for one format,
+ * on a path that already works everywhere else. Here it costs one decode
+ * attempt and no dependency at all.
+ *
+ * Decoding depends on the OS codec: Safari and Chrome-on-macOS manage it,
+ * Chrome-on-Linux generally does not. A failure is therefore expected, not
+ * exceptional — the caller reports it in words and manual entry always
+ * remains (ADR-246).
+ *
+ * Returns the original file untouched when no conversion is needed, so the
+ * common JPEG/PNG path is unaffected.
+ */
+const SERVER_READABLE = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
+
+async function toServerReadableImage(file: File): Promise<File> {
+  if (SERVER_READABLE.includes(file.type)) return file;
+
+  const bitmap = await createImageBitmap(file);   // throws if the OS cannot decode
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no 2d context');
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const blob: Blob = await new Promise((resolve, reject) => {
+    // 0.9 keeps label text legible; the endpoint caps at 10 MB and a re-encoded
+    // phone photo lands well under that.
+    canvas.toBlob(b => (b ? resolve(b) : reject(new Error('encode failed'))),
+                  'image/jpeg', 0.9);
+  });
+
+  return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg',
+                  { type: 'image/jpeg' });
+}
+
 function todayISO(): string {
   // Local date, not UTC — a UTC date rolls the feed over mid-evening for US
   // operators and hides the packages added at the end of the shift.
@@ -247,8 +293,22 @@ function AssignForm() {
       return f.type.startsWith('image/') ? URL.createObjectURL(f) : null;
     });
     try {
+      // HEIC and friends are re-encoded here; JPEG/PNG passes through
+      // untouched. A decode failure is reported in words rather than
+      // surfacing as a raw 415 from the server.
+      let upload: File;
+      try {
+        upload = await toServerReadableImage(f);
+      } catch {
+        setScanNote(
+          `This browser cannot read ${f.type || 'that format'}. ` +
+          'Save the photo as JPEG or PNG, or enter the details by hand.',
+        );
+        return;   // `finally` still reveals the manual fields
+      }
+      
       const fd = new FormData();
-      fd.append('file', f);
+      fd.append('file', upload);
       const res = await axiosClient.post<LabelReadResponse>(
         '/packages/intake/read-label', fd,
         // `undefined`, not 'multipart/form-data': axiosClient defaults every
@@ -417,7 +477,10 @@ function AssignForm() {
             <input
               id="label-file-input"
               type="file"
-              accept="image/jpeg,image/png,application/pdf"
+              // `image/*` so a HEIC is SELECTABLE — it greyed out with no explanation
+                // before, which gives the user nothing to act on. Conversion happens
+                // in scanLabel, and an unsupported file gets a sentence saying so.
+                accept="image/*,application/pdf"
               capture="environment"
               className="hidden"
               disabled={scanning}
