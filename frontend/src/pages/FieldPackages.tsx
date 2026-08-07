@@ -28,7 +28,7 @@ import ErrorBanner from '../components/ui/ErrorBanner';
 import { PackageLookupPanel } from './PackageLookup';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import type {
-  FieldAddedResponse, FieldAddedPackage, PackageIntakeResponse,
+  FieldAddedResponse, FieldAddedPackage, IntakeCandidate, PackageIntakeResponse,
   LabelReadResponse,
 } from '../api/types';
 
@@ -133,8 +133,35 @@ function outcomeSummary(r: PackageIntakeResponse): { tone: 'ok' | 'warn' | 'bad'
         tone: 'info',
         text: r.reason === 'no_coords' || r.reason === 'no_boundary'
           ? 'Address could not be placed. Correct it and try again, or create a removal.'
-          : 'No route can take this right now.',
+          : r.assessment?.routes_exist === false
+            ? 'No routes have been built for today yet — run the sort, then assign this.'
+            : 'No route is near enough to take this. Assign one by hand or send it to dispatch.',
       };
+  }
+}
+
+/* How near, in the unit of the tier that matched (ADR-260).
+
+   The tiers measure different things — graph hops vs blocks — so the raw
+   number cannot be shown bare: "1" next to "2" would imply they are comparable
+   when one is a street traversal and the other a block. Naming the unit is
+   what keeps the ranking honest. */
+function matchLabel(c: IntakeCandidate): string {
+  switch (c.match) {
+    case 'address':
+      return 'same address';
+    case 'block_key':
+      return 'same block';
+    case 'near_segment': {
+      const n = c.distance ?? 0;
+      return n <= 1 ? 'next street' : `${n} streets away`;
+    }
+    case 'near_block': {
+      const n = c.distance ?? 0;
+      return n <= 1 ? '1 block away' : `${n} blocks away`;
+    }
+    default:
+      return 'no match';
   }
 }
 
@@ -438,6 +465,14 @@ function AssignForm() {
     }
   }, [tba, address, blockKey, routeId]);
 
+  /* Every nearby route has departed and the backend placed it anyway
+     (ADR-260). Drives both the warning and whether a departed row is
+     clickable — without it the picker would show a best fit that cannot be
+     selected. */
+  const allDeparted = Boolean(
+    routePreview?.assessment?.absorbed_reason?.startsWith('all_departed'),
+  );
+
   const summary = result ? outcomeSummary(result) : null;
   const toneCls = summary && {
     ok: 'border-emerald-500/40 bg-emerald-500/5',
@@ -666,19 +701,32 @@ function AssignForm() {
                 still go to dispatch review. These routes cover the block:
               </p>
             )}
+            {allDeparted && (
+              /* Every nearby route has left. The package still goes out
+                 (ADR-260) — say so plainly, because the rows below all read
+                 "cannot accept" and would otherwise look like a dead end. */
+              <p className="text-xs text-warning">
+                Every route near this address has already left. Assigning will
+                still place it — radio the walker so they know it is coming.
+              </p>
+            )}
             <ul className="space-y-1.5">
             {routePreview.assessment.candidates.map((c) => {
               const chosen = routeId === c.route_id;
               const isBest = c.route_id === routePreview.assessment?.best_fit?.route_id;
+              /* A departed route is selectable only when NOTHING can accept —
+                 the backend's own fallback (ADR-260). Leaving it disabled
+                 would show a best fit the dispatcher cannot click. */
+              const selectable = c.can_accept || allDeparted;
               return (
                 <li key={c.route_id}>
                   <button
                     type="button"
-                    disabled={!c.can_accept}
+                    disabled={!selectable}
                     onClick={() => setRouteId(chosen ? '' : c.route_id)}
                     className={`w-full text-left rounded-lg border px-3 py-2 text-sm transition-colors ${
                       chosen ? 'border-brandText bg-brandText/5' : 'border-border hover:bg-accent'
-                    } ${c.can_accept ? '' : 'opacity-60 cursor-not-allowed'}`}
+                    } ${selectable ? '' : 'opacity-60 cursor-not-allowed'}`}
                   >
                     <span className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium">Route {c.route_number ?? '—'}</span>
@@ -689,12 +737,12 @@ function AssignForm() {
                         </span>
                       )}
                       <span className="text-[11px] px-1.5 py-0.5 rounded-full text-muted-foreground bg-muted-foreground/10">
-                        {c.match === 'address' ? 'address match' : c.match === 'block_key' ? 'block match' : 'no match'}
+                        {matchLabel(c)}
                       </span>
                       <span className={`text-[11px] px-1.5 py-0.5 rounded-full ml-auto ${
                         c.can_accept ? 'text-info bg-info/10' : 'text-warning bg-warning/10'
                       }`}>
-                        {c.status ?? 'unknown'}{c.can_accept ? '' : ' · cannot accept'}
+                        {c.status ?? 'unknown'}{c.can_accept ? '' : ' · already out'}
                       </span>
                     </span>
                   </button>
@@ -724,7 +772,12 @@ function AssignForm() {
               ? routePreview.assessment?.zone_reason === 'no_boundary'
                 ? 'No delivery zone is configured, so ownership cannot be confirmed — an admin needs to set one. Assign by hand to deliver it today.'
                 : 'Could not confirm this address, so ownership is unverified — check the spelling, or assign the route by hand.'
-              : 'No route covers this block today — assigning will escalate it to dispatch review.'}
+              : routePreview.assessment?.routes_exist === false
+                /* Not a routing failure — the day has not been sorted. Saying
+                   "no route is near" would send dispatch hunting a routing
+                   problem that is really a not-yet-run sort (ADR-260). */
+                ? 'No routes have been built for today yet. Run the sort, then assign this package.'
+                : 'No route within two blocks of this address — pick one by hand, or send it to dispatch review.'}
           </p>
         ) : null}
       </div>

@@ -324,3 +324,49 @@ class TestOutOfZoneIsTerminal:
         assert res.assessment is None
         db.close()
         eng.dispose()
+
+
+class TestDateIsAlwaysToday:
+    """A found package is in someone's hand NOW (ADR-260).
+
+    `route_date` used to be an optional request field, so a caller could file a
+    find against any date — including a closed day whose routes are already
+    reconciled. There is no physical meaning to assigning a package the walker
+    is holding to yesterday, so the server decides the date and the client
+    cannot influence it.
+    """
+
+    def test_the_write_schema_does_not_accept_a_date(self):
+        from app.schemas.package_intake import (
+            DispatchAssignRequest, PackageIntakeRequest,
+        )
+        for model in (PackageIntakeRequest, DispatchAssignRequest):
+            assert "route_date" not in model.model_fields, (
+                f"{model.__name__} accepts a caller-supplied date again"
+            )
+
+    def test_a_supplied_date_is_rejected_not_silently_ignored(self):
+        """extra fields must not pass quietly — a client sending route_date
+        should learn it is gone rather than believe it took effect."""
+        from pydantic import ValidationError
+        from app.schemas.package_intake import PackageIntakeRequest
+        try:
+            got = PackageIntakeRequest(tba="TBA1", route_date="2020-01-01")
+        except ValidationError:
+            return                       # forbidden outright — also fine
+        assert not hasattr(got, "route_date")
+
+    def test_resolve_derives_the_date_from_the_company_clock(self):
+        """Not date.today(): a UTC rollover would file an evening find against
+        tomorrow and hide it from today's oversight feed."""
+        import inspect
+        src = inspect.getsource(pi._resolve)
+        assert "_company_today(db, cid)" in src
+        assert "payload.route_date" not in src
+
+    def test_the_oversight_feed_still_takes_a_date(self):
+        """The READ endpoint keeps its param — 'what was added last Tuesday' is
+        a legitimate question. Only the write path is pinned to today."""
+        feed = next(r for r in pi.router.routes
+                    if r.path == "/packages/intake/field-added")
+        assert "route_date" in {p.name for p in feed.dependant.query_params}

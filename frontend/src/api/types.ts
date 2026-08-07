@@ -1842,8 +1842,14 @@ export interface IntakeCandidate {
   walker_name: string | null;
   status: string | null;
   can_accept: boolean;
-  /** address | block_key | none — how strongly the route matched. */
+  /** address | block_key | near_segment | near_block — how the route matched. */
   match: string;
+  /**
+   * How far, in the unit of the tier that matched (ADR-260): graph hops for
+   * near_segment, blocks for near_block. Null on an exact match. The units
+   * differ, so render via matchLabel() rather than showing the bare number.
+   */
+  distance: number | null;
   is_adders_route: boolean;
 }
 
@@ -1856,7 +1862,17 @@ export interface IntakeAssessmentOut {
   best_fit: IntakeCandidate | null;
   adders_route: IntakeCandidate | null;
   candidates: IntakeCandidate[];
+  /**
+   * best_fit_in_progress:{n} — the closest route had left, so a further one
+   *   that could still accept took it.
+   * all_departed:{n} — EVERY nearby route had left; the package was placed
+   *   anyway because it still has to go out today (ADR-260). Candidates will
+   *   all read can_accept: false.
+   */
   absorbed_reason: string | null;
+  /** Whether ANY route exists for the date. Distinguishes "the day is not
+   *  sorted yet" from "no route is near enough" when candidates is empty. */
+  routes_exist: boolean;
 }
 
 export type IntakeOutcome = 'added' | 'duplicate' | 'removal' | 'needs_dispatch';

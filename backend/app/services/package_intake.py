@@ -16,6 +16,7 @@ the gitignored sort services.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -58,7 +59,12 @@ class RouteCandidate:
     walker_name: Optional[str]
     status: Optional[str]
     can_accept: bool
-    match: str                       # block_key | address | none
+    match: str                       # address | block_key | near_segment | near_block
+    # How far away, in the unit of the tier that matched: graph hops for
+    # near_segment, hundred-blocks for near_block. None on an exact match.
+    # Kept distinct from `match` so the UI can say "2 blocks away" rather than
+    # implying a precision the tier does not have (ADR-260).
+    distance: Optional[float] = None
     is_adders_route: bool = False
 
 
@@ -69,6 +75,14 @@ class IntakeAssessment:
     best_fit: Optional[RouteCandidate] = None
     adders_route: Optional[RouteCandidate] = None
     candidates: list[RouteCandidate] = field(default_factory=list)
+    # Whether ANY route exists for the date, regardless of match (ADR-260).
+    #
+    # Not a branch — a found package is found by a walker already deployed, so
+    # routes always exist by then. It is reported so the UI can tell a
+    # dispatcher "the day is not sorted yet" instead of "no route is near",
+    # which would send them looking for a routing problem that is really a
+    # not-yet-run sort.
+    routes_exist: bool = False
     # Set when the best fit cannot take it and something else absorbed it.
     absorbed_reason: Optional[str] = None
 
@@ -144,6 +158,9 @@ class ResolvedAddress:
     lng: Optional[float] = None
     normalised_address: Optional[str] = None
     block_key: Optional[str] = None
+    # LION segment the address sits on — the package-side anchor for proximity
+    # ranking against Route.segment_ids (ADR-260). Only GeoClient supplies it.
+    segment_id: Optional[str] = None
     geocoded: bool = False
 
 
@@ -214,6 +231,7 @@ def resolve_address(
         return out
 
     out.lat, out.lng = geo.lat, geo.lng
+    out.segment_id = geo.segment_id
     out.geocoded = True
     # GeoClient's canonical form is what Route.normalised_addresses holds, so
     # preferring it is what makes the exact-address tier able to match at all.
@@ -237,6 +255,185 @@ def _company_borough(db: Session, company_id: UUID) -> str:
     return (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
 
 
+_MAX_SEGMENT_HOPS = 3
+"""How far to walk the segment graph looking for a route.
+
+Three hops is roughly a couple of blocks on the LION grid. Beyond that
+"proximity" stops meaning anything operational — a walker is not detouring six
+segments for one found package, and an unbounded BFS on a dense graph would
+rank every route in midtown as a candidate.
+"""
+
+_MAX_BLOCK_RADIUS = 2
+"""How many blocks away still counts as "near", in blocks (ADR-260).
+
+Two, because the operator runs many walkers in a dense area: within two blocks
+at least one route will almost always match, and it is a short enough detour
+that handing the package over is not an imposition on the walker.
+
+Note this is in BLOCKS, not hundred-block units. `W_37_St_500` reaches
+`W_37_St_300` on the same street, and `W_35_St`/`W_39_St` across streets.
+"""
+
+
+@dataclass(frozen=True)
+class _Block:
+    """A block key decomposed into its grid coordinates.
+
+    `W_37_St_500` -> direction "W", street 37, type "St", hundred 500.
+
+    The whole point is that a block key is not an opaque string: it carries a
+    position on the street grid, and "one block away" moves along EITHER axis.
+    From W 37th St & the 500 block, all of these are one block away:
+
+        W_37_St_400   along the street (down one hundred-block)
+        W_36_St_500   one street over
+        W_38_St_500   one street the other way
+
+    Ranking only the hundred-block, as the first cut did, misses two thirds of
+    a package's actual neighbours.
+    """
+    direction: str      # N/S/E/W, or "" for an avenue with no direction
+    street: int         # 37 in W_37_St, 10 in 10_Ave
+    kind: str           # St | Ave | Pl | Blvd ... — normalised lowercase
+    hundred: int        # the trailing hundred-block
+
+
+# W_37_St_500 / E_9_St_100 — a directional cross street.
+_NUMBERED_DIR = re.compile(r"^([NSEW])_(\d+)_([A-Za-z]+)_(\d+)$", re.I)
+# 10_Ave_500 — a numbered avenue, no direction.
+_NUMBERED_PLAIN = re.compile(r"^(\d+)_([A-Za-z]+)_(\d+)$", re.I)
+
+
+def _parse_block_key(key: str) -> Optional[_Block]:
+    """Decompose a block key into grid coordinates, or None if it is not on a grid.
+
+    Named streets (`Jackson_Ave_21`, `Metropolitan_Ave_200`, `Steinway_St_31` —
+    3 of 256 distinct keys on staging) deliberately return None. They have no
+    numeric axis, so "one street over from Jackson Ave" is not computable from
+    the key alone; those fall to the segment graph, which does know what
+    connects. Guessing a neighbour for them would be worse than admitting we
+    cannot tell.
+
+    DUPLICATES `route_sort._parse_block_key`, which splits the same four
+    components, and the duplication is forced: route_sort is proprietary and
+    gitignored, this module is deliberately public (it holds no routing
+    algorithm), so importing across that line would drag a private module into
+    a public one. Same reason load_company_boundary duplicates
+    run_sort._get_company_boundary.
+
+    The two are NOT interchangeable, and a caller must not assume they are:
+      * no direction -> "" here, None there
+      * `kind` is lowercased here, case-preserved there
+    Both are internal to their own module. If block-key parsing ever has to be
+    shared for real, it belongs in a third public module that both import —
+    not in one calling the other.
+    """
+    m = _NUMBERED_DIR.match(key)
+    if m:
+        return _Block(m.group(1).upper(), int(m.group(2)),
+                      m.group(3).lower(), int(m.group(4)))
+    m = _NUMBERED_PLAIN.match(key)
+    if m:
+        return _Block("", int(m.group(1)), m.group(2).lower(), int(m.group(3)))
+    return None
+
+
+def _block_distance(a: _Block, b: _Block) -> Optional[int]:
+    """Distance in blocks between two grid positions, or None if incomparable.
+
+    Two ways to be near, and they are not additive — a package is either along
+    the same street or on a nearby parallel one:
+
+      same street (`W_37_St`)   -> hundred-blocks apart / 100
+      same hundred (`_500`)     -> streets apart
+
+    Cross-axis pairs (`W_37_St_500` vs `W_36_St_300`) return None rather than a
+    diagonal: that is two blocks over AND two along, which is not what an
+    operator means by "one block away", and the segment graph handles genuine
+    corner cases better than arithmetic on a key.
+
+    Different direction (`W` vs `E`) or type (`St` vs `Ave`) is never near:
+    W 37th and E 37th are opposite sides of Fifth Avenue, and 37th St has no
+    relation to 37th Ave.
+    """
+    if a.direction != b.direction or a.kind != b.kind:
+        return None
+    if a.street == b.street:
+        return abs(a.hundred - b.hundred) // 100
+    if a.hundred == b.hundred:
+        return abs(a.street - b.street)
+    return None
+
+
+def _proximity_ranks(
+    db: Session,
+    routes: list,
+    *,
+    block_key: Optional[str],
+    segment_id: Optional[str],
+) -> dict:
+    """{route_id: (tier, distance)} for routes that do NOT cover the block.
+
+    Two tiers, tried in order (ADR-260):
+
+      "segment"  LION adjacency — hops through the persisted graph (ADR-236/238).
+                 Correct across streets, because it follows what connects.
+      "block"    same street, hundred-block distance. Pure string work, so it
+                 survives a geocode failure and works on routes built before
+                 `segment_ids` existed.
+
+    The fallback is not a placeholder: a route persisted before the ADR-260
+    migration has `segment_ids == []`, and ranking it as "no match" would hide
+    every route created today behind an empty picker.
+    """
+    out: dict = {}
+
+    # ── tier 1: segment adjacency ────────────────────────────────────────────
+    if segment_id:
+        with_segments = [r for r in routes if r.segment_ids]
+        if with_segments:
+            from app.services.segment_map import load_adjacency
+
+            known = {s for r in with_segments for s in r.segment_ids}
+            # Seed the walk with the package's segment AND the routes' segments
+            # so the query returns the connectors that bridge them — a graph
+            # loaded from the package alone would stop at its own neighbours.
+            adj = load_adjacency(db, known | {segment_id})
+
+            # BFS from the package outward; the first time a route's segment is
+            # reached, that hop count is its distance.
+            frontier = {segment_id}
+            seen = {segment_id}
+            for hop in range(1, _MAX_SEGMENT_HOPS + 1):
+                frontier = {n for s in frontier for n in adj.get(s, set())} - seen
+                if not frontier:
+                    break
+                seen |= frontier
+                for r in with_segments:
+                    if r.id not in out and frontier & set(r.segment_ids):
+                        out[r.id] = ("segment", float(hop))
+
+    # ── tier 2: grid distance, along the street OR across it ─────────────────
+    here = _parse_block_key(block_key) if block_key else None
+    if here:
+        for r in routes:
+            if r.id in out:
+                continue          # already ranked by the better tier
+            best: Optional[int] = None
+            for k in (r.block_keys or []):
+                other = _parse_block_key(k)
+                if other is None:
+                    continue
+                d = _block_distance(here, other)
+                if d and (best is None or d < best):
+                    best = d
+            if best is not None and best <= _MAX_BLOCK_RADIUS:
+                out[r.id] = ("block", float(best))
+
+    return out
+
+
 def find_best_fit(
     db: Session,
     company_id: UUID,
@@ -244,17 +441,27 @@ def find_best_fit(
     block_key: Optional[str],
     normalised_address: Optional[str],
     adder_employee_id: Optional[UUID] = None,
+    segment_id: Optional[str] = None,
 ) -> IntakeAssessment:
     """Rank today's routes for this package.
 
     Match strength, best first:
       1. the address is already a stop on that route  (exact — same building)
       2. the route covers that block_key              (same block)
-      3. no match
+      3. near by LION segment adjacency               (hops, ADR-260)
+      4. near by same-street hundred-blocks           (fallback, ADR-260)
+
+    Tiers 3 and 4 exist because "no route covers this block" is not the same
+    answer as "no route can take this package". A route on the adjacent block
+    is a real option, and dropping it produced a dead end for the dispatcher.
 
     Deliberately NOT the truck layer's centroid haversine (ADR-184): routes are
     block-based, and a centroid says nothing about whether a walker actually
-    passes the address.
+    passes the address. Segment adjacency follows what actually connects.
+
+    An empty result here is meaningful: with routes present it means nothing is
+    near enough; with NO routes for the date it means the day has not been
+    sorted yet, and the caller sends the package to the routing pool instead.
     """
     routes = (
         db.query(Route)
@@ -273,14 +480,29 @@ def find_best_fit(
             .all()
         }
 
-    ranked: list[tuple[int, RouteCandidate]] = []
+    # Proximity for the routes that do NOT cover the block. Computed once for
+    # the whole set rather than per route (ADR-260) — the segment tier needs a
+    # single adjacency query, and doing it inside the loop would issue one per
+    # candidate.
+    prox = _proximity_ranks(db, routes, block_key=block_key, segment_id=segment_id)
+
+    ranked: list[tuple[tuple[int, float], RouteCandidate]] = []
     for r in routes:
         if normalised_address and normalised_address in (r.normalised_addresses or []):
-            strength, match = 0, "address"
+            strength, match, distance = (0, 0.0), "address", None
         elif block_key and block_key in (r.block_keys or []):
-            strength, match = 1, "block_key"
+            strength, match, distance = (1, 0.0), "block_key", None
         else:
-            continue
+            # "No route covers this block" is not the same as "no route can
+            # take it" (ADR-260). A route on the adjacent block is a real
+            # option, and dropping it here is what produced a dead end.
+            near = prox.get(r.id)
+            if near is None:
+                continue
+            tier, distance = near
+            # Tier 2 = segment adjacency (hops), 3 = same-street blocks. Both
+            # sort after an exact match and before nothing.
+            strength, match = (2 if tier == "segment" else 3, distance), f"near_{tier}"
 
         cand = RouteCandidate(
             route_id=r.id,
@@ -290,10 +512,12 @@ def find_best_fit(
             status=r.status,
             can_accept=(r.status or "") in _ACCEPTING_STATUSES,
             match=match,
+            distance=distance,
             is_adders_route=bool(adder_employee_id and r.executor_id == adder_employee_id),
         )
         ranked.append((strength, cand))
 
+    # (tier, distance) — exact matches first, then nearest within each tier.
     ranked.sort(key=lambda t: t[0])
     candidates = [c for _, c in ranked]
 
@@ -301,6 +525,7 @@ def find_best_fit(
         zone=ZoneVerdict(in_zone=True, decidable=True),
         candidates=candidates,
         adders_route=next((c for c in candidates if c.is_adders_route), None),
+        routes_exist=bool(routes),
     )
 
     if not candidates:
@@ -314,10 +539,22 @@ def find_best_fit(
     # Best fit has departed. Absorb into the closest route that can still take
     # it — which may well be the adder's own, since they are holding it.
     fallback = next((c for c in candidates if c.can_accept), None)
-    assessment.best_fit = fallback
-    assessment.absorbed_reason = (
-        f"best_fit_in_progress:{top.route_number}" if fallback else "no_accepting_route"
-    )
+    if fallback is not None:
+        assessment.best_fit = fallback
+        assessment.absorbed_reason = f"best_fit_in_progress:{top.route_number}"
+        return assessment
+
+    # EVERY nearby route has departed. The package still has to go out today —
+    # refusing to place it means it sits at the station and misses its delivery
+    # date, which is the outcome the whole intake path exists to prevent.
+    #
+    # So the departed rule is a PREFERENCE, not a gate: fall back to the best
+    # match and ignore the in-progress status. The walker on that route is the
+    # closest person to the address, and dispatch radios them. `absorbed_reason`
+    # says this happened so the UI can tell the dispatcher they are assigning
+    # onto a route already in the field (ADR-260).
+    assessment.best_fit = top
+    assessment.absorbed_reason = f"all_departed:{top.route_number}"
     return assessment
 
 

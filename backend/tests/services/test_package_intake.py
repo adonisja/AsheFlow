@@ -272,12 +272,31 @@ class TestInProgressAbsorption:
         assert a.best_fit.route_number == 2
         assert a.absorbed_reason == "best_fit_in_progress:1"
 
-    def test_no_accepting_route_is_reported(self, db):
+    def test_everything_departed_still_places_the_package(self, db):
+        """The package has to go out TODAY (ADR-260).
+
+        This used to return best_fit=None, which stranded it at the station and
+        missed the delivery date — the exact outcome intake exists to prevent.
+        The departed rule is a preference, not a gate: with nothing able to
+        accept, fall back to the best match and let dispatch radio that walker.
+        """
         today = date(2026, 8, 1)
-        _route(db, today, number=1, blocks=["BLK1"], status="completed")
+        r = _route(db, today, number=1, blocks=["BLK1"], status="completed")
         a = find_best_fit(db, COMPANY, today, block_key="BLK1", normalised_address=None)
-        assert a.best_fit is None
-        assert a.absorbed_reason == "no_accepting_route"
+        assert a.best_fit is not None
+        assert a.best_fit.route_id == r.id
+        assert a.best_fit.can_accept is False      # the UI must still say so
+        assert a.absorbed_reason == "all_departed:1"
+
+    def test_an_accepting_route_is_still_preferred_over_a_departed_one(self, db):
+        """The fallback must not become the rule — a route that can take it
+        still wins over the nearer one that has left."""
+        today = date(2026, 8, 1)
+        _route(db, today, number=1, blocks=["BLK1"], status="in_progress")
+        ok = _route(db, today, number=2, blocks=["BLK1"], status="assigned")
+        a = find_best_fit(db, COMPANY, today, block_key="BLK1", normalised_address=None)
+        assert a.best_fit.route_id == ok.id
+        assert a.absorbed_reason == "best_fit_in_progress:1"
 
     def test_accepting_set_matches_the_model_lifecycle(self):
         """in_progress and completed must never accept a package."""
@@ -287,11 +306,18 @@ class TestInProgressAbsorption:
 
     def test_unknown_status_fails_closed(self, db):
         """The set lists what CAN accept, so an unrecognised status is not
-        handed a package."""
+        treated as available.
+
+        It is still offered as a last resort (ADR-260) — a package with nowhere
+        else to go beats a stranded package — but `can_accept` stays False so
+        the UI flags it and the absorbed_reason records that nothing was
+        genuinely available.
+        """
         today = date(2026, 8, 1)
         _route(db, today, number=1, blocks=["BLK1"], status="some_new_state")
         a = find_best_fit(db, COMPANY, today, block_key="BLK1", normalised_address=None)
-        assert a.best_fit is None
+        assert a.candidates[0].can_accept is False
+        assert a.absorbed_reason == "all_departed:1"
 
 
 class TestAdderContext:
@@ -740,3 +766,253 @@ class TestResolveAddress:
         self._stub(monkeypatch, _capture)
         resolve_address(db, COMPANY, "100 MAIN ST", "TBA1")
         assert seen["borough"] == "manhattan"
+
+
+class TestProximityRanking:
+    """"No route covers this block" is not "no route can take it" (ADR-260).
+
+    Before this, find_best_fit `continue`d past every route without an exact
+    block-key match, so a route on the ADJACENT block was never a candidate and
+    the dispatcher got a dead end. Two tiers now rank the rest: LION segment
+    adjacency where both sides have segment ids, same-street hundred-blocks
+    otherwise.
+    """
+
+    def test_exact_block_still_wins(self, db):
+        """Proximity must not disturb the existing ordering."""
+        near = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_300"])
+        exact = _route(db, date(2026, 8, 3), number=2, blocks=["W_37_St_500"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.best_fit.route_id == exact.id
+        assert a.candidates[0].match == "block_key"
+        assert near.id in [c.route_id for c in a.candidates]
+
+    def test_adjacent_block_is_a_candidate(self, db):
+        """THE bug: this route used to be dropped entirely."""
+        r = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_300"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert [c.route_id for c in a.candidates] == [r.id]
+        assert a.candidates[0].match == "near_block"
+        assert a.candidates[0].distance == 2.0      # blocks, not hundred-blocks
+        assert a.best_fit.route_id == r.id
+
+    def test_a_cross_street_is_one_block_away(self, db):
+        """The second axis. Ranking only the hundred-block, as the first cut
+        did, missed two thirds of a package's real neighbours: from
+        W_37_St_500 the routes on W_36_St_500 and W_38_St_500 are exactly as
+        near as the one on W_37_St_400."""
+        along = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_400"])
+        below = _route(db, date(2026, 8, 3), number=2, blocks=["W_36_St_500"])
+        above = _route(db, date(2026, 8, 3), number=3, blocks=["W_38_St_500"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert {c.route_id for c in a.candidates} == {along.id, below.id, above.id}
+        assert {c.distance for c in a.candidates} == {1.0}
+
+    def test_nearer_block_ranks_first(self, db):
+        far = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_300"])
+        near = _route(db, date(2026, 8, 3), number=2, blocks=["W_37_St_400"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert [c.route_id for c in a.candidates] == [near.id, far.id]
+        assert [c.distance for c in a.candidates] == [1.0, 2.0]
+
+    def test_a_diagonal_is_not_near(self, db):
+        """Two over AND two along is not what an operator means by 'near'.
+        The segment graph handles genuine corner cases; arithmetic on a block
+        key should decline rather than invent a diagonal."""
+        _route(db, date(2026, 8, 3), number=1, blocks=["W_36_St_300"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+
+    def test_the_other_side_of_town_is_not_near(self, db):
+        """W 37th and E 37th are opposite sides of Fifth Avenue.
+
+        The hundred-block deliberately DIFFERS (400 vs 500). With equal
+        hundreds the pair would fall to `abs(500-500) == 0` and be rejected by
+        the zero-distance guard even with the direction check removed — passing
+        whether or not the guard works. The differing hundred makes the
+        direction check the only thing standing between them.
+        """
+        _route(db, date(2026, 8, 3), number=1, blocks=["E_37_St_400"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+
+    def test_the_same_block_across_town_is_not_near(self, db):
+        """The companion case: equal hundreds, opposite direction."""
+        _route(db, date(2026, 8, 3), number=1, blocks=["E_37_St_500"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+
+    def test_a_street_and_an_avenue_of_the_same_number_are_not_near(self, db):
+        """37th St has no relation to 37th Ave — they are perpendicular and
+        may be miles apart. Only the segment graph can connect those.
+
+        Hundred-block differs (400 vs 500) so the `kind` check is what does the
+        work here; an equal one would be caught by the zero-distance guard
+        regardless, making the test unable to fail.
+        """
+        _route(db, date(2026, 8, 3), number=1, blocks=["W_37_Ave_400"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+
+    def test_a_named_street_is_not_guessed_at(self, db):
+        """Jackson_Ave / Metropolitan_Ave / Steinway_St exist in real data
+        (3 of 256 keys on staging). They carry no numeric axis, so 'one street
+        over' is not computable — declining beats inventing a neighbour."""
+        _route(db, date(2026, 8, 3), number=1, blocks=["Jackson_Ave_21"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+
+    def test_beyond_the_radius_is_not_near(self, db):
+        """Three blocks out is past _MAX_BLOCK_RADIUS."""
+        _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_200"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+
+    def test_the_radius_reaches_exactly_two_blocks(self, db):
+        """The boundary itself: 2 is in, 3 is out."""
+        r = _route(db, date(2026, 8, 3), number=1, blocks=["W_35_St_500"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert [c.route_id for c in a.candidates] == [r.id]
+        assert a.candidates[0].distance == 2.0
+
+    def test_routes_exist_is_true_even_with_no_candidates(self, db):
+        """The distinction the routing-pool branch turns on: routes were built,
+        none are near. That is a dispatch decision, NOT a pool case."""
+        _route(db, date(2026, 8, 3), number=1, blocks=["W_45_St_500"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+        assert a.routes_exist is True
+
+    def test_routes_exist_is_false_when_the_day_is_unsorted(self, db):
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates == []
+        assert a.routes_exist is False
+
+    def test_a_malformed_block_key_does_not_crash(self, db):
+        """derive_block_key can emit shapes this parser does not recognise; an
+        unparseable key means 'not near', not an exception."""
+        _route(db, date(2026, 8, 3), number=1, blocks=["NOTABLOCK"])
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "ALSO_NOT", None)
+        assert a.candidates == []
+
+    def test_a_departed_near_route_is_still_flagged_as_departed(self, db):
+        """Proximity does not silently clear the departed flag: the route is
+        placed (the package must go out — ADR-260) but `can_accept` stays False
+        and the reason says so, so dispatch knows they are assigning onto a
+        walker already in the field rather than a route still at the station."""
+        r = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_300"],
+                   status="in_progress")
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None)
+        assert a.candidates[0].can_accept is False
+        assert a.best_fit.route_id == r.id
+        assert a.absorbed_reason == "all_departed:1"
+
+
+class TestSegmentProximity:
+    """Segment adjacency ranks above block distance when both sides have ids."""
+
+    def _segments(self, db, *specs):
+        """specs: (segment_id, from_node, to_node)"""
+        from app.models.street_segment import StreetSegment
+        for sid, a, b in specs:
+            db.add(StreetSegment(id=uuid.uuid4(), segment_id=sid,
+                                 from_lion_node_id=a, to_lion_node_id=b))
+        db.commit()
+
+    def test_segment_adjacency_beats_block_distance(self, db):
+        """A route one segment away outranks a nearer-looking block on the
+        same street — following what actually connects is the point."""
+        self._segments(db, ("S1", "N1", "N2"), ("S2", "N2", "N3"))
+        adj = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_900"])
+        adj.segment_ids = ["S2"]
+        _route(db, date(2026, 8, 3), number=2, blocks=["W_37_St_400"])
+        db.commit()
+
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None,
+                          segment_id="S1")
+        assert a.candidates[0].route_id == adj.id
+        assert a.candidates[0].match == "near_segment"
+        assert a.candidates[1].match == "near_block"
+
+    def test_legacy_routes_fall_back_to_block_ranking(self, db):
+        """Routes built before the ADR-260 migration have segment_ids == [].
+        Ranking them as 'no match' would hide every route created today."""
+        self._segments(db, ("S1", "N1", "N2"))
+        legacy = _route(db, date(2026, 8, 3), number=1, blocks=["W_37_St_300"])
+        assert legacy.segment_ids == []
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None,
+                          segment_id="S1")
+        assert [c.route_id for c in a.candidates] == [legacy.id]
+        assert a.candidates[0].match == "near_block"
+
+    def test_an_unreachable_segment_is_not_near(self, db):
+        """The graph is not a proxy for 'exists' — a disconnected segment must
+        not rank, or every route in the city becomes a candidate."""
+        self._segments(db, ("S1", "N1", "N2"), ("S9", "N90", "N91"))
+        r = _route(db, date(2026, 8, 3), number=1, blocks=["W_99_St_100"])
+        r.segment_ids = ["S9"]
+        db.commit()
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None,
+                          segment_id="S1")
+        assert a.candidates == []
+
+    def test_hop_count_is_the_distance(self, db):
+        self._segments(db, ("S1", "N1", "N2"), ("S2", "N2", "N3"),
+                       ("S3", "N3", "N4"))
+        one = _route(db, date(2026, 8, 3), number=1, blocks=["W_99_St_100"])
+        one.segment_ids = ["S2"]
+        two = _route(db, date(2026, 8, 3), number=2, blocks=["W_99_St_200"])
+        two.segment_ids = ["S3"]
+        db.commit()
+
+        a = find_best_fit(db, COMPANY, date(2026, 8, 3), "W_37_St_500", None,
+                          segment_id="S1")
+        assert [c.route_id for c in a.candidates] == [one.id, two.id]
+        assert [c.distance for c in a.candidates] == [1.0, 2.0]
+
+
+class TestBlockKeyParserAgreement:
+    """The two block-key parsers must not silently diverge (ADR-260).
+
+    `route_sort._parse_block_key` splits the same four components. The
+    duplication is forced — route_sort is proprietary/gitignored and this
+    module is deliberately public, so neither can import the other — which
+    means nothing but a test stops one being edited without the other.
+
+    Compared on normalised output because their conventions differ by design:
+    no-direction is "" here and None there, and `kind` is lowercased here.
+    """
+
+    KEYS = [
+        "W_37_St_500", "10_Ave_500", "E_9_St_100", "W_36_St_300",
+        "Jackson_Ave_21", "Metropolitan_Ave_200", "Steinway_St_31",
+        "NOTABLOCK", "W_37_St", "W_37_St_5000", "", "W__St_100",
+    ]
+
+    @staticmethod
+    def _norm_mine(k):
+        from app.services.package_intake import _parse_block_key
+        b = _parse_block_key(k)
+        return None if b is None else (b.direction or None, b.street,
+                                       b.kind.lower(), b.hundred)
+
+    @staticmethod
+    def _norm_theirs(k):
+        try:
+            from app.services.route_sort import _parse_block_key
+        except ImportError:                       # proprietary module absent
+            pytest.skip("route_sort not available in this checkout")
+        t = _parse_block_key(k)
+        return None if t is None else (t[0], t[1], t[2].lower(), t[3])
+
+    def test_both_parsers_agree_on_every_shape(self):
+        for k in self.KEYS:
+            assert self._norm_mine(k) == self._norm_theirs(k), (
+                f"parsers disagree on {k!r} — one was changed without the other"
+            )
+
+    def test_they_agree_on_real_staging_shapes(self):
+        """Sampled from the 256 distinct keys staging actually holds, so this
+        covers the formats in production rather than invented ones."""
+        for k in ("W_43_St_100", "W_46_St_600", "W_24_St_200", "10_Ave_400"):
+            assert self._norm_mine(k) == self._norm_theirs(k)

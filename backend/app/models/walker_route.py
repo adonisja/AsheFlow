@@ -33,6 +33,14 @@ class Route(Base):
     #
     # Geographic identity — persisted so zone maps work after Redis TTL expires
     block_keys            = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    # LION segment ids the route's packages sit on (ADR-260). The sort already
+    # resolves these to build its adjacency graph; persisting them gives intake
+    # a route-side anchor for proximity ranking and closes ADR-238's gap.
+    #
+    # Unlike normalised_addresses (nulled 48h post-route, ADR-219) this needs no
+    # retention clock: a LION segment id is public street topology — no house
+    # number, no address, no TBA. Empty on routes built before the column.
+    segment_ids           = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
 
     # Tote and package lists
     tote_ids              = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)

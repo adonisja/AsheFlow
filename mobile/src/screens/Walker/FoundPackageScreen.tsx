@@ -32,7 +32,10 @@ type Candidate = {
   walker_name: string | null;
   status: string | null;
   can_accept: boolean;
+  /** address | block_key | near_segment | near_block (ADR-260) */
   match: string;
+  /** Hops for near_segment, blocks for near_block; null on an exact match. */
+  distance: number | null;
   is_adders_route: boolean;
 };
 
@@ -43,7 +46,9 @@ type Assessment = {
   best_fit: Candidate | null;
   adders_route: Candidate | null;
   candidates: Candidate[];
+  /** best_fit_in_progress:{n} | all_departed:{n} (ADR-260) */
   absorbed_reason: string | null;
+  routes_exist: boolean;
 };
 
 type IntakeResult = {
@@ -86,9 +91,15 @@ function outcomeCopy(r: IntakeResult): { title: string; body: string; tone: stri
       return {
         tone: 'success',
         title: r.route_number ? `Added to Route ${r.route_number}` : 'Added to your route',
-        body: r.reason?.startsWith('best_fit_in_progress')
-          ? 'The closest route has already departed, so this was absorbed into a route that can still take it.'
-          : 'Deliver it as normal. It will not count against the Amazon reconciliation.',
+        body: r.reason?.startsWith('all_departed')
+          // Every nearby route is already out, including possibly this one
+          // (ADR-260). The package still goes out rather than sitting at the
+          // station — but the walker may be past the block, so say so plainly
+          // instead of the reassuring "deliver as normal".
+          ? 'Every route near this address is already out, so it was placed here. Check the stop — you may have passed it. Tell dispatch if you cannot get back.'
+          : r.reason?.startsWith('best_fit_in_progress')
+            ? 'The closest route has already departed, so this was absorbed into a route that can still take it.'
+            : 'Deliver it as normal. It will not count against the Amazon reconciliation.',
       };
     case 'duplicate':
       return {

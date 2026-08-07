@@ -28,7 +28,12 @@ WORKLOAD_TO_EFFORT: dict[str, str] = {
 }
 
 # OV half-slot costs
+#
+# XS is deliberately 0 (ADR-260): an envelope or small box gets tossed into a
+# tote bag and consumes no cart slot. It is a real size a dispatcher can pick,
+# not a "no OV" sentinel — the package still rides and is still counted.
 OV_HALF_SLOTS: dict[str, int] = {
+    "XS": 0,
     "S": 1,
     "M": 2,
     "L": 3,
@@ -166,6 +171,10 @@ class RouteOut(BaseModel):
     package_count: int
     coverage_pct: float = 0.0       # fraction of packages with locked BuildingProfile
     normalised_addresses: list[str] = []
+    # LION segment ids the route's packages sit on (ADR-260). Public street
+    # topology, so unlike normalised_addresses it carries no PII and no 48h
+    # retention clock. Empty when the packages had no geocode.
+    segment_ids: list[str] = []
     stops: list[StopOut] = []       # delivered-set drill-down: block → address → tbas (ADR-194)
     misrouted_packages: list[MisroutedPackageOut] = []
 

@@ -69,6 +69,7 @@ def _cand(c) -> Optional[IntakeCandidate]:
         route_id=c.route_id, route_number=c.route_number,
         walker_name=c.walker_name, status=c.status,
         can_accept=c.can_accept, match=c.match,
+        distance=c.distance,
         is_adders_route=c.is_adders_route,
     )
 
@@ -82,6 +83,7 @@ def _assessment_out(a: IntakeAssessment) -> IntakeAssessmentOut:
         adders_route=_cand(a.adders_route),
         candidates=[_cand(c) for c in a.candidates],
         absorbed_reason=a.absorbed_reason,
+        routes_exist=a.routes_exist,
     )
 
 
@@ -104,7 +106,11 @@ def _resolve(
     """
     cid = caller.company_id
     tba = payload.tba.strip().upper()
-    when = payload.route_date or _company_today(db, cid)
+    # Always today, never a client-supplied date (ADR-260). The package is
+    # physically in someone's hand right now — there is no coherent meaning to
+    # filing a find against yesterday or tomorrow, and accepting a date let a
+    # caller write onto a closed day's routes.
+    when = _company_today(db, cid)
 
     # ── 1. already known? Name the holder rather than refusing blankly. ──
     dup = check_duplicate(db, cid, tba, when)
@@ -163,6 +169,7 @@ def _resolve(
     assessment = find_best_fit(
         db, cid, when, resolved.block_key, resolved.normalised_address,
         adder_employee_id=adder_id,
+        segment_id=resolved.segment_id,
     )
     assessment.zone = zone
     out = _assessment_out(assessment)
@@ -194,6 +201,15 @@ def _resolve(
         target = chosen.route_id if chosen else None
 
     if target is None:
+        # Routes exist but none is near enough or able to take it — a dispatch
+        # decision, and the only way to reach here in practice.
+        #
+        # There is deliberately no "the day is not sorted yet" branch. A
+        # package found in the field is found by a walker who is ALREADY out,
+        # which means the manifest was enriched, the sort ran and routes were
+        # created hours earlier. A pre-sort find at the station is a different
+        # workflow: it sorts into a TruckZone and enters that truck's manifest,
+        # where the normal sort picks it up (ADR-260).
         return PackageIntakeResponse(
             outcome="needs_dispatch", tba=tba,
             reason=assessment.absorbed_reason or "no_accepting_route",

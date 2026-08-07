@@ -27,7 +27,12 @@ class IntakeCandidate(BaseModel):
     walker_name: Optional[str] = None
     status: Optional[str] = None
     can_accept: bool
-    match: str                       # address | block_key | none
+    match: str                       # address | block_key | near_segment | near_block
+    # Distance in the unit of the tier that matched: graph hops for
+    # near_segment, hundred-blocks for near_block. None on an exact match
+    # (ADR-260). Separate from `match` so the UI states the unit rather than
+    # implying a precision the tier does not have.
+    distance: Optional[float] = None
     is_adders_route: bool = False
 
 
@@ -44,6 +49,10 @@ class IntakeAssessmentOut(BaseModel):
     adders_route: Optional[IntakeCandidate] = None
     candidates: List[IntakeCandidate] = Field(default_factory=list)
     absorbed_reason: Optional[str] = None
+    # Whether ANY route exists for the date (ADR-260). Lets the UI say "the day
+    # is not sorted yet" rather than "no route is near", which would send a
+    # dispatcher hunting a routing problem that is really a not-yet-run sort.
+    routes_exist: bool = False
 
 
 class PackageIntakeRequest(BaseModel):
@@ -54,11 +63,17 @@ class PackageIntakeRequest(BaseModel):
     than being rejected at the edge (ADR-246).
     """
     tba: str = Field(..., min_length=4, max_length=50)
+    # No ov_size: a found package attaches to an existing stop, and DeliveryStop
+    # has no size column to put it in. Accepting a field the server discards is
+    # worse than not offering one — the dispatcher would believe they had
+    # recorded something. Revisit if stop-level package sizing is ever added.
     block_key: Optional[str] = Field(None, max_length=120)
     normalised_address: Optional[str] = Field(None, max_length=300)
     lat: Optional[float] = Field(None, ge=-90, le=90)
     lng: Optional[float] = Field(None, ge=-180, le=180)
-    route_date: Optional[date] = None
+    # No route_date: the server always uses today (ADR-260). A found package is
+    # in someone's hand now, so a client-chosen date has no physical meaning —
+    # and accepting one let a caller write onto a closed day's routes.
     # Walker override: "I know Route 7 is a better fit, I am taking it anyway."
     # Advisory best-fit is a warning, not a gate (ADR-246).
     accept_override: bool = False
@@ -76,7 +91,8 @@ class PackageIntakeResponse(BaseModel):
       added          — on a route, stop opened
       duplicate      — already registered; holder named, nothing written
       removal        — not ours; PackageRemoval opened for the custody chain
-      needs_dispatch — undecidable (no coords/boundary, or no accepting route)
+      needs_dispatch — undecidable (no coords/boundary), or no route is near
+                       enough / able to take it — a dispatch decision
     """
     outcome: str
     tba: str
