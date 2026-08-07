@@ -4,8 +4,16 @@ from uuid import UUID
 from datetime import datetime
 import re
 
-VALID_ROLES = ("driver", "walker", "trainer", "trainee", "dispatch", "management", "admin")
-RoleStr = Literal["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"]
+# Mirrors app/models/employee.py VALID_ROLES — the two copies must stay in sync.
+# ADR-256: captain, field_supervisor. ADR-264: driver_trainee (enum value only).
+VALID_ROLES = (
+    "driver", "walker", "trainer", "trainee", "dispatch", "management", "admin",
+    "captain", "field_supervisor", "driver_trainee",
+)
+RoleStr = Literal[
+    "driver", "walker", "trainer", "trainee", "dispatch", "management", "admin",
+    "captain", "field_supervisor", "driver_trainee",
+]
 
 _SNOWFLAKE_RE = re.compile(r'^\d{17,20}$')
 

@@ -4,7 +4,14 @@ from app.models.base import Base
 import uuid
 from datetime import datetime, timezone
 
-VALID_ROLES = ("driver", "walker", "trainer", "trainee", "dispatch", "management", "admin")
+# ADR-256: captain (route lead, one per truck) and field_supervisor (road-facing
+# oversight, parallel to dispatch). ADR-264: driver_trainee — the enum value only;
+# its training behaviour is ADR-264's to build.
+# Mirrored in app/schemas/employee.py — the two copies must stay in sync.
+VALID_ROLES = (
+    "driver", "walker", "trainer", "trainee", "dispatch", "management", "admin",
+    "captain", "field_supervisor", "driver_trainee",
+)
 VALID_ACCOUNT_STATUSES = ("pending_verification", "active", "deactivated")
 
 
@@ -15,7 +22,7 @@ class Employee(Base):
         id: Primary key UUID.
         name: Full display name.
         discord_id: Unique Discord user ID used for notifications.
-        role: Job role — one of ``driver``, ``trainer``, or ``walker``.
+        role: Job role — one of ``VALID_ROLES``.
         is_active: Whether the employee is currently active and eligible for dispatch.
         account_status: Lifecycle state — pending_verification (invited, not yet logged in),
             active (logged in at least once), or deactivated (manually disabled).

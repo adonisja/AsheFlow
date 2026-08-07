@@ -1,4 +1,7 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Integer, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import (
+    Column, String, Boolean, DateTime, Integer, ForeignKey, CheckConstraint,
+    UniqueConstraint, Index, text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -19,14 +22,34 @@ class AssignmentMember(Base):
         id: Primary key UUID.
         assignment_id: Foreign key to the parent ``TruckAssignment``.
         employee_id: Foreign key to the assigned employee.
-        role: The employee's role for this assignment — one of ``driver``,
-            ``trainer``, or ``walker``.
+        role: The employee's SLOT for this assignment — ``driver``, ``trainer``,
+            ``trainee``, ``walker``, ``captain`` (ADR-256) or ``driver_trainee``
+            (ADR-264). Distinct from ``Employee.role``, which is the job title:
+            a captain-titled employee may be slotted as a walker for the day.
+            At most one ``captain`` row per assignment (ADR-256 D2).
     """
     __tablename__ = "assignment_members"
     __table_args__ = (
         UniqueConstraint("assignment_id", "employee_id", name="uq_assignment_member"),
-        CheckConstraint("role IN ('driver', 'trainer', 'trainee', 'walker')", name="ck_assignment_members_role"),
+        # ADR-256 adds 'captain'; ADR-264 adds 'driver_trainee'. This is the SLOT
+        # namespace (who fills what seat on this truck today), distinct from
+        # Employee.role (job title) — a captain-titled employee may be slotted as
+        # a walker for the day.
+        CheckConstraint(
+            "role IN ('driver', 'trainer', 'trainee', 'walker', 'captain', 'driver_trainee')",
+            name="ck_assignment_members_role",
+        ),
         CheckConstraint("status IN ('active', 'departed', 'transferred')", name="ck_assignment_members_status"),
+        # ADR-256 D2: exactly one captain slot per truck. The partial unique index is
+        # the guarantee — a service-level check alone loses to a concurrent double-assign
+        # (both read "no captain", both insert, both succeed). Write sites catch
+        # IntegrityError and raise 409.
+        Index(
+            "uq_assignment_members_one_captain",
+            "assignment_id",
+            unique=True,
+            postgresql_where=text("role = 'captain'"),
+        ),
     )
 
     id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
