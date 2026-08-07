@@ -9,7 +9,7 @@ import { count, hours, shortDate } from '../utils/metric';
 import {
   Shield, Users, Truck, AlertTriangle, ClipboardCheck,
   BarChart2, RefreshCw, CheckCircle2, ArrowRight, Zap,
-  FlaskConical, ChevronDown, ChevronUp, X,
+  FlaskConical, ChevronDown, ChevronUp, X, Download,
 } from 'lucide-react';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
@@ -208,12 +208,31 @@ export default function AdminDashboard() {
     }
   };
 
+  // The generator is randomly seeded and its output is never persisted server-side
+  // (ADR-261), so these bytes are the only copy of the previewed manifest. Download
+  // and upload MUST decode identically — hence one helper, not two decodes.
+  const seedCsvBlob = (data: SeedManifestData) => {
+    const csvBytes = Uint8Array.from(atob(data.csv_b64), c => c.charCodeAt(0));
+    return new Blob([csvBytes], { type: 'text/csv' });
+  };
+
+  const handleDownloadManifest = () => {
+    if (!seedData) return;
+    const url = URL.createObjectURL(seedCsvBlob(seedData));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `manifest_seed_${seedData.sort_date}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const handleConfirmUpload = async () => {
     if (!seedData) return;
     setSeedPhase('uploading');
     try {
-      const csvBytes = Uint8Array.from(atob(seedData.csv_b64), c => c.charCodeAt(0));
-      const blob = new Blob([csvBytes], { type: 'text/csv' });
+      const blob = seedCsvBlob(seedData);
       const form = new FormData();
       form.append('file', blob, 'manifest_seed.csv');
       form.append('sort_date', seedData.sort_date);
@@ -534,6 +553,14 @@ export default function AdminDashboard() {
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     Looks good — upload for enrichment
+                  </button>
+                  <button
+                    onClick={handleDownloadManifest}
+                    title={`Download all ${(seedData.package_count ?? 0).toLocaleString()} rows as CSV`}
+                    className="btn-ghost flex items-center gap-2 text-sm"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download CSV
                   </button>
                   <button
                     onClick={handleDiscardManifest}
