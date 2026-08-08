@@ -54,6 +54,25 @@ class TestOnePerTruck:
         placed = [m for crew in crews.values() for m in crew if m["role"] == "captain"]
         assert len(placed) == 2, "a third captain must not double up on a truck"
 
+    def test_surplus_captains_are_reported_not_dropped(self, db):
+        """The leftover captain must be WARNED about, not silently discarded.
+
+        Found by the ADR-115 audit (Dimension 5), not by a test: the loop simply
+        `break`s when trucks run out, and the only closing warning covered
+        captainless TRUCKS. Eight captains and six trucks left two people idle with
+        nothing in the dispatch output saying so — precisely when dispatch might
+        need one to cover a truck short a lead for an unrelated reason.
+        """
+        t1, t2 = make_truck(db, "T1"), make_truck(db, "T2")
+        caps = [make_employee(db, role="captain", name=f"Cap {i}") for i in range(3)]
+
+        warnings = assign_captains(caps, _crews(t1.id, t2.id), {t1.id: 1.0, t2.id: 1.0},
+                                   db, company_id=SEED_COMPANY_ID)
+
+        assert any(w.get("type") == "unplaced_captains" for w in warnings), (
+            "a captain who could not be placed must surface in the dispatch warnings"
+        )
+
     def test_shortage_warns_and_leaves_truck_empty(self, db):
         t1, t2 = make_truck(db, "T1"), make_truck(db, "T2")
         cap = make_employee(db, role="captain", name="Only Cap")
