@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
+from app.services.constants import ROUTE_LEAD_ROLES
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.models.truck_assignment import TruckAssignment
@@ -31,7 +32,8 @@ from app.services.audit import write_audit
 router = APIRouter(prefix="/assignment-members", tags=["assignment-members"])
 
 allow_dispatch_mgmt = RoleChecker(["dispatch", "management", "admin"])
-allow_captain       = RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])
+# ADR-256 D13: named for scope granted. Trainer removed (D5); captain + field_supervisor added.
+allow_route_lead    = RoleChecker(list(ROUTE_LEAD_ROLES))
 allow_any_auth      = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
 
 
@@ -123,7 +125,7 @@ def update_member_status(
     member_id: UUID,
     body: AssignmentMemberStatusUpdate,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_captain),
+    _: dict = Depends(allow_route_lead),
     db: Session = Depends(get_db),
 ):
     """Mark a crew member departed or transferred (ADR-197 Phase 0b).
@@ -166,7 +168,7 @@ def update_member_status(
 def get_crew_availability(
     assignment_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_captain),
+    _: dict = Depends(allow_route_lead),
     db: Session = Depends(get_db),
 ):
     """Derived crew availability for a truck (ADR-197 Phase 0b).

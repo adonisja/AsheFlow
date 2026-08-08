@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
 from app.core.config import settings
+from app.services.constants import ROUTE_LEAD_ROLES, TRUCK_SCOPED_ROLES
 from app.database import get_db
 from app.models.company import CompanyConfig, CompanyZone
 from app.models.employee import Employee
@@ -2146,7 +2147,7 @@ def get_load_rosters(
     sort_date: date,
     mine: bool = False,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Per-truck tote rosters with check-off state and station transfers.
@@ -2167,9 +2168,9 @@ def get_load_rosters(
     drivers = _driver_names_by_truck(db, caller.company_id, sort_date)
 
     scope_truck = None
-    if mine or caller.role in ("driver", "trainer"):
+    if mine or caller.role in TRUCK_SCOPED_ROLES:
         scope_truck = _caller_truck_id(db, caller, sort_date)
-        if scope_truck is None and caller.role in ("driver", "trainer"):
+        if scope_truck is None and caller.role in TRUCK_SCOPED_ROLES:
             return RostersResponse(
                 sort_date=sort_date, rosters=[], pending_transfer_count=0,
                 unchecked_count=0, loading_finalized=False, roster_available=False,
@@ -2308,7 +2309,7 @@ def check_tote(
     bag_id: str,
     body: ToteCheckRequest,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Check a tote onto (or off) its assigned truck during station loading.
@@ -2326,7 +2327,7 @@ def check_tote(
     if home_zone is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tote not found in any active zone for this date.")
 
-    if caller.role in ("driver", "trainer"):
+    if caller.role in TRUCK_SCOPED_ROLES:
         own = _caller_truck_id(db, caller, sort_date)
         if own != home_zone.truck_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only check totes on your own truck.")
@@ -2649,7 +2650,7 @@ def confirm_load(
     sort_date: date,
     truck_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Driver handoff: confirm this truck is loaded (ADR-181).
@@ -2672,7 +2673,7 @@ def confirm_load(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
 
     # Object-level ownership — a driver/trainer confirms only their own truck.
-    if caller.role in ("driver", "trainer"):
+    if caller.role in TRUCK_SCOPED_ROLES:
         own = _caller_truck_id(db, caller, sort_date)
         if own != truck_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only confirm your own truck.")
@@ -2749,7 +2750,7 @@ def unconfirm_load(
     sort_date: date,
     truck_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Reopen a confirmed truck's loading (ADR-183).
@@ -2771,7 +2772,7 @@ def unconfirm_load(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
 
     # Object-level ownership — a driver/trainer reopens only their own truck.
-    if caller.role in ("driver", "trainer"):
+    if caller.role in TRUCK_SCOPED_ROLES:
         own = _caller_truck_id(db, caller, sort_date)
         if own != truck_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only reopen your own truck.")
@@ -2824,7 +2825,7 @@ def add_freight(
     sort_date: date,
     body: AddFreightRequest,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Add mid-day freight to the day's load without re-running the sort (ADR-184).
@@ -2861,7 +2862,7 @@ def add_freight(
         ).all()
     }
 
-    own_truck = _caller_truck_id(db, caller, sort_date) if caller.role in ("driver", "trainer") else None
+    own_truck = _caller_truck_id(db, caller, sort_date) if caller.role in TRUCK_SCOPED_ROLES else None
 
     # Borough for GeoClient: admin config, else infer from zone centroids, else manhattan.
     cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
@@ -3258,7 +3259,7 @@ def _removals_response(db: Session, company_id, sort_date: date, scope_truck_id=
 def get_removals(
     sort_date: date,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Out-of-zone freight flagged for removal (and the record of what was pulled).
@@ -3268,7 +3269,7 @@ def get_removals(
     trucks (ADR-176). Driver/trainer see only their own truck's returns (ADR-185);
     dispatch/management/admin see all.
     """
-    scope = _caller_truck_id(db, caller, sort_date) if caller.role in ("driver", "trainer") else None
+    scope = _caller_truck_id(db, caller, sort_date) if caller.role in TRUCK_SCOPED_ROLES else None
     return _removals_response(db, caller.company_id, sort_date, scope_truck_id=scope)
 
 
@@ -3276,7 +3277,7 @@ def get_removals(
 def get_zone_status(
     sort_date: date,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Per-truck commit-sort readiness (ADR-185).
@@ -3287,7 +3288,7 @@ def get_zone_status(
     a scoped, allowed way to know their truck is ready to commit. Driver/trainer
     see only their own truck; oversight roles see all.
     """
-    scope = _caller_truck_id(db, caller, sort_date) if caller.role in ("driver", "trainer") else None
+    scope = _caller_truck_id(db, caller, sort_date) if caller.role in TRUCK_SCOPED_ROLES else None
 
     zones = _active_zones(db, caller.company_id, sort_date)
     truck_names = {
@@ -3458,7 +3459,7 @@ def handover_ap_removal(
 def receive_ap_removal(
     removal_id: UUID,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])),
+    _: dict = Depends(RoleChecker(list(ROUTE_LEAD_ROLES))),
     db: Session = Depends(get_db),
 ):
     """Driver confirms receipt of a handed-over out-of-zone package (ADR-178).
@@ -3479,7 +3480,7 @@ def receive_ap_removal(
             detail="The walker has not handed this package over yet.",
         )
 
-    if caller.role in ("driver", "trainer"):
+    if caller.role in TRUCK_SCOPED_ROLES:
         own = _caller_truck_id(db, caller, removal.removal_date)
         zones = _active_zones(db, caller.company_id, removal.removal_date)
         bag_truck = next(

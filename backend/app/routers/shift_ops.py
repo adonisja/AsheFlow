@@ -30,7 +30,9 @@ router = APIRouter(prefix="/shift-ops", tags=["shift-ops"])
 
 allow_driver      = RoleChecker(["driver"])
 # Captains on a truck who share the Crew Roster (ADR-228): the driver + trainers.
-allow_captain     = RoleChecker(["driver", "trainer"])
+# ADR-256: the on-truck leadership pair. Trainer removed (D5) — a trainer no longer
+# holds truck-level authority; the captain does.
+allow_truck_lead  = RoleChecker(["driver", "captain"])
 allow_management  = RoleChecker(["dispatch", "management", "admin"])
 
 
@@ -281,7 +283,7 @@ def _assert_roster_complete_and_finalize(db: Session, driver_id: UUID, target_da
 def upsert_crew_compliance_draft(
     payload: CrewComplianceDraftUpsert,
     db: Session = Depends(get_db),
-    _: dict = Depends(allow_captain),
+    _: dict = Depends(allow_truck_lead),
     caller: Employee = Depends(get_caller_employee),
 ):
     """Save ONE crew member's uniform/cart-cover as a DRAFT, live on the shared

@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/roll-call", tags=["roll-call"])
 
-_allow_field     = RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])
+# ADR-256: captain leads the truck; field_supervisor oversees the road.
+_allow_field     = RoleChecker(["driver", "trainer", "dispatch", "management", "admin", "captain", "field_supervisor"])
 _allow_dispatch  = RoleChecker(["dispatch", "management", "admin"])
 
 DEFAULT_LATE_WINDOW = 20  # minutes — used when CompanyConfig.late_window_minutes is NULL

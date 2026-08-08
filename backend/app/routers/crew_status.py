@@ -35,18 +35,19 @@ from app.services.crew_availability import (
     MemberProgress, derive_availability, classify_member, present_from_roll_call,
     DEFAULT_COMPLETION_THRESHOLD,
 )
-from app.services.constants import ROLE_TRAINEE, OVERSIGHT_ROLES
+from app.services.constants import ROLE_TRAINEE, OVERSIGHT_ROLES, ROUTE_LEAD_ROLES
 
 router = APIRouter(prefix="/crew-status", tags=["crew-status"])
 
-_allow_captain = RoleChecker(["driver", "trainer", "dispatch", "management", "admin"])
+# ADR-256 D13: named for scope granted. Trainer removed (D5); captain + field_supervisor added.
+_allow_route_lead = RoleChecker(list(ROUTE_LEAD_ROLES))
 
 
 @router.get("/{target_date}", response_model=CrewStatusResponse)
 def get_crew_status(
     target_date: date,
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(_allow_captain),
+    _: dict = Depends(_allow_route_lead),
     db: Session = Depends(get_db),
 ):
     cid = caller.company_id
