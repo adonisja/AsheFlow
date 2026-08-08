@@ -42,6 +42,12 @@ class CompanyConfig(Base):
     checkin_open   = Column(Time, nullable=True)   # earliest accepted check-in
     checkin_close  = Column(Time, nullable=True)   # latest accepted check-in
     dispatch_confirmation_cutoff = Column(Time, nullable=True)  # default 09:00 — pending notifications expire after this
+    # ADR-256: the earlier confirmation deadline for roles expected at the AP before
+    # the crew — driver and captain. A Time, read in the company's own timezone
+    # (Company.timezone) like every other column here; a hardcoded 08:20 is wrong
+    # for any tenant not on the seed company's clock. Null falls back to
+    # checkin_close, which is what these roles used before this column existed.
+    early_confirmation_deadline = Column(Time, nullable=True)
 
     # ── Walker rating window ──────────────────────────────────────────────────
     # Hours after driver departure that walker ratings are accepted.
@@ -59,8 +65,18 @@ class CompanyConfig(Base):
 
     # ── Dispatch algorithm weights ────────────────────────────────────────────
     dispatch_weight_driver          = Column(Float, nullable=True)   # default 0.70
-    dispatch_weight_trainer         = Column(Float, nullable=True)   # default 0.50
-    dispatch_weight_walker          = Column(Float, nullable=True)   # default 0.30
+    # ADR-256: a captain's fan pull sits between driver and trainer — they lead the
+    # truck's route work, the driver owns the vehicle and the day.
+    dispatch_weight_captain         = Column(Float, nullable=True)   # default 0.50
+    dispatch_weight_trainer         = Column(Float, nullable=True)   # default 0.25 (was 0.50)
+    dispatch_weight_walker          = Column(Float, nullable=True)   # default 0.15 (was 0.30)
+
+    # ── Captain truck familiarisation (ADR-256 D16) ───────────────────────────
+    # A new captain holds one truck for this many dispatched days, then rotates to
+    # a truck they have not yet completed. Familiarisation ends once every ACTIVE
+    # truck has a completed row — after which the normal consecutive-day penalty
+    # applies. Total cycle length is derived (active_trucks × this), never stored.
+    captain_truck_rotation_days     = Column(Integer, nullable=True)  # default 5
     dispatch_mutual_bonus           = Column(Float, nullable=True)   # default 0.10
     dispatch_tridirectional_bonus   = Column(Float, nullable=True)   # default 0.20
     dispatch_consecutive_penalty    = Column(Float, nullable=True)   # default 0.05
@@ -83,6 +99,30 @@ class CompanyConfig(Base):
     # Default 0.5 each (equal contribution). Tuned per-company from field data.
     effort_time_factor     = Column(Float, nullable=True)   # default 0.5
     effort_physical_factor = Column(Float, nullable=True)   # default 0.5
+
+    # ── Amazon scorecard tier targets (ADR-262) ───────────────────────────────
+    # Per-DSP because Amazon sets several of these per station (DCR and DNR DPMO
+    # explicitly), and our researched values come from third-party/UK guides that
+    # are not authoritative for any given station. NULL means "no target
+    # configured" — the UI shows Amazon's reported value with no pass/fail
+    # judgement. Deliberately NOT in _REQUIRED_FIELDS: a DSP that has not yet read
+    # its first Amazon card cannot supply these, and gating setup on them would
+    # 503 the whole tenant. A missing threshold must never render as a failing one.
+    #
+    # Comparison DIRECTION is not stored here — it is domain truth, not tenant
+    # configuration. See METRIC_DIRECTION in services/company_config.py.
+    scorecard_dcr_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 99.0)
+    scorecard_dnr_dpmo_target  = Column(Integer, nullable=True)  # DPMO, LOWER better (e.g. 950)
+    scorecard_pod_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 97.0)
+    scorecard_cc_target        = Column(Float,   nullable=True)  # %, higher better  (e.g. 98.0)
+    scorecard_cdf_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 84.9)
+    scorecard_dsb_dpmo_target  = Column(Integer, nullable=True)  # DPMO, LOWER better
+
+    # Safety & Compliance — driver-only metrics (no walker analogue).
+    scorecard_fico_target            = Column(Integer, nullable=True)  # 100–850, higher better (e.g. 800)
+    scorecard_speeding_rate_target   = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 10.0)
+    scorecard_signsignal_rate_target = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 15.0)
+    scorecard_dvic_target            = Column(Float,   nullable=True)  # %, higher better (e.g. 95.0)
 
     # ── Manifest ingestion mode ───────────────────────────────────────────────
     ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
@@ -116,6 +156,8 @@ class CompanyConfig(Base):
 
     __table_args__ = (
         CheckConstraint("dispatch_weight_driver    IS NULL OR (dispatch_weight_driver    BETWEEN 0 AND 1)", name="ck_company_configs_weight_driver"),
+        CheckConstraint("dispatch_weight_captain   IS NULL OR (dispatch_weight_captain   BETWEEN 0 AND 1)", name="ck_company_configs_weight_captain"),
+        CheckConstraint("captain_truck_rotation_days IS NULL OR captain_truck_rotation_days > 0", name="ck_company_configs_captain_rotation_days"),
         CheckConstraint("dispatch_weight_trainer   IS NULL OR (dispatch_weight_trainer   BETWEEN 0 AND 1)", name="ck_company_configs_weight_trainer"),
         CheckConstraint("dispatch_weight_walker    IS NULL OR (dispatch_weight_walker    BETWEEN 0 AND 1)", name="ck_company_configs_weight_walker"),
         CheckConstraint("dispatch_mutual_bonus     IS NULL OR (dispatch_mutual_bonus     BETWEEN 0 AND 1)", name="ck_company_configs_mutual_bonus"),

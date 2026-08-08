@@ -31,6 +31,7 @@ from app.services.company_config import PLATFORM_DEFAULTS
 
 ROLE_BOOST = {
     "driver":  PLATFORM_DEFAULTS["dispatch_weight_driver"],
+    "captain": PLATFORM_DEFAULTS["dispatch_weight_captain"],
     "trainer": PLATFORM_DEFAULTS["dispatch_weight_trainer"],
     "walker":  PLATFORM_DEFAULTS["dispatch_weight_walker"],
 }
@@ -224,8 +225,10 @@ class TestFanBoost:
 
     def test_trainer_fan_boost_is_smaller_than_driver(self, db):
         """
-        ROLE_BOOST constants: driver=0.70, trainer=0.50, walker=0.30.
-        A trainer fan should produce a smaller boost than a driver fan.
+        Read from PLATFORM_DEFAULTS, never hardcoded — ADR-256 moved trainer
+        0.50 -> 0.25 and walker 0.30 -> 0.15, and a literal here would have to be
+        chased every time the weights are retuned. The ORDERING is the invariant
+        worth asserting, not the arithmetic.
         """
         truck_a = make_truck(db, "Truck A")
         truck_b = make_truck(db, "Truck B")
@@ -540,3 +543,89 @@ class TestAssignDrivers:
             "Consecutive truck should get weight 0.05 in the driver weight list; "
             f"captured={captured_weights}"
         )
+
+
+# ── ADR-256: the weight ORDER is the invariant, not the numbers ──────────────
+
+class TestRoleBoostOrdering:
+    """driver > captain > trainer > walker.
+
+    Pinned as an ordering rather than four literals: the numbers are retunable
+    CompanyConfig values, but the ranking encodes the hierarchy and must not drift.
+    A retune that accidentally puts trainer above captain would restore exactly the
+    authority ADR-256 D5 removed, and no arithmetic assertion would notice.
+    """
+
+    def test_driver_outranks_captain(self):
+        assert ROLE_BOOST["driver"] > ROLE_BOOST["captain"]
+
+    def test_captain_outranks_trainer(self):
+        assert ROLE_BOOST["captain"] > ROLE_BOOST["trainer"]
+
+    def test_trainer_outranks_walker(self):
+        assert ROLE_BOOST["trainer"] > ROLE_BOOST["walker"]
+
+    def test_every_boost_is_a_valid_weight(self):
+        """The CHECK constraint on these columns is BETWEEN 0 AND 1."""
+        for role, weight in ROLE_BOOST.items():
+            assert 0 <= weight <= 1, f"{role} weight {weight} outside the DB constraint"
+
+
+class TestCaptainFanDoesNotCrash:
+    """fans_by_role was three hardcoded keys — a captain fan raised KeyError.
+
+    The bug was invisible until a captain appeared on a crew, which is why this
+    asserts the call SUCCEEDS rather than checking a particular weight.
+    """
+
+    def test_captain_fan_boosts_without_raising(self, db):
+        truck_a = make_truck(db, "Truck A")
+        truck_b = make_truck(db, "Truck B")
+        captain = make_employee(db, role="captain", name="Captain Fan")
+        candidate = make_employee(db, role="walker", name="Walker")
+
+        make_relationship(db, captain, candidate, rel_type="fav")
+
+        base = {truck_a.id: 1.0, truck_b.id: 1.0}
+        crews = {
+            truck_a.id: [{"id": captain.id, "role": "captain"}],
+            truck_b.id: [],
+        }
+
+        result = calculate_weights(
+            employee_id=candidate.id,
+            employee_role="walker",
+            base_weights=base,
+            assigned_crews=crews,
+            banned_truck_ids=[],
+            db=db,
+        )
+
+        assert result[truck_a.id] > result[truck_b.id], (
+            "a captain fan must pull the candidate toward their truck"
+        )
+
+    def test_unknown_role_on_crew_does_not_crash(self, db):
+        """A role with no configured boost contributes no pull and must not raise.
+
+        driver_trainee is the live case: ADR-256 made the slot insertable while
+        ADR-264 (its behaviour) is still unimplemented.
+        """
+        truck_a = make_truck(db, "Truck A")
+        odd = make_employee(db, role="driver_trainee", name="Driver Trainee")
+        candidate = make_employee(db, role="walker", name="Walker")
+
+        make_relationship(db, odd, candidate, rel_type="fav")
+
+        base = {truck_a.id: 1.0}
+        crews = {truck_a.id: [{"id": odd.id, "role": "driver_trainee"}]}
+
+        result = calculate_weights(
+            employee_id=candidate.id,
+            employee_role="walker",
+            base_weights=base,
+            assigned_crews=crews,
+            banned_truck_ids=[],
+            db=db,
+        )
+        assert result[truck_a.id] == pytest.approx(1.0), "unweighted role should not move the weight"
