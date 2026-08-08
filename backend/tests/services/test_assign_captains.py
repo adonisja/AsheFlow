@@ -212,3 +212,108 @@ def _row(*, days_held, completed):
         completed_at=date(2026, 1, 1) if completed else None,
         pinned=False,
     )
+
+
+# ── ADR-256 D17a: a pin is exclusive in both directions ─────────────────────
+
+class TestPinExclusivity:
+    """The scenario the (employee_id, truck_id) unique constraint does NOT prevent:
+
+        Mon: pin A to Viking
+        Tue: A is off, so pin B to Viking
+        Wed: both available — two captains pinned to one truck
+
+    Nobody did anything wrong on any single day. Before the partial unique indexes,
+    assign_captains placed whichever it reached first and the other pin vanished
+    silently.
+    """
+
+    def test_two_captains_cannot_both_be_pinned_to_one_truck(self, db):
+        from sqlalchemy.exc import IntegrityError
+
+        truck = make_truck(db, "Viking")
+        cap_a = make_employee(db, role="captain", name="Cap A")
+        cap_b = make_employee(db, role="captain", name="Cap B")
+
+        db.add(CaptainTruckFamiliarity(
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=cap_a.id,
+            truck_id=truck.id, days_held=0, pinned=True,
+        ))
+        db.commit()
+
+        db.add(CaptainTruckFamiliarity(
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=cap_b.id,
+            truck_id=truck.id, days_held=0, pinned=True,
+        ))
+        with pytest.raises(IntegrityError):
+            db.commit()
+
+    def test_one_captain_cannot_be_pinned_to_two_trucks(self, db):
+        from sqlalchemy.exc import IntegrityError
+
+        t1, t2 = make_truck(db, "Viking"), make_truck(db, "Odin")
+        cap = make_employee(db, role="captain", name="Cap")
+
+        db.add(CaptainTruckFamiliarity(
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=cap.id,
+            truck_id=t1.id, days_held=0, pinned=True,
+        ))
+        db.commit()
+
+        db.add(CaptainTruckFamiliarity(
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=cap.id,
+            truck_id=t2.id, days_held=0, pinned=True,
+        ))
+        with pytest.raises(IntegrityError):
+            db.commit()
+
+    def test_unpinned_rows_are_unconstrained(self, db):
+        """The predicate must not degrade into a plain unique on the column.
+
+        Familiarity rows exist for every truck a captain has held; only the pinned
+        ones are exclusive. This is the half that catches a dropped WHERE clause.
+        """
+        t1, t2 = make_truck(db, "Viking"), make_truck(db, "Odin")
+        cap_a = make_employee(db, role="captain", name="Cap A")
+        cap_b = make_employee(db, role="captain", name="Cap B")
+
+        for cap in (cap_a, cap_b):
+            for truck in (t1, t2):
+                db.add(CaptainTruckFamiliarity(
+                    id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=cap.id,
+                    truck_id=truck.id, days_held=3, pinned=False,
+                ))
+        db.commit()
+
+        rows = db.query(CaptainTruckFamiliarity).filter(
+            CaptainTruckFamiliarity.pinned == False,  # noqa: E712
+        ).all()
+        assert len(rows) == 4, "unpinned history rows must not collide"
+
+
+class TestUnhonoredPin:
+    def test_pin_on_an_occupied_truck_warns_instead_of_vanishing(self, db):
+        """A pin that cannot be honoured must say so.
+
+        Falling through to normal weighting honours the pin's existence and ignores
+        its content — indistinguishable from "the pin did nothing", with no way to
+        tell why.
+        """
+        t1, t2 = make_truck(db, "Viking"), make_truck(db, "Odin")
+        seated = make_employee(db, role="captain", name="Already Seated")
+        pinned_cap = make_employee(db, role="captain", name="Pinned Elsewhere")
+
+        db.add(CaptainTruckFamiliarity(
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=pinned_cap.id,
+            truck_id=t1.id, days_held=0, pinned=True,
+        ))
+        db.commit()
+
+        # t1 is already taken by a manual assignment before the algorithm runs.
+        crews = {t1.id: [{"id": seated.id, "role": "captain"}], t2.id: []}
+        warnings = assign_captains([pinned_cap], crews, {t1.id: 1.0, t2.id: 1.0},
+                                   db, company_id=SEED_COMPANY_ID)
+
+        assert any(w.get("type") == "captain_pin_unhonored" for w in warnings)
+        # ...and they are still placed, on the free truck.
+        assert _captains_on(crews, t2.id)[0]["id"] == pinned_cap.id

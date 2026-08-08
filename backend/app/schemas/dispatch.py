@@ -2,7 +2,7 @@ import datetime
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class DispatchConfig(BaseModel):
     date: Optional[datetime.date] = Field(None, description="Date to run dispatch for")
@@ -28,6 +28,32 @@ class ManualAssignmentUpdate(BaseModel):
 class TraineePairingUpdate(BaseModel):
     """Set (or clear) a trainee's paired trainer on their own truck (ADR-210)."""
     trainer_id: Optional[UUID] = Field(None, description="Trainer to pair with; null to clear (orphan)")
+
+
+class CaptainPinUpdate(BaseModel):
+    """Pin (or unpin) a captain to a truck — ADR-256 D17a.
+
+    A pin is exclusive in both directions: one pinned captain per truck, and one pin
+    per captain. Repointing either side displaces an existing pin, so the caller must
+    acknowledge with ``confirm_override=True`` rather than having it happen silently.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    truck_id: Optional[UUID] = Field(
+        None, description="Truck to pin this captain to; null clears their pin."
+    )
+    confirm_override: bool = Field(
+        False,
+        description=(
+            "Acknowledge displacing an existing pin — this captain's pin on another "
+            "truck, or another captain's pin on this truck. Without it, a conflicting "
+            "pin is refused with 409 and the conflict described."
+        ),
+    )
+    reason: Optional[str] = Field(
+        None, max_length=280,
+        description="Why the pin was set or overridden. Recorded in the audit trail.",
+    )
 
 
 # ── ADR-199 Phase B: trainer-absent day-of reassignment (dispatch only) ─────────

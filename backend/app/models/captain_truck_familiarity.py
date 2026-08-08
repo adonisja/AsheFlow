@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column, Integer, Boolean, Date, DateTime, ForeignKey, CheckConstraint,
-    UniqueConstraint,
+    UniqueConstraint, Index, text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -43,6 +43,33 @@ class CaptainTruckFamiliarity(Base):
     __table_args__ = (
         UniqueConstraint("employee_id", "truck_id", name="uq_captain_truck_familiarity"),
         CheckConstraint("days_held >= 0", name="ck_captain_familiarity_days_nonneg"),
+        # ADR-256 D17a. The UniqueConstraint above only stops ONE captain being pinned
+        # twice to the SAME truck. It does not stop two different captains being pinned
+        # to one truck, which happens across days without anyone doing anything wrong:
+        # pin A to Viking on Monday, A is off Tuesday so pin B to Viking, then both are
+        # available Wednesday. Without these, assign_captains places whichever it
+        # reaches first and the other pin is silently ignored.
+        #
+        # Both dialects named — `postgresql_where` alone is dropped by SQLite and the
+        # index degrades into a plain unique on the column (see ADR-256, the
+        # one-captain-per-truck index that shipped with exactly that bug).
+        Index(
+            "uq_captain_pin_one_per_truck",
+            "truck_id",
+            unique=True,
+            postgresql_where=text("pinned = true"),
+            sqlite_where=text("pinned = true"),
+        ),
+        # One pin per captain, total. A pin means "this captain, this truck"; two pins
+        # for one captain is a contradiction, not a preference — assign_captains would
+        # take whichever it reached first, arbitrarily.
+        Index(
+            "uq_captain_pin_one_per_captain",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("pinned = true"),
+            sqlite_where=text("pinned = true"),
+        ),
     )
 
     id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
