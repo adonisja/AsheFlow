@@ -39,14 +39,16 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
         db.query(Employee)
         .filter(
             Employee.company_id == company_id,
-            Employee.role.in_(["driver", "trainer", "trainee", "walker"]),
+            # ADR-256: captain is dispatchable crew. field_supervisor is NOT — they
+            # oversee the road rather than filling a seat on one truck.
+            Employee.role.in_(["driver", "trainer", "trainee", "walker", "captain"]),
             Employee.is_active == True,
             ~or_(has_off_day_today, has_pto_today),
         )
         .all()
     )
 
-    available_pool = {"drivers": [], "trainers": [], "trainees": [], "walkers": []}
+    available_pool = {"drivers": [], "trainers": [], "trainees": [], "walkers": [], "captains": []}
     for employee in available_employees:
         if employee.role == "driver":
             available_pool["drivers"].append(employee)
@@ -56,6 +58,8 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
             available_pool["trainees"].append(employee)
         elif employee.role == "walker":
             available_pool["walkers"].append(employee)
+        elif employee.role == "captain":
+            available_pool["captains"].append(employee)
 
     return available_pool
 
