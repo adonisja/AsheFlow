@@ -133,6 +133,7 @@ backend/asheflow_private/
 # Individual proprietary modules
 backend/app/services/calculate_weights.py
 backend/app/services/run_dispatch.py
+backend/app/services/assign_captains.py
 backend/app/services/assign_drivers.py
 backend/app/services/assign_trainers.py
 backend/app/services/assign_trainees.py
