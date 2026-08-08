@@ -44,11 +44,17 @@ class AssignmentMember(Base):
         # the guarantee — a service-level check alone loses to a concurrent double-assign
         # (both read "no captain", both insert, both succeed). Write sites catch
         # IntegrityError and raise 409.
+        # Both dialects must be named explicitly. A `postgresql_where` alone is
+        # SILENTLY DROPPED by SQLite (the test engine), degrading this into a plain
+        # unique index on assignment_id — one crew member per truck, any role. That
+        # is not a test artifact: it fails ordinary driver/trainer inserts, which is
+        # how it was caught.
         Index(
             "uq_assignment_members_one_captain",
             "assignment_id",
             unique=True,
             postgresql_where=text("role = 'captain'"),
+            sqlite_where=text("role = 'captain'"),
         ),
     )
 
