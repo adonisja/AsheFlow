@@ -12,7 +12,11 @@ rather than a bare count.
 """
 import inspect
 
-import app.routers.rts as rts
+try:
+    import app.routers.rts as rts
+except (ImportError, ModuleNotFoundError):
+    import pytest
+    pytest.skip("proprietary rts deps not available (CI skip)", allow_module_level=True)
 from app.models.delivery_stop import DeliveryStop
 from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
 

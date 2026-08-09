@@ -16,7 +16,6 @@ Two distinct failures are covered:
 """
 import pytest
 
-from app.routers import walker_routes as _wr
 from app.services.constants import (
     ROUTE_LEAD_ROLES,
     TRUCK_SCOPED_ROLES,
@@ -97,12 +96,27 @@ class TestCaptainIsNotOversight:
         assert "captain" not in STATION_RESOLVE_ROLES
 
 
+def _walker_routes_has_rename() -> bool:
+    """Is the ADR-256 gate rename present in THIS build's walker_routes?
+
+    walker_routes.py is gitignored, so it is either ABSENT from the public repo
+    (ModuleNotFoundError) or present as a pre-rename copy (no _allow_route_lead).
+    Both are handled here, and the import is inside the function on purpose: at
+    module level a missing module is a COLLECTION error, which aborts the entire
+    pytest run rather than skipping one file.
+    """
+    try:
+        from app.routers import walker_routes
+    except (ImportError, ModuleNotFoundError):
+        return False
+    return hasattr(walker_routes, "_allow_route_lead")
+
+
 @pytest.mark.skipif(
-    not hasattr(_wr, "_allow_route_lead"),
+    not _walker_routes_has_rename(),
     reason=(
-        "walker_routes predates the ADR-256 gate rename. It is gitignored, so CI "
-        "checks out the public repo's pre-rename copy — the import succeeds and only "
-        "the attribute is missing, which an ImportError guard cannot see."
+        "walker_routes is gitignored: absent from the public repo, or present as a "
+        "pre-ADR-256 copy without _allow_route_lead."
     ),
 )
 class TestGatesUseTheSharedSets:

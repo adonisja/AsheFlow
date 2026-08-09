@@ -7,8 +7,15 @@ integration check noted in the ADR; here we keep to unit-testable surface.
 """
 from unittest.mock import MagicMock, patch
 
-from app.services.segment_map import fetch_blockface, load_adjacency
-from app.tasks.enrich_manifest import _street_of, _street_sort_key
+try:
+    from app.services.segment_map import fetch_blockface, load_adjacency
+    # enrich_manifest transitively imports derive_block_key, which is also
+    # gitignored — so both imports belong inside the same guard. Guarding only the
+    # first left the second as a collection error, which aborts the whole run.
+    from app.tasks.enrich_manifest import _street_of, _street_sort_key
+except (ImportError, ModuleNotFoundError):
+    import pytest
+    pytest.skip("proprietary sort deps not available (CI skip)", allow_module_level=True)
 
 
 # ---------------------------------------------------------------------------
