@@ -120,6 +120,7 @@ SERVICES=(
   assign_trainees.py
   assign_walkers.py
   assign_captains.py
+  assign_clusters.py
   rebalance_crews.py
   resolve_conflict.py
   ban_override.py
