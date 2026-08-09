@@ -138,6 +138,10 @@ backend/app/services/assign_drivers.py
 backend/app/services/assign_trainers.py
 backend/app/services/assign_trainees.py
 backend/app/services/assign_walkers.py
+# ADR-256. Was neither ignored nor tracked, so the pre-push hook never synced it
+# to AsheFlow-private and CI could not import it — run_dispatch.py:12 imports it
+# unconditionally, so every test reaching routers.dispatch aborted collection.
+backend/app/services/assign_captains.py
 backend/app/services/rebalance_crews.py
 backend/app/services/resolve_conflict.py
 backend/app/services/ban_override.py
