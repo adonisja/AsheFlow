@@ -102,39 +102,29 @@ mkdir -p docs/journals
 mkdir -p docs/templates
 
 # ── Proprietary files ───────────────────────────────────────────────────────
-ROUTERS=(
-  dispatch.py
-  training.py
-  field_ops.py
-  walker_routes.py
-  rts.py
-  building_profiles.py
-  building_profile_library.py
-)
+# Read from PROPRIETARY.txt — the single source of truth. Previously these were
+# two hardcoded arrays that had to agree with .gitignore by hand, and they
+# drifted in both directions: assign_captains.py was in NEITHER list (so nothing
+# had it), while run_sort/persist_zones/sort_analysis were in SERVICES but not
+# .gitignore (so they synced to private AND stayed public). One list removes the
+# whole failure class.
+MANIFEST="$PUBLIC_ROOT/PROPRIETARY.txt"
+if [ ! -f "$MANIFEST" ]; then
+  echo "ERROR: $MANIFEST not found — cannot determine what is proprietary."
+  exit 1
+fi
 
-SERVICES=(
-  calculate_weights.py
-  run_dispatch.py
-  assign_drivers.py
-  assign_trainers.py
-  assign_trainees.py
-  assign_walkers.py
-  assign_captains.py
-  assign_clusters.py
-  rebalance_crews.py
-  resolve_conflict.py
-  ban_override.py
-  route_sort.py
-  score_phase4.py
-  seed_manifest.py
-  derive_block_key.py
-  sort_analysis.py
-  run_sort.py
-  persist_zones.py
-  assign_totes.py
-  wave_distribution.py
-  stop_cutoff.py
-)
+ROUTERS=()
+SERVICES=()
+while IFS= read -r _p; do
+  case "$_p" in ''|\#*) continue ;; esac
+  case "$_p" in
+    backend/app/routers/*.py)  ROUTERS+=("$(basename "$_p")") ;;
+    backend/app/services/*.py) SERVICES+=("$(basename "$_p")") ;;
+  esac
+done < "$MANIFEST"
+
+echo "  manifest: ${#ROUTERS[@]} routers, ${#SERVICES[@]} services"
 
 echo ""
 echo "Copying routers..."
@@ -160,34 +150,30 @@ for f in "${SERVICES[@]}"; do
   fi
 done
 
-# ── Drift guard: a proprietary file that is in NEITHER list is invisible ──────
-# assign_captains.py (ADR-256) fell through exactly this gap: not in .gitignore,
-# so it stayed untracked in the public repo; not in SERVICES above, so it never
-# reached AsheFlow-private. CI copies proprietary source from private, found
-# nothing, and every test importing routers.dispatch aborted collection while
-# local runs stayed green off the working-tree copy.
-#
-# Two hand-maintained lists that must agree is the actual defect. This does not
-# merge them — it just refuses to let them drift silently.
+# ── Orphan guard: a service in NEITHER the manifest nor the public index ─────
+# The manifest removed the two-list drift class, but one gap survives it: a NEW
+# service file that nobody has classified yet. It is untracked publicly (so the
+# public repo does not have it) and absent from the manifest (so this sync does
+# not copy it) — exactly how assign_captains.py became invisible to everything
+# at once. Fail the push rather than let it disappear.
 echo ""
-echo "Checking for unsynced proprietary services..."
-_drift=0
+echo "Checking for unclassified services..."
+_orphans=0
 for src in "$PUBLIC_ROOT"/backend/app/services/*.py; do
   f="$(basename "$src")"
-  # In SERVICES? then it is handled above.
   printf '%s\n' "${SERVICES[@]}" | grep -qx "$f" && continue
-  # Tracked in the public repo? then it is intentionally public.
   git -C "$PUBLIC_ROOT" ls-files --error-unmatch "backend/app/services/$f" >/dev/null 2>&1 && continue
-  echo "  ✗ $f is untracked publicly AND not in SERVICES — nothing has it."
-  echo "    Add it to BOTH .gitignore and the SERVICES list in this script."
-  _drift=1
+  echo "  ✗ $f is neither tracked publicly nor listed in PROPRIETARY.txt."
+  echo "    Decide which it is: add it to PROPRIETARY.txt (then run"
+  echo "    scripts/sync_proprietary_lists.sh), or git add it."
+  _orphans=1
 done
-if [ "$_drift" -eq 1 ]; then
+if [ "$_orphans" -eq 1 ]; then
   echo ""
-  echo "ERROR: proprietary file(s) would be lost. Push aborted."
+  echo "ERROR: unclassified proprietary file(s) would be lost. Push aborted."
   exit 1
 fi
-echo "  ✓ no drift"
+echo "  ✓ every service is classified"
 
 # ── Proprietary tests ────────────────────────────────────────────────────────
 # These import proprietary routers/services, so they're gitignored from the public

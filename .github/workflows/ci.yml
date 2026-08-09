@@ -98,6 +98,31 @@ jobs:
         working-directory: backend
         run: pip-audit -r requirements.txt
 
+  # ── 1b. PROPRIETARY EXPOSURE GATE ──────────────────────────────────────────
+  # Fails the build if anything in PROPRIETARY.txt is tracked in the public repo.
+  # This is the check that would have caught run_sort.py, persist_zones.py and
+  # sort_analysis.py — all three were being synced to AsheFlow-private while
+  # simultaneously sitting in the public tree, for months, silently.
+  #
+  # Runs on the PUBLIC checkout only, before the private-repo pull, so it sees
+  # exactly what the world sees. Deliberately NOT a dependency of deploy: the
+  # point is to fail fast and loudly on a PR, not to gate a release.
+  proprietary:
+    name: Proprietary exposure
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # history check needs the full log
+
+      # --allow-history downgrades the historical-exposure finding to a notice.
+      # Remove this flag once the ADR-265 purge has run, so history regressions
+      # fail too.
+      - name: Check for proprietary exposure
+        run: bash scripts/check_proprietary_exposure.sh --allow-history
+
   # ── 2. BACKEND TESTS ───────────────────────────────────────────────────────
   test:
     name: Backend tests
