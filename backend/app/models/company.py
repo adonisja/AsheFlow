@@ -134,6 +134,9 @@ class CompanyConfig(Base):
     discord_guild_id            = Column(BigInteger, nullable=True)
     discord_drivers_channel_id  = Column(BigInteger, nullable=True)
     discord_trainers_channel_id = Column(BigInteger, nullable=True)
+    # ADR-256: the captains' room. Crew embeds post here alongside #trainers-chat
+    # so the truck's route lead sees the crew they are leading.
+    discord_captains_channel_id = Column(BigInteger, nullable=True)
     discord_general_channel_id  = Column(BigInteger, nullable=True)
     discord_invite_channel_id   = Column(BigInteger, nullable=True)
     discord_role_admin          = Column(BigInteger, nullable=True)

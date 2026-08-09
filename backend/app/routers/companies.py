@@ -184,6 +184,7 @@ class DiscordConfigUpdate(BaseModel):
     discord_guild_id:            Optional[int] = None
     discord_drivers_channel_id:  Optional[int] = None
     discord_trainers_channel_id: Optional[int] = None
+    discord_captains_channel_id: Optional[int] = None
     discord_general_channel_id:  Optional[int] = None
     discord_invite_channel_id:   Optional[int] = None
     discord_role_admin:          Optional[int] = None
@@ -201,6 +202,7 @@ class DiscordConfigResponse(BaseModel):
     discord_guild_id:            Optional[str] = None
     discord_drivers_channel_id:  Optional[str] = None
     discord_trainers_channel_id: Optional[str] = None
+    discord_captains_channel_id: Optional[str] = None
     discord_general_channel_id:  Optional[str] = None
     discord_invite_channel_id:   Optional[str] = None
     discord_role_admin:          Optional[str] = None
@@ -219,7 +221,7 @@ class DiscordConfigResponse(BaseModel):
     def from_config(cls, config) -> "DiscordConfigResponse":
         fields = [
             "discord_guild_id", "discord_drivers_channel_id", "discord_trainers_channel_id",
-            "discord_general_channel_id", "discord_invite_channel_id",
+            "discord_captains_channel_id", "discord_general_channel_id", "discord_invite_channel_id",
             "discord_role_admin", "discord_role_manager", "discord_role_asheflow",
             "discord_role_bot", "discord_role_dispatch", "discord_role_driver",
             "discord_role_trainer", "discord_role_captain", "discord_role_walker",

@@ -42,6 +42,7 @@ class GuildConfig:
     guild_id:            int
     drivers_channel_id:  Optional[int]
     trainers_channel_id: Optional[int]
+    captains_channel_id: Optional[int]
     general_channel_id:  Optional[int]
     invite_channel_id:   Optional[int]
     role_admin:          Optional[int]
@@ -125,6 +126,7 @@ async def _fetch_guild_config(company_id: str) -> Optional[GuildConfig]:
         guild_id            = int(guild_id),
         drivers_channel_id  = data.get("drivers_channel_id"),
         trainers_channel_id = data.get("trainers_channel_id"),
+        captains_channel_id = data.get("captains_channel_id"),
         general_channel_id  = data.get("general_channel_id"),
         invite_channel_id   = data.get("invite_channel_id"),
         role_admin          = data.get("role_admin"),

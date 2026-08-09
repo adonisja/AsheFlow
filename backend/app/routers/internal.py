@@ -45,6 +45,7 @@ class GuildConfigResponse(BaseModel):
     guild_id:            int | None
     drivers_channel_id:  int | None
     trainers_channel_id: int | None
+    captains_channel_id: int | None
     general_channel_id:  int | None
     invite_channel_id:   int | None
     role_admin:          int | None
@@ -79,6 +80,7 @@ def get_guild_config(
         guild_id            = cfg.guild_id,
         drivers_channel_id  = cfg.drivers_channel_id,
         trainers_channel_id = cfg.trainers_channel_id,
+        captains_channel_id = cfg.captains_channel_id,
         general_channel_id  = cfg.general_channel_id,
         invite_channel_id   = cfg.invite_channel_id,
         role_admin          = cfg.role_admin,

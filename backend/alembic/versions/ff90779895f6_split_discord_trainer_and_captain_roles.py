@@ -25,6 +25,11 @@ Manual guild work this expects, in order:
   2. create a new "Captain" role
   3. set discord_role_captain to the new role id in company settings
 
+NOTE: the discord_* columns live on COMPANY_CONFIGS, not on `companies`. The
+first version of this migration targeted the wrong table — it would have failed on
+Postgres with "column discord_role_captain does not exist" and was invisible to the
+test suite, which builds SQLite tables from ORM metadata and never runs migrations.
+
 Revision ID: ff90779895f6
 Revises: de0cd30c177d
 Create Date: 2026-08-08
@@ -39,17 +44,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("companies", sa.Column("discord_role_trainer", sa.BigInteger(), nullable=True))
+    op.add_column("company_configs", sa.Column("discord_role_trainer", sa.BigInteger(), nullable=True))
 
     # Move, do not copy: the old column held the trainer role all along.
-    op.execute("UPDATE companies SET discord_role_trainer = discord_role_captain")
-    op.execute("UPDATE companies SET discord_role_captain = NULL")
+    op.execute("UPDATE company_configs SET discord_role_trainer = discord_role_captain")
+    op.execute("UPDATE company_configs SET discord_role_captain = NULL")
 
 
 def downgrade() -> None:
     # Put the trainer role id back where it was, for a chain that predates the split.
     op.execute(
-        "UPDATE companies SET discord_role_captain = discord_role_trainer "
+        "UPDATE company_configs SET discord_role_captain = discord_role_trainer "
         "WHERE discord_role_trainer IS NOT NULL"
     )
-    op.drop_column("companies", "discord_role_trainer")
+    op.drop_column("company_configs", "discord_role_trainer")

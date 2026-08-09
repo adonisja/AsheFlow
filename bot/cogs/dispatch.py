@@ -643,6 +643,33 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 "finalize_assignments: trainers_channel not found — trainers_channel_id=%s guild=%s",
                 cfg.trainers_channel_id, cfg.guild_id,
             )
+
+        # ADR-256: post the day's captain roster to #captains. Guarded on the id, so
+        # a company that has not created the channel simply gets no post — the same
+        # shape as #trainers-chat above.
+        captains_channel = guild.get_channel(cfg.captains_channel_id) if cfg.captains_channel_id else None
+        if captains_channel:
+            captain_lines = []
+            for truck in trucks_summary:
+                caps = [m["name"] for m in truck.get("crew", []) if m.get("role") == "captain"]
+                if caps:
+                    captain_lines.append(f"**{truck.get('truck_name', 'Truck')}:** `{caps[0]}`")
+            if captain_lines:
+                try:
+                    embed = discord.Embed(
+                        title=f"Captains — {dispatch_date}",
+                        description="\n".join(captain_lines),
+                        color=0x5865F2,
+                    )
+                    await captains_channel.send(embed=embed)
+                except Exception as e:
+                    logger.error("finalize_assignments: failed to post captains: %s", e, exc_info=True)
+            else:
+                # Loud rather than silent: every truck rolled without a route lead.
+                logger.warning(
+                    "finalize_assignments: no captains on any truck for %s — nothing posted to #captains",
+                    dispatch_date,
+                )
             await drivers_channel.send(
                 f"⚠️ #trainers-chat (ID `{cfg.trainers_channel_id}`) not found in guild — "
                 "trainer pairings not posted."

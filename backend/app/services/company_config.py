@@ -216,6 +216,7 @@ class DiscordGuildConfig:
     guild_id:            int | None
     drivers_channel_id:  int | None
     trainers_channel_id: int | None
+    captains_channel_id: int | None
     general_channel_id:  int | None
     invite_channel_id:   int | None
     role_admin:          int | None
@@ -243,6 +244,7 @@ def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
     if row is None:
         return DiscordGuildConfig(
             guild_id=None, drivers_channel_id=None, trainers_channel_id=None,
+            captains_channel_id=None,
             general_channel_id=None, invite_channel_id=None,
             role_admin=None, role_manager=None, role_asheflow=None,
             role_bot=None, role_dispatch=None, role_driver=None,
@@ -252,6 +254,7 @@ def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
         guild_id            = row.discord_guild_id,
         drivers_channel_id  = row.discord_drivers_channel_id,
         trainers_channel_id = row.discord_trainers_channel_id,
+        captains_channel_id = row.discord_captains_channel_id,
         general_channel_id  = row.discord_general_channel_id,
         invite_channel_id   = row.discord_invite_channel_id,
         role_admin          = row.discord_role_admin,
