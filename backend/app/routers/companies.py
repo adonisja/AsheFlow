@@ -135,6 +135,17 @@ class CompanyConfigResponse(BaseModel):
     effort_time_factor:               Optional[float]
     effort_physical_factor:           Optional[float]
     ingestion_mode:                   Optional[str]
+    # Scorecard tier targets (ADR-262). None = not configured.
+    scorecard_dcr_target:             Optional[float] = None
+    scorecard_dnr_dpmo_target:        Optional[int]   = None
+    scorecard_pod_target:             Optional[float] = None
+    scorecard_cc_target:              Optional[float] = None
+    scorecard_cdf_target:             Optional[float] = None
+    scorecard_dsb_dpmo_target:        Optional[int]   = None
+    scorecard_fico_target:            Optional[int]   = None
+    scorecard_speeding_rate_target:   Optional[float] = None
+    scorecard_signsignal_rate_target: Optional[float] = None
+    scorecard_dvic_target:            Optional[float] = None
 
     model_config = {"from_attributes": True}
 
@@ -174,6 +185,16 @@ class CompanyConfigResponse(BaseModel):
             effort_time_factor=obj.effort_time_factor,
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
+            scorecard_dcr_target=obj.scorecard_dcr_target,
+            scorecard_dnr_dpmo_target=obj.scorecard_dnr_dpmo_target,
+            scorecard_pod_target=obj.scorecard_pod_target,
+            scorecard_cc_target=obj.scorecard_cc_target,
+            scorecard_cdf_target=obj.scorecard_cdf_target,
+            scorecard_dsb_dpmo_target=obj.scorecard_dsb_dpmo_target,
+            scorecard_fico_target=obj.scorecard_fico_target,
+            scorecard_speeding_rate_target=obj.scorecard_speeding_rate_target,
+            scorecard_signsignal_rate_target=obj.scorecard_signsignal_rate_target,
+            scorecard_dvic_target=obj.scorecard_dvic_target,
         )
 
 
@@ -605,6 +626,21 @@ class CompanyConfigUpdate(BaseModel):
 
     # Manifest ingestion
     ingestion_mode:                  Optional[str]   = None
+
+    # Amazon scorecard tier targets (ADR-262). Bounded per Dimension 9 — these
+    # are attacker-controlled input. Percentages 0–100; DPMO 0–1,000,000 (a
+    # defect rate cannot exceed one million per million); FICO on its real
+    # 100–850 scale; event rates per 100 trips capped generously at 1000.
+    scorecard_dcr_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_pod_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_cc_target:              Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_cdf_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_dvic_target:            Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_dnr_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
+    scorecard_dsb_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
+    scorecard_fico_target:            Optional[int]   = Field(None, ge=100, le=850)
+    scorecard_speeding_rate_target:   Optional[float] = Field(None, ge=0.0, le=1000.0)
+    scorecard_signsignal_rate_target: Optional[float] = Field(None, ge=0.0, le=1000.0)
 
 
 def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, allow_super_admin_fields: bool = False) -> None:

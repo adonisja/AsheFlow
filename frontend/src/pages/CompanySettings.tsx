@@ -46,6 +46,18 @@ interface CompanyConfig {
   effort_time_factor: number | null;
   effort_physical_factor: number | null;
   ingestion_mode: string | null;
+  // Amazon scorecard tier targets (ADR-262). null = no target configured; the
+  // scorecard shows the reported value with no pass/fail judgement.
+  scorecard_dcr_target: number | null;
+  scorecard_dnr_dpmo_target: number | null;
+  scorecard_pod_target: number | null;
+  scorecard_cc_target: number | null;
+  scorecard_cdf_target: number | null;
+  scorecard_dsb_dpmo_target: number | null;
+  scorecard_fico_target: number | null;
+  scorecard_speeding_rate_target: number | null;
+  scorecard_signsignal_rate_target: number | null;
+  scorecard_dvic_target: number | null;
 }
 
 interface DiscordConfig {
@@ -129,6 +141,31 @@ const EFFORT_SCORING: FieldMeta[] = [
   { key: 'effort_physical_factor', label: 'Effort Physical Factor', type: 'float', description: 'Weight for physical-based effort in route scoring (0–1).', placeholder: '0.5', min: 0, max: 1, step: 0.05 },
 ];
 
+// Amazon scorecard tier targets (ADR-262). Leave blank if you have not confirmed
+// the number against your own station's card — a blank target means "no
+// judgement", which is correct, whereas a guessed one silently mislabels every
+// week. The placeholders are industry-typical values from third-party DSP
+// guides, NOT Amazon-published figures: Amazon sets several per station.
+//
+// Direction is deliberately spelled out in each description because the card
+// mixes floors and ceilings, and reading a DPMO row as higher-is-better is the
+// single most common scorecard misreading.
+const SCORECARD_QUALITY: FieldMeta[] = [
+  { key: 'scorecard_dcr_target', label: 'DCR Target (%)', type: 'float', description: 'Delivery Completion Rate. Higher is better — pass at or above this.', placeholder: '99.0', min: 0, max: 100, step: 0.1 },
+  { key: 'scorecard_pod_target', label: 'POD Target (%)', type: 'float', description: 'Photo on Delivery usable-photo rate. Higher is better.', placeholder: '97.0', min: 0, max: 100, step: 0.1 },
+  { key: 'scorecard_cc_target', label: 'Contact Compliance Target (%)', type: 'float', description: 'Required in-app customer contacts made. Higher is better.', placeholder: '98.0', min: 0, max: 100, step: 0.1 },
+  { key: 'scorecard_cdf_target', label: 'CDF Target (%)', type: 'float', description: 'Customer Delivery Feedback positive rate. Higher is better.', placeholder: '84.9', min: 0, max: 100, step: 0.1 },
+  { key: 'scorecard_dnr_dpmo_target', label: 'DNR DPMO Ceiling', type: 'int', description: 'Delivered-Not-Received defects per million. LOWER is better — pass at or below this.', placeholder: '950', min: 0, max: 1000000 },
+  { key: 'scorecard_dsb_dpmo_target', label: 'DSB DPMO Ceiling', type: 'int', description: 'Delivery Success Behaviors defects per million. LOWER is better.', placeholder: '', min: 0, max: 1000000 },
+];
+
+const SCORECARD_SAFETY: FieldMeta[] = [
+  { key: 'scorecard_fico_target', label: 'FICO Target', type: 'int', description: 'Safe Driving Score, 100–850. Higher is better. Driver track only.', placeholder: '800', min: 100, max: 850 },
+  { key: 'scorecard_dvic_target', label: 'DVIC Compliance Target (%)', type: 'float', description: 'Pre/post-trip inspections completed. Higher is better.', placeholder: '95.0', min: 0, max: 100, step: 0.1 },
+  { key: 'scorecard_speeding_rate_target', label: 'Speeding Rate Ceiling (per 100 trips)', type: 'float', description: 'LOWER is better — pass at or below this.', placeholder: '10.0', min: 0, max: 1000, step: 0.1 },
+  { key: 'scorecard_signsignal_rate_target', label: 'Sign/Signal Rate Ceiling (per 100 trips)', type: 'float', description: 'Stop-light violations weigh ~10x a stop sign. LOWER is better.', placeholder: '15.0', min: 0, max: 1000, step: 0.1 },
+];
+
 const INGESTION: FieldMeta[] = [
   {
     key: 'ingestion_mode', label: 'Ingestion Mode', type: 'select',
@@ -175,6 +212,10 @@ const CONFIG_KEYS: string[] = [
   'dispatch_weight_cap', 'flag_threshold', 'driver_checkin_count',
   'late_window_minutes', 'ncns_cutoff_minutes',
   'effort_time_factor', 'effort_physical_factor', 'ingestion_mode',
+  'scorecard_dcr_target', 'scorecard_dnr_dpmo_target', 'scorecard_pod_target',
+  'scorecard_cc_target', 'scorecard_cdf_target', 'scorecard_dsb_dpmo_target',
+  'scorecard_fico_target', 'scorecard_speeding_rate_target',
+  'scorecard_signsignal_rate_target', 'scorecard_dvic_target',
 ];
 
 const DISCORD_KEYS: string[] = [
@@ -190,12 +231,16 @@ const INT_FIELDS = new Set([
   'rating_window_hours', 'graduation_assignments', 'debt_escalation_threshold',
   'underperforming_trainer_threshold', 'max_training_phase', 'driver_checkin_count',
   'late_window_minutes', 'ncns_cutoff_minutes',
+  'scorecard_dnr_dpmo_target', 'scorecard_dsb_dpmo_target', 'scorecard_fico_target',
 ]);
 const FLOAT_FIELDS = new Set([
   'phase4_pass_score', 'dispatch_weight_driver', 'dispatch_weight_trainer',
   'dispatch_weight_walker', 'dispatch_mutual_bonus', 'dispatch_tridirectional_bonus',
   'dispatch_consecutive_penalty', 'dispatch_weight_cap', 'flag_threshold',
   'effort_time_factor', 'effort_physical_factor',
+  'scorecard_dcr_target', 'scorecard_pod_target', 'scorecard_cc_target',
+  'scorecard_cdf_target', 'scorecard_speeding_rate_target',
+  'scorecard_signsignal_rate_target', 'scorecard_dvic_target',
 ]);
 const STRING_FIELDS = new Set(['ingestion_mode']);
 
@@ -629,6 +674,8 @@ export default function CompanySettings({ isOnboarding = false }: CompanySetting
     { title: 'Walker Rating', icon: Star, fields: WALKER_RATING },
     { title: 'Attendance', icon: CheckSquare, fields: ATTENDANCE },
     { title: 'Effort Scoring', icon: MapPin, fields: EFFORT_SCORING },
+    { title: 'Scorecard Targets — Quality', icon: Star, fields: SCORECARD_QUALITY },
+    { title: 'Scorecard Targets — Safety', icon: Truck, fields: SCORECARD_SAFETY },
     { title: 'Manifest Ingestion', icon: Settings, fields: INGESTION },
   ];
 
