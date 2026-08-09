@@ -128,7 +128,14 @@ function TitleBar() {
   }, [avatarOpen]);
 
   return (
-    <div className="w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    // `relative z-10` is load-bearing, not cosmetic. This bar and the nav strip
+    // below are siblings, and BOTH create their own stacking context
+    // (backdrop-blur here, .glass's backdrop-filter there). Painting then
+    // follows DOM order, so the nav strip covered anything overflowing this bar
+    // — the avatar and bell dropdowns were clipped behind it however high their
+    // own z-index went, because a child cannot escape its parent's stacking
+    // context. Lifting the whole bar fixes both dropdowns at once.
+    <div className="relative z-10 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between gap-4">
         {/* Brand */}
         <div className="flex items-center gap-2 font-bold text-base tracking-tight shrink-0">
