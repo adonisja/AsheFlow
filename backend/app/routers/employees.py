@@ -794,20 +794,43 @@ def _apply_role_transition(
         else:
             cognito = _cognito_client()
             cognito_username = db_employee.email or db_employee.cognito_sub
+            # ADD BEFORE REMOVE. Nothing in this codebase creates Cognito groups —
+            # they are assumed to already exist in the User Pool — so a role whose
+            # group has not been created yet raises ResourceNotFoundException here.
+            # Removing first would leave the user in NO group: worse than the old
+            # one, and it locks them out rather than over-permitting them.
+            # Briefly holding both is the safe direction to fail.
             try:
-                if old_group:
-                    cognito.admin_remove_user_from_group(
-                        UserPoolId=settings.aws_cognito_user_pool_id,
-                        Username=cognito_username,
-                        GroupName=old_group,
-                    )
                 cognito.admin_add_user_to_group(
                     UserPoolId=settings.aws_cognito_user_pool_id,
                     Username=cognito_username,
                     GroupName=new_group,
                 )
             except ClientError as e:
-                logger.error("Cognito group sync failed for %s: %s", db_employee.id, e)
+                # Loud: the DB role has changed and the token claims have not, so
+                # this person's permissions no longer match their role.
+                logger.error(
+                    "Cognito ADD to group %s FAILED for employee %s (%s) — role is now "
+                    "%s in the database but their Cognito group is unchanged. If the "
+                    "group does not exist, create it in the User Pool.",
+                    new_group, db_employee.id, e, new_role,
+                )
+            else:
+                if old_group and old_group != new_group:
+                    try:
+                        cognito.admin_remove_user_from_group(
+                            UserPoolId=settings.aws_cognito_user_pool_id,
+                            Username=cognito_username,
+                            GroupName=old_group,
+                        )
+                    except ClientError as e:
+                        # They hold both groups now. Over-permitted, not locked out,
+                        # and recoverable by hand — but it must not pass silently.
+                        logger.error(
+                            "Cognito REMOVE from group %s failed for employee %s (%s) — "
+                            "they now hold both %s and %s.",
+                            old_group, db_employee.id, e, old_group, new_group,
+                        )
 
     verb = "promoted" if is_promotion else "changed"
     db.add(Notification(

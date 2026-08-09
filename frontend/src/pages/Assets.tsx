@@ -72,7 +72,8 @@ type TruckRecord = {
 
 type Tab = 'people' | 'fleet' | 'system';
 
-const ROLES = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'];
+// ADR-256/264 added captain, field_supervisor and driver_trainee.
+const ROLES = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain', 'field_supervisor', 'driver_trainee'];
 // Roles that can be directly assigned at creation time — walker and trainer are earned, not assigned
 const CREATABLE_ROLES = ['driver', 'trainee', 'dispatch', 'management', 'admin'];
 // Management callers are further restricted to field-entry roles only
@@ -82,6 +83,7 @@ const PROTECTED_ROLES = ['management', 'admin'];
 const ROLE_CREATION_NOTICES: Partial<Record<string, string>> = {
   walker:  'Walkers must start as trainees and be assigned the walker role by dispatch.',
   trainer: 'Trainers can only be promoted from existing walkers by a manager or admin.',
+  captain: 'Captains are promoted from existing walkers or trainers by a manager or admin.',
 };
 
 // Formats the 10-digit local portion as (xxx) xxx-xxxx as the user types.
@@ -631,43 +633,49 @@ function PeopleTab() {
     setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
   };
 
-  const handlePromote = async (emp: Employee) => {
-    const ok = await confirm({
-      title: 'Promote to Trainer',
-      message: `Promote ${emp.name} from walker to trainer? They will gain trainer permissions on their next login.`,
-      confirmLabel: 'Promote',
-      variant: 'default',
-    });
-    if (!ok) return;
-    setPromotingId(emp.id);
-    setPromoteMsg(null);
-    try {
-      const res = await axiosClient.post(`/employees/${emp.id}/promote`);
-      setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
-      setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} promoted to trainer.` });
-    } catch (err: unknown) {
-      setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Promotion failed.') });
-    } finally {
-      setPromotingId(null);
-    }
+  // ADR-256: walker/trainer/captain move between one another. The table mirrors
+  // ROLE_TRANSITIONS on the server — the server is authoritative and re-checks, this
+  // only decides which buttons to draw.
+  const ROLE_TRANSITIONS: Record<string, string[]> = {
+    walker:  ['trainer', 'captain'],
+    trainer: ['captain', 'walker'],
+    captain: ['trainer', 'walker'],
   };
+  const ROLE_RANK: Record<string, number> = { walker: 0, trainer: 1, captain: 2 };
 
-  const handleDemote = async (emp: Employee) => {
+  const handleTransition = async (emp: Employee, newRole: string) => {
+    const isPromotion = (ROLE_RANK[newRole] ?? 0) > (ROLE_RANK[emp.role] ?? 0);
+    const label = newRole.charAt(0).toUpperCase() + newRole.slice(1);
+
     const ok = await confirm({
-      title: 'Demote to Walker',
-      message: `Demote ${emp.name} from trainer to walker? They will lose trainer permissions on their next login.`,
-      confirmLabel: 'Demote',
-      variant: 'danger',
+      title: isPromotion ? `Promote to ${label}` : `Change to ${label}`,
+      message: isPromotion
+        ? `Promote ${emp.name} from ${emp.role} to ${newRole}?` +
+          (newRole === 'captain'
+            ? ' They will start truck familiarisation on their next dispatch.'
+            : '')
+        : `Change ${emp.name} from ${emp.role} to ${newRole}? ` +
+          `They will lose ${emp.role} permissions on their next login.` +
+          (emp.role === 'captain' ? ' Any truck pin they hold will be cleared.' : ''),
+      confirmLabel: isPromotion ? 'Promote' : 'Change Role',
+      variant: isPromotion ? 'default' : 'danger',
     });
     if (!ok) return;
+
     setPromotingId(emp.id);
     setPromoteMsg(null);
     try {
-      const res = await axiosClient.post(`/employees/${emp.id}/demote`);
-      setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
-      setPromoteMsg({ id: emp.id, ok: true, text: `${emp.name} demoted to walker.` });
+      const res = await axiosClient.post(`/employees/${emp.id}/transition`, {
+        new_role: newRole,
+      });
+      setEmployees(prev => prev.map(e => (e.id === emp.id ? res.data : e)));
+      setPromoteMsg({
+        id: emp.id,
+        ok: true,
+        text: `${emp.name} is now a ${newRole}.`,
+      });
     } catch (err: unknown) {
-      setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Demotion failed.') });
+      setPromoteMsg({ id: emp.id, ok: false, text: errorText(err, 'Role change failed.') });
     } finally {
       setPromotingId(null);
     }
@@ -939,32 +947,44 @@ function PeopleTab() {
                               Resend Credentials
                             </button>
                           )}
-                          {emp.role === 'walker' && emp.account_status === 'active' && (
-                            <button
-                              onClick={() => handlePromote(emp)}
-                              disabled={promotingId === emp.id}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-violet hover:bg-violet/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                              title="Promote to trainer"
-                            >
-                              {promotingId === emp.id
-                                ? <div className="w-3 h-3 border-2 border-violet border-t-transparent rounded-full animate-spin" />
-                                : <ArrowUp className="w-3 h-3" />}
-                              Promote
-                            </button>
-                          )}
-                          {emp.role === 'trainer' && emp.account_status === 'active' && (
-                            <button
-                              onClick={() => handleDemote(emp)}
-                              disabled={promotingId === emp.id}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-warning hover:bg-warning/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
-                              title="Demote to walker"
-                            >
-                              {promotingId === emp.id
-                                ? <div className="w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin" />
-                                : <ArrowDown className="w-3 h-3" />}
-                              Demote
-                            </button>
-                          )}
+                          {/* ADR-256: one button per legal target role. Rendered from
+                              the transition table so a role gaining a new destination
+                              needs no new JSX — and a role with no destinations (driver,
+                              dispatch, admin) draws nothing at all.
+
+                              Class strings are written out in full, never interpolated:
+                              Tailwind extracts classes statically, so a `text-${tone}`
+                              template is purged from the build and the button renders
+                              unstyled. tsc cannot catch that — it is a valid string. */}
+                          {emp.account_status === 'active' &&
+                            (ROLE_TRANSITIONS[emp.role] ?? []).map(target => {
+                              const isPromotion =
+                                (ROLE_RANK[target] ?? 0) > (ROLE_RANK[emp.role] ?? 0);
+                              const btnCls = isPromotion
+                                ? 'inline-flex items-center gap-1 text-xs font-medium text-violet hover:bg-violet/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50'
+                                : 'inline-flex items-center gap-1 text-xs font-medium text-warning hover:bg-warning/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50';
+                              const spinCls = isPromotion
+                                ? 'w-3 h-3 border-2 border-violet border-t-transparent rounded-full animate-spin'
+                                : 'w-3 h-3 border-2 border-warning border-t-transparent rounded-full animate-spin';
+                              return (
+                                <button
+                                  key={target}
+                                  onClick={() => handleTransition(emp, target)}
+                                  disabled={promotingId === emp.id}
+                                  className={btnCls}
+                                  title={`${isPromotion ? 'Promote' : 'Change'} to ${target}`}
+                                >
+                                  {promotingId === emp.id ? (
+                                    <div className={spinCls} />
+                                  ) : isPromotion ? (
+                                    <ArrowUp className="w-3 h-3" />
+                                  ) : (
+                                    <ArrowDown className="w-3 h-3" />
+                                  )}
+                                  {target.charAt(0).toUpperCase() + target.slice(1)}
+                                </button>
+                              );
+                            })}
                           {(!isManagement || !PROTECTED_ROLES.includes(emp.role)) && (
                             <>
                               <button

@@ -192,6 +192,7 @@ class DiscordConfigUpdate(BaseModel):
     discord_role_bot:            Optional[int] = None
     discord_role_dispatch:       Optional[int] = None
     discord_role_driver:         Optional[int] = None
+    discord_role_trainer:        Optional[int] = None
     discord_role_captain:        Optional[int] = None
     discord_role_walker:         Optional[int] = None
 
@@ -208,6 +209,7 @@ class DiscordConfigResponse(BaseModel):
     discord_role_bot:            Optional[str] = None
     discord_role_dispatch:       Optional[str] = None
     discord_role_driver:         Optional[str] = None
+    discord_role_trainer:        Optional[str] = None
     discord_role_captain:        Optional[str] = None
     discord_role_walker:         Optional[str] = None
 
@@ -220,7 +222,7 @@ class DiscordConfigResponse(BaseModel):
             "discord_general_channel_id", "discord_invite_channel_id",
             "discord_role_admin", "discord_role_manager", "discord_role_asheflow",
             "discord_role_bot", "discord_role_dispatch", "discord_role_driver",
-            "discord_role_captain", "discord_role_walker",
+            "discord_role_trainer", "discord_role_captain", "discord_role_walker",
         ]
         return cls(**{f: str(getattr(config, f)) if getattr(config, f) is not None else None for f in fields})
 
