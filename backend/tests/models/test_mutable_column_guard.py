@@ -38,6 +38,12 @@ MUTABLE_TYPES = (ARRAY, PG_ARRAY, JSONB, JSON)
 # assignment only, so mutation tracking would buy nothing but a deep copy on
 # every load. Format: "Model.column": why.
 REASSIGN_ONLY = {
+    # ADR-263. Set at seed time and replaced wholesale on re-seed
+    # (seed_training_curriculum.py assigns `exists.roles = list(roles)`), never
+    # appended to. A curriculum item's track membership is restated from the
+    # seed data as a unit, so there is no in-place-mutation path to lose.
+    "TrainingCurriculum.roles":             "seed-managed; assigned as a whole list",
+
     # Write-once payload snapshots — captured at creation, never edited.
     "ADPTimeCard.raw_payload":              "immutable API capture",
     "TimeCardAdjustment.adp_response_payload": "immutable API capture",

@@ -1,9 +1,26 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, Integer, Float, Date, Text, ForeignKey, DateTime
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.sql import func
 from app.models.base import Base
+
+# Valid values for TrainingCurriculum.roles (ADR-263). A subset of
+# employee.VALID_ROLES — only roles that actually have a training track.
+#
+# "walker" covers trainees and the trainers who supervise them
+# (walker_routes.py::_WALKER_ROLES). Note that `trainer` means WALKER trainer
+# specifically — it is not a general supervision role, and a trainer never
+# trains a driver. Drivers train drivers: ADR-264 pairs a driver_trainee with a
+# supervising DRIVER on the same truck via AssignmentMember.paired_trainer_id —
+# no new role, since the supervisor stays a driver. ADR-264 is proposed and
+# unimplemented; the `driver_trainee` enum value exists (ADR-256) but nothing
+# trains or promotes it yet.
+#
+# "driver" is the vehicle / load-custody / crew-custody track.
+CURRICULUM_ROLES: frozenset[str] = frozenset({"walker", "driver"})
+
 
 class TrainingCurriculum(Base):
     """
@@ -28,8 +45,29 @@ class TrainingCurriculum(Base):
     topic_title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     is_mandatory = Column(Boolean, nullable=False, default=True)
-    category    = Column(String(50), nullable=True)             # app_setup|policy|delivery_standards|delivery_types|scorecard|observation
+    category    = Column(String(50), nullable=True)             # app_setup|policy|delivery_standards|delivery_types|scorecard|vehicle_safety|crew_ops|observation
     record_type = Column(String(20), nullable=False, default="coverage")  # coverage|demonstration
+
+    # Which training track(s) this item belongs to (ADR-263). Multi-valued so a
+    # shared item — ADP, Discord, attendance, the whole scorecard-literacy block —
+    # is ONE row carrying {"walker", "driver"} rather than two rows that drift
+    # apart the first time someone edits one and not the other.
+    #
+    # Assignment: a trainee receives rows where their role is in `roles`.
+    # Trainer/trainee -> "walker" (walker_routes.py::_WALKER_ROLES); drivers ->
+    # "driver". Query with .roles.any("walker") — NOT `== ["walker"]`, which
+    # would miss every shared item.
+    # Dialect variant: Postgres gets a real text[] (so `.any()` compiles to a
+    # native array containment check); SQLite — which the test suite runs on —
+    # has no array type and gets JSON. Without the variant, model creation fails
+    # under SQLite with "can't render element of type ARRAY" and every test that
+    # touches this table errors at table-create time.
+    roles = Column(
+        ARRAY(String(20)).with_variant(SQLiteJSON(), "sqlite"),
+        nullable=False,
+        server_default="{walker}",
+        default=lambda: ["walker"],
+    )
 
 
 class TrainingRecord(Base):

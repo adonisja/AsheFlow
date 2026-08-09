@@ -19,10 +19,15 @@ MAX_CURRICULUM_PHASE = 4
 # walkers — walker_routes.py::_WALKER_ROLES is {"walker", "trainee"} — and this
 # service only ever processes crew members with role == "trainee".
 #
-# A constant rather than a lookup because there is currently no driver-trainee:
-# drivers are trained by other drivers via a temporary driver-trainer role that
-# is not yet modelled (ADR-263 "Deferred"). This becomes a per-trainee lookup
-# when that lands.
+# A constant rather than a lookup because the driver training track (ADR-264,
+# proposed) is not implemented. ADR-256 added `driver_trainee` to VALID_ROLES and
+# to ck_assignment_members_role, so the slot is INSERTABLE — but nothing trains
+# or promotes it yet. The elif in the crew loop below counts and logs those
+# members rather than injecting them; injecting here would hand a driver trainee
+# walker material.
+#
+# ADR-264 §1 replaces this constant with a per-trainee lookup on the trainee's
+# own role, and makes the phase count config-driven (driver_training_days).
 TRAINEE_CURRICULUM_ROLE = "walker"
 
 
@@ -98,13 +103,12 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
     #     walker, who has no vehicle, performing a pre-trip vehicle inspection.
     #
     # Trainees are walkers (walker_routes.py::_WALKER_ROLES), so this service —
-    # which only ever handles role == "trainee" crew members — always wants the
+    # which only ever injects role == "trainee" crew members — always wants the
     # walker track. Driver curriculum reaches drivers through the curriculum read
     # endpoints, not through dispatch-time injection: `trainer` is a WALKER
-    # trainer and never supervises a driver, and the temporary driver-trainer
-    # role that would pair a driver trainee is not yet modelled (ADR-263
-    # "Deferred"). When it is, TRAINEE_CURRICULUM_ROLE below becomes a lookup on
-    # the trainee's own role rather than a constant.
+    # trainer and never supervises a driver. Under ADR-264 a driver trainee is
+    # supervised by a DRIVER paired on the same truck, and this filter becomes a
+    # per-trainee lookup rather than a constant.
     curriculum = [
         item
         for item in db.query(TrainingCurriculum)
