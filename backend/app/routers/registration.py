@@ -20,14 +20,21 @@ from app.services.email import send_invite_email, send_credentials_email
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/registration", tags=["registration"])
 
+# ADR-256/264 added captain, field_supervisor and driver_trainee. A role missing
+# here resolves to None via .get() and the Cognito group silently never syncs —
+# the user keeps their OLD group and its permissions after a role change.
+# Mirrored in routers/registration.py; the two copies must stay in sync.
 ROLE_TO_COGNITO_GROUP: dict[str, str] = {
-    "driver":     "driver",
-    "walker":     "walker",
-    "trainer":    "trainer",
-    "trainee":    "trainee",
-    "dispatch":   "dispatch",
-    "management": "management",
-    "admin":      "admin",
+    "driver":           "driver",
+    "walker":           "walker",
+    "trainer":          "trainer",
+    "trainee":          "trainee",
+    "dispatch":         "dispatch",
+    "management":       "management",
+    "admin":            "admin",
+    "captain":          "captain",
+    "field_supervisor": "field_supervisor",
+    "driver_trainee":   "driver_trainee",
 }
 
 

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, field_validator, EmailStr, Field
 from typing import Optional, Literal, List
 from uuid import UUID
 from datetime import datetime
@@ -111,3 +111,22 @@ class EmployeePublicResponse(BaseModel):
     is_active: bool
 
     model_config = {"from_attributes": True}
+
+
+class RoleTransitionRequest(BaseModel):
+    """Move an employee between field roles (ADR-256).
+
+    `new_role` is a Literal, not a free string: a request body is attacker-controlled
+    input, and this one writes straight to `Employee.role`, which every role gate in
+    the app reads. The server-side ROLE_TRANSITIONS table still decides whether the
+    specific old->new pair is legal — this only bounds the vocabulary.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    new_role: Literal["walker", "trainer", "captain"] = Field(
+        ..., description="Target field role. Legal transitions are enforced server-side."
+    )
+    reason: Optional[str] = Field(
+        None, max_length=280,
+        description="Why the role changed. Recorded in the audit trail.",
+    )

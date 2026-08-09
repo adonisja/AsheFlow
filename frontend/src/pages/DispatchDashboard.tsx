@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
-import type { UnavailableStaff, DispatchResult } from '../api/types';
+import type { UnavailableStaff, DispatchResult, FinalizeResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -46,6 +46,9 @@ export default function DispatchDashboard() {
   const [transferNote, setTransferNote] = useState<string>('');
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferWarnings, setTransferWarnings] = useState<string[]>([]);
+  // ADR-256 D3: trucks that finalized without a captain. Warn-only for now —
+  // enforcement lands once captains are staffed and assign_captains places them.
+  const [captainlessTrucks, setCaptainlessTrucks] = useState<string[]>([]);
   // hub state
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
@@ -286,7 +289,14 @@ export default function DispatchDashboard() {
         setError(null);
         stopConfirmationPolling();
         try {
-          await axiosClient.post(`/dispatch/${selectedDate}/finalize`);
+          const res = await axiosClient.post<FinalizeResponse>(
+            `/dispatch/${selectedDate}/finalize`,
+          );
+          // ADR-256 D3 is warn-only: finalize succeeds with captainless trucks, and
+          // the response is the only place that says which. Discarding it — as this
+          // did — meant the warning existed on the server and reached nobody.
+          const captainless = res.data?.captainless_trucks ?? [];
+          setCaptainlessTrucks(captainless);
           await fetchDispatchData();
         } catch (err: unknown) {
           setError(errorText(err, 'Failed to post final assignments to Discord.'));
@@ -858,6 +868,31 @@ export default function DispatchDashboard() {
               </p>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ADR-256 D3 — captainless trucks after finalize.
+          Separate from the warnings block below, and above it: this one reports a
+          crew that has ALREADY been posted to Discord, so it needs to survive being
+          skimmed past in a list of pre-dispatch advisories. */}
+      {captainlessTrucks.length > 0 && (
+        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
+          <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
+            <AlertCircle className="w-4 h-4" />
+            No captain on {captainlessTrucks.length} truck
+            {captainlessTrucks.length > 1 ? 's' : ''}
+          </h3>
+          <p className="text-sm text-warning pl-1">
+            Crews were posted anyway. Assign a captain, or elevate an unpaired trainer:{' '}
+            <span className="font-semibold">{captainlessTrucks.join(', ')}</span>
+          </p>
+          <button
+            type="button"
+            onClick={() => setCaptainlessTrucks([])}
+            className="text-xs underline text-warning/80 hover:text-warning"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

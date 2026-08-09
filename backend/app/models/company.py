@@ -142,6 +142,10 @@ class CompanyConfig(Base):
     discord_role_bot            = Column(BigInteger, nullable=True)
     discord_role_dispatch       = Column(BigInteger, nullable=True)
     discord_role_driver         = Column(BigInteger, nullable=True)
+    # ADR-256: distinct guild roles. discord_role_captain previously held the
+    # TRAINER role (Discord called trainers "Captain"); migration ff90779895f6
+    # moved that value to discord_role_trainer and nulled this one.
+    discord_role_trainer        = Column(BigInteger, nullable=True)
     discord_role_captain        = Column(BigInteger, nullable=True)
     discord_role_walker         = Column(BigInteger, nullable=True)
 

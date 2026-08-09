@@ -21,7 +21,7 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
-from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch
+from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
 from app.services.audit import write_audit
 from app.services.email import send_invite_email
 
@@ -69,14 +69,21 @@ def _fire_role_sync(discord_id: str, company_id: str, action: str) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 # Cognito group name per role — must match your User Pool group names exactly
+# ADR-256/264 added captain, field_supervisor and driver_trainee. A role missing
+# here resolves to None via .get() and the Cognito group silently never syncs —
+# the user keeps their OLD group and its permissions after a role change.
+# Mirrored in routers/registration.py; the two copies must stay in sync.
 ROLE_TO_COGNITO_GROUP: dict[str, str] = {
-    "driver":     "driver",
-    "walker":     "walker",
-    "trainer":    "trainer",
-    "trainee":    "trainee",
-    "dispatch":   "dispatch",
-    "management": "management",
-    "admin":      "admin",
+    "driver":           "driver",
+    "walker":           "walker",
+    "trainer":          "trainer",
+    "trainee":          "trainee",
+    "dispatch":         "dispatch",
+    "management":       "management",
+    "admin":            "admin",
+    "captain":          "captain",
+    "field_supervisor": "field_supervisor",
+    "driver_trainee":   "driver_trainee",
 }
 
 
@@ -695,6 +702,193 @@ def delete_employee(
     db.commit()
 
 
+# ── Field-role transitions (ADR-256) ─────────────────────────────────────────
+#
+# Who may become what. An ALLOW-list, not a deny-list: a role absent from a value
+# tuple cannot be reached, and a role absent from the keys cannot transition at all.
+# Deny-lists silently admit every role added later (ADR-256 audit, `rebalance_crews`).
+#
+# dispatch / management / admin / field_supervisor are deliberately absent — those
+# are hiring decisions, not field promotions, and are set at creation or by an admin
+# editing the employee directly.
+ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "walker":  ("trainer", "captain"),
+    "trainer": ("captain", "walker"),
+    "captain": ("trainer", "walker"),
+}
+
+# Which direction the change is, for the audit trail and the wording of the notice.
+# Captain outranks trainer outranks walker (ADR-256 hierarchy).
+_ROLE_RANK: dict[str, int] = {"walker": 0, "trainer": 1, "captain": 2}
+
+
+def _clear_captain_pins(db: Session, employee_id: UUID, company_id: UUID) -> int:
+    """Clear a departing captain's truck pins. Returns how many were cleared.
+
+    Familiarity ROWS are kept — `days_held` is real history and survives a
+    round-trip out of and back into the captain role. Only `pinned` is cleared: a
+    pin left behind would steer `assign_captains` toward someone who is no longer a
+    captain, and the partial unique index would hold a truck's pin slot hostage.
+    """
+    from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
+
+    rows = db.query(CaptainTruckFamiliarity).filter(
+        CaptainTruckFamiliarity.company_id == company_id,
+        CaptainTruckFamiliarity.employee_id == employee_id,
+        CaptainTruckFamiliarity.pinned == True,  # noqa: E712
+    ).all()
+    for row in rows:
+        row.pinned = False
+    return len(rows)
+
+
+def _apply_role_transition(
+    db: Session,
+    db_employee: Employee,
+    new_role: str,
+    caller: Employee,
+) -> Employee:
+    """Move an employee between field roles, with every side effect that implies.
+
+    Cognito group, in-app notification, audit row, Discord DM and Discord role sync.
+    Shared by /promote, /demote and /transition so the three cannot drift apart —
+    the original pair duplicated all of it and only covered walker<->trainer.
+    """
+    old_role = db_employee.role
+
+    allowed = ROLE_TRANSITIONS.get(old_role)
+    if allowed is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A {old_role} cannot be promoted or demoted from this page.",
+        )
+    if new_role not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cannot change a {old_role} to {new_role}. "
+                f"Allowed: {', '.join(allowed)}."
+            ),
+        )
+
+    is_promotion = _ROLE_RANK.get(new_role, 0) > _ROLE_RANK.get(old_role, 0)
+
+    # Leaving the captain role must release the pins, or assign_captains keeps
+    # steering toward someone who is no longer a captain.
+    pins_cleared = 0
+    if old_role == "captain":
+        pins_cleared = _clear_captain_pins(db, db_employee.id, db_employee.company_id)
+
+    db_employee.role = new_role
+    db.flush()
+
+    if db_employee.cognito_sub and db_employee.account_status == "active":
+        old_group = ROLE_TO_COGNITO_GROUP.get(old_role)
+        new_group = ROLE_TO_COGNITO_GROUP.get(new_role)
+        if new_group is None:
+            # Never silently leave someone in their old group with old permissions.
+            logger.error(
+                "No Cognito group mapped for role %s — group NOT synced for employee %s",
+                new_role, db_employee.id,
+            )
+        else:
+            cognito = _cognito_client()
+            cognito_username = db_employee.email or db_employee.cognito_sub
+            try:
+                if old_group:
+                    cognito.admin_remove_user_from_group(
+                        UserPoolId=settings.aws_cognito_user_pool_id,
+                        Username=cognito_username,
+                        GroupName=old_group,
+                    )
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=cognito_username,
+                    GroupName=new_group,
+                )
+            except ClientError as e:
+                logger.error("Cognito group sync failed for %s: %s", db_employee.id, e)
+
+    verb = "promoted" if is_promotion else "changed"
+    db.add(Notification(
+        company_id=db_employee.company_id,
+        employee_id=db_employee.id,
+        type="role_change",
+        message=(
+            f"Congratulations! You have been promoted from {old_role} to {new_role} by {caller.name}."
+            if is_promotion
+            else f"Your role has been updated from {old_role} to {new_role} by {caller.name}."
+        ),
+    ))
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type=f"employee.role_{verb}",
+        target_table="employees",
+        target_id=str(db_employee.id),
+        before={"role": old_role},
+        after={"role": new_role, "captain_pins_cleared": pins_cleared},
+    )
+    db.commit()
+    db.refresh(db_employee)
+
+    if db_employee.discord_id:
+        if is_promotion:
+            _fire_discord_dm(
+                str(db_employee.discord_id),
+                f"Congratulations! You've been promoted to {new_role.title()}.",
+            )
+        _sync_discord_role_for_transition(db_employee, old_role, new_role)
+
+    return db_employee
+
+
+def _sync_discord_role_for_transition(db_employee: Employee, old_role: str, new_role: str) -> None:
+    """Grant/revoke the Discord role that matches the new field role.
+
+    Trainer and captain are DIFFERENT Discord roles (ADR-256): the guild's old
+    "Captain" role is being renamed Trainer with a new Captain role created
+    alongside it, so `grant_trainer` and `grant_captain` are distinct actions.
+    Sending the wrong one would give a trainer route-lead channel access.
+    """
+    discord_id = str(db_employee.discord_id)
+    company_id = str(db_employee.company_id)
+
+    if old_role in ("trainer", "captain"):
+        _fire_role_sync(discord_id, company_id, f"revoke_{old_role}")
+    if new_role in ("trainer", "captain"):
+        _fire_role_sync(discord_id, company_id, f"grant_{new_role}")
+
+
+@router.post("/{employee_id}/transition", response_model=EmployeeResponse)
+def transition_employee_role(
+    employee_id: UUID,
+    payload: RoleTransitionRequest,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Move an employee between field roles (ADR-256).
+
+    walker  -> trainer | captain
+    trainer -> captain | walker
+    captain -> trainer | walker
+
+    A new captain needs no further setup: `assign_captains` treats any captain with
+    no completed familiarity rows as familiarising, so the rotation starts on their
+    next dispatch automatically.
+    """
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not db_employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    return _apply_role_transition(db, db_employee, payload.new_role, caller)
+
+
 @router.post("/{employee_id}/promote", response_model=EmployeeResponse)
 def promote_employee(
     employee_id: UUID,
@@ -704,7 +898,10 @@ def promote_employee(
 ):
     """Promote a walker to trainer.
 
-    Syncs the Cognito group and fires an in-app notification to the employee.
+    Kept for the existing Assets UI call. Delegates to _apply_role_transition so the
+    Cognito / notification / audit / Discord side effects cannot drift from the
+    general /transition path — promote and demote each carried their own copy before
+    ADR-256, which is how a new role gets added to one and missed in the other.
     """
     db_employee = db.query(Employee).filter(
         Employee.id == employee_id,
@@ -717,57 +914,7 @@ def promote_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Can only promote walkers to trainer (current role: {db_employee.role}).",
         )
-
-    old_role = db_employee.role
-    db_employee.role = "trainer"
-    db.flush()
-
-    # Sync Cognito group
-    if db_employee.cognito_sub and db_employee.account_status == "active":
-        cognito = _cognito_client()
-        cognito_username = db_employee.email or db_employee.cognito_sub
-        try:
-            cognito.admin_remove_user_from_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["walker"],
-            )
-            cognito.admin_add_user_to_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["trainer"],
-            )
-        except ClientError as e:
-            logger.error("Cognito group sync failed for promote %s: %s", employee_id, e)
-
-    # In-app notification
-    db.add(Notification(
-        company_id=db_employee.company_id,
-        employee_id=db_employee.id,
-        type="role_change",
-        message=f"Congratulations! You have been promoted from {old_role} to trainer by {caller.name}.",
-    ))
-    write_audit(
-        db,
-        actor_id=str(caller.id),
-        company_id=str(caller.company_id),
-        action_type="employee.promoted",
-        target_table="employees",
-        target_id=str(employee_id),
-        before={"role": old_role},
-        after={"role": "trainer"},
-    )
-    db.commit()
-    db.refresh(db_employee)
-
-    if db_employee.discord_id:
-        _fire_discord_dm(
-            str(db_employee.discord_id),
-            "Congratulations! You've been promoted to Trainer. Welcome to the training team. Access has been granted to #trainers-chat.",
-        )
-        _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "grant_trainer")
-
-    return db_employee
+    return _apply_role_transition(db, db_employee, "trainer", caller)
 
 
 @router.post("/{employee_id}/demote", response_model=EmployeeResponse)
@@ -777,10 +924,7 @@ def demote_employee(
     current_user: dict = Depends(RoleChecker(["management", "admin"])),
     db: Session = Depends(get_db),
 ):
-    """Demote a trainer back to walker.
-
-    Syncs the Cognito group and fires an in-app notification to the employee.
-    """
+    """Demote a trainer back to walker. See promote_employee on delegation."""
     db_employee = db.query(Employee).filter(
         Employee.id == employee_id,
         Employee.company_id == caller.company_id,
@@ -792,53 +936,7 @@ def demote_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Can only demote trainers to walker (current role: {db_employee.role}).",
         )
-
-    old_role = db_employee.role
-    db_employee.role = "walker"
-    db.flush()
-
-    # Sync Cognito group
-    if db_employee.cognito_sub and db_employee.account_status == "active":
-        cognito = _cognito_client()
-        cognito_username = db_employee.email or db_employee.cognito_sub
-        try:
-            cognito.admin_remove_user_from_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["trainer"],
-            )
-            cognito.admin_add_user_to_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["walker"],
-            )
-        except ClientError as e:
-            logger.error("Cognito group sync failed for demote %s: %s", employee_id, e)
-
-    # In-app notification
-    db.add(Notification(
-        company_id=db_employee.company_id,
-        employee_id=db_employee.id,
-        type="role_change",
-        message=f"Your role has been updated from {old_role} to walker by {caller.name}.",
-    ))
-    write_audit(
-        db,
-        actor_id=str(caller.id),
-        company_id=str(caller.company_id),
-        action_type="employee.demoted",
-        target_table="employees",
-        target_id=str(employee_id),
-        before={"role": old_role},
-        after={"role": "walker"},
-    )
-    db.commit()
-    db.refresh(db_employee)
-
-    if db_employee.discord_id:
-        _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "revoke_trainer")
-
-    return db_employee
+    return _apply_role_transition(db, db_employee, "walker", caller)
 
 
 # ── Injury / modified-duty status ─────────────────────────────────────────────

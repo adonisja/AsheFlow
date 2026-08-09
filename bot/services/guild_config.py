@@ -50,6 +50,7 @@ class GuildConfig:
     role_bot:            Optional[int]
     role_dispatch:       Optional[int]
     role_driver:         Optional[int]
+    role_trainer:        Optional[int]
     role_captain:        Optional[int]
     role_walker:         Optional[int]
 
@@ -132,6 +133,7 @@ async def _fetch_guild_config(company_id: str) -> Optional[GuildConfig]:
         role_bot            = data.get("role_bot"),
         role_dispatch       = data.get("role_dispatch"),
         role_driver         = data.get("role_driver"),
+        role_trainer        = data.get("role_trainer"),
         role_captain        = data.get("role_captain"),
         role_walker         = data.get("role_walker"),
     )

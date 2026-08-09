@@ -226,7 +226,7 @@ class AsheFlowBot(commands.Bot):
         if dispatch_cog is None:
             logger.error("Dispatch cog not loaded — cannot process role-sync.")
             return
-        await dispatch_cog.sync_trainer_role(discord_id, company_id, action)
+        await dispatch_cog.sync_role(discord_id, company_id, action)
 
     async def trigger_dm(self, discord_id: str, message: str) -> None:
         invite_cog = self.cogs.get("Invite")
@@ -506,7 +506,8 @@ async def handle_revoke_member(request: web.Request) -> web.Response:
 async def handle_role_sync(request: web.Request) -> web.Response:
     """POST /internal/role-sync
 
-    body: { "discord_id": "...", "company_id": "...", "action": "grant_trainer" | "revoke_trainer" }
+    body: { "discord_id": "...", "company_id": "...",
+             "action": "grant_trainer"|"revoke_trainer"|"grant_captain"|"revoke_captain" }
 
     Grants or revokes the Captain (trainer) Discord role for the given member.
     """
@@ -518,7 +519,9 @@ async def handle_role_sync(request: web.Request) -> web.Response:
     company_id = data.get("company_id")
     action     = data.get("action")
 
-    if not discord_id or not company_id or action not in ("grant_trainer", "revoke_trainer"):
+    if not discord_id or not company_id or action not in (
+        "grant_trainer", "revoke_trainer", "grant_captain", "revoke_captain",
+    ):
         return web.Response(status=400, text="Missing or invalid fields")
 
     asyncio.create_task(bot.trigger_role_sync(discord_id, company_id, action))

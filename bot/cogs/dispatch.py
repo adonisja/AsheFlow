@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 # Role display config
 # ---------------------------------------------------------------------------
 
-ROLE_ORDER = ["driver", "trainer", "trainee", "walker"]
+# ADR-256: captain sits between driver and trainer — the truck's route lead.
+ROLE_ORDER = ["driver", "captain", "trainer", "trainee", "walker"]
 ROLE_LABELS = {
     "driver":  "🚛 Driver",
     "trainer": "🎓 Trainer",
@@ -154,11 +155,16 @@ def _build_truck_channel_embed(truck_name: str, crew: list[dict], dispatch_date:
     embed.add_field(name="​", value=f"`{padded_name}`\n{SEP}", inline=False)
 
     drivers  = by_role.get("driver",  [])
+    captains = by_role.get("captain", [])
     trainers = by_role.get("trainer", [])
 
+    # Each section is guarded, so an unstaffed role is skipped rather than rendered
+    # as an empty heading — the same behaviour trainers already had.
     leadership_lines = []
     if drivers:
         leadership_lines.append(f"**Driver:** `{drivers[0]}`")
+    if captains:
+        leadership_lines.append(f"**Captain:** `{captains[0]}`")
     if trainers:
         if leadership_lines:
             leadership_lines.append("")
@@ -680,11 +686,17 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         except Exception as e:
             logger.warning("revoke_member_from_channel: error removing %s from %s: %s", discord_id, channel_id, e)
 
-    async def sync_trainer_role(self, discord_id: str, company_id: str, action: str) -> None:
-        """Grant or revoke the Captain (trainer) Discord role for a member.
+    async def sync_role(self, discord_id: str, company_id: str, action: str) -> None:
+        """Grant or revoke a field-role Discord role.
 
-        action: "grant_trainer" → add role_captain
-                "revoke_trainer" → remove role_captain
+        action: "grant_trainer" | "revoke_trainer" | "grant_captain" | "revoke_captain"
+
+        ADR-256 split these. `role_captain` used to hold the TRAINER role — Discord
+        called trainers "Captain" — and migration ff90779895f6 moved that value to
+        `role_trainer`, leaving `role_captain` null until an admin creates the new
+        guild role. A null is treated as "not configured": logged and skipped, never
+        substituted, because falling back to the other role would hand a trainer
+        route-lead channel access.
         """
         cfg = await get_guild_config(company_id)
         if cfg is None or not cfg.is_configured:
@@ -692,33 +704,42 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
         guild = self.bot.get_guild(cfg.guild_id)
         if guild is None:
-            logger.warning("sync_trainer_role: guild %s not found", cfg.guild_id)
+            logger.warning("sync_role: guild %s not found", cfg.guild_id)
             return
 
-        if not cfg.role_captain:
-            logger.warning("sync_trainer_role: role_captain not configured for company %s", company_id)
+        verb, _, which = action.partition("_")
+        role_id = cfg.role_captain if which == "captain" else cfg.role_trainer
+        if not role_id:
+            logger.warning(
+                "sync_role: role_%s not configured for company %s — %s skipped",
+                which, company_id, action,
+            )
             return
 
-        role = guild.get_role(cfg.role_captain)
+        role = guild.get_role(role_id)
         if role is None:
-            logger.warning("sync_trainer_role: role_captain %s not found in guild", cfg.role_captain)
+            logger.warning("sync_role: role_%s (%s) not found in guild", which, role_id)
             return
 
         try:
             member = await guild.fetch_member(int(discord_id))
         except (discord.NotFound, discord.HTTPException):
-            logger.warning("sync_trainer_role: member %s not found in guild", discord_id)
+            logger.warning("sync_role: member %s not found in guild", discord_id)
             return
 
         try:
-            if action == "grant_trainer":
-                await member.add_roles(role, reason="Promoted to trainer")
+            if verb == "grant":
+                await member.add_roles(role, reason=f"Promoted to {which}")
             else:
-                await member.remove_roles(role, reason="Demoted from trainer")
+                await member.remove_roles(role, reason=f"No longer a {which}")
         except discord.Forbidden:
-            logger.error("sync_trainer_role: missing Manage Roles permission for guild %s", cfg.guild_id)
+            logger.error("sync_role: missing Manage Roles permission for guild %s", cfg.guild_id)
         except discord.HTTPException as exc:
-            logger.error("sync_trainer_role: HTTP error for discord_id=%s: %s", discord_id, exc)
+            logger.error("sync_role: %s failed for discord_id=%s: %s", action, discord_id, exc)
+
+    # Kept so a call from an older backend build still resolves.
+    async def sync_trainer_role(self, discord_id: str, company_id: str, action: str) -> None:
+        await self.sync_role(discord_id, company_id, action)
 
     async def hub_finalize_truck(self, payload: dict) -> None:
         """Post a hub crew embed to the hub truck's Discord channel and send DMs.

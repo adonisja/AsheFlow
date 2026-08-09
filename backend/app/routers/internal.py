@@ -53,6 +53,7 @@ class GuildConfigResponse(BaseModel):
     role_bot:            int | None
     role_dispatch:       int | None
     role_driver:         int | None
+    role_trainer:        int | None
     role_captain:        int | None
     role_walker:         int | None
     is_configured:       bool
@@ -86,6 +87,7 @@ def get_guild_config(
         role_bot            = cfg.role_bot,
         role_dispatch       = cfg.role_dispatch,
         role_driver         = cfg.role_driver,
+        role_trainer        = cfg.role_trainer,
         role_captain        = cfg.role_captain,
         role_walker         = cfg.role_walker,
         is_configured       = cfg.is_configured,

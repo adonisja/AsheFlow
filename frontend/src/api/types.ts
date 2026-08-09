@@ -183,6 +183,18 @@ export interface DispatchResult {
   warnings: DispatchWarning[];
 }
 
+/** POST /dispatch/{date}/finalize (ADR-256 D3).
+ *
+ * `captainless_trucks` names trucks that finalized WITHOUT a captain. The gate is
+ * warn-only until captains are staffed and assign_captains places them, so this is
+ * the only signal that a truck rolled with no route lead — a 200 alone looks clean.
+ */
+export interface FinalizeResponse {
+  status: string;
+  date: string;
+  captainless_trucks: string[];
+}
+
 export interface UnavailableStaff {
   id: string;
   name: string;
