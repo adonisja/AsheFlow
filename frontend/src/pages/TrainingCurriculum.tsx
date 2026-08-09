@@ -38,10 +38,15 @@ const CATEGORY_BADGE: Record<string, string> = {
   policy: 'badge-warning',
   delivery_standards: 'badge-success',
   delivery_types: 'badge-success',
-  scorecard: 'badge-error',
-  vehicle_safety: 'bg-amber-500/20 text-amber-400',
-  crew_ops: 'bg-sky-500/20 text-sky-400',
-  observation: 'bg-purple-500/20 text-purple-400',
+  // `badge-danger`, not `badge-error` — the latter is not defined in index.css and
+  // rendered unstyled.
+  scorecard: 'badge-danger',
+  // Token-backed badges rather than raw Tailwind palette utilities. `bg-amber-500`
+  // bypasses the token layer exactly as a hex literal does: it does not follow a
+  // palette change and the contrast gate cannot see it.
+  vehicle_safety: 'badge-gold',
+  crew_ops: 'badge-teal',
+  observation: 'badge-slate',
 };
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -116,7 +121,7 @@ export default function TrainingCurriculum() {
                   className={`px-3 py-1.5 text-sm transition-colors ${
                     track === t
                       ? 'bg-white/15 text-white'
-                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                      : 'text-muted-foreground hover:text-white hover:bg-white/5'
                   }`}
                 >
                   {TRACK_LABEL[t]}
