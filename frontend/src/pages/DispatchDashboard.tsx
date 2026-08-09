@@ -2,11 +2,36 @@ import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
+import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mail, Info, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
 import type { UnavailableStaff, DispatchResult, FinalizeResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
 import { useNotificationContext } from '../contexts/NotificationContext';
+
+/* Availability for the SELECTED date, derived from data the page already holds
+   (ADR-266). `unavailable-staff` is fetched on every date change and returns a
+   reason per employee; absence from that list is what "available" means. No
+   extra request, and no second source of truth to drift from the call-in list
+   rendered further down. */
+type AvailabilityKey = 'available' | 'pto' | 'scheduled_off';
+
+const AVAILABILITY: Record<AvailabilityKey, { label: string; cls: string; title: string }> = {
+  available:     { label: 'Available',     cls: 'badge-success', title: 'Working this date' },
+  pto:           { label: 'PTO',           cls: 'badge-info',    title: 'Approved time-off request' },
+  // Distinct from PTO on purpose: this is the person's normal weekly pattern,
+  // not leave they asked for — which is the difference dispatch weighs when
+  // deciding who to call in.
+  scheduled_off: { label: 'Scheduled off', cls: 'badge-slate',   title: 'Recurring day off' },
+};
+
+function availabilityOf(
+  employeeId: string,
+  unavailable: UnavailableStaff[],
+): AvailabilityKey {
+  const hit = unavailable.find((u) => u.id === employeeId);
+  if (!hit) return 'available';
+  return hit.reason === 'time_off_request' ? 'pto' : 'scheduled_off';
+}
 
 export default function DispatchDashboard() {
   const { groups } = useAuth();
@@ -75,6 +100,39 @@ export default function DispatchDashboard() {
     }, 0);
     return () => { clearTimeout(t); window.removeEventListener('pointerdown', onDown); window.removeEventListener('keydown', onKey); };
   }, [pairingFor]);
+
+  // Contact card popover (ADR-266): which employee's details are open. Same
+  // shape and same dismissal as the pairing picker above — including the
+  // setTimeout, without which the listener fires on the click that opened it.
+  const [contactFor, setContactFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!contactFor) return;
+    const onDown = () => setContactFor(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setContactFor(null); };
+    /* The panel is position:fixed so it can escape the pool's overflow clip,
+       which means it does NOT travel with the card. Closing on scroll beats
+       leaving it stranded over unrelated rows. Capture phase: the pool is an
+       inner scroller and its scroll events do not bubble to window. */
+    const onScroll = () => setContactFor(null);
+    const t = setTimeout(() => {
+      window.addEventListener('pointerdown', onDown);
+      window.addEventListener('keydown', onKey);
+      window.addEventListener('scroll', onScroll, true);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [contactFor]);
+
+  /* Only one overlay per card. Opening either closes the other, so a trainee's
+     pairing picker and their contact card cannot stack. */
+  const openContact = (id: string) => {
+    setPairingFor(null);
+    setContactFor((cur) => (cur === id ? null : id));
+  };
   const openDialog = (cfg: DialogConfig) => setDialog(cfg);
   const closeDialog = () => setDialog(null);
 
@@ -994,13 +1052,32 @@ export default function DispatchDashboard() {
                     <div
                       draggable={!isLoading}
                       onDragStart={(e) => handleDragStart(e, emp.id)}
-                      className="flex items-center gap-2 bg-accent/50 p-2 rounded border border-transparent hover:border-primary/30 cursor-grab active:cursor-grabbing"
+                      className="group flex items-center gap-2 bg-accent/50 p-2 rounded border border-transparent hover:border-primary/30 cursor-grab active:cursor-grabbing"
                     >
                       <GripVertical className="w-4 h-4 text-muted-foreground shrink-0" />
-                      <div className="overflow-hidden">
+                      <div className="overflow-hidden min-w-0 flex-1">
                         <p className="text-sm font-medium text-foreground truncate leading-tight">{emp.name}</p>
-                        <p className="text-[10px] text-subtle uppercase tracking-wider">{emp.role}</p>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <p className="text-[10px] text-subtle uppercase tracking-wider truncate">{emp.role}</p>
+                          {/* Only the exceptions are drawn here (ADR-266). This
+                              pool is availability-filtered already, so an
+                              "Available" chip on every card would be noise
+                              that hides the one person who is not. */}
+                          {availabilityOf(emp.id, unavailableStaff) !== 'available' && (
+                            <span className={`${AVAILABILITY[availabilityOf(emp.id, unavailableStaff)].cls} text-[9px] shrink-0`}>
+                              {AVAILABILITY[availabilityOf(emp.id, unavailableStaff)].label}
+                            </span>
+                          )}
+                        </div>
                       </div>
+                      <ContactPopover
+                        employee={employees[emp.id] || emp}
+                        name={emp.name}
+                        role={emp.role}
+                        status={availabilityOf(emp.id, unavailableStaff)}
+                        open={contactFor === emp.id}
+                        onToggle={() => openContact(emp.id)}
+                      />
                     </div>
                   </React.Fragment>
                 );
@@ -1147,7 +1224,10 @@ export default function DispatchDashboard() {
                                  if (draggedTruck === truckId) return; // same truck, nothing to swap
                                  swapTwo(draggedId, draggedTruck, member.employee_id, truckId);
                                }}
-                               className={`flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm ${pairingFor === member.employee_id ? 'relative z-40' : ''}`}
+                               /* Either overlay needs the card lifted above its
+                                  siblings, or the popover renders behind the
+                                  next crew member's card. */
+                               className={`flex justify-between items-center group bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing shadow-sm drop-shadow-sm ${pairingFor === member.employee_id || contactFor === member.employee_id ? 'relative z-40' : ''}`}
                              >
                                <div className="flex items-center gap-2">
                                  <GripVertical className="w-4 h-4 text-muted-foreground opacity-30 group-hover:opacity-100" />
@@ -1222,10 +1302,31 @@ export default function DispatchDashboard() {
                                          ↗ {transfers[member.employee_id].to_truck_name}
                                        </span>
                                      )}
+                                     {/* Assigned but off (ADR-266): PTO or a scheduled
+                                         day off on someone already placed on a truck is
+                                         a real dispatch problem, so it is drawn on the
+                                         card rather than left to the call-in list.
+                                         "Available" is not drawn — it is the norm here. */}
+                                     {availabilityOf(member.employee_id, unavailableStaff) !== 'available' && (
+                                       <span
+                                         className={`${AVAILABILITY[availabilityOf(member.employee_id, unavailableStaff)].cls} text-[9px]`}
+                                         title={AVAILABILITY[availabilityOf(member.employee_id, unavailableStaff)].title}
+                                       >
+                                         {AVAILABILITY[availabilityOf(member.employee_id, unavailableStaff)].label}
+                                       </span>
+                                     )}
                                    </div>
                                  </div>
                                </div>
                                <div className="flex items-center gap-1">
+                                 <ContactPopover
+                                   employee={employees[member.employee_id]}
+                                   name={member.name || member.employee_id}
+                                   role={employees[member.employee_id]?.role || member.role}
+                                   status={availabilityOf(member.employee_id, unavailableStaff)}
+                                   open={contactFor === member.employee_id}
+                                   onToggle={() => openContact(member.employee_id)}
+                                 />
                                  {(() => {
                                    const conf = confirmations[member.employee_id];
                                    if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" aria-label="Confirmed" />;
@@ -1426,6 +1527,109 @@ export default function DispatchDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+/* Contact + availability for one employee (ADR-266).
+   Shared by the unassigned pool and the truck crew list so the two cannot
+   drift. Renders the trigger AND the popover, because the trigger has to stop
+   pointerdown from reaching the draggable card — putting that guard in one
+   place is the whole reason this is a component. */
+function ContactPopover({
+  employee, name, role, status, open, onToggle,
+}: {
+  employee: any;                      // EmployeeResponse row, may be undefined
+  name: string;
+  role: string;
+  status: AvailabilityKey;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const phone: string | null = employee?.phone_number || null;
+  const email: string | null = employee?.email || null;
+  const s = AVAILABILITY[status];
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  /* Positioned against the VIEWPORT, not the card.
+
+     An absolutely-positioned popover is clipped by the nearest scroll
+     container, and the unassigned pool is exactly that
+     (`max-h-[300px] overflow-y-auto`) — the first attempt rendered with its
+     left edge and bottom sheared off. `position: fixed` escapes the clip;
+     the cost is having to compute the coordinates and flip near an edge. */
+  useEffect(() => {
+    if (!open || !btnRef.current) { setPos(null); return; }
+    const r = btnRef.current.getBoundingClientRect();
+    const W = 224;                                   // w-56
+    const H = 150;                                   // approx; only used to flip
+    const left = Math.min(Math.max(8, r.right - W), window.innerWidth - W - 8);
+    const below = r.bottom + 6;
+    // Flip above when there is not room below, so the panel is never cut off
+    // by the bottom of the window.
+    const top = below + H > window.innerHeight ? Math.max(8, r.top - H - 6) : below;
+    setPos({ top, left });
+  }, [open]);
+
+  return (
+    <span className="shrink-0">
+      <button
+        ref={btnRef}
+        type="button"
+        /* The card is draggable: a pointerdown reaching it starts a drag, so
+           the trigger must swallow it. Same guard the pairing button uses. */
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        aria-label={`Contact details for ${name}`}
+        aria-expanded={open}
+        className="p-0.5 rounded text-muted-foreground opacity-40 hover:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary transition-opacity"
+        title="Contact details"
+      >
+        <Info className="w-3.5 h-3.5" />
+      </button>
+
+      {open && pos && (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{ top: pos.top, left: pos.left }}
+          className="fixed z-50 w-56 bg-card border border-border rounded-md shadow-lg p-2.5 text-left"
+        >
+          <p className="text-sm font-semibold text-foreground leading-tight truncate">{name}</p>
+          <p className="text-[10px] text-subtle uppercase tracking-wider mb-1.5">{role}</p>
+
+          <span className={`${s.cls} text-[10px]`} title={s.title}>{s.label}</span>
+
+          <div className="mt-2 pt-2 border-t border-border space-y-1.5">
+            {phone && (
+              /* tel:/mailto: rather than plain text — dispatch is often on a
+                 laptop with a softphone, and copying a number by hand during a
+                 shift is the friction this feature exists to remove. */
+              <a
+                href={`tel:${phone}`}
+                className="flex items-center gap-1.5 text-xs text-foreground hover:text-primary transition-colors"
+              >
+                <Phone className="w-3 h-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{phone}</span>
+              </a>
+            )}
+            {email && (
+              <a
+                href={`mailto:${email}`}
+                className="flex items-center gap-1.5 text-xs text-foreground hover:text-primary transition-colors"
+              >
+                <Mail className="w-3 h-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{email}</span>
+              </a>
+            )}
+            {!phone && !email && (
+              /* Both fields are Optional server-side. Saying so beats an empty
+                 box that reads as a loading failure. */
+              <p className="text-xs text-subtle italic">No contact details on file</p>
+            )}
+          </div>
+        </div>
+      )}
+    </span>
   );
 }
 
