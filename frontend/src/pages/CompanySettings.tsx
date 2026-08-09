@@ -52,6 +52,7 @@ interface DiscordConfig {
   discord_guild_id: number | null;
   discord_drivers_channel_id: number | null;
   discord_trainers_channel_id: number | null;
+  discord_captains_channel_id: number | null;
   discord_general_channel_id: number | null;
   discord_invite_channel_id: number | null;
   discord_role_admin: number | null;
@@ -60,6 +61,7 @@ interface DiscordConfig {
   discord_role_bot: number | null;
   discord_role_dispatch: number | null;
   discord_role_driver: number | null;
+  discord_role_trainer: number | null;
   discord_role_captain: number | null;
   discord_role_walker: number | null;
 }
@@ -143,6 +145,7 @@ const DISCORD_CHANNELS: FieldMeta[] = [
   { key: 'discord_guild_id', label: 'Server ID (Guild ID)', type: 'bigint', description: 'Numeric ID of your Discord server.', placeholder: '1234567890123456789' },
   { key: 'discord_drivers_channel_id', label: 'Drivers Channel', type: 'bigint', description: 'Channel for driver dispatch notifications.', placeholder: '' },
   { key: 'discord_trainers_channel_id', label: 'Trainers Channel', type: 'bigint', description: 'Channel for trainer assignments and updates.', placeholder: '' },
+  { key: 'discord_captains_channel_id', label: 'Captains Channel', type: 'bigint', description: "Channel where the day's captain roster is posted at finalize.", placeholder: '' },
   { key: 'discord_general_channel_id', label: 'General Channel', type: 'bigint', description: 'Fallback channel for company-wide announcements.', placeholder: '' },
   { key: 'discord_invite_channel_id', label: 'Invite Channel', type: 'bigint', description: 'Channel where new invite links are posted.', placeholder: '' },
 ];
@@ -153,7 +156,8 @@ const DISCORD_ROLES: FieldMeta[] = [
   { key: 'discord_role_dispatch', label: 'Dispatch Role', type: 'bigint', description: 'Discord role ID for dispatch employees.', placeholder: '' },
   { key: 'discord_role_driver', label: 'Driver Role', type: 'bigint', description: 'Discord role ID for driver employees.', placeholder: '' },
   { key: 'discord_role_walker', label: 'Walker Role', type: 'bigint', description: 'Discord role ID for walker employees.', placeholder: '' },
-  { key: 'discord_role_captain', label: 'Captain Role', type: 'bigint', description: 'Discord role ID for captain/lead employees.', placeholder: '' },
+  { key: 'discord_role_trainer', label: 'Trainer Role', type: 'bigint', description: 'Discord role ID for trainers. This role was previously named "Captain" in Discord — see the Captain Role below.', placeholder: '' },
+  { key: 'discord_role_captain', label: 'Captain Role', type: 'bigint', description: 'Discord role ID for captains (truck route leads). Distinct from the Trainer role above.', placeholder: '' },
   { key: 'discord_role_asheflow', label: 'AsheFlow Bot Role', type: 'bigint', description: 'Role assigned to the AsheFlow bot.', placeholder: '' },
   { key: 'discord_role_bot', label: 'Generic Bot Role', type: 'bigint', description: 'Shared bot role if used in your server.', placeholder: '' },
 ];
@@ -175,10 +179,10 @@ const CONFIG_KEYS: string[] = [
 
 const DISCORD_KEYS: string[] = [
   'discord_guild_id', 'discord_drivers_channel_id', 'discord_trainers_channel_id',
-  'discord_general_channel_id', 'discord_invite_channel_id',
+  'discord_captains_channel_id', 'discord_general_channel_id', 'discord_invite_channel_id',
   'discord_role_admin', 'discord_role_manager', 'discord_role_asheflow',
   'discord_role_bot', 'discord_role_dispatch', 'discord_role_driver',
-  'discord_role_captain', 'discord_role_walker',
+  'discord_role_trainer', 'discord_role_captain', 'discord_role_walker',
 ];
 
 const TIME_FIELDS = new Set(['shift_start', 'shift_end', 'checkin_open', 'checkin_close', 'dispatch_confirmation_cutoff']);

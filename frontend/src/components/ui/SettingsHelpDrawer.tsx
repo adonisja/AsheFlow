@@ -223,6 +223,12 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     detail:
       'Trainer-role notifications (trainee assignments, phase completions, graduation quiz results) are posted here.',
   },
+  discord_captains_channel_id: {
+    title: 'Captains Channel ID',
+    summary: "The Discord channel where the day's captain roster is posted.",
+    detail:
+      'At finalize, each truck and its captain is posted here. If this is unset, no captain roster is posted — nothing else breaks.',
+  },
   discord_general_channel_id: {
     title: 'General Channel ID',
     summary: 'Fallback channel for company-wide announcements.',
@@ -267,10 +273,17 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     summary: 'Discord role ID for driver employees.',
     detail: 'Used for @mentioning drivers when dispatch assignments and route notifications are sent.',
   },
+  discord_role_trainer: {
+    title: 'Trainer Role ID',
+    summary: 'Discord role ID for trainers.',
+    detail:
+      'Granted and revoked automatically when someone is promoted to or moved off the trainer role. This is the role Discord previously called "Captain" — it was renamed when captains became a separate role, and the ID did not change.',
+  },
   discord_role_captain: {
     title: 'Captain Role ID',
-    summary: 'Discord role ID for captain/lead employees.',
-    detail: 'Used for notifications targeted at crew leads or captain-tier employees.',
+    summary: 'Discord role ID for captains — the truck route leads.',
+    detail:
+      'Granted and revoked automatically on promotion to or from captain. Distinct from the Trainer role: a captain leads a truck, a trainer supervises a trainee. If unset, captain promotions log a warning and grant no Discord role.',
   },
   discord_role_walker: {
     title: 'Walker Role ID',

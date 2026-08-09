@@ -663,6 +663,7 @@ interface DiscordConfig {
   discord_guild_id:            number | null;
   discord_drivers_channel_id:  number | null;
   discord_trainers_channel_id: number | null;
+  discord_captains_channel_id: number | null;
   discord_general_channel_id:  number | null;
   discord_invite_channel_id:   number | null;
   discord_role_admin:          number | null;
@@ -671,6 +672,7 @@ interface DiscordConfig {
   discord_role_bot:            number | null;
   discord_role_dispatch:       number | null;
   discord_role_driver:         number | null;
+  discord_role_trainer:        number | null;
   discord_role_captain:        number | null;
   discord_role_walker:         number | null;
 }
@@ -682,6 +684,7 @@ const DISCORD_FIELDS: { key: keyof DiscordConfig; label: string; hint: string }[
   { key: 'discord_general_channel_id',  label: 'General Channel',       hint: '#general channel ID' },
   { key: 'discord_drivers_channel_id',  label: 'Drivers Channel',       hint: '#drivers-chat ID' },
   { key: 'discord_trainers_channel_id', label: 'Trainers Channel',      hint: '#trainers-chat ID' },
+  { key: 'discord_captains_channel_id', label: 'Captains Channel',      hint: '#captains ID' },
   { key: 'discord_invite_channel_id',   label: 'Invite Channel',        hint: 'Channel used for onboarding invites' },
   { key: 'discord_role_admin',          label: 'Admin Role',            hint: 'Role ID' },
   { key: 'discord_role_manager',        label: 'Manager Role',          hint: 'Role ID' },
@@ -689,7 +692,8 @@ const DISCORD_FIELDS: { key: keyof DiscordConfig; label: string; hint: string }[
   { key: 'discord_role_bot',            label: 'Bot Role',              hint: 'Role ID' },
   { key: 'discord_role_dispatch',       label: 'Dispatch Role',         hint: 'Role ID' },
   { key: 'discord_role_driver',         label: 'Driver Role',           hint: 'Role ID' },
-  { key: 'discord_role_captain',        label: 'Captain Role',          hint: 'Trainers role ID' },
+  { key: 'discord_role_trainer',        label: 'Trainer Role',          hint: 'Trainer role ID (was "Captain")' },
+  { key: 'discord_role_captain',        label: 'Captain Role',          hint: 'Captain role ID (route leads)' },
   { key: 'discord_role_walker',         label: 'Walker/Trainee Role',   hint: 'Role ID' },
 ];
 
