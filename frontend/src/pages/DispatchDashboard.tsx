@@ -1,5 +1,6 @@
 import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mail, Info, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
@@ -1551,13 +1552,25 @@ function ContactPopover({
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
-  /* Positioned against the VIEWPORT, not the card.
+  /* Positioned against the VIEWPORT and rendered through a PORTAL.
 
-     An absolutely-positioned popover is clipped by the nearest scroll
-     container, and the unassigned pool is exactly that
-     (`max-h-[300px] overflow-y-auto`) — the first attempt rendered with its
-     left edge and bottom sheared off. `position: fixed` escapes the clip;
-     the cost is having to compute the coordinates and flip near an edge. */
+     Two separate ancestor problems force this, and each defeats a simpler fix:
+
+     1. `overflow` — the unassigned pool is `max-h-[300px] overflow-y-auto`, so
+        an absolutely-positioned child is clipped by it. The first attempt
+        rendered with its left edge and bottom sheared off.
+
+     2. `filter` — the crew card carries `drop-shadow-sm`, and a filtered
+        ancestor becomes the CONTAINING BLOCK for `position: fixed`
+        descendants. So `fixed` alone was not enough: the coordinates resolved
+        against the card instead of the viewport and the panel landed
+        thousands of pixels off-screen (measured: top 5348 for a button at
+        y≈700).
+
+     A portal to <body> escapes both — no clipping ancestor, and `fixed`
+     resolves against the viewport as intended. Everything else is unchanged:
+     the panel closes on scroll because it still does not travel with the
+     card. */
   useEffect(() => {
     if (!open || !btnRef.current) { setPos(null); return; }
     const r = btnRef.current.getBoundingClientRect();
@@ -1588,7 +1601,7 @@ function ContactPopover({
         <Info className="w-3.5 h-3.5" />
       </button>
 
-      {open && pos && (
+      {open && pos && createPortal(
         <div
           onPointerDown={(e) => e.stopPropagation()}
           style={{ top: pos.top, left: pos.left }}
@@ -1627,7 +1640,8 @@ function ContactPopover({
               <p className="text-xs text-subtle italic">No contact details on file</p>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   );
