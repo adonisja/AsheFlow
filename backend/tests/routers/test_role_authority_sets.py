@@ -16,6 +16,7 @@ Two distinct failures are covered:
 """
 import pytest
 
+from app.routers import walker_routes as _wr
 from app.services.constants import (
     ROUTE_LEAD_ROLES,
     TRUCK_SCOPED_ROLES,
@@ -96,6 +97,14 @@ class TestCaptainIsNotOversight:
         assert "captain" not in STATION_RESOLVE_ROLES
 
 
+@pytest.mark.skipif(
+    not hasattr(_wr, "_allow_route_lead"),
+    reason=(
+        "walker_routes predates the ADR-256 gate rename. It is gitignored, so CI "
+        "checks out the public repo's pre-rename copy — the import succeeds and only "
+        "the attribute is missing, which an ImportError guard cannot see."
+    ),
+)
 class TestGatesUseTheSharedSets:
     """Every renamed gate resolves from the shared tuples, not a re-typed literal.
 

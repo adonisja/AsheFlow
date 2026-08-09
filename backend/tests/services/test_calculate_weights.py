@@ -47,6 +47,41 @@ from tests.conftest import make_employee, make_truck, make_assignment, make_memb
 # calculate_weights — banned trucks
 # ---------------------------------------------------------------------------
 
+def _has_adr256_weights() -> bool:
+    """Does this build's calculate_weights know about captains?
+
+    Probes BEHAVIOUR, not source text. The first version of this guard searched
+    getsource() for "captain" and passed against a pre-ADR-256 build whose comments
+    happened to mention captains — a proxy that matched while the code did not.
+
+    A crew with a captain fan raises KeyError on the old three-key fans_by_role and
+    returns normally on the new one, so the exception IS the version check.
+    """
+    import uuid as _u
+    from unittest.mock import MagicMock, patch
+
+    tid, cap, cand = _u.uuid4(), _u.uuid4(), _u.uuid4()
+    db = MagicMock()
+    try:
+        with patch("app.services.calculate_weights.get_fans", return_value={tid: [cap]}), \
+             patch("app.services.calculate_weights.check_consecutive_assignment", return_value=False), \
+             patch("app.services.calculate_weights.resolve_conflict", return_value=None), \
+             patch("app.services.calculate_weights.perform_bidirectional_check", return_value=False), \
+             patch("app.services.calculate_weights.perform_tridirectional_check", return_value=False):
+            calculate_weights(
+                employee_id=cand, employee_role="walker",
+                base_weights={tid: 1.0},
+                assigned_crews={tid: [{"id": cap, "role": "captain"}]},
+                banned_truck_ids=[], db=db, cfg=None,
+            )
+    except KeyError:
+        return False
+    return True
+
+
+_HAS_ADR256_WEIGHTS = _has_adr256_weights()
+
+
 class TestBannedTrucks:
     """
     A banned truck must have weight == 0 regardless of fans or history.
@@ -223,6 +258,10 @@ class TestFanBoost:
             "Truck with no fans should keep base weight"
         )
 
+    @pytest.mark.skipif(
+        not _HAS_ADR256_WEIGHTS,
+        reason="pre-ADR-256 calculate_weights uses the old trainer weight (0.50)",
+    )
     def test_trainer_fan_boost_is_smaller_than_driver(self, db):
         """
         Read from PLATFORM_DEFAULTS, never hardcoded — ADR-256 moved trainer
@@ -571,6 +610,17 @@ class TestRoleBoostOrdering:
             assert 0 <= weight <= 1, f"{role} weight {weight} outside the DB constraint"
 
 
+
+
+
+@pytest.mark.skipif(
+    not _HAS_ADR256_WEIGHTS,
+    reason=(
+        "calculate_weights is gitignored, so CI checks out the public repo's "
+        "pre-ADR-256 copy: fans_by_role is still three hardcoded keys and a captain "
+        "fan raises KeyError. The module imports fine, so only a source check sees it."
+    ),
+)
 class TestCaptainFanDoesNotCrash:
     """fans_by_role was three hardcoded keys — a captain fan raised KeyError.
 

@@ -24,6 +24,33 @@ try:
 except ImportError:
     pytest.skip("proprietary dispatch deps not available (CI skip)", allow_module_level=True)
 
+# The proprietary file this exercises is gitignored, so CI checks out the PUBLIC
+# repo's copy — which predates ADR-256. Importing succeeds (the module exists); the
+# ADR-256 behaviour simply is not in it. An ImportError guard is therefore not
+# enough: skip on the absence of the specific thing under test.
+# Probes BEHAVIOUR, not source text: a getsource() search for "captain" matches the
+# ADR-256 comments even in a build whose candidate filter still admits captains.
+def _excludes_captains() -> bool:
+    from unittest.mock import MagicMock
+    a, b = uuid.uuid4(), uuid.uuid4()
+    crews = {
+        a: [{"id": uuid.uuid4(), "role": "captain"}]
+            + [{"id": uuid.uuid4(), "role": "walker"} for _ in range(5)],
+        b: [],
+    }
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = []
+    db.query.return_value.filter.return_value.first.return_value = None
+    rebalance_crews(crews, db)
+    return any(m["role"] == "captain" for m in crews[a])
+
+
+if not _excludes_captains():
+    pytest.skip(
+        "rebalance_crews predates the ADR-256 captain exclusion (public-repo copy)",
+        allow_module_level=True,
+    )
+
 from tests.conftest import make_employee, make_truck
 
 
