@@ -119,6 +119,7 @@ SERVICES=(
   assign_trainers.py
   assign_trainees.py
   assign_walkers.py
+  assign_captains.py
   rebalance_crews.py
   resolve_conflict.py
   ban_override.py
@@ -157,6 +158,35 @@ for f in "${SERVICES[@]}"; do
     echo "  ✗ MISSING: services/$f (skipped)"
   fi
 done
+
+# ── Drift guard: a proprietary file that is in NEITHER list is invisible ──────
+# assign_captains.py (ADR-256) fell through exactly this gap: not in .gitignore,
+# so it stayed untracked in the public repo; not in SERVICES above, so it never
+# reached AsheFlow-private. CI copies proprietary source from private, found
+# nothing, and every test importing routers.dispatch aborted collection while
+# local runs stayed green off the working-tree copy.
+#
+# Two hand-maintained lists that must agree is the actual defect. This does not
+# merge them — it just refuses to let them drift silently.
+echo ""
+echo "Checking for unsynced proprietary services..."
+_drift=0
+for src in "$PUBLIC_ROOT"/backend/app/services/*.py; do
+  f="$(basename "$src")"
+  # In SERVICES? then it is handled above.
+  printf '%s\n' "${SERVICES[@]}" | grep -qx "$f" && continue
+  # Tracked in the public repo? then it is intentionally public.
+  git -C "$PUBLIC_ROOT" ls-files --error-unmatch "backend/app/services/$f" >/dev/null 2>&1 && continue
+  echo "  ✗ $f is untracked publicly AND not in SERVICES — nothing has it."
+  echo "    Add it to BOTH .gitignore and the SERVICES list in this script."
+  _drift=1
+done
+if [ "$_drift" -eq 1 ]; then
+  echo ""
+  echo "ERROR: proprietary file(s) would be lost. Push aborted."
+  exit 1
+fi
+echo "  ✓ no drift"
 
 # ── Proprietary tests ────────────────────────────────────────────────────────
 # These import proprietary routers/services, so they're gitignored from the public
