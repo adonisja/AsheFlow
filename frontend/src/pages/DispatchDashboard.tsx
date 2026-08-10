@@ -1028,100 +1028,142 @@ export default function DispatchDashboard() {
           thing this feature was built to fix, so it must not depend on a
           warning existing. */}
       {showEmergencyPool && (
-        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
-              <button
-                onClick={() => setShowCallInList(p => !p)}
-                className="flex items-center gap-2 text-sm font-medium text-warning hover:text-warning/80 transition-colors"
-              >
-                <Phone className="w-4 h-4" />
-                {showCallInList ? 'Hide' : 'Show'} emergency pool ({emergencyPool.length} contactable)
-                {criticalDecline && (
-                  /* Named explicitly: this is the case where a truck does not
-                     leave, and it fires with no threshold at all. */
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-danger/15 text-danger uppercase tracking-wide">
-                    Driver/captain declined
-                  </span>
-                )}
-                {showCallInList ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </button>
+        <div className="card space-y-3 border-danger/40 border mb-4 bg-danger/[0.03]">
+          <button
+            onClick={() => setShowCallInList(p => !p)}
+            className="w-full flex items-center gap-2 text-sm font-semibold text-foreground hover:text-danger transition-colors"
+          >
+            <Phone className="w-4 h-4 text-danger" />
+            Emergency pool
+            <span className="text-xs font-normal text-subtle">
+              {emergencyPool.length} contactable
+            </span>
+            {criticalDecline && (
+              /* The one case that strands a truck. Loudest thing in the block,
+                 because it fires with no threshold and outranks a headcount. */
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-danger text-danger-foreground uppercase tracking-wide">
+                Driver/captain out
+              </span>
+            )}
+            <span className="ml-auto text-subtle">
+              {showCallInList ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </span>
+          </button>
 
-              {showCallInList && (
-                <div className="space-y-2 pt-1">
-                  <p className="text-xs text-subtle">
-                    Anyone still contactable for {selectedDate}. Approved time-off is
-                    deliberately excluded — they asked for the day.
-                  </p>
-                  {emergencyPool.map((member: EmergencyPoolMember) => {
-                    /* Why they are free, said plainly. A decline is the freshest
-                       signal and the one dispatch must react to, so it reads as
-                       a warning; the other two are neutral facts. */
-                    const REASON: Record<string, { label: string; cls: string }> = {
-                      declined:      { label: 'Declined',      cls: 'text-warning bg-warning/15' },
-                      scheduled_off: { label: 'Scheduled off', cls: 'text-subtle bg-muted' },
-                      unassigned:    { label: 'Unassigned',    cls: 'text-info bg-info/15' },
-                    };
-                    const r = REASON[member.reason] ?? REASON.unassigned;
-                    return (
-                      <div
-                        key={member.id}
-                        className="flex items-center justify-between gap-3 rounded-lg bg-card border border-border px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className="text-sm font-medium text-foreground">{member.name}</p>
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-subtle capitalize">{member.role}</span>
-                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide ${r.cls}`}>
-                              {r.label}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3 mt-1 text-xs flex-wrap">
-                            {member.phone_number && (
-                              <a href={`tel:${member.phone_number}`} className="text-foreground hover:text-primary transition-colors">
-                                {member.phone_number}
-                              </a>
-                            )}
-                            {member.email && (
-                              <a href={`mailto:${member.email}`} className="text-foreground hover:text-primary transition-colors truncate max-w-[16rem]">
-                                {member.email}
-                              </a>
-                            )}
-                            {member.discord_id && (
-                              /* discord:// opens the DM in the desktop app. The
-                                 name is resolved live from the bot's cache, so
-                                 it cannot go stale; the raw id is the fallback
-                                 when the bot cannot see them (ADR-267). */
-                              <a
-                                href={`discord://-/users/${member.discord_id}`}
-                                className="text-primary hover:underline"
-                                title="Open Discord DM"
-                              >
-                                @{member.discord_name || member.discord_id}
-                              </a>
-                            )}
-                            {!member.phone_number && !member.email && !member.discord_id && (
-                              <span className="text-subtle italic">No contact details on file</span>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleAddUnavailableStaff(member)}
-                          disabled={addingStaffId === member.id}
-                          className="shrink-0 flex items-center gap-1 text-xs font-medium bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          {showCallInList && (
+            <div className="space-y-3">
+              <p className="text-xs text-subtle">
+                Call before assigning. Approved time-off is excluded — they asked for the day.
+              </p>
+
+              {/* Grouped by WHY they are free, most urgent first. The flat list
+                  sorted only by role, which buried a declined driver among
+                  people who were merely off. */}
+              {([
+                ['declined',      'Declined — needs replacing'],
+                ['scheduled_off', 'On a scheduled day off'],
+                ['unassigned',    'Unassigned today'],
+              ] as const).map(([reason, heading]) => {
+                const group = emergencyPool.filter(m => m.reason === reason);
+                if (group.length === 0) return null;
+                return (
+                  <div key={reason} className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold uppercase tracking-widest ${
+                        reason === 'declined' ? 'text-danger' : 'text-subtle'
+                      }`}>
+                        {heading}
+                      </span>
+                      <span className="text-[10px] text-subtle">({group.length})</span>
+                      <div className="h-px bg-border/60 flex-1" />
+                    </div>
+
+                    {group.map((member: EmergencyPoolMember) => {
+                      const critical = member.role === 'driver' || member.role === 'captain';
+                      const noContact = !member.phone_number && !member.email && !member.discord_id;
+                      return (
+                        <div
+                          key={member.id}
+                          className={`flex items-center gap-3 rounded-lg bg-card border px-3 py-2 ${
+                            critical && reason === 'declined' ? 'border-danger/50' : 'border-border'
+                          }`}
                         >
-                          {addingStaffId === member.id ? (
-                            <div className="w-3 h-3 border border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                          ) : (
-                            <Plus className="w-3 h-3" />
-                          )}
-                          Add to dispatch
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-sm font-medium text-foreground">{member.name}</p>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                                critical ? 'bg-danger/15 text-danger font-semibold' : 'bg-muted text-subtle'
+                              }`}>
+                                {member.role}
+                              </span>
+                            </div>
+                            {noContact ? (
+                              /* Reads as a problem, because it is one: this
+                                 person is in the pool and cannot be reached. */
+                              <p className="text-xs text-warning mt-0.5 flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3 shrink-0" />
+                                No contact details on file
+                              </p>
+                            ) : (
+                              /* Actionable, not decorative: this surface exists
+                                 to get someone on the phone. */
+                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                {member.phone_number && (
+                                  <a
+                                    href={`tel:${member.phone_number}`}
+                                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md bg-success/10 text-success hover:bg-success/20 transition-colors"
+                                  >
+                                    <Phone className="w-3 h-3" />
+                                    {member.phone_number}
+                                  </a>
+                                )}
+                                {member.email && (
+                                  <a
+                                    href={`mailto:${member.email}`}
+                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-muted text-foreground hover:bg-accent transition-colors max-w-[15rem]"
+                                  >
+                                    <Mail className="w-3 h-3 shrink-0" />
+                                    <span className="truncate">{member.email}</span>
+                                  </a>
+                                )}
+                                {member.discord_id && (
+                                  <a
+                                    href={`discord://-/users/${member.discord_id}`}
+                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-info/10 text-info hover:bg-info/20 transition-colors"
+                                    title="Open Discord DM"
+                                  >
+                                    @{member.discord_name || member.discord_id}
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleAddUnavailableStaff(member)}
+                            disabled={addingStaffId === member.id}
+                            /* Secondary by design: the primary action here is
+                               phoning them, not silently re-adding them to a
+                               truck they may not have agreed to. */
+                            className="shrink-0 flex items-center gap-1 text-xs font-medium border border-border text-foreground hover:bg-accent px-2.5 py-1.5 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {addingStaffId === member.id ? (
+                              <div className="w-3 h-3 border border-foreground border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Plus className="w-3 h-3" />
+                            )}
+                            Add
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           )}
+        </div>
+      )}
+
 
       <div className="flex flex-col gap-6">
         
