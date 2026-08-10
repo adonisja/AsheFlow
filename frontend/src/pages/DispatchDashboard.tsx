@@ -57,6 +57,12 @@ export default function DispatchDashboard() {
   // (who must not be called) and omitted decliners and unassigned staff (who
   // are exactly who you call).
   const [emergencyPool, setEmergencyPool] = useState<EmergencyPoolMember[]>([]);
+  /* Who the dispatcher has actually reached out to this session (ADR-267).
+     Gates the Add button — adding someone who is off, without speaking to
+     them, schedules a shift they never agreed to. Deliberately session-only:
+     it is a UI nudge, not a claim of record, and persisting it would imply an
+     audit trail that does not exist. */
+  const [contactedIds, setContactedIds] = useState<Set<string>>(new Set());
   const [showCallInList, setShowCallInList] = useState(false);
   const [addingStaffId, setAddingStaffId] = useState<string | null>(null);
   // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
@@ -733,14 +739,60 @@ export default function DispatchDashboard() {
     .filter(([, s]) => s === 'declined')
     .map(([id]) => id);
 
-  const criticalDecline = declinedIds.some((id) => {
-    const crews = dispatchData?.assigned_crews ?? {};
-    for (const crew of Object.values(crews)) {
+  /* The SLOT each decliner held today, not their job title — a captain-titled
+     employee slotted as a walker costs a walker (ADR-256 D2). */
+  const slotRoleOf = (id: string): string | null => {
+    for (const crew of Object.values(dispatchData?.assigned_crews ?? {})) {
       const slot = (crew as any[]).find((m) => m.employee_id === id);
-      if (slot) return slot.role === 'driver' || slot.role === 'captain';
+      if (slot) return slot.role;
     }
-    return false;
-  });
+    return null;
+  };
+
+  const declinedRoles = declinedIds
+    .map(slotRoleOf)
+    .filter((r): r is string => r !== null);
+
+  const declineCounts = declinedRoles.reduce<Record<string, number>>((acc, r) => {
+    acc[r] = (acc[r] || 0) + 1;
+    return acc;
+  }, {});
+
+  const criticalDecline = declinedRoles.some((r) => r === 'driver' || r === 'captain');
+
+  /* The decliners as pool members, ordered by how much the gap hurts: a
+     captain or driver strands a truck, so those holes are shown first. */
+  const _gapOrder: Record<string, number> = { captain: 0, driver: 1, trainer: 2, walker: 3 };
+  const declinedMembers = emergencyPool
+    .filter((m) => m.reason === 'declined')
+    .sort((a, b) => (_gapOrder[slotRoleOf(a.id) || a.role] ?? 9)
+                  - (_gapOrder[slotRoleOf(b.id) || b.role] ?? 9));
+
+  /* Name what actually happened. A single hardcoded "Driver/captain declined"
+     read as a lie when three walkers called out, and told a dispatcher nothing
+     about which hole to fill.
+
+     Ordered by how much each role hurts: a captain or driver strands a truck,
+     so those are named individually and first; walkers and trainers are
+     reported as counts, because the number is the signal. */
+  const declineBadge: string | null = (() => {
+    const parts: string[] = [];
+    const singular: Record<string, string> = {
+      captain: 'Captain out',
+      driver: 'Driver out',
+    };
+    for (const role of ['captain', 'driver']) {
+      const n = declineCounts[role] || 0;
+      if (n === 1) parts.push(singular[role]);
+      else if (n > 1) parts.push(`${n} ${role}s out`);
+    }
+    for (const role of ['trainer', 'walker']) {
+      const n = declineCounts[role] || 0;
+      if (n === 1) parts.push(`1 ${role} out`);
+      else if (n > 1) parts.push(`${n} ${role}s out`);
+    }
+    return parts.length ? parts.join(' · ') : null;
+  })();
 
   const understaffed = Boolean(dispatchData?.warnings?.some(
     (w) => w.type === 'understaffed_drivers'
@@ -1035,14 +1087,14 @@ export default function DispatchDashboard() {
           >
             <Phone className="w-4 h-4 text-danger" />
             Emergency pool
-            <span className="text-xs font-normal text-subtle">
-              {emergencyPool.length} contactable
-            </span>
-            {criticalDecline && (
-              /* The one case that strands a truck. Loudest thing in the block,
-                 because it fires with no threshold and outranks a headcount. */
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-danger text-danger-foreground uppercase tracking-wide">
-                Driver/captain out
+            {declineBadge && (
+              /* Composed from the roles that ACTUALLY declined. A static
+                 "Driver/captain out" read as a lie when three walkers called
+                 out, and told the dispatcher nothing about which hole to fill. */
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                criticalDecline ? 'bg-danger text-danger-foreground' : 'bg-warning/20 text-warning'
+              }`}>
+                {declineBadge}
               </span>
             )}
             <span className="ml-auto text-subtle">
@@ -1051,16 +1103,78 @@ export default function DispatchDashboard() {
           </button>
 
           {showCallInList && (
-            <div className="space-y-3">
-              <p className="text-xs text-subtle">
-                Call before assigning. Approved time-off is excluded — they asked for the day.
-              </p>
+            <div className="space-y-4">
+              {/* ── Each decline is a GAP, with its own candidates ──────────
+                  The flat list put the person who called out next to an "Add"
+                  button, which reads as "re-add the person who just said no".
+                  A decline is a hole to fill; the people who can fill it are
+                  same-role staff who are off or unassigned. */}
+              {declinedMembers.length > 0 && (
+                <div className="space-y-3">
+                  {declinedMembers.map((gap) => {
+                    const role = slotRoleOf(gap.id) || gap.role;
+                    const critical = role === 'driver' || role === 'captain';
+                    const candidates = emergencyPool.filter(
+                      (m) => m.reason !== 'declined' && m.role === role,
+                    );
+                    return (
+                      <div
+                        key={gap.id}
+                        className={`rounded-lg border ${critical ? 'border-danger/50' : 'border-border'} overflow-hidden`}
+                      >
+                        {/* The gap itself */}
+                        <div className={`px-3 py-2 ${critical ? 'bg-danger/10' : 'bg-warning/10'}`}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${
+                              critical ? 'bg-danger text-danger-foreground' : 'bg-warning/25 text-warning'
+                            }`}>
+                              {role} out
+                            </span>
+                            <p className="text-sm font-medium text-foreground">{gap.name}</p>
+                            <span className="text-xs text-subtle">declined</span>
+                            <div className="ml-auto">
+                              <ContactActions member={gap} />
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-subtle mt-1">
+                            Try them first — a decline is often negotiable. If not, pick a
+                            replacement below.
+                          </p>
+                        </div>
 
-              {/* Grouped by WHY they are free, most urgent first. The flat list
-                  sorted only by role, which buried a declined driver among
-                  people who were merely off. */}
+                        {/* Same-role replacements */}
+                        <div className="px-3 py-2 space-y-1.5 bg-card">
+                          {candidates.length === 0 ? (
+                            <p className="text-xs text-warning flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3 shrink-0" />
+                              No other {role} is contactable for this date.
+                            </p>
+                          ) : (
+                            <>
+                              <p className="text-[10px] font-bold uppercase tracking-widest text-subtle">
+                                Suggested {role}s ({candidates.length})
+                              </p>
+                              {candidates.map((c) => (
+                                <PoolRow
+                                  key={c.id}
+                                  member={c}
+                                  adding={addingStaffId === c.id}
+                                  onAdd={() => handleAddUnavailableStaff(c)}
+                                  contacted={contactedIds.has(c.id)}
+                                  onContact={() => setContactedIds(s => new Set(s).add(c.id))}
+                                />
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ── Everyone else, still available to call ─────────────────── */}
               {([
-                ['declined',      'Declined — needs replacing'],
                 ['scheduled_off', 'On a scheduled day off'],
                 ['unassigned',    'Unassigned today'],
               ] as const).map(([reason, heading]) => {
@@ -1069,93 +1183,22 @@ export default function DispatchDashboard() {
                 return (
                   <div key={reason} className="space-y-1.5">
                     <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-bold uppercase tracking-widest ${
-                        reason === 'declined' ? 'text-danger' : 'text-subtle'
-                      }`}>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-subtle">
                         {heading}
                       </span>
                       <span className="text-[10px] text-subtle">({group.length})</span>
                       <div className="h-px bg-border/60 flex-1" />
                     </div>
-
-                    {group.map((member: EmergencyPoolMember) => {
-                      const critical = member.role === 'driver' || member.role === 'captain';
-                      const noContact = !member.phone_number && !member.email && !member.discord_id;
-                      return (
-                        <div
-                          key={member.id}
-                          className={`flex items-center gap-3 rounded-lg bg-card border px-3 py-2 ${
-                            critical && reason === 'declined' ? 'border-danger/50' : 'border-border'
-                          }`}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-medium text-foreground">{member.name}</p>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${
-                                critical ? 'bg-danger/15 text-danger font-semibold' : 'bg-muted text-subtle'
-                              }`}>
-                                {member.role}
-                              </span>
-                            </div>
-                            {noContact ? (
-                              /* Reads as a problem, because it is one: this
-                                 person is in the pool and cannot be reached. */
-                              <p className="text-xs text-warning mt-0.5 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3 shrink-0" />
-                                No contact details on file
-                              </p>
-                            ) : (
-                              /* Actionable, not decorative: this surface exists
-                                 to get someone on the phone. */
-                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                {member.phone_number && (
-                                  <a
-                                    href={`tel:${member.phone_number}`}
-                                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md bg-success/10 text-success hover:bg-success/20 transition-colors"
-                                  >
-                                    <Phone className="w-3 h-3" />
-                                    {member.phone_number}
-                                  </a>
-                                )}
-                                {member.email && (
-                                  <a
-                                    href={`mailto:${member.email}`}
-                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-muted text-foreground hover:bg-accent transition-colors max-w-[15rem]"
-                                  >
-                                    <Mail className="w-3 h-3 shrink-0" />
-                                    <span className="truncate">{member.email}</span>
-                                  </a>
-                                )}
-                                {member.discord_id && (
-                                  <a
-                                    href={`discord://-/users/${member.discord_id}`}
-                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-info/10 text-info hover:bg-info/20 transition-colors"
-                                    title="Open Discord DM"
-                                  >
-                                    @{member.discord_name || member.discord_id}
-                                  </a>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => handleAddUnavailableStaff(member)}
-                            disabled={addingStaffId === member.id}
-                            /* Secondary by design: the primary action here is
-                               phoning them, not silently re-adding them to a
-                               truck they may not have agreed to. */
-                            className="shrink-0 flex items-center gap-1 text-xs font-medium border border-border text-foreground hover:bg-accent px-2.5 py-1.5 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {addingStaffId === member.id ? (
-                              <div className="w-3 h-3 border border-foreground border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <Plus className="w-3 h-3" />
-                            )}
-                            Add
-                          </button>
-                        </div>
-                      );
-                    })}
+                    {group.map((member) => (
+                      <PoolRow
+                        key={member.id}
+                        member={member}
+                        adding={addingStaffId === member.id}
+                        onAdd={() => handleAddUnavailableStaff(member)}
+                        contacted={contactedIds.has(member.id)}
+                        onContact={() => setContactedIds(s => new Set(s).add(member.id))}
+                      />
+                    ))}
                   </div>
                 );
               })}
@@ -1666,6 +1709,117 @@ export default function DispatchDashboard() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* The contact channels for one pool member (ADR-267).
+
+   Chips, not text: this surface exists to get someone on the phone, and a
+   number you have to select-and-copy is not an affordance. `onUse` fires when
+   any channel is actually clicked — that is what unlocks Add on a row. */
+function ContactActions({
+  member, onUse,
+}: {
+  member: EmergencyPoolMember;
+  onUse?: () => void;
+}) {
+  const none = !member.phone_number && !member.email && !member.discord_id;
+  if (none) {
+    return (
+      <span className="text-xs text-warning flex items-center gap-1">
+        <AlertCircle className="w-3 h-3 shrink-0" />
+        No contact details
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 flex-wrap">
+      {member.phone_number && (
+        <a
+          href={`tel:${member.phone_number}`}
+          onClick={onUse}
+          className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md bg-success/10 text-success hover:bg-success/20 transition-colors"
+        >
+          <Phone className="w-3 h-3" />
+          {member.phone_number}
+        </a>
+      )}
+      {member.email && (
+        <a
+          href={`mailto:${member.email}`}
+          onClick={onUse}
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-muted text-foreground hover:bg-accent transition-colors max-w-[14rem]"
+        >
+          <Mail className="w-3 h-3 shrink-0" />
+          <span className="truncate">{member.email}</span>
+        </a>
+      )}
+      {member.discord_id && (
+        <a
+          href={`discord://-/users/${member.discord_id}`}
+          onClick={onUse}
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-info/10 text-info hover:bg-info/20 transition-colors"
+          title="Open Discord DM"
+        >
+          @{member.discord_name || member.discord_id}
+        </a>
+      )}
+    </span>
+  );
+}
+
+/* One contactable person, with Add gated behind Contact (ADR-267).
+
+   Adding someone who is off — or who just declined — without speaking to them
+   first schedules a shift they never agreed to. So Contact is the primary
+   action and Add stays disabled until a channel has been used; a person with
+   no contact details on file can still be added, because there is no call to
+   make and blocking would strand the dispatcher. */
+function PoolRow({
+  member, adding, onAdd, contacted, onContact,
+}: {
+  member: EmergencyPoolMember;
+  adding: boolean;
+  onAdd: () => void;
+  contacted: boolean;
+  onContact: () => void;
+}) {
+  const reachable = Boolean(member.phone_number || member.email || member.discord_id);
+  const canAdd = contacted || !reachable;
+  return (
+    <div className="flex items-center gap-3 rounded-md bg-background border border-border px-2.5 py-1.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm text-foreground">{member.name}</p>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-subtle uppercase tracking-wide">
+            {member.role}
+          </span>
+          {member.reason === 'scheduled_off' && (
+            <span className="text-[10px] text-subtle">day off</span>
+          )}
+        </div>
+        <div className="mt-1">
+          <ContactActions member={member} onUse={onContact} />
+        </div>
+      </div>
+      <button
+        onClick={onAdd}
+        disabled={adding || !canAdd}
+        title={canAdd ? 'Add to dispatch' : 'Contact them first'}
+        className={`shrink-0 flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-md transition-colors ${
+          canAdd
+            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+            : 'border border-border text-subtle cursor-not-allowed'
+        } disabled:opacity-60`}
+      >
+        {adding ? (
+          <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+        ) : (
+          <Plus className="w-3 h-3" />
+        )}
+        Add
+      </button>
     </div>
   );
 }
