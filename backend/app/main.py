@@ -11,7 +11,7 @@ from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -98,6 +98,7 @@ api_v1_router.include_router(trainer_marks.router,            dependencies=_conf
 api_v1_router.include_router(trainer_coverage.router,         dependencies=_configured)
 api_v1_router.include_router(anchor_points.router,            dependencies=_configured)
 api_v1_router.include_router(analytics.router,                dependencies=_configured)
+api_v1_router.include_router(assignment_history.router,        dependencies=_configured)
 api_v1_router.include_router(shift_ops.router,                dependencies=_configured)
 api_v1_router.include_router(shift_sessions.router,           dependencies=_configured)
 if _register_proprietary:
