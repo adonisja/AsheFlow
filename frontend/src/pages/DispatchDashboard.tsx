@@ -1018,11 +1018,17 @@ export default function DispatchDashboard() {
             ))}
           </ul>
 
-          {/* Emergency pool (ADR-267) — replaces the call-in list. See
-              showEmergencyPool for the trigger; a driver/captain decline fires
-              it on its own. */}
-          {showEmergencyPool && (
-            <div className="border-t border-warning/30 pt-3 space-y-2">
+        </div>
+      )}
+
+      {/* Emergency pool (ADR-267) — its OWN block, deliberately not nested in
+          the warnings card. It used to live inside, which meant it inherited
+          `warnings.length > 0` on top of its own trigger: three declines with
+          no warning fired rendered nothing at all. That over-gating is the very
+          thing this feature was built to fix, so it must not depend on a
+          warning existing. */}
+      {showEmergencyPool && (
+        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
               <button
                 onClick={() => setShowCallInList(p => !p)}
                 className="flex items-center gap-2 text-sm font-medium text-warning hover:text-warning/80 transition-colors"
@@ -1116,8 +1122,6 @@ export default function DispatchDashboard() {
               )}
             </div>
           )}
-        </div>
-      )}
 
       <div className="flex flex-col gap-6">
         
