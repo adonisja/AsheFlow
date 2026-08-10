@@ -3,6 +3,7 @@ import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import type { MyPerformance } from '../api/types';
 import { Package, Star, TrendingUp, AlertTriangle } from 'lucide-react';
+import RecentDaysSection from './RecentDaysSection';
 
 /** My Performance card (ADR-203). The caller's own live field-execution stats
  *  from OUR data (distinct from the official Amazon Scorecard). Role-adaptive:
@@ -137,6 +138,12 @@ export default function MyPerformanceCard() {
           )}
         </>
       )}
+
+      {/* Per-day detail (ADR-268). Inside this card, not on its own page: the
+          tiles above answer "how am I doing overall" from the same source, and
+          this answers "what was Thursday" — including the difficulty
+          normalisation the aggregate numbers cannot apply. */}
+      {isField && <RecentDaysSection />}
     </div>
   );
 }

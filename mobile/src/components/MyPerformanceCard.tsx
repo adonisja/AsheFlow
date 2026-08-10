@@ -3,6 +3,7 @@ import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import RecentDaysSection from './RecentDaysSection';
 
 // My Performance card (ADR-203) — the caller's own live delivery/RTS/rating stats
 // from OUR data (distinct from the official Amazon Scorecard, ADR-204).
@@ -117,6 +118,12 @@ export default function MyPerformanceCard() {
           )}
         </>
       )}
+
+      {/* Per-day detail (ADR-268). Inside this card, not a new screen: the
+          tiles above answer "how am I doing overall" from the same source, and
+          this answers "what was Thursday" — including the difficulty
+          normalisation the aggregates cannot apply. */}
+      {isField && <RecentDaysSection />}
     </View>
   );
 }
