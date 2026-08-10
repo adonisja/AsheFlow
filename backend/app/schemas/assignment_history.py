@@ -22,6 +22,12 @@ class CrewMemberOut(BaseModel):
     # captain-titled employee may ride as a walker (ADR-256 D2).
     role: str
 
+    # Required on the NESTED models too, not just the outer ones. The service
+    # returns dataclasses; without this Pydantic refuses to coerce them and the
+    # endpoint 500s with "Input should be a valid dictionary or instance of
+    # CrewMemberOut". The outer model having it is not inherited.
+    model_config = ConfigDict(from_attributes=True)
+
 
 class RTSDetailOut(BaseModel):
     tba_number: str
@@ -30,6 +36,8 @@ class RTSDetailOut(BaseModel):
     is_reattemptable: bool
     # Null once ADR-219 has run. Not an error — see `address_detail`.
     normalised_address: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AssignmentDayOut(BaseModel):

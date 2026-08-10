@@ -328,3 +328,54 @@ class TestTenancy:
         days = get_assignment_history(
             db, SEED_COMPANY_ID, emp.id, date.today() - timedelta(days=5), date.today())
         assert days == []
+
+
+class TestSerialisation:
+    """The service returns dataclasses; the endpoint returns Pydantic models.
+
+    Every other test in this file calls the service directly and never crosses
+    that boundary — which is exactly why they all passed while the endpoint
+    500'd on staging. `from_attributes` has to be on the NESTED models too;
+    having it on the outer one is not inherited, and Pydantic refuses to coerce
+    a nested dataclass without it:
+
+        Input should be a valid dictionary or instance of RTSDetailOut
+    """
+
+    def test_a_day_with_nested_crew_and_rts_serialises(self):
+        from app.schemas.assignment_history import AssignmentHistoryResponse
+        from app.services.assignment_history import AssignmentDay, RTSDetail
+
+        day = AssignmentDay(
+            route_date=date(2026, 8, 4), truck_name="Viking", slot_role="driver")
+        day.crew = [{"name": "Ana Rivera", "role": "walker"}]
+        day.rts_details = [RTSDetail(
+            tba_number="TBA1", rts_type="no_access",
+            rts_explanation="Gate code failed", is_reattemptable=True,
+            normalised_address="505 WEST 37 STREET",
+        )]
+
+        payload = AssignmentHistoryResponse(
+            employee_id="e1", start_date=day.route_date,
+            end_date=day.route_date, days=[day],
+        ).model_dump()
+
+        out = payload["days"][0]
+        assert out["crew"][0]["name"] == "Ana Rivera"
+        assert out["rts_details"][0]["rts_type"] == "no_access"
+        assert out["rts_details"][0]["normalised_address"] == "505 WEST 37 STREET"
+
+    def test_every_nested_model_allows_attribute_coercion(self):
+        """Guard the guard: a new nested model without from_attributes would
+        reintroduce the same 500, and the test above only covers the two that
+        exist today."""
+        from app.schemas import assignment_history as sch
+        from pydantic import BaseModel
+
+        for name in dir(sch):
+            obj = getattr(sch, name)
+            if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel:
+                assert obj.model_config.get("from_attributes") is True, (
+                    f"{name} cannot be built from a dataclass — the endpoint "
+                    "will 500 when the service returns one"
+                )
