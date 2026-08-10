@@ -117,11 +117,15 @@ jobs:
         with:
           fetch-depth: 0   # history check needs the full log
 
-      # --allow-history downgrades the historical-exposure finding to a notice.
-      # Remove this flag once the ADR-265 purge has run, so history regressions
-      # fail too.
+      # Strict since the ADR-265 purge landed (verified 2026-08-09 against a
+      # fresh public clone: 0 commits for run_sort/persist_zones/tier1_verify/
+      # assign_clusters). Both findings now fail the build:
+      #   TRACKED — in the index; every future push publishes it.
+      #   HISTORY — gitignoring does not retract a push; `git log -- <path>`
+      #             still serves the content, so a regression must fail here
+      #             rather than be discovered months later.
       - name: Check for proprietary exposure
-        run: bash scripts/check_proprietary_exposure.sh --allow-history
+        run: bash scripts/check_proprietary_exposure.sh
 
   # ── 2. BACKEND TESTS ───────────────────────────────────────────────────────
   test:
