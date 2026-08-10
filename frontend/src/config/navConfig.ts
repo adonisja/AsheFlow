@@ -1,7 +1,7 @@
 import {
   Home, ClipboardCheck, BarChart2, Users, ScrollText, Building2, ClipboardList,
   MapPin, MessageSquare, Shield, ShoppingBag, AlertTriangle, Route, Calendar,
-  RefreshCw, Settings, Activity, ShieldAlert, Star, Gavel, Package,
+  RefreshCw, Settings, Activity, ShieldAlert, Star, Gavel, Package, CalendarDays,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -64,6 +64,12 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/gear',                  label: 'Gear',              icon: ShoppingBag,    roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/incidents',             label: 'Incidents',         icon: AlertTriangle,  roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/my-route',              label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'] },
+  // ADR-268. 'captain' is deliberately absent: the frontend Role union predates
+  // ADR-256 and does not include it, and widening that union is a bigger change
+  // than this feature warrants. A captain-titled employee still reaches the page
+  // — the ROUTE guard in App.tsx allows them — they just do not get a nav link
+  // until Role is updated.
+  { path: '/my-assignments',        label: 'My Assignments',    icon: CalendarDays,   roles: [...ALL_FIELD] },
   { path: '/my-training',           label: 'My Training',       icon: ClipboardCheck, roles: ['trainee'] },
   { path: '/my-quiz',               label: 'Quiz',              icon: ClipboardCheck, roles: ['trainee'], when: c => c.hasActiveQuiz },
   { path: '/phase4-observation',    label: 'Phase 4',           icon: ClipboardCheck, roles: ['admin', 'trainer'], when: c => c.trainerPhase === 4 },

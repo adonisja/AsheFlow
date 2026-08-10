@@ -38,6 +38,7 @@ import ReturnsManifestPrint from './pages/ReturnsManifestPrint';
 import WalkerSortMonitor from './pages/WalkerSort';
 import NotificationsHistory from './pages/NotificationsHistory';
 import MyRoute from './pages/MyRoute';
+import MyAssignments from './pages/MyAssignments';
 import BuildingProfilesPage from './pages/BuildingProfiles';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
@@ -537,6 +538,16 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['walker', 'trainee']}>
                   <MyRoute />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/my-assignments"
+              element={
+                /* Every field role, not just walkers: a driver or captain
+                   worked the day too and has the same question about it. */
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'captain']}>
+                  <MyAssignments />
                 </ProtectedRoute>
               }
             />
