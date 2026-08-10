@@ -134,3 +134,126 @@ def get_unavailable_staff(db: Session, target_date: date = None, roles: list = N
 def get_unavailable_drivers(db: Session, target_date: date = None, company_id: UUID = None) -> list:
     """Convenience wrapper — returns unavailable drivers only."""
     return get_unavailable_staff(db, target_date, roles=["driver"], company_id=company_id)
+
+
+def get_emergency_pool(db: Session, target_date: date = None, company_id: UUID = None) -> list:
+    """Everyone dispatch can still phone for target_date, with why they are free.
+
+    Three groups, each labelled so nobody is called blind (ADR-267):
+
+      scheduled_off  approved recurring day off — not working by default, askable
+      declined       said no to THIS dispatch; often circumstantial, so dispatch
+                     may negotiate
+      unassigned     active and available, simply not on a truck
+
+    Two hard exclusions:
+
+      approved PTO   they asked for the day and it was granted. Listing them
+                     invites a call that should not happen — this is the one
+                     group the previous call-in list got backwards.
+      trainees       their assignment runs through the training system, not a
+                     dispatch phone call (matches get_unavailable_staff).
+
+    Ordered driver → captain → trainer → walker, because a missing driver or
+    captain strands a whole truck and is what dispatch reaches for first.
+    """
+    from app.models.assignment_member import AssignmentMember
+    from app.models.dispatch_confirmation import DispatchConfirmation
+    from app.models.truck_assignment import TruckAssignment
+
+    if company_id is None:
+        raise ValueError("company_id is required for get_emergency_pool")
+    target_date = target_date or company_today(db, company_id)
+    day_name = target_date.strftime("%A")
+
+    employees = (
+        db.query(Employee)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.is_active == True,
+            # field_supervisor oversees the road rather than filling a seat
+            # (ADR-256); trainee is excluded per above.
+            Employee.role.in_(["driver", "captain", "trainer", "walker"]),
+        )
+        .all()
+    )
+    if not employees:
+        return []
+    employee_ids = [e.id for e in employees]
+
+    # ── hard exclusion: approved PTO ─────────────────────────────────────────
+    pto_ids = {
+        row.employee_id
+        for row in db.query(TimeOffRequest).filter(
+            TimeOffRequest.date == target_date,
+            TimeOffRequest.status == "approved",
+            TimeOffRequest.employee_id.in_(employee_ids),
+        ).all()
+    }
+
+    # ── group 1: approved recurring day off ──────────────────────────────────
+    # ilike, not ==: get_available_pool compares exactly while the availability
+    # endpoint uses ilike, so mixed-case data would put someone in BOTH the
+    # dispatch pool and this one. Matching the looser comparison keeps the two
+    # consistent; the underlying inconsistency is noted in the journal.
+    off_ids = {
+        row.employee_id
+        for row in db.query(EmployeeOffDay).filter(
+            EmployeeOffDay.day_of_week.ilike(day_name),
+            EmployeeOffDay.status == "approved",
+            EmployeeOffDay.employee_id.in_(employee_ids),
+        ).all()
+    }
+
+    # ── group 2: declined this dispatch ──────────────────────────────────────
+    declined_ids = {
+        row.employee_id
+        for row in db.query(DispatchConfirmation).filter(
+            DispatchConfirmation.company_id == company_id,
+            DispatchConfirmation.date == target_date,
+            DispatchConfirmation.status == "declined",
+            DispatchConfirmation.employee_id.in_(employee_ids),
+        ).all()
+    }
+
+    # ── group 3: not on a truck ──────────────────────────────────────────────
+    assigned_ids = {
+        row.employee_id
+        for row in db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == company_id,
+            TruckAssignment.date == target_date,
+            AssignmentMember.employee_id.in_(employee_ids),
+        ).all()
+    }
+
+    # driver/captain first: their absence strands a truck, not just a route.
+    role_order = {"driver": 0, "captain": 1, "trainer": 2, "walker": 3}
+    result = []
+    for emp in employees:
+        if emp.id in pto_ids:
+            continue
+        # Most actionable reason wins where several apply: a decline is a fresh
+        # signal dispatch must react to, an off-day is a standing fact, and
+        # "unassigned" is merely the absence of both.
+        if emp.id in declined_ids:
+            reason = "declined"
+        elif emp.id in off_ids:
+            reason = "scheduled_off"
+        elif emp.id not in assigned_ids:
+            reason = "unassigned"
+        else:
+            continue                      # on a truck and hasn't declined
+        result.append({
+            "id": str(emp.id),
+            "name": emp.name,
+            "role": emp.role,
+            "reason": reason,
+            "phone_number": emp.phone_number,
+            "email": emp.email,
+            "discord_id": emp.discord_id,
+        })
+
+    result.sort(key=lambda e: (role_order.get(e["role"], 9), e["name"]))
+    return result

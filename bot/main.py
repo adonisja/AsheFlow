@@ -357,6 +357,40 @@ async def handle_dm(request: web.Request) -> web.Response:
     return web.json_response({"status": "queued", "discord_id": discord_id})
 
 
+async def handle_resolve_users(request: web.Request) -> web.Response:
+    """POST /internal/resolve-users  body: { "discord_ids": ["123", ...] }
+
+    Returns { "<id>": "<display name>" } for every id the bot can see.
+
+    CACHE ONLY — deliberately no `fetch_user` fallback (ADR-267). `intents.members`
+    is on, so `get_user` is an in-memory lookup: a pool of thirty costs nothing
+    and cannot be rate-limited. `fetch_user` is one Discord API call per id, and
+    doing that on a page load for an arbitrary-length list is how you get a
+    dispatcher staring at a spinner during the emergency the list exists for.
+
+    An id the cache does not hold is simply omitted; the caller falls back to
+    showing the raw id, which is what it did before this endpoint existed.
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data = await request.json()
+    ids = data.get("discord_ids") or []
+    if not isinstance(ids, list):
+        return web.Response(status=400, text="discord_ids must be a list")
+
+    # Bound the work: a caller asking for thousands is a bug, not a use case.
+    resolved: dict[str, str] = {}
+    for raw in ids[:200]:
+        if not isinstance(raw, str) or not raw.isdigit():
+            continue
+        user = bot.get_user(int(raw))
+        if user is not None:
+            resolved[raw] = user.global_name or user.name
+
+    return web.json_response({"users": resolved})
+
+
 async def handle_swap(request: web.Request) -> web.Response:
     """POST /internal/swap
 
@@ -568,6 +602,7 @@ async def start_webhook_server() -> None:
     app.router.add_post("/internal/invite",           handle_invite)
     app.router.add_post("/internal/revoke-member",    handle_revoke_member)
     app.router.add_post("/internal/dm",               handle_dm)
+    app.router.add_post("/internal/resolve-users",    handle_resolve_users)
     app.router.add_post("/internal/post-to-channel",  handle_post_to_channel)
     app.router.add_post("/internal/post-embed",       handle_post_embed)
     runner = web.AppRunner(app)

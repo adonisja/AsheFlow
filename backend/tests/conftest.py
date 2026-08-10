@@ -41,6 +41,7 @@ from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
 from app.models.notification import Notification
 from app.models.time_off_request import TimeOffRequest
+from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.company import Company, CompanyConfig
 from app.models.shift_session import ShiftSession
 from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
@@ -95,6 +96,7 @@ DISPATCH_TABLES = [
     CompanyConfig.__table__,
     ShiftSession.__table__,
     CaptainTruckFamiliarity.__table__,   # ADR-256
+    DispatchConfirmation.__table__,      # ADR-267 — the emergency pool reads declines
     _graduation_quizzes_sqlite,
 ]
 

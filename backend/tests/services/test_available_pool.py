@@ -294,3 +294,166 @@ class TestUnavailableStaff:
         make_employee(db, role="driver")
         result = get_unavailable_staff(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# get_emergency_pool — ADR-267
+#
+# The call-in list's successor. Membership is deliberately NOT the same:
+#   included: scheduled_off, declined, unassigned
+#   excluded: approved PTO (they asked for the day), trainees
+# ---------------------------------------------------------------------------
+
+from app.models.dispatch_confirmation import DispatchConfirmation  # noqa: E402
+from app.services.available_pool import get_emergency_pool  # noqa: E402
+from tests.conftest import make_assignment, make_member, make_truck  # noqa: E402
+
+
+def _decline(db, employee, target_date, status="declined"):
+    row = DispatchConfirmation(
+        id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=employee.id,
+        date=target_date, status=status,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+class TestEmergencyPoolMembership:
+    def test_unassigned_staff_are_contactable(self, db):
+        e = make_employee(db, role="walker", name="Una Signed")
+        pool = get_emergency_pool(db, date.today(), company_id=SEED_COMPANY_ID)
+        row = next(p for p in pool if p["id"] == str(e.id))
+        assert row["reason"] == "unassigned"
+
+    def test_scheduled_off_staff_are_contactable(self, db):
+        d = _date_for_weekday("Wednesday")
+        e = make_employee(db, role="walker", name="Ola Off")
+        make_off_day(db, e, "Wednesday")
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        row = next(p for p in pool if p["id"] == str(e.id))
+        assert row["reason"] == "scheduled_off"
+
+    def test_decliners_are_contactable(self, db):
+        """The group the old call-in list omitted — and the whole reason the
+        pool exists. A decline is often circumstantial and negotiable."""
+        d = date.today()
+        e = make_employee(db, role="walker", name="Dee Clined")
+        _decline(db, e, d)
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        row = next(p for p in pool if p["id"] == str(e.id))
+        assert row["reason"] == "declined"
+
+    def test_approved_pto_is_never_contactable(self, db):
+        """THE inversion vs the old list, which showed PTO. They requested the
+        day and it was granted; offering them a shift is the wrong call."""
+        d = date.today()
+        e = make_employee(db, role="walker", name="Pia Teeoh")
+        make_time_off_request(db, e, d, status="approved")
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        assert str(e.id) not in {p["id"] for p in pool}
+
+    def test_pto_wins_over_being_unassigned(self, db):
+        """Someone on PTO is also trivially unassigned. The exclusion must not
+        be defeated by the broader group."""
+        d = date.today()
+        e = make_employee(db, role="driver", name="Both Ways")
+        make_time_off_request(db, e, d, status="approved")
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        assert str(e.id) not in {p["id"] for p in pool}
+
+    def test_pending_pto_does_not_exclude(self, db):
+        """Only APPROVED time off is a real commitment."""
+        d = date.today()
+        e = make_employee(db, role="walker", name="Penny Ding")
+        make_time_off_request(db, e, d, status="pending")
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        assert str(e.id) in {p["id"] for p in pool}
+
+    def test_trainees_are_excluded(self, db):
+        """Their assignment runs through the training system, not a phone call."""
+        make_employee(db, role="trainee", name="Tia Rainee")
+        pool = get_emergency_pool(db, date.today(), company_id=SEED_COMPANY_ID)
+        assert "trainee" not in {p["role"] for p in pool}
+
+    def test_inactive_staff_are_excluded(self, db):
+        e = make_employee(db, role="walker", name="Ina Ctive")
+        e.is_active = False
+        db.commit()
+        pool = get_emergency_pool(db, date.today(), company_id=SEED_COMPANY_ID)
+        assert str(e.id) not in {p["id"] for p in pool}
+
+    def test_assigned_and_not_declined_is_not_in_the_pool(self, db):
+        """Someone already on a truck who has said nothing is working. Listing
+        them would drown the real candidates."""
+        d = date.today()
+        e = make_employee(db, role="walker", name="Onna Truck")
+        truck = make_truck(db, name="T-EP1")
+        assignment = make_assignment(db, truck, target_date=d)
+        make_member(db, assignment, e, "walker")
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        assert str(e.id) not in {p["id"] for p in pool}
+
+    def test_an_assigned_decliner_IS_in_the_pool(self, db):
+        """The core case: they were on a truck and pulled out. Being assigned
+        must not mask the decline."""
+        d = date.today()
+        e = make_employee(db, role="driver", name="Quit Lastminute")
+        truck = make_truck(db, name="T-EP2")
+        assignment = make_assignment(db, truck, target_date=d)
+        make_member(db, assignment, e, "driver")
+        _decline(db, e, d)
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        row = next(p for p in pool if p["id"] == str(e.id))
+        assert row["reason"] == "declined"
+
+    def test_confirmed_staff_are_not_in_the_pool(self, db):
+        d = date.today()
+        e = make_employee(db, role="walker", name="Yes Confirmed")
+        truck = make_truck(db, name="T-EP3")
+        assignment = make_assignment(db, truck, target_date=d)
+        make_member(db, assignment, e, "walker")
+        _decline(db, e, d, status="confirmed")
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        assert str(e.id) not in {p["id"] for p in pool}
+
+    def test_decline_outranks_scheduled_off_as_the_reason(self, db):
+        """Where several apply, the most actionable wins — a fresh decline is a
+        signal to react to, an off-day is a standing fact."""
+        d = _date_for_weekday("Thursday")
+        e = make_employee(db, role="walker", name="Both Reasons")
+        make_off_day(db, e, "Thursday")
+        _decline(db, e, d)
+        pool = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+        row = next(p for p in pool if p["id"] == str(e.id))
+        assert row["reason"] == "declined"
+
+
+class TestEmergencyPoolShape:
+    def test_contact_channels_are_returned(self, db):
+        """Dispatch must be able to reach someone without leaving the page."""
+        e = make_employee(db, role="walker", name="Contact Able")
+        e.phone_number, e.email, e.discord_id = "+15551234567", "c@x.com", "12345"
+        db.commit()
+        pool = get_emergency_pool(db, date.today(), company_id=SEED_COMPANY_ID)
+        row = next(p for p in pool if p["id"] == str(e.id))
+        assert row["phone_number"] == "+15551234567"
+        assert row["email"] == "c@x.com"
+        assert row["discord_id"] == "12345"
+
+    def test_drivers_and_captains_sort_first(self, db):
+        """Their absence strands a truck, so they are what dispatch reaches for."""
+        make_employee(db, role="walker",  name="Zeb Walker")
+        make_employee(db, role="driver",  name="Zoe Driver")
+        make_employee(db, role="captain", name="Zack Captain")
+        pool = get_emergency_pool(db, date.today(), company_id=SEED_COMPANY_ID)
+        roles = [p["role"] for p in pool if p["name"].startswith("Z")]
+        assert roles == ["driver", "captain", "walker"]
+
+    def test_company_id_is_required(self, db):
+        with pytest.raises(ValueError):
+            get_emergency_pool(db, date.today())
+
+    def test_other_company_staff_are_never_returned(self, db):
+        pool = get_emergency_pool(db, date.today(), company_id=uuid.uuid4())
+        assert pool == []

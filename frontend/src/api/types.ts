@@ -204,6 +204,27 @@ export interface UnavailableStaff {
   reason: 'time_off_request' | 'recurring_off_day';
 }
 
+/**
+ * One person dispatch can still phone for a date (ADR-267).
+ *
+ * Distinct from UnavailableStaff, which answers "who did the pool exclude" —
+ * that INCLUDES approved PTO (who must not be called) and OMITS decliners and
+ * unassigned staff (who are exactly who you call).
+ */
+export interface EmergencyPoolMember {
+  id: string;
+  name: string;
+  role: string;
+  /** Why they are free. Most actionable wins where several apply. */
+  reason: 'declined' | 'scheduled_off' | 'unassigned';
+  phone_number: string | null;
+  email: string | null;
+  discord_id: string | null;
+  /** Resolved live from the bot's member cache; null if the bot cannot see
+   *  them or is down. Never stored, so it cannot go stale. */
+  discord_name: string | null;
+}
+
 export type ConfirmationStatus = 'pending' | 'confirmed' | 'declined';
 
 export interface ConfirmationsResponse {

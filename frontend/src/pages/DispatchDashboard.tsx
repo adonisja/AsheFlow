@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mail, Info, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
-import type { UnavailableStaff, DispatchResult, FinalizeResponse } from '../api/types';
+import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -52,6 +52,11 @@ export default function DispatchDashboard() {
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailableStaff, setUnavailableStaff] = useState<UnavailableStaff[]>([]);
+  // Emergency pool (ADR-267): everyone dispatch can still phone, and why they
+  // are free. Supersedes the call-in list's membership — that one listed PTO
+  // (who must not be called) and omitted decliners and unassigned staff (who
+  // are exactly who you call).
+  const [emergencyPool, setEmergencyPool] = useState<EmergencyPoolMember[]>([]);
   const [showCallInList, setShowCallInList] = useState(false);
   const [addingStaffId, setAddingStaffId] = useState<string | null>(null);
   // confirmations: { [employee_id]: "pending" | "confirmed" | "declined" }
@@ -245,6 +250,7 @@ export default function DispatchDashboard() {
     fetchDispatchData();
     fetchAvailablePool();
     fetchUnavailableStaff();
+    fetchEmergencyPool();
     fetchConfirmations();
     fetchTransfers(selectedDate);
     startDispatchPhasePolling(selectedDate);
@@ -390,7 +396,19 @@ export default function DispatchDashboard() {
     }
   };
 
-  const handleAddUnavailableStaff = async (member: UnavailableStaff) => {
+  const fetchEmergencyPool = async () => {
+    try {
+      const res = await axiosClient.get(`/dispatch/emergency-pool/${selectedDate}`);
+      setEmergencyPool(res.data.pool || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Structural, not UnavailableStaff: the emergency pool calls this too, and
+  // the body only ever reads these three fields. Widening beats an `as any` at
+  // the call site, which would hide a real mismatch if the body grows.
+  const handleAddUnavailableStaff = async (member: { id: string; name: string; role: string }) => {
     if (!dispatchData) return;
     // For drivers: find first truck with no driver. For others: find first truck at all.
     let targetTruckId: string | undefined;
@@ -701,6 +719,38 @@ export default function DispatchDashboard() {
       .sort(sortCrewMembers);
   };
 
+  /* Emergency-pool trigger (ADR-267). Three independent conditions:
+
+       1+ driver/captain decline — a walker short is a slower route; a DRIVER or
+         CAPTAIN short is a truck that does not leave. No threshold applies.
+       3+ declines of any role   — enough attrition to need a phone.
+       understaffed warning      — thin before anyone declined.
+
+     Against the SLOT held today (assigned_crews), not Employee.role: a
+     captain-titled employee may be slotted as a walker (ADR-256 D2), and their
+     decline then costs a walker, not a truck. */
+  const declinedIds = Object.entries(confirmations)
+    .filter(([, s]) => s === 'declined')
+    .map(([id]) => id);
+
+  const criticalDecline = declinedIds.some((id) => {
+    const crews = dispatchData?.assigned_crews ?? {};
+    for (const crew of Object.values(crews)) {
+      const slot = (crew as any[]).find((m) => m.employee_id === id);
+      if (slot) return slot.role === 'driver' || slot.role === 'captain';
+    }
+    return false;
+  });
+
+  const understaffed = Boolean(dispatchData?.warnings?.some(
+    (w) => w.type === 'understaffed_drivers'
+        || w.type === 'understaffed_trainers'
+        || w.type === 'understaffed_walkers',
+  ));
+
+  const showEmergencyPool =
+    (criticalDecline || declinedIds.length >= 3 || understaffed) && emergencyPool.length > 0;
+
   const unassigned = getUnassignedEmployees();
   const maxCrewSize = dispatchData?.assigned_crews
     ? Object.values(dispatchData.assigned_crews).reduce((max: number, crew: any) => Math.max(max, crew.length), 0) || 3
@@ -769,7 +819,7 @@ export default function DispatchDashboard() {
             <p className="text-subtle mt-1">Manage and assign daily routes</p>
           </div>
           <button
-            onClick={() => { fetchDispatchData(); fetchAvailablePool(); fetchUnavailableStaff(); fetchConfirmations(); }}
+            onClick={() => { fetchDispatchData(); fetchAvailablePool(); fetchUnavailableStaff(); fetchEmergencyPool(); fetchConfirmations(); }}
             disabled={isLoading}
             className="btn-ghost text-muted-foreground hover:text-foreground disabled:opacity-40"
             title="Refresh dispatch data"
@@ -968,57 +1018,100 @@ export default function DispatchDashboard() {
             ))}
           </ul>
 
-          {/* Staff shortage call-in list — fires on any understaffed warning when staff are unavailable */}
-          {dispatchData.warnings.some(w => w.type === 'understaffed_drivers' || w.type === 'understaffed_trainers' || w.type === 'understaffed_walkers') && unavailableStaff.length > 0 && (
+          {/* Emergency pool (ADR-267) — replaces the call-in list. See
+              showEmergencyPool for the trigger; a driver/captain decline fires
+              it on its own. */}
+          {showEmergencyPool && (
             <div className="border-t border-warning/30 pt-3 space-y-2">
               <button
                 onClick={() => setShowCallInList(p => !p)}
                 className="flex items-center gap-2 text-sm font-medium text-warning hover:text-warning/80 transition-colors"
               >
                 <Phone className="w-4 h-4" />
-                {showCallInList ? 'Hide' : 'Show'} call-in list ({unavailableStaff.length} staff member{unavailableStaff.length !== 1 ? 's' : ''} unavailable)
+                {showCallInList ? 'Hide' : 'Show'} emergency pool ({emergencyPool.length} contactable)
+                {criticalDecline && (
+                  /* Named explicitly: this is the case where a truck does not
+                     leave, and it fires with no threshold at all. */
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-danger/15 text-danger uppercase tracking-wide">
+                    Driver/captain declined
+                  </span>
+                )}
                 {showCallInList ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </button>
 
               {showCallInList && (
                 <div className="space-y-2 pt-1">
                   <p className="text-xs text-subtle">
-                    These staff members are off today. Call to confirm availability before adding to dispatch.
+                    Anyone still contactable for {selectedDate}. Approved time-off is
+                    deliberately excluded — they asked for the day.
                   </p>
-                  {unavailableStaff.map((member: UnavailableStaff) => (
-                    <div
-                      key={member.id}
-                      className="flex items-center justify-between rounded-lg bg-card border border-border px-3 py-2"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium text-foreground">{member.name}</p>
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-subtle capitalize">{member.role}</span>
-                        </div>
-                        <p className="text-xs text-subtle mt-0.5">
-                          {member.reason === 'time_off_request' ? 'Approved time-off request' : 'Recurring day off'}
-                          {member.phone_number && (
-                            <span className="ml-2 font-medium text-foreground">{member.phone_number}</span>
-                          )}
-                          {member.discord_id && (
-                            <span className="ml-2 text-primary">@{member.discord_id}</span>
-                          )}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => handleAddUnavailableStaff(member)}
-                        disabled={addingStaffId === member.id}
-                        className="flex items-center gap-1 text-xs font-medium bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  {emergencyPool.map((member: EmergencyPoolMember) => {
+                    /* Why they are free, said plainly. A decline is the freshest
+                       signal and the one dispatch must react to, so it reads as
+                       a warning; the other two are neutral facts. */
+                    const REASON: Record<string, { label: string; cls: string }> = {
+                      declined:      { label: 'Declined',      cls: 'text-warning bg-warning/15' },
+                      scheduled_off: { label: 'Scheduled off', cls: 'text-subtle bg-muted' },
+                      unassigned:    { label: 'Unassigned',    cls: 'text-info bg-info/15' },
+                    };
+                    const r = REASON[member.reason] ?? REASON.unassigned;
+                    return (
+                      <div
+                        key={member.id}
+                        className="flex items-center justify-between gap-3 rounded-lg bg-card border border-border px-3 py-2"
                       >
-                        {addingStaffId === member.id ? (
-                          <div className="w-3 h-3 border border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <Plus className="w-3 h-3" />
-                        )}
-                        Add to dispatch
-                      </button>
-                    </div>
-                  ))}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium text-foreground">{member.name}</p>
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-subtle capitalize">{member.role}</span>
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide ${r.cls}`}>
+                              {r.label}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-xs flex-wrap">
+                            {member.phone_number && (
+                              <a href={`tel:${member.phone_number}`} className="text-foreground hover:text-primary transition-colors">
+                                {member.phone_number}
+                              </a>
+                            )}
+                            {member.email && (
+                              <a href={`mailto:${member.email}`} className="text-foreground hover:text-primary transition-colors truncate max-w-[16rem]">
+                                {member.email}
+                              </a>
+                            )}
+                            {member.discord_id && (
+                              /* discord:// opens the DM in the desktop app. The
+                                 name is resolved live from the bot's cache, so
+                                 it cannot go stale; the raw id is the fallback
+                                 when the bot cannot see them (ADR-267). */
+                              <a
+                                href={`discord://-/users/${member.discord_id}`}
+                                className="text-primary hover:underline"
+                                title="Open Discord DM"
+                              >
+                                @{member.discord_name || member.discord_id}
+                              </a>
+                            )}
+                            {!member.phone_number && !member.email && !member.discord_id && (
+                              <span className="text-subtle italic">No contact details on file</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleAddUnavailableStaff(member)}
+                          disabled={addingStaffId === member.id}
+                          className="shrink-0 flex items-center gap-1 text-xs font-medium bg-primary text-primary-foreground px-3 py-1.5 rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {addingStaffId === member.id ? (
+                            <div className="w-3 h-3 border border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <Plus className="w-3 h-3" />
+                          )}
+                          Add to dispatch
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
