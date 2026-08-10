@@ -457,3 +457,52 @@ class TestEmergencyPoolShape:
     def test_other_company_staff_are_never_returned(self, db):
         pool = get_emergency_pool(db, date.today(), company_id=uuid.uuid4())
         assert pool == []
+
+
+class TestDayOfWeekCaseConsistency:
+    """The three readers of EmployeeOffDay.day_of_week must never disagree.
+
+    Three places ask "is this person off today" — /schedule/available,
+    get_emergency_pool and get_available_pool — and they historically mixed
+    `ilike` with `==`. That looked like a latent bug: a row stored as "friday"
+    would satisfy one and not the others, putting the same person in the
+    dispatch pool AND the emergency pool.
+
+    It turned out the schema already prevents it. A CHECK constraint
+    (`ck_employee_off_days_day_of_week`, present since the initial migration)
+    admits only exact Title-case day names, so the two comparisons cannot
+    diverge on stored data.
+
+    These tests pin BOTH halves of that: the constraint that makes it true, and
+    the agreement it guarantees. If someone relaxes the constraint to accept
+    free-form casing, the first test fails and points at the second.
+    """
+
+    def test_the_schema_rejects_non_title_case_days(self):
+        """The constraint is what makes ilike-vs-== a non-issue. Without it the
+        comparison mismatch becomes real, so its existence is load-bearing."""
+        from app.models.employee_off_day import EmployeeOffDay
+        checks = [
+            str(c.sqltext) for c in EmployeeOffDay.__table__.constraints
+            if hasattr(c, "sqltext")
+        ]
+        joined = " ".join(checks)
+        assert "day_of_week IN" in joined
+        for day in ("Monday", "Friday", "Sunday"):
+            assert f"'{day}'" in joined
+        assert "'friday'" not in joined, "lowercase accepted — comparisons can now diverge"
+
+    def test_a_stored_off_day_agrees_across_both_pools(self, db):
+        """The invariant that matters: nobody may be simultaneously 'available
+        for dispatch' and 'off, call them in an emergency'."""
+        d = _date_for_weekday("Friday")
+        e = make_employee(db, role="walker", name="Both Pools")
+        make_off_day(db, e, "Friday")
+
+        available = get_available_pool(db, d, company_id=SEED_COMPANY_ID)
+        emergency = get_emergency_pool(db, d, company_id=SEED_COMPANY_ID)
+
+        in_available = e.id in {x.id for x in available["walkers"]}
+        in_emergency = str(e.id) in {m["id"] for m in emergency}
+        assert not in_available, "off-day staff must not be in the dispatch pool"
+        assert in_emergency, "off-day staff must be callable in an emergency"

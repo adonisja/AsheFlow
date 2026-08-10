@@ -19,7 +19,12 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
         db.query(EmployeeOffDay)
         .filter(
             EmployeeOffDay.employee_id == Employee.id,
-            EmployeeOffDay.day_of_week == target_date.strftime("%A"),
+            # ilike, not ==: the /schedule/available endpoint and
+            # get_emergency_pool both compare case-insensitively, and an exact
+            # match here would disagree with them on mixed-case data — the same
+            # person excluded from one pool and present in another. Nothing
+            # normalises day_of_week on write, so the readers must agree.
+            EmployeeOffDay.day_of_week.ilike(target_date.strftime("%A")),
             EmployeeOffDay.status == "approved",
         )
         .exists()

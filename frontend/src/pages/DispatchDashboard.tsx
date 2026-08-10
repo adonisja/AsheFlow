@@ -1240,18 +1240,14 @@ export default function DispatchDashboard() {
                       <GripVertical className="w-4 h-4 text-muted-foreground shrink-0" />
                       <div className="overflow-hidden min-w-0 flex-1">
                         <p className="text-sm font-medium text-foreground truncate leading-tight">{emp.name}</p>
-                        <div className="flex items-center gap-1 min-w-0">
-                          <p className="text-[10px] text-subtle uppercase tracking-wider truncate">{emp.role}</p>
-                          {/* Only the exceptions are drawn here (ADR-266). This
-                              pool is availability-filtered already, so an
-                              "Available" chip on every card would be noise
-                              that hides the one person who is not. */}
-                          {availabilityOf(emp.id, unavailableStaff) !== 'available' && (
-                            <span className={`${AVAILABILITY[availabilityOf(emp.id, unavailableStaff)].cls} text-[9px] shrink-0`}>
-                              {AVAILABILITY[availabilityOf(emp.id, unavailableStaff)].label}
-                            </span>
-                          )}
-                        </div>
+                        {/* No availability badge here. This pool comes from
+                            /schedule/available, which excludes approved PTO and
+                            recurring off-days by definition, so the non-available
+                            branch could never render — dead code that implied a
+                            state this list cannot contain. The badge is still
+                            live on the truck-crew cards, where someone assigned
+                            AND off is a real and useful signal (ADR-266 D5). */}
+                        <p className="text-[10px] text-subtle uppercase tracking-wider truncate">{emp.role}</p>
                       </div>
                       <ContactPopover
                         employee={employees[emp.id] || emp}
