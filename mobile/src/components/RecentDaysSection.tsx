@@ -158,12 +158,23 @@ function DayRow({ day }: { day: AssignmentDay }) {
                 </Text>
               )}
               {day.rts_details.map(r => (
-                <Text key={r.tba_number} style={[s.detail, { color: c.mutedForeground }]}>
-                  <Text style={{ color: c.foreground }}>
-                    {RTS_LABEL[r.rts_type] ?? r.rts_type}
+                <View key={r.tba_number}>
+                  <Text style={[s.detail, { color: c.mutedForeground }]}>
+                    <Text style={{ color: c.foreground }}>
+                      {RTS_LABEL[r.rts_type] ?? r.rts_type}
+                    </Text>
+                    {r.normalised_address ? ` · ${r.normalised_address}` : ''}
+                    {r.is_reattemptable ? '  · retryable' : ''}
                   </Text>
-                  {r.normalised_address ? ` · ${r.normalised_address}` : ''}
-                </Text>
+                  {/* The walker's own words. rts_type is a dropdown value; this
+                      is what they actually wrote, and it is the part that
+                      explains the day to them a week later. */}
+                  {!!r.rts_explanation && (
+                    <Text style={[s.explanation, { color: c.mutedForeground }]}>
+                      {r.rts_explanation}
+                    </Text>
+                  )}
+                </View>
               ))}
             </View>
           )}
@@ -224,4 +235,5 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   details:   { marginTop: 4, gap: 2 },
   policy:    { fontSize: 10, fontStyle: 'italic' },
   detail:    { fontSize: 11 },
+  explanation: { fontSize: 11, fontStyle: 'italic', marginLeft: spacing.xs, marginBottom: 2 },
 });

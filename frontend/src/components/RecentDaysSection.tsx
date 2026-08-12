@@ -131,10 +131,23 @@ function DayRow({ day }: { day: AssignmentDay }) {
                 </p>
               )}
               {day.rts_details.map(r => (
-                <p key={r.tba_number} className="text-[11px] text-muted-foreground">
-                  <span className="text-foreground">{RTS_LABEL[r.rts_type] ?? r.rts_type}</span>
-                  {r.normalised_address && ` · ${r.normalised_address}`}
-                </p>
+                <div key={r.tba_number} className="text-[11px]">
+                  <p className="text-muted-foreground">
+                    <span className="text-foreground">{RTS_LABEL[r.rts_type] ?? r.rts_type}</span>
+                    {r.normalised_address && ` · ${r.normalised_address}`}
+                    {r.is_reattemptable && (
+                      <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-info/10 text-info uppercase tracking-wide">
+                        retryable
+                      </span>
+                    )}
+                  </p>
+                  {/* The walker's own words. rts_type is a dropdown value; this
+                      is what they actually wrote, and it is the part that
+                      explains the day to them a week later. */}
+                  {r.rts_explanation && (
+                    <p className="text-muted-foreground/80 italic">{r.rts_explanation}</p>
+                  )}
+                </div>
               ))}
             </div>
           )}
