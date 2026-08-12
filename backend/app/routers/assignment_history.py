@@ -1,6 +1,7 @@
-"""Past assignment history (ADR-268).
+"""Past assignment history and day replay (ADR-268).
 
   GET /assignment-history/me            any employee — own days only
+  GET /assignment-history/day/{date}    dispatch+   — a whole past day
   GET /assignment-history/{employee_id} dispatch+   — anyone's days
 
 Public router: the whole feature is a read-only aggregation over completed
@@ -22,7 +23,9 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.employee import Employee
 from app.schemas.assignment_history import AssignmentHistoryResponse
+from app.schemas.dispatch_replay import DayReplayOut
 from app.services.assignment_history import get_assignment_history
+from app.services.dispatch_replay import get_day_replay
 
 router = APIRouter(prefix="/assignment-history", tags=["assignment-history"])
 
@@ -110,3 +113,27 @@ def get_employee_assignment_history(
         end_date=end_date,
         days=days,
     )
+
+
+@router.get("/day/{day}", response_model=DayReplayOut)
+def get_day_replay_endpoint(
+    day: date,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_dispatch),
+):
+    """What a past day actually ran — dispatch, management, admin.
+
+    `GET /dispatch/{date}` already returns the board for any date, but only the
+    PLAN: crews, zones, package_count. This adds the outcome half — delivered
+    vs total, RTS by reason, per truck AND per crew member.
+
+    Declared with a literal `/day/` prefix so it cannot be confused with
+    `/{employee_id}`, which takes a UUID. A date would fail that parse rather
+    than match, but relying on a parse failure to route a request is not a
+    design.
+
+    Future dates are allowed rather than rejected: "the day has not run yet"
+    is a legitimate answer, and it renders as zeros without a special case.
+    """
+    return get_day_replay(db, caller.company_id, day)

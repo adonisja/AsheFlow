@@ -2019,3 +2019,51 @@ export interface AssignmentHistoryResponse {
   end_date: string;
   days: AssignmentDay[];
 }
+
+// ── Dispatch day replay (ADR-268) ────────────────────────────────────────────
+
+export interface ReplayMemberOutcome {
+  employee_id: string;
+  name: string;
+  slot_role: string;
+  packages_total: number;
+  packages_delivered: number;
+  rts_count: number;
+  missing_count: number;
+  /**
+   * True for driver/captain. Their line is the TRUCK's load, not their own
+   * stops. The UI must say so — otherwise the row reads as one person who
+   * delivered thirty times more than everyone else.
+   */
+  is_truck_lead: boolean;
+}
+
+export interface ReplayTruckOutcome {
+  truck_id: string;
+  truck_name: string | null;
+  route_numbers: number[];
+  stops_total: number;
+  packages_total: number;
+  packages_delivered: number;
+  rts_count: number;
+  missing_count: number;
+  effort_class: string | null;
+  crew: ReplayMemberOutcome[];
+  /** {rts_type: count} for the whole truck. */
+  rts_reasons: Record<string, number>;
+}
+
+export interface DayReplay {
+  route_date: string;
+  trucks: ReplayTruckOutcome[];
+  /**
+   * Summed from the TRUCK rows, never the crew lines: a lead's line already
+   * contains the whole load, so adding crew together double-counts every
+   * package. Measured on staging: crew lines summed to 5,730 against a real
+   * day total of 2,865.
+   */
+  packages_total: number;
+  packages_delivered: number;
+  rts_count: number;
+  missing_count: number;
+}
