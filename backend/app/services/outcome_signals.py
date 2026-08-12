@@ -175,3 +175,113 @@ def get_outcome_signals(
             sig.rts_rate_vs_class = round(sig.rts_count / expected, 2)
 
     return per_person
+
+# ── Coverage depth (ADR-268) ─────────────────────────────────────────────────
+
+@dataclass
+class CoverageDepth:
+    """How many people are CALLABLE beyond those already rostered, per role.
+
+    Answers "are we one flu away from a stranded truck". A today number, which
+    is why it belongs as a field on the management dashboard rather than a page
+    of its own.
+
+    Driver and captain are called out separately because either being short
+    strands a whole vehicle (TRUCK_SCOPED_ROLES, ADR-256), where a walker short
+    is a slower route.
+    """
+    assigned_drivers: int = 0
+    spare_drivers: int = 0
+    assigned_captains: int = 0
+    spare_captains: int = 0
+    assigned_walkers: int = 0
+    spare_walkers: int = 0
+    assigned_trainers: int = 0
+    spare_trainers: int = 0
+    at_capacity_risk: bool = False
+
+
+def get_coverage_depth(db: Session, company_id: UUID, day: date) -> CoverageDepth:
+    """Assigned vs spare per role for `day`.
+
+    Spare = active field staff of that role who are NOT on a truck and NOT
+    excluded by approved PTO or a recurring day off. Reuses the same exclusion
+    rules as the dispatch pool so the two cannot disagree about who is
+    available (ADR-267).
+    """
+    from app.models.assignment_member import AssignmentMember
+    from app.models.employee import Employee
+    from app.models.employee_off_day import EmployeeOffDay
+    from app.models.time_off_request import TimeOffRequest
+    from app.models.truck_assignment import TruckAssignment
+
+    out = CoverageDepth()
+    roles = ("driver", "captain", "walker", "trainer")
+
+    staff = (
+        db.query(Employee)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.is_active == True,           # noqa: E712
+            Employee.role.in_(roles),
+        )
+        .all()
+    )
+    if not staff:
+        return out
+    ids = [e.id for e in staff]
+
+    assigned = {
+        r.employee_id
+        for r in db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == company_id,
+            TruckAssignment.date == day,
+            AssignmentMember.employee_id.in_(ids),
+        )
+        .all()
+    }
+
+    # ilike on the weekday: the availability endpoint and the emergency pool
+    # both compare case-insensitively, and disagreeing here would make the
+    # dashboard contradict the pool it is meant to summarise.
+    unavailable = {
+        r.employee_id
+        for r in db.query(TimeOffRequest).filter(
+            TimeOffRequest.date == day,
+            TimeOffRequest.status == "approved",
+            TimeOffRequest.employee_id.in_(ids),
+        ).all()
+    } | {
+        r.employee_id
+        for r in db.query(EmployeeOffDay).filter(
+            EmployeeOffDay.day_of_week.ilike(day.strftime("%A")),
+            EmployeeOffDay.status == "approved",
+            EmployeeOffDay.employee_id.in_(ids),
+        ).all()
+    }
+
+    for e in staff:
+        on_truck = e.id in assigned
+        spare = not on_truck and e.id not in unavailable
+        if e.role == "driver":
+            out.assigned_drivers += on_truck
+            out.spare_drivers += spare
+        elif e.role == "captain":
+            out.assigned_captains += on_truck
+            out.spare_captains += spare
+        elif e.role == "walker":
+            out.assigned_walkers += on_truck
+            out.spare_walkers += spare
+        elif e.role == "trainer":
+            out.assigned_trainers += on_truck
+            out.spare_trainers += spare
+
+    # Only the truck-critical roles raise the flag. Zero spare walkers is a
+    # thin day; zero spare drivers means the next decline strands a vehicle.
+    out.at_capacity_risk = (
+        (out.assigned_drivers > 0 and out.spare_drivers == 0)
+        or (out.assigned_captains > 0 and out.spare_captains == 0)
+    )
+    return out

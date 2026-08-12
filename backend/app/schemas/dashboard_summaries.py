@@ -170,6 +170,27 @@ class ProblemArea(BaseModel):
     debt_count: int
 
 
+class CoverageDepth(BaseModel):
+    """Spare capacity per role for today.
+
+    `spare_*` counts people who could still be called — the emergency pool
+    (ADR-267) minus anyone already on a truck. Zero spare drivers is the
+    number that matters: it means the next decline strands a truck.
+    """
+    assigned_drivers: int = 0
+    spare_drivers: int = 0
+    assigned_captains: int = 0
+    spare_captains: int = 0
+    assigned_walkers: int = 0
+    spare_walkers: int = 0
+    assigned_trainers: int = 0
+    spare_trainers: int = 0
+    # True when any truck-critical role has no spare at all.
+    at_capacity_risk: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ManagementCrewSummary(BaseModel):
     """No-shows come from ShiftRollCall.status=='ncns' (ADR-200/201) — there is
     no NoShow model. Escalation comes from TrainingTask, not TrainingRecord.
@@ -199,6 +220,14 @@ class ManagementCrewSummary(BaseModel):
     trainee_phases: List[TraineePhaseRow]
     stuck_trainees: List[StuckTrainee]
     training_problem_areas: List[ProblemArea]
+
+    # Coverage depth (ADR-268): how many people are CALLABLE beyond those
+    # already rostered, per role. Answers "are we one flu away from a stranded
+    # truck" — a today number, which is why it is a field here rather than a
+    # page of its own. Driver and captain are called out separately because
+    # either being short strands a whole vehicle, where a walker short is a
+    # slower route.
+    coverage_depth: Optional[CoverageDepth] = None
 
     model_config = ConfigDict(from_attributes=True)
 

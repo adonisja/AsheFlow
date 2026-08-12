@@ -229,3 +229,75 @@ class TestShape:
         r = _route(db, a, when)
         _stop(db, r, total=50, rts=1, effort="standard", walker_id=emp.id)
         assert get_outcome_signals(db, uuid.uuid4()) == {}
+
+
+class TestCoverageDepth:
+    """Spare capacity per role — "are we one flu away from a stranded truck".
+
+    Only driver and captain raise the risk flag. Zero spare walkers is a thin
+    day; zero spare drivers means the next decline strands a vehicle.
+    """
+
+    def _staff(self, db, when, *, assigned_drivers=1, spare_drivers=1):
+        from app.services.outcome_signals import get_coverage_depth  # noqa
+        truck = make_truck(db, name=f"T-CD{_seq[0]}")
+        _seq[0] += 1
+        a = make_assignment(db, truck, target_date=when)
+        for i in range(assigned_drivers):
+            d = make_employee(db, role="driver", name=f"Assigned Driver {i}")
+            make_member(db, a, d, "driver")
+        for i in range(spare_drivers):
+            make_employee(db, role="driver", name=f"Spare Driver {i}")
+        return a
+
+    def test_spare_counts_who_is_not_on_a_truck(self, db):
+        from app.services.outcome_signals import get_coverage_depth
+        when = date.today()
+        self._staff(db, when, assigned_drivers=2, spare_drivers=3)
+        cd = get_coverage_depth(db, SEED_COMPANY_ID, when)
+        assert cd.assigned_drivers == 2
+        assert cd.spare_drivers == 3
+        assert cd.at_capacity_risk is False
+
+    def test_no_spare_driver_is_a_capacity_risk(self, db):
+        """THE number this exists for."""
+        from app.services.outcome_signals import get_coverage_depth
+        when = date.today()
+        self._staff(db, when, assigned_drivers=2, spare_drivers=0)
+        cd = get_coverage_depth(db, SEED_COMPANY_ID, when)
+        assert cd.spare_drivers == 0
+        assert cd.at_capacity_risk is True
+
+    def test_no_spare_walkers_is_NOT_a_capacity_risk(self, db):
+        """A walker short is a slower route, not a stranded truck. Flagging it
+        the same way would make the flag meaningless."""
+        from app.services.outcome_signals import get_coverage_depth
+        when = date.today()
+        a = self._staff(db, when, assigned_drivers=1, spare_drivers=1)
+        w = make_employee(db, role="walker", name="Only Walker")
+        make_member(db, a, w, "walker")
+        cd = get_coverage_depth(db, SEED_COMPANY_ID, when)
+        assert cd.assigned_walkers == 1
+        assert cd.spare_walkers == 0
+        assert cd.at_capacity_risk is False
+
+    def test_approved_time_off_is_not_spare_capacity(self, db):
+        """They asked for the day and it was granted — counting them as
+        callable would overstate the depth (ADR-267)."""
+        from app.models.time_off_request import TimeOffRequest
+        from app.services.outcome_signals import get_coverage_depth
+        when = date.today()
+        self._staff(db, when, assigned_drivers=1, spare_drivers=0)
+        off = make_employee(db, role="driver", name="On PTO")
+        db.add(TimeOffRequest(id=uuid.uuid4(), company_id=SEED_COMPANY_ID,
+                              employee_id=off.id, date=when, status="approved"))
+        db.commit()
+        cd = get_coverage_depth(db, SEED_COMPANY_ID, when)
+        assert cd.spare_drivers == 0, "someone on approved PTO counted as spare"
+        assert cd.at_capacity_risk is True
+
+    def test_an_empty_roster_is_not_a_risk(self, db):
+        """Nothing dispatched yet is not the same as nothing available."""
+        from app.services.outcome_signals import get_coverage_depth
+        cd = get_coverage_depth(db, SEED_COMPANY_ID, date.today())
+        assert cd.at_capacity_risk is False
