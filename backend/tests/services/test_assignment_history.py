@@ -466,3 +466,57 @@ class TestCountsAreScopedToThePerson:
         days = get_assignment_history(db, SEED_COMPANY_ID, mine.id, when, when)
         types = [d.rts_type for d in days[0].rts_details]
         assert types == ["no_access"], f"got {types} — showing another walker's returns"
+
+
+class TestCountAndListAgree:
+    """rts_count and rts_details must describe the same packages.
+
+    They come from different tables — the count from DeliveryStop.rts_count,
+    the list from RTSPackage rows — and are filtered independently. A repair
+    that attributed RTS rows by hashing the TBA left them disagreeing per
+    person: the count said 2, the list showed 4. Both were "scoped", and both
+    were wrong together.
+    """
+
+    def test_a_walkers_count_matches_their_listed_returns(self, db):
+        when = date.today() - timedelta(days=3)
+        mine = make_employee(db, role="walker", name="Mine Only")
+        theirs = make_employee(db, role="walker", name="Not Mine")
+        truck = make_truck(db, name="T-AGREE")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, mine, "walker")
+        make_member(db, a, theirs, "walker")
+        r = _route(db, a, when)
+
+        # Two returns for me, three for them — on the same route.
+        _stop(db, r, total=10, rts=2, seq=1, walker_id=mine.id)
+        _stop(db, r, total=10, rts=3, seq=2, walker_id=theirs.id)
+        for _ in range(2):
+            _rts(db, r, walker_id=mine.id)
+        for _ in range(3):
+            _rts(db, r, walker_id=theirs.id)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, mine.id, when, when)[0]
+        assert day.rts_count == 2
+        assert len(day.rts_details) == 2, (
+            f"count says {day.rts_count}, list shows {len(day.rts_details)} — "
+            "the two are scoped differently"
+        )
+
+    def test_a_driver_sees_every_return_on_the_truck(self, db):
+        when = date.today() - timedelta(days=3)
+        w = make_employee(db, role="walker", name="A Walker")
+        drv = make_employee(db, role="driver", name="A Driver")
+        truck = make_truck(db, name="T-AGREE2")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, w, "walker")
+        make_member(db, a, drv, "driver")
+        r = _route(db, a, when)
+        _stop(db, r, total=10, rts=2, seq=1, walker_id=w.id)
+        for _ in range(2):
+            _rts(db, r, walker_id=w.id)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, drv.id, when, when)[0]
+        assert day.rts_count == 2
+        assert len(day.rts_details) == 2
+        assert day.counts_scope == "truck"

@@ -195,41 +195,53 @@ def main(dry_run: bool = False) -> None:
                 rts_created += 1
 
     # RTS rows created before stops were attributed copied a NULL walker_id,
-    # which made a walker's rts_count (from the stop) disagree with their
-    # rts_details (from these rows) — the count said 2, the list said 0.
-    # Backfill from the owning stop rather than re-creating anything.
+    # which made a walker's rts_count (from DeliveryStop) disagree with their
+    # rts_details (from these rows) — the count said 2, the list said 4.
+    #
+    # The link is EXACT, not inferred: the TBA is built as
+    # f"SEED268{stop.id[:8]}{i}", so the originating stop is encoded in it.
+    # An earlier version distributed orphans across the route's walkers by
+    # hashing the TBA, which repaired the NULLs but left the count and the list
+    # disagreeing per person — a repair that produced a different wrong answer.
+    #
+    # Verified collision-free before relying on it: 15,579 stops, 15,579
+    # distinct 8-char prefixes.
+    # Every seeded row, not just the NULLs: an earlier hash-based repair wrote
+    # a WRONG owner onto 1,595 of 1,647 rows, and leaving those in place would
+    # keep the count/list mismatch it caused. Reassigning from the TBA is
+    # idempotent — a row already pointing at the right stop is rewritten to the
+    # same value.
     orphan_rts = (
         db.query(RTSPackage)
         .filter(RTSPackage.company_id == company.id,
-                RTSPackage.walker_id.is_(None))
+                RTSPackage.tba_number.like("SEED268%"))
         .all()
     )
     rts_repaired = 0
+    rts_unmatched = 0
     if orphan_rts:
-        # One lookup for every stop that has an owner, keyed by route, so the
-        # backfill is a dict hit per row instead of a query per row.
-        by_route: dict = {}
-        for st in (
-            db.query(DeliveryStop)
-            .filter(DeliveryStop.company_id == company.id,
-                    DeliveryStop.walker_id.isnot(None))
-            .all()
-        ):
-            by_route.setdefault(st.route_id, []).append(st)
-
+        stop_by_prefix = {
+            str(st.id)[:8].upper(): st
+            for st in db.query(DeliveryStop).filter(
+                DeliveryStop.company_id == company.id).all()
+        }
         for r in orphan_rts:
-            owners = by_route.get(r.route_id)
-            if not owners:
+            # "SEED268" is 7 chars; the next 8 are the stop id prefix.
+            prefix = r.tba_number[7:15]
+            st = stop_by_prefix.get(prefix)
+            if st is None or st.walker_id is None:
+                # Left NULL on purpose. Guessing an owner is what produced the
+                # count/list mismatch in the first place.
+                rts_unmatched += 1
                 continue
-            # Deterministic: the same TBA always lands on the same walker, so a
-            # re-run does not reshuffle who returned what.
-            st = owners[hash(r.tba_number) % len(owners)]
             r.walker_id = st.walker_id
             r.walker_name = st.walker_name
             rts_repaired += 1
 
     print(f"routes  touched: {touched_routes}")
     print(f"RTS     re-attributed: {rts_repaired}")
+    if rts_unmatched:
+        print(f"RTS     unmatched (left NULL): {rts_unmatched}")
     print(f"stops   completed: {touched_stops}")
     print(f"RTS     rows created: {rts_created}")
 
