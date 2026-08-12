@@ -67,6 +67,13 @@ class AssignmentDayOut(BaseModel):
     rts_details: List[RTSDetailOut] = Field(default_factory=list)
     address_detail: Literal["street", "block"] = "block"
 
+    # Whose numbers the counts above are.
+    #   "truck"  driver/captain — they answer for the whole load
+    #   "own"    walker/trainer/trainee — only the stops they executed
+    # The UI MUST label this. A walker's 142 and a driver's 2,865 are different
+    # measurements, and showing them identically was the original bug.
+    counts_scope: Literal["truck", "own"] = "own"
+
     model_config = ConfigDict(from_attributes=True)
 
 

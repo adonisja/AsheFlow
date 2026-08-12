@@ -109,26 +109,29 @@ def _route(db, assignment, when, *, number=1, effort="standard"):
     return r
 
 
-def _stop(db, route, *, total, rts, effort="standard", seq=1, address=None):
+def _stop(db, route, *, total, rts, effort="standard", seq=1, address=None,
+          walker_id=None):
+    """walker_id matters: counts are scoped to the executor for non-truck roles
+    (ADR-268), so a stop with no owner belongs to nobody."""
     s = DeliveryStop(
         id=uuid.uuid4(), company_id=SEED_COMPANY_ID, route_id=route.id,
         truck_assignment_id=route.truck_assignment_id,
         block_key="W_37_St_500", tba_numbers=[], status="completed",
         stop_sequence=seq, packages_total=total, packages_delivered=total - rts,
         rts_count=rts, missing_count=0, effort_class=effort,
-        normalised_address=address,
+        normalised_address=address, walker_id=walker_id,
     )
     db.add(s); db.commit()
     return s
 
 
-def _rts(db, route, *, rts_type="no_access", address=None):
+def _rts(db, route, *, rts_type="no_access", address=None, walker_id=None):
     r = RTSPackage(
         id=uuid.uuid4(), company_id=SEED_COMPANY_ID, route_id=route.id,
         truck_assignment_id=route.truck_assignment_id,
         tba_number=f"TBA{uuid.uuid4().hex[:10].upper()}",
         rts_type=rts_type, rts_explanation="seeded for test",
-        is_reattemptable=True, normalised_address=address,
+        is_reattemptable=True, normalised_address=address, walker_id=walker_id,
     )
     db.add(r); db.commit()
     return r
@@ -170,7 +173,7 @@ class TestDifficultyNormalisation:
 
         # This person's day: 5% raw on a HEAVY route — half the heavy baseline.
         r = _route(db, a, when, number=1, effort="heavy")
-        _stop(db, r, total=200, rts=10, effort="heavy")
+        _stop(db, r, total=200, rts=10, effort="heavy", walker_id=emp.id)
 
         days = get_assignment_history(db, SEED_COMPANY_ID, emp.id, when, when)
         assert len(days) == 1, "the caller worked one truck that day"
@@ -213,7 +216,7 @@ class TestDifficultyNormalisation:
         a = make_assignment(db, truck, target_date=when)
         make_member(db, a, emp, "walker")
         r = _route(db, a, when, effort="heavy")
-        _stop(db, r, total=12, rts=3, effort="heavy")
+        _stop(db, r, total=12, rts=3, effort="heavy", walker_id=emp.id)
 
         days = get_assignment_history(db, SEED_COMPANY_ID, emp.id, when, when)
         day = days[0]
@@ -253,8 +256,9 @@ class TestDayContents:
         a = make_assignment(db, truck, target_date=when)
         make_member(db, a, emp, "walker")
         r = _route(db, a, when)
-        _stop(db, r, total=10, rts=1)
-        _rts(db, r, rts_type="business_closed", address="505 WEST 37 STREET")
+        _stop(db, r, total=10, rts=1, walker_id=emp.id)
+        _rts(db, r, rts_type="business_closed", address="505 WEST 37 STREET",
+             walker_id=emp.id)
 
         days = get_assignment_history(db, SEED_COMPANY_ID, emp.id, when, when)
         detail = days[0].rts_details[0]
@@ -304,7 +308,7 @@ class TestAddressRetention:
         a = make_assignment(db, truck, target_date=when)
         make_member(db, a, emp, "walker")
         r = _route(db, a, when)
-        _stop(db, r, total=10, rts=0)          # zero RTS, so zero addresses
+        _stop(db, r, total=10, rts=0, walker_id=emp.id)   # zero RTS
         days = get_assignment_history(db, SEED_COMPANY_ID, emp.id, when, when)
         assert days[0].rts_details == []
         assert days[0].address_detail == "street"
@@ -379,3 +383,86 @@ class TestSerialisation:
                     f"{name} cannot be built from a dataclass — the endpoint "
                     "will 500 when the service returns one"
                 )
+
+
+class TestCountsAreScopedToThePerson:
+    """A walker must not see the whole truck's numbers as their own.
+
+    The first version aggregated every stop on the truck for everyone, so a
+    walker's day read "2658/2865 delivered" — the entire crew's work. That is
+    false, and it makes every member of a truck look identical.
+
+    walker_id is the stop's EXECUTOR (ADR-244) — the same field
+    get_my_performance scopes by. A driver or captain still sees the whole load
+    because they answer for it.
+    """
+
+    def _day_with_two_walkers(self, db, when):
+        mine = make_employee(db, role="walker", name="My Stops")
+        theirs = make_employee(db, role="walker", name="Their Stops")
+        truck = make_truck(db, name="T-SCOPE")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, mine, "walker")
+        make_member(db, a, theirs, "walker")
+        r = _route(db, a, when)
+
+        s1 = _stop(db, r, total=10, rts=1, seq=1)
+        s1.walker_id = mine.id
+        s2 = _stop(db, r, total=90, rts=9, seq=2)
+        s2.walker_id = theirs.id
+        db.commit()
+        return mine, theirs, a, r
+
+    def test_a_walker_sees_only_their_own_packages(self, db):
+        when = date.today() - timedelta(days=3)
+        mine, _theirs, _a, _r = self._day_with_two_walkers(db, when)
+        days = get_assignment_history(db, SEED_COMPANY_ID, mine.id, when, when)
+        day = days[0]
+        assert day.packages_total == 10, (
+            f"got {day.packages_total} — the walker is seeing the whole truck"
+        )
+        assert day.rts_count == 1
+        assert day.counts_scope == "own"
+
+    def test_a_driver_sees_the_whole_truck(self, db):
+        """They answer for the load, so the load is the right unit."""
+        when = date.today() - timedelta(days=3)
+        _mine, _theirs, a, _r = self._day_with_two_walkers(db, when)
+        drv = make_employee(db, role="driver", name="The Driver")
+        make_member(db, a, drv, "driver")
+        days = get_assignment_history(db, SEED_COMPANY_ID, drv.id, when, when)
+        day = days[0]
+        assert day.packages_total == 100
+        assert day.counts_scope == "truck"
+
+    def test_scope_follows_the_SLOT_not_the_job_title(self, db):
+        """A driver-titled employee riding as a walker carries their own stops
+        that day — the slot is what determines responsibility (ADR-256 D2)."""
+        when = date.today() - timedelta(days=3)
+        mine, _theirs, a, _r = self._day_with_two_walkers(db, when)
+        # same person, but re-slotted: role on AssignmentMember is 'walker'
+        assert get_assignment_history(
+            db, SEED_COMPANY_ID, mine.id, when, when)[0].counts_scope == "own"
+
+        titled_driver = make_employee(db, role="driver", name="Driver As Walker")
+        make_member(db, a, titled_driver, "walker")     # slotted as a WALKER
+        day = get_assignment_history(
+            db, SEED_COMPANY_ID, titled_driver.id, when, when)[0]
+        assert day.counts_scope == "own", (
+            "scope read the job title instead of the slot held that day"
+        )
+
+    def test_rts_details_are_scoped_too(self, db):
+        """Counting only your own RTS but listing everyone's would contradict
+        the number directly above it."""
+        when = date.today() - timedelta(days=3)
+        mine, theirs, _a, r = self._day_with_two_walkers(db, when)
+        m = _rts(db, r, rts_type="no_access")
+        m.walker_id = mine.id
+        t = _rts(db, r, rts_type="business_closed")
+        t.walker_id = theirs.id
+        db.commit()
+
+        days = get_assignment_history(db, SEED_COMPANY_ID, mine.id, when, when)
+        types = [d.rts_type for d in days[0].rts_details]
+        assert types == ["no_access"], f"got {types} — showing another walker's returns"

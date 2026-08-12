@@ -30,6 +30,11 @@ DELIBERATE SHAPE
     nothing — the normalisation has to have a signal to remove.
   * effort_class is assigned per route, not per stop, matching how route_sort
     produces it.
+  * Stops are ATTRIBUTED to a walker (DeliveryStop.walker_id). Without it every
+    stop belongs to nobody, and the per-person scoping in ADR-268 — a walker
+    sees their own stops, a driver sees the truck's — has nothing to filter on,
+    so every walker's history reads empty. Found only by checking the rendered
+    numbers against a walker account.
   * Only PAST dates. Completing today's or a future route would corrupt the
     live dispatch board.
   * Idempotent: a stop already completed is skipped, so re-running does not
@@ -47,7 +52,10 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import or_                                # noqa: E402
+
 from app.database import SessionLocal                     # noqa: E402
+from app.models.assignment_member import AssignmentMember  # noqa: E402
 from app.models.company import Company                    # noqa: E402
 from app.models.delivery_stop import DeliveryStop         # noqa: E402
 from app.models.rts import RTSPackage, RTS_TYPES, is_reattemptable  # noqa: E402
@@ -99,17 +107,39 @@ def main(dry_run: bool = False) -> None:
     rts_created = 0
 
     for route in routes:
+        # Idempotent on the OUTCOME columns, but a completed stop with no
+        # walker_id still needs repairing: the first version of this script did
+        # not attribute stops at all, which left every walker's per-person
+        # history empty (ADR-268). Re-running must fix those rows without
+        # re-rolling their package counts.
         stops = (
             db.query(DeliveryStop)
             .filter(
                 DeliveryStop.company_id == company.id,
                 DeliveryStop.route_id == route.id,
-                DeliveryStop.status != "completed",     # idempotent
+                or_(
+                    DeliveryStop.status != "completed",
+                    DeliveryStop.walker_id.is_(None),
+                ),
             )
             .all()
         )
         if not stops:
             continue
+
+        # Who can own a stop on this truck. Drivers and captains run the
+        # vehicle; the people who actually walk packages to doors are the ones
+        # a stop belongs to (ADR-244: walker_id is the stop's EXECUTOR).
+        crew = (
+            db.query(AssignmentMember)
+            .filter(
+                AssignmentMember.assignment_id == route.truck_assignment_id,
+                AssignmentMember.company_id == company.id,
+                AssignmentMember.role.in_(["walker", "trainee", "trainer"]),
+            )
+            .all()
+        )
+        owners = [m.employee_id for m in crew] or [None]
 
         effort = random.choice(_EFFORT_CHOICES)
         rts_rate = _RTS_RATE[effort]
@@ -117,17 +147,33 @@ def main(dry_run: bool = False) -> None:
         touched_routes += 1
 
         for stop in stops:
+            # Round-robin rather than random, so every walker on the truck ends
+            # up with a comparable share — random assignment leaves some crew
+            # members with almost nothing and makes the per-person view look
+            # broken for them.
+            owner = owners[touched_stops % len(owners)]
+
             # Package count per stop: most stops are one or two parcels.
             total = random.choice([1, 1, 1, 2, 2, 3])
             rts = sum(1 for _ in range(total) if random.random() < rts_rate)
             delivered = total - rts
+
+            already_done = stop.status == "completed"
+            if stop.walker_id is None:
+                stop.walker_id = owner
+            touched_stops += 1
+
+            if already_done:
+                # Attribution repair only. Re-rolling counts would change
+                # numbers a user may already have seen, and would double-create
+                # the RTS rows below.
+                continue
 
             stop.status = "completed"
             stop.effort_class = effort            # the completion snapshot
             stop.packages_total = total
             stop.packages_delivered = delivered
             stop.rts_count = rts
-            touched_stops += 1
 
             for i in range(rts):
                 rts_type = random.choice(RTS_TYPES)
@@ -148,7 +194,42 @@ def main(dry_run: bool = False) -> None:
                 ))
                 rts_created += 1
 
+    # RTS rows created before stops were attributed copied a NULL walker_id,
+    # which made a walker's rts_count (from the stop) disagree with their
+    # rts_details (from these rows) — the count said 2, the list said 0.
+    # Backfill from the owning stop rather than re-creating anything.
+    orphan_rts = (
+        db.query(RTSPackage)
+        .filter(RTSPackage.company_id == company.id,
+                RTSPackage.walker_id.is_(None))
+        .all()
+    )
+    rts_repaired = 0
+    if orphan_rts:
+        # One lookup for every stop that has an owner, keyed by route, so the
+        # backfill is a dict hit per row instead of a query per row.
+        by_route: dict = {}
+        for st in (
+            db.query(DeliveryStop)
+            .filter(DeliveryStop.company_id == company.id,
+                    DeliveryStop.walker_id.isnot(None))
+            .all()
+        ):
+            by_route.setdefault(st.route_id, []).append(st)
+
+        for r in orphan_rts:
+            owners = by_route.get(r.route_id)
+            if not owners:
+                continue
+            # Deterministic: the same TBA always lands on the same walker, so a
+            # re-run does not reshuffle who returned what.
+            st = owners[hash(r.tba_number) % len(owners)]
+            r.walker_id = st.walker_id
+            r.walker_name = st.walker_name
+            rts_repaired += 1
+
     print(f"routes  touched: {touched_routes}")
+    print(f"RTS     re-attributed: {rts_repaired}")
     print(f"stops   completed: {touched_stops}")
     print(f"RTS     rows created: {rts_created}")
 

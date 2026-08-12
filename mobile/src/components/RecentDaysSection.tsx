@@ -50,6 +50,10 @@ type AssignmentDay = {
   rts_rate_vs_class: number | null;
   rts_details: RTSDetail[];
   address_detail: 'street' | 'block';
+  /** 'truck' = driver/captain (whole load); 'own' = walker/trainer/trainee
+   *  (only their stops). Must be labelled — a walker's 142 and a driver's
+   *  2,865 are different measurements. */
+  counts_scope: 'truck' | 'own';
 };
 
 const RTS_LABEL: Record<string, string> = {
@@ -122,6 +126,11 @@ function DayRow({ day }: { day: AssignmentDay }) {
               <Text style={{ color: c.mutedForeground, fontWeight: fontWeight.regular }}>
                 /{day.packages_total}
               </Text>
+            </Text>
+            {/* WHOSE numbers — see counts_scope. Rendering a walker's own
+                stops identically to a driver's whole load was the bug. */}
+            <Text style={[s.vs, { color: c.mutedForeground }]}>
+              {day.counts_scope === 'truck' ? 'whole truck' : 'your stops'}
             </Text>
             {vs !== null ? (
               <Text style={[s.vs, { color: vsColor }]}>{vs.toFixed(2)}× typical</Text>

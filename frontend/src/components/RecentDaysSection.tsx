@@ -89,6 +89,12 @@ function DayRow({ day }: { day: AssignmentDay }) {
               {day.packages_delivered}
               <span className="text-muted-foreground font-normal">/{day.packages_total}</span>
             </p>
+            {/* WHOSE numbers these are. A walker's 142 and a driver's 2,865 are
+                different measurements, and rendering them identically was the
+                original bug (ADR-268). */}
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              {day.counts_scope === 'truck' ? 'whole truck' : 'your stops'}
+            </p>
             {vs !== null ? (
               /* The verdict. The raw rate alone would mark whoever drew the
                  heavy routes as worse; this is the comparison that is fair. */

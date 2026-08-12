@@ -2003,6 +2003,14 @@ export interface AssignmentDay {
   rts_details: HistoryRTSDetail[];
   /** 'street' while addresses survive, 'block' after ADR-219 nulls them. */
   address_detail: 'street' | 'block';
+  /**
+   * Whose numbers the counts are.
+   *   'truck' — driver/captain; they answer for the whole load
+   *   'own'   — walker/trainer/trainee; only the stops they executed
+   * MUST be labelled in the UI. A walker's 142 and a driver's 2,865 are
+   * different measurements, and rendering them identically was the bug.
+   */
+  counts_scope: 'truck' | 'own';
 }
 
 export interface AssignmentHistoryResponse {

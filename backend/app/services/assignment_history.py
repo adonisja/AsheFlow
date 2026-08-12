@@ -34,6 +34,7 @@ from app.models.rts import RTSPackage
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route
+from app.services.constants import TRUCK_SCOPED_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,12 @@ class AssignmentDay:
     rts_details: list = field(default_factory=list)
     # "street" while addresses survive, "block" once ADR-219 has nulled them.
     address_detail: str = "block"
+    # Whose numbers the counts above represent.
+    #   "truck"  driver/captain — the whole load is theirs to answer for
+    #   "own"    walker/trainer/trainee — only the stops they executed
+    # Reported so the UI can label it. Without this a walker's 142 and a
+    # driver's 2,865 look like the same measurement.
+    counts_scope: str = "own"
 
 
 def _class_baselines(db: Session, company_id: UUID) -> dict:
@@ -185,28 +192,42 @@ def get_assignment_history(
         )
 
         if route_ids:
-            stops = (
-                db.query(DeliveryStop)
-                .filter(
-                    DeliveryStop.company_id == company_id,
-                    DeliveryStop.route_id.in_(route_ids),
-                )
-                .all()
+            # WHOSE numbers are these?
+            #
+            # A driver or captain owns the truck: the whole load is theirs to
+            # answer for, so they see every stop on it. A walker, trainer or
+            # trainee carries their OWN stops — showing them the truck's 2,865
+            # packages as if they delivered them is simply false, and it makes
+            # every crew member on a truck look identical.
+            #
+            # walker_id is the stop's EXECUTOR (ADR-244) — "the walker the stop
+            # belongs to", which is the same field get_my_performance scopes by.
+            # Deliberately NOT recorded_by: a trainer completing a trainee's
+            # stop during supervision does not make it the trainer's stop.
+            stop_q = db.query(DeliveryStop).filter(
+                DeliveryStop.company_id == company_id,
+                DeliveryStop.route_id.in_(route_ids),
             )
+            truck_wide = member.role in TRUCK_SCOPED_ROLES
+            day.counts_scope = "truck" if truck_wide else "own"
+            if not truck_wide:
+                stop_q = stop_q.filter(DeliveryStop.walker_id == employee_id)
+            stops = stop_q.all()
             day.stops_total = len(stops)
             day.packages_total = sum(s.packages_total or 0 for s in stops)
             day.packages_delivered = sum(s.packages_delivered or 0 for s in stops)
             day.rts_count = sum(s.rts_count or 0 for s in stops)
             day.missing_count = sum(s.missing_count or 0 for s in stops)
 
-            rts_rows = (
-                db.query(RTSPackage)
-                .filter(
-                    RTSPackage.company_id == company_id,
-                    RTSPackage.route_id.in_(route_ids),
-                )
-                .all()
+            rts_q = db.query(RTSPackage).filter(
+                RTSPackage.company_id == company_id,
+                RTSPackage.route_id.in_(route_ids),
             )
+            if not truck_wide:
+                # Same rule as the stops above: the packages THIS person carried
+                # back, not everything that returned on the truck.
+                rts_q = rts_q.filter(RTSPackage.walker_id == employee_id)
+            rts_rows = rts_q.all()
             day.rts_details = [
                 RTSDetail(
                     tba_number=r.tba_number,
