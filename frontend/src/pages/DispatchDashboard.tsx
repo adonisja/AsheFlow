@@ -7,6 +7,7 @@ import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mai
 import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
+import PreviousAssignments from '../components/PreviousAssignments';
 import { useNotificationContext } from '../contexts/NotificationContext';
 
 /* Availability for the SELECTED date, derived from data the page already holds
@@ -34,11 +35,52 @@ function availabilityOf(
   return hit.reason === 'time_off_request' ? 'pto' : 'scheduled_off';
 }
 
+type DispatchTab = 'current' | 'previous';
+
+/** Tab shell (ADR-268).
+
+    Two surfaces rather than one board with a date control: every write here is
+    keyed to the date, so a shared picker let a past day be published against.
+    Splitting them means the current board can only ever act on today, and the
+    history view can only ever read. */
 export default function DispatchDashboard() {
+  const [tab, setTab] = useState<DispatchTab>('current');
+
+  return (
+    <div className="space-y-6 animate-slide-up">
+      <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
+        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments']] as [DispatchTab, string][])
+          .map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                tab === k
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+      </div>
+
+      {tab === 'current' ? <CurrentAssignments /> : <PreviousAssignments />}
+    </div>
+  );
+}
+
+function CurrentAssignments() {
   const { groups } = useAuth();
   const { setOnNotification } = useNotificationContext();
   const isAdmin = groups.includes('admin') || groups.includes('Admin');
-  const [selectedDate, setSelectedDate] = useState<string>(getLocalYMD());
+  /* Today, always. The picker that used to set this lived on the same surface
+     as every write (publish, finalize, assign, swap, remove), all of which are
+     keyed to it — so a dispatcher could select a past date and publish crews
+     against a day that had already happened. Viewing history now lives in the
+     Previous Assignments tab, which is read-only, so the hazard is removed by
+     construction rather than by disabling controls (ADR-268). */
+  const selectedDate = getLocalYMD();
   const [totalEmployees, setTotalEmployees] = useState<number | ''>('');
   // ADR-202: dispatch selects the exact trucks to send out; the count is derived.
   const [selectedTruckIds, setSelectedTruckIds] = useState<Set<string>>(new Set());
@@ -862,7 +904,9 @@ export default function DispatchDashboard() {
   );
 
   return (
-    <div className="space-y-6 animate-slide-up">
+    <div /* No animate-slide-up here: the tab shell above already wraps this, and
+       replaying the entrance animation on every tab switch is distracting. */
+      className="space-y-6">
       <div className="flex flex-col gap-4">
         {/* Row 1 — title + refresh */}
         <div className="flex items-center gap-3">
@@ -908,12 +952,10 @@ export default function DispatchDashboard() {
             min="1"
           />
           <div className="flex items-center gap-1.5">
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
-            />
+            {/* Today is stated, not chosen — see selectedDate above. */}
+            <span className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm text-foreground">
+              {selectedDate}
+            </span>
             {companyTimezone && (
               <span className="text-xs text-muted-foreground whitespace-nowrap">({companyTimezone})</span>
             )}
