@@ -437,8 +437,28 @@ export default function WalkerPerformance() {
     return dist;
   }, [graded]);
 
+  /* At-Risk on TWO independent signals (ADR-268), not peer grade alone.
+     Peer grade is a popularity-adjacent measure; on its own it made this list
+     a reputation surface. rts_rate_vs_class is an outcome the person controls,
+     normalised for route difficulty — raw rate runs 2.10% on easy routes
+     against 10.81% on heavy, so ranking on it would flag whoever drew the hard
+     work.
+
+     Either signal qualifies, and each row says WHICH — "D grade" and "returns
+     1.7x the norm for comparable routes" call for different conversations, and
+     a merged score would hide that. */
   const atRisk = useMemo(
-    () => walkers.filter(w => w.grade === 'D' || w.grade === 'F'),
+    () => walkers
+      .filter(w => w.grade === 'D' || w.grade === 'F' || w.outcome_at_risk)
+      .map(w => ({
+        ...w,
+        reasons: [
+          ...(w.grade === 'D' || w.grade === 'F' ? [`${w.grade} peer grade`] : []),
+          ...(w.outcome_at_risk && w.rts_rate_vs_class
+            ? [`${w.rts_rate_vs_class.toFixed(1)}x returns for this difficulty`]
+            : []),
+        ],
+      })),
     [walkers],
   );
 
@@ -525,7 +545,7 @@ export default function WalkerPerformance() {
             <div className="card-elevated">
               <p className="text-xs text-muted-foreground uppercase tracking-wider">At Risk</p>
               <p className={`text-2xl font-bold mt-1 ${atRisk.length > 0 ? 'text-danger' : 'text-subtle'}`}>{atRisk.length}</p>
-              <p className="text-xs text-subtle mt-0.5">D/F peer grade</p>
+              <p className="text-xs text-subtle mt-0.5">grade or return rate</p>
             </div>
           </div>
 
@@ -580,18 +600,24 @@ export default function WalkerPerformance() {
             <div className="card border-danger/30 bg-danger/5">
               <div className="flex items-center gap-2 mb-3">
                 <AlertTriangle className="w-4 h-4 text-danger" />
-                <h2 className="text-sm font-semibold text-danger">At-Risk Walkers ({atRisk.length})</h2>
-                <span className="text-xs text-subtle ml-1">D/F peer grade — consider a review</span>
+                <h2 className="text-sm font-semibold text-danger">At-Risk ({atRisk.length})</h2>
+                <span className="text-xs text-subtle ml-1">peer grade or return rate — consider a review</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {atRisk.map(w => (
                   <button
                     key={w.employee_id}
                     onClick={() => setSelectedId(w.employee_id)}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-background border border-danger/30 hover:bg-danger/10 transition-colors text-sm font-medium text-foreground"
+                    className="flex items-start gap-2 px-3 py-1.5 rounded-lg bg-background border border-danger/30 hover:bg-danger/10 transition-colors text-left"
+                    title={w.reasons.join(' · ')}
                   >
                     <GradeBadge grade={w.grade} />
-                    {w.employee_name}
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-foreground">{w.employee_name}</span>
+                      {/* Why they are here. A flag with no reason is an
+                          accusation; a flag with a reason is a starting point. */}
+                      <span className="block text-[10px] text-subtle">{w.reasons.join(' · ')}</span>
+                    </span>
                   </button>
                 ))}
               </div>

@@ -356,6 +356,25 @@ export interface WalkerSummary {
   avg_stars: number | null;
   grade: 'A' | 'B' | 'C' | 'D' | 'F' | null;
   grade_eligible: boolean;
+
+  // ── Operational outcomes (ADR-268) ────────────────────────────────────────
+  // Reported ALONGSIDE the peer grade, never folded into it: an outcome and an
+  // opinion are different claims, and averaging them makes both unreadable.
+  packages_total: number;
+  rts_count: number;
+  missing_count: number;
+  /** Raw return rate. Confounded by route difficulty — 2.10% on easy routes
+   *  against 10.81% on heavy. Do NOT rank people on this. */
+  rts_rate: number | null;
+  /** rts_rate divided by the company rate for the same effort class,
+   *  volume-weighted across the classes this person actually worked.
+   *  1.0 = exactly typical for work of that difficulty. THE fair comparison. */
+  rts_rate_vs_class: number | null;
+  /** False when they have not worked enough packages (100) for any of the
+   *  above to mean anything. Check this before flagging anyone. */
+  outcome_volume_ok: boolean;
+  /** Materially worse than peers on comparable work (>= 1.5x class baseline). */
+  outcome_at_risk: boolean;
 }
 
 export interface WalkerRatingDetail {
