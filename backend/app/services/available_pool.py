@@ -15,9 +15,16 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
         raise ValueError("company_id is required for get_available_pool")
     target_date = target_date or company_today(db, company_id)
 
+    # Both EXISTS subqueries below are CORRELATED to the outer Employee query
+    # (employee_id == Employee.id), and that outer query is company-scoped, so
+    # a foreign-tenant row cannot correlate to an in-tenant employee. The
+    # explicit company_id is belt-and-braces: it states the boundary locally
+    # instead of making a reader trace the correlation to establish it, and it
+    # keeps every query in this module scoped the same way.
     has_off_day_today = (
         db.query(EmployeeOffDay)
         .filter(
+            EmployeeOffDay.company_id == company_id,
             EmployeeOffDay.employee_id == Employee.id,
             # ilike, not ==: the /schedule/available endpoint and
             # get_emergency_pool both compare case-insensitively, and an exact
@@ -33,6 +40,7 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
     has_pto_today = (
         db.query(TimeOffRequest)
         .filter(
+            TimeOffRequest.company_id == company_id,
             TimeOffRequest.employee_id == Employee.id,
             TimeOffRequest.date == target_date,
             TimeOffRequest.status == "approved",
@@ -97,9 +105,16 @@ def get_unavailable_staff(db: Session, target_date: date = None, roles: list = N
 
     employee_ids = [e.id for e in employees]
 
+    # These carry their own company_id even though employee_ids already comes
+    # from a company-scoped query. The .in_() bound makes them safe only
+    # TRANSITIVELY — it depends on an invariant established several statements
+    # earlier, and a later edit that widens employee_ids turns them into
+    # cross-tenant reads with no visible change here. ADR-115 D1 requires every
+    # inner query to carry its own scope for that reason.
     time_off_ids = {
         row.employee_id
         for row in db.query(TimeOffRequest).filter(
+            TimeOffRequest.company_id == company_id,
             TimeOffRequest.date == target_date,
             TimeOffRequest.status == "approved",
             TimeOffRequest.employee_id.in_(employee_ids),
@@ -109,6 +124,7 @@ def get_unavailable_staff(db: Session, target_date: date = None, roles: list = N
     off_day_ids = {
         row.employee_id
         for row in db.query(EmployeeOffDay).filter(
+            EmployeeOffDay.company_id == company_id,
             EmployeeOffDay.day_of_week == day_name,
             EmployeeOffDay.status == "approved",
             EmployeeOffDay.employee_id.in_(employee_ids),
@@ -190,6 +206,7 @@ def get_emergency_pool(db: Session, target_date: date = None, company_id: UUID =
     pto_ids = {
         row.employee_id
         for row in db.query(TimeOffRequest).filter(
+            TimeOffRequest.company_id == company_id,
             TimeOffRequest.date == target_date,
             TimeOffRequest.status == "approved",
             TimeOffRequest.employee_id.in_(employee_ids),
@@ -204,6 +221,7 @@ def get_emergency_pool(db: Session, target_date: date = None, company_id: UUID =
     off_ids = {
         row.employee_id
         for row in db.query(EmployeeOffDay).filter(
+            EmployeeOffDay.company_id == company_id,
             EmployeeOffDay.day_of_week.ilike(day_name),
             EmployeeOffDay.status == "approved",
             EmployeeOffDay.employee_id.in_(employee_ids),
