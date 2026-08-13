@@ -19,7 +19,7 @@ app.auth, which raised ImportError at module load and prevented uvicorn from
 starting at all (502 on every route, including /health).
 """
 
-from datetime import date as _date
+from datetime import date as _date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -32,12 +32,14 @@ from app.schemas.dashboard_summaries import (
     AdminDashboardSummary,
     ManagementDashboardSummary,
     DispatchDashboardSummary,
+    DeclineAnalysisOut,
 )
 from app.services.dashboard_summaries import (
     get_admin_dashboard_summary,
     get_management_dashboard_summary,
     get_dispatch_dashboard_summary,
 )
+from app.services.decline_analysis import get_decline_analysis
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
 
@@ -74,6 +76,33 @@ def management_summary(
     Suggested client refresh: 5 minutes.
     """
     return get_management_dashboard_summary(db, caller.company_id, period=period)
+
+
+@router.get("/management/declines", response_model=DeclineAnalysisOut)
+def management_declines(
+    days: int = Query(90, ge=14, le=365,
+                      description="Lookback window. The floor is 14 so a weekday "
+                                  "slice can accumulate occurrences toward its gate."),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_management),
+):
+    """Decline rates sliced by weekday, truck and person.
+
+    MANAGEMENT+ADMIN, not dispatch. The by_person slice is individual
+    performance data, and docs/SCORECARD_ACCESS_MODEL.md puts that with
+    management — dispatch sees company-level surfaces only. This mirrors the
+    Scorecards sub-tab filtering rather than inventing a second access rule.
+
+    Slices below their volume gate return `rate: null` and sort last. Render
+    the count for those, never a percentage.
+
+    Suggested client refresh: on demand — this is a pattern over months, not a
+    live number.
+    """
+    end = _date.today()
+    start = end - timedelta(days=days)
+    return get_decline_analysis(db, caller.company_id, start, end)
 
 
 @router.get("/dispatch/summary", response_model=DispatchDashboardSummary)

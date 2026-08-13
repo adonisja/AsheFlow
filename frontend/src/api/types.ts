@@ -1463,6 +1463,48 @@ export interface ProblemArea {
   debt_count: number;
 }
 
+/** One slice of decline data — a weekday, a truck, or a person.
+ *
+ *  `rate` is null until the slice clears its volume gate, and that is
+ *  load-bearing: render `rate` only when `gated` is false, otherwise show
+ *  `declines`. Publishing a one-sample percentage is the exact failure the
+ *  backend gate exists to prevent, and null (rather than 0) is what makes the
+ *  mistake impossible to make silently. */
+export interface DeclineSlice {
+  key: string;
+  declines: number;
+  total: number;
+  /** Distinct dates observed. For a weekday slice this is the gate unit. */
+  occurrences: number;
+  rate?: number | null;
+  gated: boolean;
+}
+
+export interface DeclineAnalysis {
+  start_date: string;
+  end_date: string;
+  total_confirmations: number;
+  total_declines: number;
+  by_weekday: DeclineSlice[];
+  by_truck: DeclineSlice[];
+  by_person: DeclineSlice[];
+}
+
+/** Spare capacity per role for TODAY — not the dashboard's selected period.
+ *  "Who could I still call" has no meaning averaged over a week. */
+export interface CoverageDepth {
+  assigned_drivers: number;
+  spare_drivers: number;
+  assigned_captains: number;
+  spare_captains: number;
+  assigned_walkers: number;
+  spare_walkers: number;
+  assigned_trainers: number;
+  spare_trainers: number;
+  /** True when a truck-critical role (driver/captain) has no spare at all. */
+  at_capacity_risk: boolean;
+}
+
 export interface ManagementCrewSummary {
   active_trainees: number;
   escalated_trainees: number;
@@ -1476,6 +1518,8 @@ export interface ManagementCrewSummary {
   trainee_phases: TraineePhaseRow[];
   stuck_trainees: StuckTrainee[];
   training_problem_areas: ProblemArea[];
+  /** Null when the backend could not compute it — never render a 0 in its place. */
+  coverage_depth?: CoverageDepth | null;
 }
 
 export interface IncidentCategory {

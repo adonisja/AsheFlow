@@ -434,3 +434,48 @@ class DispatchDashboardSummary(BaseModel):
 #
 # Field staff are mobile-first, and the mobile trainer surface (7 screens) is
 # more complete than the web page ever was.
+
+
+# ── Decline analysis (ADR-268) ────────────────────────────────────────────────
+
+class DeclineSlice(BaseModel):
+    """One slice of decline data — a weekday, a truck, or a person.
+
+    `rate` is Optional and is None until the slice clears its volume gate. That
+    is deliberate and load-bearing: a consumer rendering `rate ?? count` cannot
+    accidentally publish a one-sample percentage as a finding. Returning 0.0
+    would require every caller to remember to check `gated` first, and one that
+    forgets shows "0% declines" for a slice with no data.
+    """
+    key: str
+    declines: int
+    total: int
+    # Distinct dates observed. For a weekday slice this is the GATE unit: 12
+    # confirmations across 2 Fridays is not 12 observations of "Friday".
+    occurrences: int
+    rate: Optional[float] = None
+    gated: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DeclineAnalysisOut(BaseModel):
+    """Where the operation loses capacity to declines, sliced three ways.
+
+    A raw decline rate is ambiguous — "declined 4 of 12" reads the same whether
+    someone is unreliable or is repeatedly handed a shift they cannot make.
+    Clustering disambiguates: concentrated on a weekday it is a ROTA problem,
+    concentrated on a truck it is that shift, and only alongside those two is
+    the per-person number interpretable.
+
+    Slices below their gate keep `rate: null` and sort last.
+    """
+    start_date: date
+    end_date: date
+    total_confirmations: int
+    total_declines: int
+    by_weekday: List[DeclineSlice]
+    by_truck: List[DeclineSlice]
+    by_person: List[DeclineSlice]
+
+    model_config = ConfigDict(from_attributes=True)

@@ -52,7 +52,9 @@ from app.schemas.dashboard_summaries import (
     DispatchRtsRequest, DispatchUrgentIncident, DispatchPerformanceSummary,
     DispatchDashboardSummary, SlowestRoute, CrewPerformance,
     TraineePhaseRow, StuckTrainee, ProblemArea,
+    CoverageDepth as CoverageDepthOut,
 )
+from app.services.outcome_signals import get_coverage_depth
 
 URGENT_AGE_MINUTES = 240
 STUCK_PHASE_DAYS = 21
@@ -825,6 +827,12 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
         trainee_phases=oversight["phases"],
         stuck_trainees=oversight["stuck"],
         training_problem_areas=oversight["problem_areas"],
+        # Coverage depth is a TODAY number, not a period one: "who could I still
+        # call" has no meaning averaged over last week. So it uses `today` even
+        # though every other field here honours `start`/`end`.
+        coverage_depth=CoverageDepthOut.model_validate(
+            get_coverage_depth(db, company_id, today), from_attributes=True
+        ),
     )
 
     # ── incidents ──

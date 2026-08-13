@@ -10,6 +10,7 @@ import GearRequestSummary from '../gear/GearRequestSummary';
 import type { NoShowRow, InspectionSummaryRow, ManagementDashboardSummary } from '../../api/types';
 import { pct, metric, count, hours } from '../../utils/metric';
 import CompanyStandingCard from '../CompanyStandingCard';
+import DeclinePatterns from './DeclinePatterns';
 
 export default function ManagementView() {
   const { user } = useAuth();
@@ -209,6 +210,54 @@ export default function ManagementView() {
               ))}
             </div>
 
+            {/* Coverage depth (ADR-268) — sits under Crew Utilization because the
+                two answer adjacent questions: how many are out, and how many
+                could still be called. A TODAY number regardless of the period
+                selector above, which the label states rather than leaving the
+                reader to assume it follows the dropdown. */}
+            {efficiency.crew.coverage_depth && (
+              <div className="mt-4 p-3 rounded-lg bg-accent/10 border border-border/60">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <LogIn className="w-4 h-4 text-info shrink-0" />
+                  <span className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                    Coverage Depth
+                  </span>
+                  <span className="text-xs text-subtle">still callable · today</span>
+                  {efficiency.crew.coverage_depth.at_capacity_risk && (
+                    <span className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-full
+                                     bg-danger/10 text-danger text-xs font-semibold">
+                      <AlertTriangle className="w-3 h-3" /> No spare cover
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                  {([
+                    { label: 'Drivers',  spare: efficiency.crew.coverage_depth.spare_drivers,  assigned: efficiency.crew.coverage_depth.assigned_drivers,  critical: true },
+                    { label: 'Captains', spare: efficiency.crew.coverage_depth.spare_captains, assigned: efficiency.crew.coverage_depth.assigned_captains, critical: true },
+                    { label: 'Walkers',  spare: efficiency.crew.coverage_depth.spare_walkers,  assigned: efficiency.crew.coverage_depth.assigned_walkers,  critical: false },
+                    { label: 'Trainers', spare: efficiency.crew.coverage_depth.spare_trainers, assigned: efficiency.crew.coverage_depth.assigned_trainers, critical: false },
+                  ]).map(r => {
+                    // Only driver/captain turn red: a truck with no spare driver
+                    // strands on the next decline, where a walker short is a
+                    // slower route. Same rule as the backend's at_capacity_risk,
+                    // and it must stay in step with it.
+                    const short = r.critical && r.assigned > 0 && r.spare === 0;
+                    return (
+                      <div key={r.label} className="p-2 rounded-lg bg-accent/20">
+                        <p className="text-xs text-muted-foreground truncate">{r.label}</p>
+                        <p className={`text-lg font-bold tabular-nums mt-0.5 ${
+                          short ? 'text-danger' : r.spare > 0 ? 'text-success' : 'text-muted-foreground'
+                        }`}>
+                          {count(r.spare)}
+                        </p>
+                        <p className="text-xs text-subtle truncate">{count(r.assigned)} assigned</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Routing quality — nothing else on this page surfaces misroutes */}
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
               <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
@@ -252,6 +301,13 @@ export default function ManagementView() {
           </>
         )}
       </div>
+
+      {/* Decline patterns (ADR-268). Sits above Training Oversight because it
+          is the same subject as the coverage-depth block just rendered — where
+          capacity is being lost, then who is left to call. Loads independently
+          of `efficiency`: it has its own endpoint and its own lookback, and a
+          failure on one must not blank the other. */}
+      <DeclinePatterns />
 
       {/* Training oversight (ADR-241). Roster-wide comparison is a MANAGEMENT
           judgement — a trainer's own view is scoped to their session, on mobile.

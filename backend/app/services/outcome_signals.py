@@ -246,9 +246,16 @@ def get_coverage_depth(db: Session, company_id: UUID, day: date) -> CoverageDept
     # ilike on the weekday: the availability endpoint and the emergency pool
     # both compare case-insensitively, and disagreeing here would make the
     # dashboard contradict the pool it is meant to summarise.
+    # Both of these also filter company_id even though `ids` already comes from
+    # a company-scoped Employee query. The .in_(ids) bound makes them safe only
+    # TRANSITIVELY — it relies on an invariant established two statements away,
+    # and a later edit that widens `ids` would silently turn these into
+    # cross-tenant reads. ADR-115 D1 requires every inner query to carry its own
+    # scope for exactly that reason.
     unavailable = {
         r.employee_id
         for r in db.query(TimeOffRequest).filter(
+            TimeOffRequest.company_id == company_id,
             TimeOffRequest.date == day,
             TimeOffRequest.status == "approved",
             TimeOffRequest.employee_id.in_(ids),
@@ -256,6 +263,7 @@ def get_coverage_depth(db: Session, company_id: UUID, day: date) -> CoverageDept
     } | {
         r.employee_id
         for r in db.query(EmployeeOffDay).filter(
+            EmployeeOffDay.company_id == company_id,
             EmployeeOffDay.day_of_week.ilike(day.strftime("%A")),
             EmployeeOffDay.status == "approved",
             EmployeeOffDay.employee_id.in_(ids),
