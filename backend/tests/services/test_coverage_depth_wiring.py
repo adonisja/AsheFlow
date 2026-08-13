@@ -67,7 +67,7 @@ from app.models.walker_route import (  # noqa: E402
     MisroutedPackageFlag, Route, RouteParticipant,
 )
 from app.services.dashboard_summaries import (  # noqa: E402
-    get_management_dashboard_summary,
+    _company_today, get_management_dashboard_summary,
 )
 from app.services.outcome_signals import get_coverage_depth  # noqa: E402
 from tests.conftest import (  # noqa: E402
@@ -126,24 +126,33 @@ class TestCoverageDepthIsWiredIn:
         and the assertion holds no matter which date the service is handed —
         a test that cannot fail. Verified by planting `start` in place of
         `today`: with this setup the plant fails, without it, it passes.
+
+        USE THE COMPANY CLOCK, NOT date.today(). The service computes its own
+        "today" via `_company_today`, which is company-LOCAL. `date.today()` is
+        the runner's UTC date, and the two disagree for every hour between UTC
+        midnight and the company's midnight — a UTC-4 company is still on the
+        previous date until 04:00 UTC. This test passed locally (afternoon,
+        both clocks on the same date) and failed in CI at 01:46 UTC, where the
+        fixture was built around Aug 13 while the service worked on Aug 12.
+        Mixing the two clocks makes a test that fails only overnight.
         """
         driver = make_employee(db, role="driver", name="Period Test Driver")
+        today = _company_today(db, SEED_COMPANY_ID)
 
         # A Monday-anchored week start is >= 1 day back whenever today is not
         # Monday; month start likewise. Roster them across that whole span so
         # any period-start date sees them ASSIGNED while today sees them SPARE.
         truck = make_truck(db, name="P1")
-        first_of_month = date.today().replace(day=1)
-        span = (date.today() - first_of_month).days
+        span = (today - today.replace(day=1)).days
         for back in range(1, max(span, 7) + 1):
-            when = date.today() - timedelta(days=back)
-            asg = make_assignment(db, truck=truck, target_date=when)
+            asg = make_assignment(db, truck=truck,
+                                  target_date=today - timedelta(days=back))
             make_member(db, assignment=asg, employee=driver, role="driver")
 
-        today_view = get_coverage_depth(db, SEED_COMPANY_ID, date.today())
+        today_view = get_coverage_depth(db, SEED_COMPANY_ID, today)
         assert today_view.spare_drivers >= 1, "fixture broken: not spare today"
         past_view = get_coverage_depth(db, SEED_COMPANY_ID,
-                                       date.today() - timedelta(days=1))
+                                       today - timedelta(days=1))
         assert past_view.assigned_drivers >= 1, "fixture broken: no divergence"
 
         per_period = {
@@ -167,7 +176,9 @@ class TestCoverageDepthIsWiredIn:
         composed = get_management_dashboard_summary(
             db, SEED_COMPANY_ID, period="week"
         ).crew.coverage_depth
-        direct = get_coverage_depth(db, SEED_COMPANY_ID, date.today())
+        # Company clock, not date.today() — see the note in the period test.
+        direct = get_coverage_depth(db, SEED_COMPANY_ID,
+                                    _company_today(db, SEED_COMPANY_ID))
 
         assert composed.spare_drivers == direct.spare_drivers
         assert composed.spare_captains == direct.spare_captains
