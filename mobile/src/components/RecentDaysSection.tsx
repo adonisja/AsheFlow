@@ -256,7 +256,13 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
   });
 
   const max = Math.max(1, ...slots.map(x => valueOf(x.day)));
-  if (!slots.some(x => x.day)) return null;
+  // Guard on a VALUE, not merely on a day existing. A week of assignment-only
+  // days (rostered, but no delivery stops — Aug 4-7 for a trainer on staging)
+  // passed the old check and rendered an axis with no bars, which reads as a
+  // broken chart rather than as "you were on a truck but carried nothing".
+  const hasValues = slots.some(x => valueOf(x.day) > 0);
+  const anyDay = slots.some(x => x.day);
+  if (!anyDay) return null;
 
   return (
     <View style={s.chartWrap}>
@@ -280,6 +286,13 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
           </TouchableOpacity>
         ))}
       </View>
+      {!hasValues ? (
+        <Text style={[s.chartEmpty, { color: c.mutedForeground }]}>
+          {metric === 'packages'
+            ? 'No packages delivered this week.'
+            : 'Nothing came back this week.'}
+        </Text>
+      ) : (
       <View style={s.chartRow}>
         {slots.map(slot => {
           const value = valueOf(slot.day);
@@ -305,6 +318,7 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
           );
         })}
       </View>
+      )}
       {/* The legend is the point of the colour — without it the bars are just
           decorative. Only classes actually present in the week are listed. */}
       <View style={s.legendRow}>
@@ -622,6 +636,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   chartCol:      { flex: 1, alignItems: 'center' },
   chartBarTrack: { flex: 1, width: '100%', justifyContent: 'flex-end' },
   chartLabel:    { fontSize: 9, marginTop: 3 },
+  chartEmpty:    { fontSize: 11, fontStyle: 'italic', textAlign: 'center', paddingVertical: spacing.md },
   legendRow:     { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs, justifyContent: 'center' },
   legendItem:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot:     { width: 7, height: 7, borderRadius: 2 },

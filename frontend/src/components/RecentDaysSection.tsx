@@ -182,6 +182,11 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
   });
 
   const max = Math.max(1, ...slots.map(x => valueOf(x.day)));
+  // Guard on a VALUE, not merely on a day existing. A week of assignment-only
+  // days (rostered, but no delivery stops) passed the old check and rendered an
+  // axis with no bars, which reads as a broken chart rather than as "you were
+  // on a truck but carried nothing".
+  const hasValues = slots.some(x => valueOf(x.day) > 0);
   if (!slots.some(x => x.day)) return null;
 
   const present = (['easy', 'standard', 'heavy'] as const).filter(e =>
@@ -210,6 +215,13 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
           </button>
         ))}
       </div>
+      {!hasValues ? (
+        <p className="text-[11px] text-muted-foreground italic text-center py-4">
+          {metric === 'packages'
+            ? 'No packages delivered this week.'
+            : 'Nothing came back this week.'}
+        </p>
+      ) : (
       <div className="flex items-end gap-1.5 h-20">
         {slots.map(slot => {
           const value = valueOf(slot.day);
@@ -227,6 +239,7 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
           );
         })}
       </div>
+      )}
       <div className="flex gap-1.5 mt-1">
         {slots.map(slot => (
           <span key={slot.key} className="flex-1 text-center text-[9px] text-muted-foreground">

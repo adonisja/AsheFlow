@@ -64,9 +64,28 @@ class LifetimeTotalsOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class YearStatOut(BaseModel):
+    """One calendar year, all time.
+
+    Separate from the daily series because that series is capped at 24 months
+    and the LIFETIME chart is year-over-year (ADR-271 D2).
+    """
+    year: int
+    delivered: int = 0
+    total: int = 0
+    rts: int = 0
+    missing: int = 0
+    damaged: int = 0
+    truck_damaged: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MyStatsOut(BaseModel):
     """One request serves the entire drill-down."""
     lifetime: LifetimeTotalsOut
+    # All-time, oldest first. Drives the entry-state chart.
+    years: List[YearStatOut] = []
     series: StatsSeriesOut
 
     model_config = ConfigDict(from_attributes=True)

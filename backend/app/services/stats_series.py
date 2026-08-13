@@ -35,7 +35,7 @@ from datetime import date, timedelta
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import Integer, func
 from sqlalchemy.orm import Session
 
 from app.models.assignment_member import AssignmentMember
@@ -226,6 +226,26 @@ def get_stats_series(
 
 
 @dataclass
+class YearStat:
+    """One calendar year, all-time.
+
+    Computed server-side rather than folded out of the daily series because the
+    series is capped at 24 months (ADR-271 D) and the LIFETIME chart is
+    year-over-year — a five-year employee would otherwise see two bars and a
+    silent hole where their first three years were.
+
+    Cheap: one grouped query per metric, a handful of rows.
+    """
+    year: int
+    delivered: int = 0
+    total: int = 0
+    rts: int = 0
+    missing: int = 0
+    damaged: int = 0
+    truck_damaged: int = 0
+
+
+@dataclass
 class LifetimeTotals:
     delivered: int = 0
     rts: int = 0
@@ -234,6 +254,66 @@ class LifetimeTotals:
     truck_damaged: int = 0
     trips: int = 0
     success_pct: Optional[float] = None
+
+
+def get_year_stats(
+    db: Session, company_id: UUID, employee_id: UUID, role: str
+) -> list:
+    """Per-calendar-year totals, all time, oldest first.
+
+    Excludes the current in-progress day for consistency with the daily series,
+    but DOES include the current year — an in-progress year is still worth
+    seeing; it simply carries no trend (ADR-271 D3).
+    """
+    end = date.today() - timedelta(days=1)
+    yr = func.cast(func.strftime("%Y", Route.route_date), Integer) \
+        if db.bind and db.bind.dialect.name == "sqlite" \
+        else func.extract("year", Route.route_date)
+
+    rows = (
+        db.query(
+            yr.label("y"),
+            func.coalesce(func.sum(DeliveryStop.packages_delivered), 0),
+            func.coalesce(func.sum(DeliveryStop.packages_total), 0),
+            func.coalesce(func.sum(DeliveryStop.rts_count), 0),
+            func.coalesce(func.sum(DeliveryStop.missing_count), 0),
+        )
+        .join(Route, Route.id == DeliveryStop.route_id)
+        .filter(
+            DeliveryStop.company_id == company_id,
+            Route.company_id == company_id,
+            DeliveryStop.walker_id == employee_id,
+            Route.route_date <= end,
+        )
+        .group_by(yr)
+        .all()
+    )
+    by_year = {
+        int(y): YearStat(
+            year=int(y), delivered=int(d or 0), total=int(t or 0),
+            rts=int(r or 0), missing=int(m or 0),
+        )
+        for y, d, t, r, m in rows if y is not None
+    }
+
+    if role in _OWN_DAMAGE_ROLES:
+        for y, n in (
+            db.query(yr, func.count(RTSPackage.id))
+            .join(Route, Route.id == RTSPackage.route_id)
+            .filter(
+                RTSPackage.company_id == company_id,
+                Route.company_id == company_id,
+                RTSPackage.walker_id == employee_id,
+                RTSPackage.rts_type == "package_damaged",
+                Route.route_date <= end,
+            )
+            .group_by(yr)
+            .all()
+        ):
+            if y is not None and int(y) in by_year:
+                by_year[int(y)].damaged = int(n or 0)
+
+    return [by_year[k] for k in sorted(by_year)]
 
 
 def get_lifetime_totals(

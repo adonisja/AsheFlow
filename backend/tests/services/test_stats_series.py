@@ -337,3 +337,50 @@ class TestEndpointScoping:
         )
         assert "caller.role" in src
         assert "role: str = Query" not in src
+
+
+class TestYearStats:
+    """All-time yearly aggregates for the LIFETIME chart (ADR-271 D2).
+
+    Computed server-side rather than folded out of the daily series, because
+    that series is capped at 24 months — a five-year employee would otherwise
+    see two bars and a silent hole where their first three years were.
+    """
+
+    def test_groups_by_calendar_year(self, db):
+        from app.services.stats_series import get_year_stats
+        emp = make_employee(db, role="walker", name="Multi")
+        _day(db, emp, date(2025, 3, 10), total=100, rts=5)
+        _day(db, emp, date(2025, 9, 2), total=50, rts=1)
+        _day(db, emp, date(2026, 2, 4), total=80, rts=2)
+
+        ys = get_year_stats(db, SEED_COMPANY_ID, emp.id, "walker")
+        by = {y.year: y for y in ys}
+        assert by[2025].delivered == 95 + 49    # (100-5) + (50-1)
+        assert by[2026].delivered == 78
+        assert [y.year for y in ys] == [2025, 2026], "years must be oldest first"
+
+    def test_reaches_beyond_the_series_window(self, db):
+        """THE REASON THIS EXISTS. A day older than the 24-month daily cap must
+        still appear in the yearly chart."""
+        from app.services.stats_series import get_stats_series, get_year_stats
+        emp = make_employee(db, role="walker", name="Veteran")
+        old = date.today() - timedelta(days=1000)   # ~2.7 years back
+        _day(db, emp, old, total=200, rts=10)
+
+        series = get_stats_series(db, SEED_COMPANY_ID, emp.id, "walker")
+        years = get_year_stats(db, SEED_COMPANY_ID, emp.id, "walker")
+
+        assert all(d.d != old for d in series.days), "outside the 24mo cap"
+        assert any(y.year == old.year and y.delivered == 190 for y in years), (
+            "the yearly chart lost a year the daily series cannot reach"
+        )
+
+    def test_excludes_today(self, db):
+        from app.services.stats_series import get_year_stats
+        emp = make_employee(db, role="walker", name="TodayYear")
+        _day(db, emp, date.today(), total=999, rts=0)
+
+        ys = get_year_stats(db, SEED_COMPANY_ID, emp.id, "walker")
+        cur = next((y for y in ys if y.year == date.today().year), None)
+        assert cur is None or cur.delivered == 0, "today leaked into the year"

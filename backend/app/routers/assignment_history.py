@@ -25,11 +25,13 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.schemas.assignment_history import AssignmentHistoryResponse
 from app.schemas.dispatch_replay import DayReplayOut
-from app.schemas.stats_series import LifetimeTotalsOut, MyStatsOut, StatsSeriesOut
+from app.schemas.stats_series import (
+    LifetimeTotalsOut, MyStatsOut, StatsSeriesOut, YearStatOut,
+)
 from app.services.assignment_history import get_assignment_history
 from app.services.dispatch_replay import get_day_replay
 from app.services.stats_series import (
-    MAX_LOOKBACK_MONTHS, get_lifetime_totals, get_stats_series,
+    MAX_LOOKBACK_MONTHS, get_lifetime_totals, get_stats_series, get_year_stats,
 )
 
 router = APIRouter(prefix="/assignment-history", tags=["assignment-history"])
@@ -176,10 +178,12 @@ def get_my_stats(
     level that needs it.
     """
     lifetime = get_lifetime_totals(db, caller.company_id, caller.id, caller.role)
+    years = get_year_stats(db, caller.company_id, caller.id, caller.role)
     series = get_stats_series(
         db, caller.company_id, caller.id, caller.role, months=months
     )
     return MyStatsOut(
         lifetime=LifetimeTotalsOut.model_validate(lifetime, from_attributes=True),
+        years=[YearStatOut.model_validate(y, from_attributes=True) for y in years],
         series=StatsSeriesOut.model_validate(series, from_attributes=True),
     )
