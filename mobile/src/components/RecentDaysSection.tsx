@@ -56,8 +56,15 @@ type AssignmentDay = {
   counts_scope: 'truck' | 'own';
   /** Trainees the caller was PAIRED with that day (ADR-269). Empty for every
    *  role but a trainer who was actually paired — the pairing is the
-   *  authorisation, so this is never a filtered view of a longer list. */
-  supervised: SupervisedDay[];
+   *  authorisation, so this is never a filtered view of a longer list.
+   *
+   *  OPTIONAL ON THE WIRE, not just in spirit: the mobile app ships ahead of
+   *  the backend it talks to, so during a deploy window — or against any older
+   *  API — this field is simply absent. Typing it as required made
+   *  `day.supervised.map()` a hard render crash for EVERY user, not just
+   *  trainers. Any newly-added response field is absent from some running
+   *  server until that server is updated; the client must survive it. */
+  supervised?: SupervisedDay[];
 };
 
 /** A paired trainee's day, as their trainer sees it (ADR-269).
@@ -205,7 +212,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
           above, never merged into them: the numbers above are the trainer's
           own executed stops, these are the trainee's. Merging them is the
           ADR-244 attribution bug and makes both unreadable. */}
-      {day.supervised.map(sup => (
+      {(day.supervised ?? []).map(sup => (
         <View key={sup.employee_id} style={[s.supervised, { borderLeftColor: c.primary }]}>
           <Text style={[s.supervisedName, { color: c.foreground }]}>
             {sup.name}

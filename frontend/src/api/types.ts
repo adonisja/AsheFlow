@@ -2081,8 +2081,15 @@ export interface AssignmentDay {
    * the pairing IS the authorisation, so this is never a filtered view of a
    * longer list. Render SEPARATELY from the counts above; merging them
    * resurrects the ADR-244 attribution bug.
+   *
+   * OPTIONAL ON THE WIRE. The client ships ahead of the backend it talks to,
+   * so during a deploy window — or against any older API — this field is
+   * absent. Typing it as required turned `day.supervised.map()` into a hard
+   * render crash for EVERY user, not just trainers. Any newly-added response
+   * field is missing from some running server until that server is updated.
+   * Read it as `day.supervised ?? []`.
    */
-  supervised: SupervisedDay[];
+  supervised?: SupervisedDay[];
 }
 
 /**

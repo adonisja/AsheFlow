@@ -146,7 +146,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
           Kept field-for-field identical to the mobile RecentDaysSection: two
           hand-maintained renderers over one endpoint, so any change here lands
           there in the same commit. */}
-      {day.supervised.map(sup => (
+      {(day.supervised ?? []).map(sup => (
         <div key={sup.employee_id} className="mt-2 pl-2 border-l-2 border-primary/60">
           <p className="text-xs font-semibold text-foreground">
             {sup.name}
