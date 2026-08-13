@@ -164,7 +164,16 @@ function groupCrew(crew: { name: string; role: string }[]) {
  *
  *  Days with no assignment render as an empty slot: the gap IS the information
  *  ("you did not work Tuesday"), and omitting it would reflow the week. */
+/** Which number the bars represent. Packages answers "how much did I move",
+ *  RTS answers "how much came back" — the same week reads completely
+ *  differently under each. Must stay in step with the mobile WeekChart. */
+type ChartMetric = 'packages' | 'rts';
+
 function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
+  const [metric, setMetric] = useState<ChartMetric>('packages');
+  const valueOf = (d?: AssignmentDay) =>
+    d ? (metric === 'packages' ? d.packages_delivered : d.rts_count) : 0;
+
   const byDate = new Map(days.map(d => [d.route_date, d]));
   const slots = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(start);
@@ -172,29 +181,46 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
     return { key: ymdOf(d), letter: 'SMTWTFS'[d.getDay()], day: byDate.get(ymdOf(d)) };
   });
 
-  const max = Math.max(1, ...slots.map(x => x.day?.packages_delivered ?? 0));
+  const max = Math.max(1, ...slots.map(x => valueOf(x.day)));
   if (!slots.some(x => x.day)) return null;
 
   const present = (['easy', 'standard', 'heavy'] as const).filter(e =>
     /* `packages_delivered > 0` is load-bearing: a day with an assignment but no
        delivered packages draws NO bar, so listing its class advertises a colour
        the chart never uses. */
-    slots.some(x => x.day && x.day.packages_delivered > 0 &&
+    /* Follows the metric: a day with 0 RTS draws no bar in RTS mode, so it
+       must not claim a legend swatch there either. */
+    slots.some(x => x.day && valueOf(x.day) > 0 &&
                     (x.day.effort_class ?? 'standard') === e));
 
   return (
     <div className="mb-4">
+      <div className="flex justify-center gap-1.5 mb-2">
+        {(['packages', 'rts'] as const).map(m => (
+          <button
+            key={m}
+            onClick={() => setMetric(m)}
+            className={`px-2.5 py-0.5 rounded-full border text-[10px] font-semibold transition-colors ${
+              metric === m
+                ? 'border-primary bg-accent text-foreground'
+                : 'border-border text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {m === 'packages' ? 'Delivered' : 'Returned'}
+          </button>
+        ))}
+      </div>
       <div className="flex items-end gap-1.5 h-20">
         {slots.map(slot => {
-          const delivered = slot.day?.packages_delivered ?? 0;
+          const value = valueOf(slot.day);
           return (
             <div key={slot.key} className="flex-1 flex flex-col items-center justify-end h-full">
-              {delivered > 0 && (
+              {value > 0 && (
                 <div
                   className={`w-full rounded-t ${effortBar(slot.day?.effort_class ?? null)}`}
                   /* 12% floor: a worked day must read as a bar, not a sliver. */
-                  style={{ height: `${Math.max(12, (delivered / max) * 100)}%` }}
-                  title={`${delivered} delivered · ${slot.day?.effort_class ?? 'standard'}`}
+                  style={{ height: `${Math.max(12, (value / max) * 100)}%` }}
+                  title={`${value} ${metric === 'packages' ? 'delivered' : 'returned'} · ${slot.day?.effort_class ?? 'standard'}`}
                 />
               )}
             </div>

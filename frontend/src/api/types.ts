@@ -1299,7 +1299,9 @@ export interface MyPerformance {
   trips_today: number;
   trips_this_week: number;
   daily_last_week: { day: string; delivered: number; rts: number }[];
-  weekly_trend: { week_start: string; delivered: number }[];
+  /** `rts` is optional on the wire: a client can outrun the backend that
+   *  serves it, exactly as with AssignmentDay.supervised. Read as `?? 0`. */
+  weekly_trend: { week_start: string; delivered: number; rts?: number }[];
   rts_reasons_30d: { rts_type: string; count: number }[];
   troublesome_addresses_30d: { normalised_address: string; count: number }[];
 }

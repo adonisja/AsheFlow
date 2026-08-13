@@ -10,6 +10,7 @@ import RecentDaysSection from './RecentDaysSection';
  *  field workers see deliveries/RTS; everyone sees their rating. */
 export default function MyPerformanceCard() {
   const [data, setData] = useState<MyPerformance | null>(null);
+  const [trendMetric, setTrendMetric] = useState<'packages' | 'rts'>('packages');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -42,7 +43,10 @@ export default function MyPerformanceCard() {
   // Must stay identical to mobile/src/components/MyPerformanceCard.tsx.
   const isField = ['walker', 'trainee', 'driver', 'captain', 'trainer'].includes(data.role);
   const hasHistory = isField;
-  const maxWeek = Math.max(1, ...data.weekly_trend.map(w => w.delivered));
+  // Scale to the metric being shown: reusing the delivered max would flatten
+  // the RTS series into invisibility (23 returns against 379 delivered).
+  const maxTrend = Math.max(1, ...data.weekly_trend.map(
+    w => trendMetric === 'packages' ? w.delivered : (w.rts ?? 0)));
 
   return (
     <div className="card space-y-5">
@@ -88,17 +92,42 @@ export default function MyPerformanceCard() {
               below stays: it answers a different question (am I trending up
               over a month) and is not duplicated anywhere. */}
 
-          {/* 4-week trend */}
+          {/* 4-week trend. Same metric toggle as the week chart in Recent Days
+              — the two answer the same question at different grains, so they
+              must offer the same choice. */}
           <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">4-week trend</p>
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">4-week trend</p>
+              <div className="flex gap-1 ml-auto">
+                {(['packages', 'rts'] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={() => setTrendMetric(m)}
+                    className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold transition-colors ${
+                      trendMetric === m
+                        ? 'border-primary bg-accent text-foreground'
+                        : 'border-border text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {m === 'packages' ? 'Delivered' : 'Returned'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex items-end gap-3 h-16">
-              {data.weekly_trend.map(w => (
-                <div key={w.week_start} className="flex-1 flex flex-col items-center justify-end gap-1">
-                  <span className="text-[10px] text-foreground font-medium">{w.delivered}</span>
-                  <div className="w-full rounded-t bg-primary/70" style={{ height: `${(w.delivered / maxWeek) * 100}%` }} />
-                  <span className="text-[10px] text-muted-foreground">{w.week_start.slice(5)}</span>
-                </div>
-              ))}
+              {data.weekly_trend.map(w => {
+                const v = trendMetric === 'packages' ? w.delivered : (w.rts ?? 0);
+                return (
+                  <div key={w.week_start} className="flex-1 flex flex-col items-center justify-end gap-1">
+                    <span className="text-[10px] text-foreground font-medium">{v}</span>
+                    <div
+                      className={`w-full rounded-t ${trendMetric === 'packages' ? 'bg-primary/70' : 'bg-warning/70'}`}
+                      style={{ height: `${maxTrend ? (v / maxTrend) * 100 : 0}%` }}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{w.week_start.slice(5)}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

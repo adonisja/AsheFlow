@@ -68,6 +68,11 @@ class DailyDeliveryCount(BaseModel):
 class WeeklyDeliveredCount(BaseModel):
     week_start: date
     delivered: int
+    # Returns for the same week, so the trend chart can switch metric without a
+    # second request. Defaulted for wire-compat: a client built against the
+    # older response still parses (ADR-269 addendum — a newly added field is
+    # absent from some running server until that server is updated).
+    rts: int = 0
 
 
 class RtsReasonCount(BaseModel):

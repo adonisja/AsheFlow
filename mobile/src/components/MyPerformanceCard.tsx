@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
@@ -18,7 +18,9 @@ type Perf = {
   trips_today: number;
   trips_this_week: number;
   daily_last_week: { day: string; delivered: number; rts: number }[];
-  weekly_trend: { week_start: string; delivered: number }[];
+  /** `rts` optional on the wire — a client can outrun the backend serving it
+   *  (see AssignmentDay.supervised, ADR-269 addendum). Read as `?? 0`. */
+  weekly_trend: { week_start: string; delivered: number; rts?: number }[];
   rts_reasons_30d: { rts_type: string; count: number }[];
   troublesome_addresses_30d: { normalised_address: string; count: number }[];
 };
@@ -27,6 +29,7 @@ export default function MyPerformanceCard() {
   const c = useColors();
   const s = styles(c);
   const [data, setData] = useState<Perf | null>(null);
+  const [trendMetric, setTrendMetric] = useState<'packages' | 'rts'>('packages');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -94,6 +97,62 @@ export default function MyPerformanceCard() {
               tiles and the 30-day RTS reason breakdown stay: those are
               genuinely period-independent. */}
 
+          {/* 4-week trend. Web had this and mobile did not; the toggle matches
+              the week chart in Recent Days, since the two answer the same
+              question at different grains. */}
+          {data.weekly_trend.length > 0 && (
+            <>
+              <View style={s.trendHead}>
+                <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>4-WEEK TREND</Text>
+                <View style={s.metricRow}>
+                  {(['packages', 'rts'] as const).map(m => (
+                    <TouchableOpacity
+                      key={m}
+                      onPress={() => setTrendMetric(m)}
+                      style={[
+                        s.metricBtn,
+                        { borderColor: c.border },
+                        trendMetric === m && { backgroundColor: c.accent, borderColor: c.primary },
+                      ]}
+                    >
+                      <Text style={[s.metricText, {
+                        color: trendMetric === m ? c.foreground : c.mutedForeground,
+                      }]}>
+                        {m === 'packages' ? 'Delivered' : 'Returned'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              <View style={s.trendRow}>
+                {data.weekly_trend.map(w => {
+                  const v = trendMetric === 'packages' ? w.delivered : (w.rts ?? 0);
+                  // Scale to the metric shown: reusing the delivered max would
+                  // flatten the RTS series into invisibility (23 vs 379).
+                  const maxTrend = Math.max(1, ...data.weekly_trend.map(
+                    x => trendMetric === 'packages' ? x.delivered : (x.rts ?? 0)));
+                  return (
+                    <View key={w.week_start} style={s.trendCol}>
+                      <Text style={[s.trendValue, { color: c.foreground }]}>{v}</Text>
+                      <View style={s.trendTrack}>
+                        <View style={{
+                          width: '100%',
+                          height: `${(v / maxTrend) * 100}%`,
+                          backgroundColor: trendMetric === 'packages' ? c.primary : c.gold,
+                          borderTopLeftRadius: 2,
+                          borderTopRightRadius: 2,
+                        }} />
+                      </View>
+                      <Text style={[s.trendLabel, { color: c.mutedForeground }]}>
+                        {w.week_start.slice(5)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          )}
+
           {/* 30-day RTS reasons */}
           {data.rts_reasons_30d.length > 0 && (
             <>
@@ -141,6 +200,15 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tileValue:   { fontSize: fontSize.lg, fontWeight: fontWeight.bold, marginTop: 2 },
   tileSub:     { fontSize: 10 },
   subLine:     { fontSize: fontSize.xs, marginTop: spacing.sm },
+  trendHead:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  metricRow:   { flexDirection: 'row', gap: spacing.xs },
+  metricBtn:   { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 2 },
+  metricText:  { fontSize: 10, fontWeight: fontWeight.semibold },
+  trendRow:    { flexDirection: 'row', alignItems: 'flex-end', height: 72, gap: spacing.sm },
+  trendCol:    { flex: 1, alignItems: 'center' },
+  trendTrack:  { width: '100%', flex: 1, justifyContent: 'flex-end' },
+  trendValue:  { fontSize: 10, fontWeight: fontWeight.semibold, marginBottom: 2 },
+  trendLabel:  { fontSize: 9, marginTop: 2 },
   sectionLabel:{ fontSize: 10, fontWeight: fontWeight.bold, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: spacing.md, marginBottom: spacing.xs },
   legend:      { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs },
   legendItem:  { flexDirection: 'row', alignItems: 'center', gap: 4 },

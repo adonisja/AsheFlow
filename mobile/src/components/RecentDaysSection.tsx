@@ -234,9 +234,19 @@ function prettyDate(iso: string): string {
  *  Days with no assignment render as an empty slot rather than being omitted:
  *  a gap IS the information ("you did not work Tuesday"), and dropping the slot
  *  would silently reflow the week. */
+/** Which number the bars represent. Packages answers "how much did I move",
+ *  RTS answers "how much came back" — the same week reads completely
+ *  differently under each, and a heavy delivery day with heavy returns is not
+ *  visible from either one alone. */
+type ChartMetric = 'packages' | 'rts';
+
 function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
   const c = useColors();
   const s = styles(c);
+  const [metric, setMetric] = useState<ChartMetric>('packages');
+
+  const valueOf = (d?: AssignmentDay) =>
+    d ? (metric === 'packages' ? d.packages_delivered : d.rts_count) : 0;
 
   const byDate = new Map(days.map(d => [d.route_date, d]));
   const slots = Array.from({ length: 7 }, (_, i) => {
@@ -245,24 +255,44 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
     return { key: ymdOf(d), letter: 'SMTWTFS'[d.getDay()], day: byDate.get(ymdOf(d)) };
   });
 
-  const max = Math.max(1, ...slots.map(x => x.day?.packages_delivered ?? 0));
+  const max = Math.max(1, ...slots.map(x => valueOf(x.day)));
   if (!slots.some(x => x.day)) return null;
 
   return (
     <View style={s.chartWrap}>
+      <View style={s.metricRow}>
+        {(['packages', 'rts'] as const).map(m => (
+          <TouchableOpacity
+            key={m}
+            onPress={() => setMetric(m)}
+            style={[
+              s.metricBtn,
+              { borderColor: c.border },
+              metric === m && { backgroundColor: c.accent, borderColor: c.primary },
+            ]}
+          >
+            <Text style={[
+              s.metricText,
+              { color: metric === m ? c.foreground : c.mutedForeground },
+            ]}>
+              {m === 'packages' ? 'Delivered' : 'Returned'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <View style={s.chartRow}>
         {slots.map(slot => {
-          const delivered = slot.day?.packages_delivered ?? 0;
+          const value = valueOf(slot.day);
           return (
             <View key={slot.key} style={s.chartCol}>
               <View style={s.chartBarTrack}>
-                {delivered > 0 && (
+                {value > 0 && (
                   <View
                     style={{
                       width: '100%',
                       // 12% floor: a day that was worked must read as a bar, not a
                       // sliver, even next to a much bigger day.
-                      height: `${Math.max(12, (delivered / max) * 100)}%`,
+                      height: `${Math.max(12, (value / max) * 100)}%`,
                       backgroundColor: effortColor(slot.day?.effort_class ?? null, c),
                       borderTopLeftRadius: 2,
                       borderTopRightRadius: 2,
@@ -284,7 +314,7 @@ function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
              class advertises a colour the chart never uses. Jul 23 (effort
              null, 0 delivered) showed a phantom "Standard" entry. */
           .filter(e => slots.some(x =>
-            x.day && x.day.packages_delivered > 0 && (x.day.effort_class ?? 'standard') === e))
+            x.day && valueOf(x.day) > 0 && (x.day.effort_class ?? 'standard') === e))
           .map(e => (
             <View key={e} style={s.legendItem}>
               <View style={[s.legendDot, { backgroundColor: effortColor(e, c) }]} />
@@ -585,6 +615,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   // Chart, inside the week picker block
   chartWrap:     { marginBottom: spacing.md },
+  metricRow:     { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm, justifyContent: 'center' },
+  metricBtn:     { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  metricText:    { fontSize: 10, fontWeight: fontWeight.semibold },
   chartRow:      { flexDirection: 'row', height: 76, gap: 6, alignItems: 'flex-end' },
   chartCol:      { flex: 1, alignItems: 'center' },
   chartBarTrack: { flex: 1, width: '100%', justifyContent: 'flex-end' },

@@ -31,6 +31,9 @@ const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
 const CLIENT_ID        = COGNITO_CLIENT_ID ?? '';
 
 type EmailStep    = 'idle' | 'entering' | 'verifying';
+/** Same three states as email: the Discord flow is deliberately identical, so
+ *  a user who has changed their email already knows how this works. */
+type DiscordStep  = 'idle' | 'entering' | 'verifying';
 type PasswordStep = 'idle' | 'open';
 
 export default function AccountSettingsScreen() {
@@ -45,6 +48,16 @@ export default function AccountSettingsScreen() {
   const [code,         setCode]         = useState('');
   const [emailBusy,    setEmailBusy]    = useState(false);
   const [currentEmail, setCurrentEmail] = useState(user?.email ?? '');
+
+  // Discord link (ADR-270)
+  const [dStep,    setDStep]    = useState<DiscordStep>('idle');
+  const [dId,      setDId]      = useState('');
+  const [dCode,    setDCode]    = useState('');
+  const [dBusy,    setDBusy]    = useState(false);
+  const [dHelp,    setDHelp]    = useState(false);
+  const [currentDiscord, setCurrentDiscord] = useState<string | null>(
+    (user as any)?.discord_id ?? null,
+  );
 
   // Password change
   const [pwStep,     setPwStep]     = useState<PasswordStep>('idle');
@@ -108,6 +121,56 @@ export default function AccountSettingsScreen() {
   };
 
   const cancelEmail = () => { setEmailStep('idle'); setNewEmail(''); setCode(''); };
+
+  // ── Discord handlers ────────────────────────────────────────────────────────
+
+  const requestDiscordLink = async () => {
+    // Mirror the server's ADR-083 rule locally so a typo is caught before it
+    // DMs a stranger, not after.
+    if (!/^[0-9]{17,20}$/.test(dId.trim())) {
+      Alert.alert('Invalid Discord ID', 'A Discord ID is 17-20 digits. See "How do I find this?" below.');
+      return;
+    }
+    setDBusy(true);
+    try {
+      await apiClient.post('/employees/me/discord/request-link', {
+        discord_id: dId.trim(),
+      });
+      setDStep('verifying');
+    } catch (e: any) {
+      const status = e?.response?.status;
+      Alert.alert(
+        status === 409 ? 'Already linked' : status === 429 ? 'Too many attempts' : 'Could not send code',
+        e?.response?.data?.detail ?? 'Please try again.',
+      );
+    } finally {
+      setDBusy(false);
+    }
+  };
+
+  const confirmDiscordLink = async () => {
+    if (dCode.trim().length !== 6) {
+      Alert.alert('Invalid code', 'Enter the 6-digit code sent to your Discord DMs.');
+      return;
+    }
+    setDBusy(true);
+    try {
+      const res = await apiClient.post('/employees/me/discord/confirm-link', {
+        discord_id: dId.trim(),
+        code: dCode.trim(),
+      });
+      setCurrentDiscord(res.data?.discord_id ?? dId.trim());
+      setDStep('idle');
+      setDId(''); setDCode('');
+      Alert.alert('Linked', 'Your Discord account is now linked.');
+    } catch (e: any) {
+      Alert.alert('Could not link', e?.response?.data?.detail ?? 'Please try again.');
+    } finally {
+      setDBusy(false);
+    }
+  };
+
+  const cancelDiscord = () => { setDStep('idle'); setDId(''); setDCode(''); setDHelp(false); };
 
   // ── Password handler ────────────────────────────────────────────────────────
 
@@ -277,6 +340,121 @@ export default function AccountSettingsScreen() {
               </View>
             </View>
           )}
+
+          {/* ── Discord row (ADR-270) ──
+              Verified, not a free edit: discord_id is the bot's DM address and
+              the third step of the auth lookup chain, so the flow mirrors email
+              exactly — send a code to the claimed account, prove receipt, write. */}
+          {dStep === 'idle' && (
+            <TouchableOpacity
+              style={[s.row, s.rowBorder, { borderTopColor: c.border, borderTopWidth: 1, borderBottomWidth: 0 }]}
+              onPress={() => { setDId(currentDiscord ?? ''); setDStep('entering'); }}
+              activeOpacity={0.7}
+            >
+              <Text style={[s.rowLabel, { color: c.mutedForeground }]}>Discord</Text>
+              <View style={s.rowRight}>
+                <Text style={[s.rowValue, { color: currentDiscord ? c.foreground : c.mutedForeground }]}
+                      numberOfLines={1}>
+                  {currentDiscord ?? 'Not linked'}
+                </Text>
+                <Text style={[s.editChip, { color: c.primary }]}>
+                  {currentDiscord ? 'Change' : 'Link'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {dStep === 'entering' && (
+            <View style={s.editBlock}>
+              <Text style={[s.editLabel, { color: c.foreground }]}>Discord ID</Text>
+              <TextInput
+                style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.surfaceMuted }]}
+                value={dId}
+                onChangeText={setDId}
+                placeholder="219476523456789012"
+                placeholderTextColor={c.mutedForeground}
+                keyboardType="number-pad"
+                autoCorrect={false}
+                autoFocus
+              />
+              <Text style={[s.editHint, { color: c.mutedForeground }]}>
+                We'll DM a 6-digit code to that Discord account to confirm it's yours.
+              </Text>
+
+              {/* The steps inline rather than a link out: nobody knows their own
+                  snowflake, and Developer Mode is off by default. */}
+              <TouchableOpacity onPress={() => setDHelp(h => !h)}>
+                <Text style={[s.editHint, { color: c.primary }]}>
+                  {dHelp ? '▾' : '▸'} How do I find this?
+                </Text>
+              </TouchableOpacity>
+              {dHelp && (
+                <View style={s.helpBlock}>
+                  {[
+                    'Open Discord → Settings (gear icon)',
+                    'Advanced → turn on Developer Mode',
+                    'Tap your own name or avatar',
+                    'Tap the ⋯ menu → Copy User ID',
+                  ].map((line, i) => (
+                    <Text key={i} style={[s.helpLine, { color: c.mutedForeground }]}>
+                      {i + 1}. {line}
+                    </Text>
+                  ))}
+                  <Text style={[s.helpLine, { color: c.mutedForeground }]}>
+                    It's a 17–20 digit number — not your username.
+                  </Text>
+                </View>
+              )}
+
+              <View style={s.editActions}>
+                <TouchableOpacity onPress={cancelDiscord} style={[s.editBtn, { borderColor: c.border }]}>
+                  <Text style={[s.editBtnText, { color: c.mutedForeground }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={requestDiscordLink}
+                  disabled={dBusy}
+                  style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: dBusy ? 0.6 : 1 }]}
+                >
+                  {dBusy
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Send Code</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {dStep === 'verifying' && (
+            <View style={s.editBlock}>
+              <Text style={[s.editLabel, { color: c.foreground }]}>Verification code</Text>
+              <Text style={[s.editHint, { color: c.mutedForeground }]}>
+                Check your Discord DMs for a 6-digit code from the AsheFlow bot.
+              </Text>
+              <TextInput
+                style={[s.input, s.codeInput, { color: c.foreground, borderColor: c.border, backgroundColor: c.surfaceMuted }]}
+                value={dCode}
+                onChangeText={setDCode}
+                placeholder="000000"
+                placeholderTextColor={c.mutedForeground}
+                keyboardType="number-pad"
+                maxLength={6}
+                autoFocus
+              />
+              <View style={s.editActions}>
+                <TouchableOpacity onPress={cancelDiscord} style={[s.editBtn, { borderColor: c.border }]}>
+                  <Text style={[s.editBtnText, { color: c.mutedForeground }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={confirmDiscordLink}
+                  disabled={dBusy || dCode.length < 6}
+                  style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: (dBusy || dCode.length < 6) ? 0.5 : 1 }]}
+                >
+                  {dBusy
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Confirm</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
 
         {/* ── Security section ── */}
@@ -437,6 +615,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   editLabel:   { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   editHint:    { fontSize: fontSize.xs, lineHeight: 17 },
   input:       { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2, fontSize: fontSize.base },
+  helpBlock:   { marginTop: 4, marginLeft: spacing.xs, gap: 2 },
+  helpLine:    { fontSize: 11, lineHeight: 16 },
   codeInput:   { textAlign: 'center', fontSize: fontSize.xl, letterSpacing: 8, fontWeight: fontWeight.bold },
   editActions: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.xs },
   editBtn:     { flex: 1, paddingVertical: spacing.sm + 2, borderRadius: radius.md, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
