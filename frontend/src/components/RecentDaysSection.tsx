@@ -20,7 +20,9 @@ import { useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import { getLocalYMD } from '../utils/date';
-import type { AssignmentDay, AssignmentHistoryResponse } from '../api/types';
+import type {
+  AssignmentDay, AssignmentHistoryResponse, HistoryRTSDetail,
+} from '../api/types';
 import { ChevronDown, ChevronUp, Truck, Users } from 'lucide-react';
 
 const LOOKBACK_DAYS = 30;
@@ -130,28 +132,63 @@ function DayRow({ day }: { day: AssignmentDay }) {
                   Street addresses are removed 48h after the route.
                 </p>
               )}
-              {day.rts_details.map(r => (
-                <div key={r.tba_number} className="text-[11px]">
-                  <p className="text-muted-foreground">
-                    <span className="text-foreground">{RTS_LABEL[r.rts_type] ?? r.rts_type}</span>
-                    {r.normalised_address && ` · ${r.normalised_address}`}
-                    {r.is_reattemptable && (
-                      <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-info/10 text-info uppercase tracking-wide">
-                        retryable
-                      </span>
-                    )}
-                  </p>
-                  {/* The walker's own words. rts_type is a dropdown value; this
-                      is what they actually wrote, and it is the part that
-                      explains the day to them a week later. */}
-                  {r.rts_explanation && (
-                    <p className="text-muted-foreground/80 italic">{r.rts_explanation}</p>
-                  )}
-                </div>
-              ))}
+              {day.rts_details.map(r => <RTSRow key={r.tba_number} r={r} />)}
             </div>
           )}
         </>
+      )}
+
+      {/* Supervised trainees (ADR-269). Rendered SEPARATELY and indented — the
+          counts above are the trainer's own executed stops, these are the
+          trainee's. Merging them is the ADR-244 attribution bug and makes both
+          numbers unreadable.
+
+          Kept field-for-field identical to the mobile RecentDaysSection: two
+          hand-maintained renderers over one endpoint, so any change here lands
+          there in the same commit. */}
+      {day.supervised.map(sup => (
+        <div key={sup.employee_id} className="mt-2 pl-2 border-l-2 border-primary/60">
+          <p className="text-xs font-semibold text-foreground">
+            {sup.name}
+            <span className="ml-1 font-normal text-[11px] text-muted-foreground">
+              · you supervised
+            </span>
+          </p>
+          <p className="text-[11px] text-muted-foreground mb-0.5">
+            {sup.packages_delivered}/{sup.packages_total} delivered
+            {sup.rts_count > 0 && ` · ${sup.rts_count} back`}
+            {/* vs_class, not the raw rate: a trainee on a heavy route is not
+                worse than one on an easy route at the same raw number. */}
+            {sup.rts_rate_vs_class != null && ` · ${sup.rts_rate_vs_class}× typical`}
+          </p>
+          <div className="space-y-1">
+            {sup.rts_details.map(r => <RTSRow key={r.tba_number} r={r} />)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** One returned package. Shared by a day's own RTS list and by the supervised
+ *  block below it, so the two cannot present the same record differently. */
+function RTSRow({ r }: { r: HistoryRTSDetail }) {
+  return (
+    <div className="text-[11px]">
+      <p className="text-muted-foreground">
+        <span className="text-foreground">{RTS_LABEL[r.rts_type] ?? r.rts_type}</span>
+        {r.normalised_address && ` · ${r.normalised_address}`}
+        {r.is_reattemptable && (
+          <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-info/10 text-info uppercase tracking-wide">
+            retryable
+          </span>
+        )}
+      </p>
+      {/* The walker's own words. rts_type is a dropdown value; this is what
+          they actually wrote, and it is the part that explains the day to them
+          a week later. */}
+      {r.rts_explanation && (
+        <p className="text-muted-foreground/80 italic">{r.rts_explanation}</p>
       )}
     </div>
   );

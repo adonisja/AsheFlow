@@ -520,3 +520,142 @@ class TestCountAndListAgree:
         assert day.rts_count == 2
         assert len(day.rts_details) == 2
         assert day.counts_scope == "truck"
+
+
+class TestSupervisedTraineeBlock:
+    """A trainer sees the day of the trainee they were PAIRED with (ADR-269).
+
+    THE AUTHORISATION IS THE PAIRING, not the job title. `paired_trainer_id`
+    lives on the trainee's member row for a given assignment — therefore a given
+    date — so "was I responsible for this person on this day" is answered by the
+    same field dispatch stamped, not by a second permission rule that could
+    drift away from it.
+
+    The operator's framing: during training the trainer answers for items on the
+    trainee's record, including RTS. So the block carries full detail rather than
+    a summary. What it must NEVER do is merge into the trainer's own counts —
+    that is the ADR-244 attribution bug, and it would make a trainer's own
+    performance unreadable.
+    """
+
+    def _paired_day(self, db, when, *, pair=True):
+        """One truck, one trainer, one trainee. `pair` controls the ONLY thing
+        that should decide visibility."""
+        trainer = make_employee(db, role="trainer", name="Pair Trainer")
+        trainee = make_employee(db, role="trainee", name="Pair Trainee")
+        truck = make_truck(db, name="T-PAIR")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, trainer, "trainer")
+        tm = make_member(db, a, trainee, "trainee")
+        if pair:
+            tm.paired_trainer_id = trainer.id
+            db.commit()
+        r = _route(db, a, when)
+        # The trainee executed the work: walker_id is the EXECUTOR (ADR-244).
+        _stop(db, r, total=100, rts=7, walker_id=trainee.id)
+        for _ in range(7):
+            _rts(db, r, walker_id=trainee.id)
+        return trainer, trainee
+
+    def test_paired_trainer_sees_the_trainee_day(self, db):
+        when = date.today() - timedelta(days=3)
+        trainer, trainee = self._paired_day(db, when)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, trainer.id, when, when)[0]
+
+        assert len(day.supervised) == 1, "paired trainee missing from the day"
+        sup = day.supervised[0]
+        assert sup.name == "Pair Trainee"
+        assert sup.employee_id == str(trainee.id)
+        assert sup.packages_total == 100
+        assert sup.rts_count == 7
+
+    def test_unpaired_trainer_sees_nothing(self, db):
+        """THE GATE. Same truck, same day, same trainee — only the pairing
+        differs. If this ever returns a row, a trainer can read the record of
+        someone they were not responsible for."""
+        when = date.today() - timedelta(days=4)
+        trainer, _ = self._paired_day(db, when, pair=False)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, trainer.id, when, when)[0]
+
+        assert day.supervised == [], (
+            "an UNPAIRED trainer received a trainee's record — the pairing gate "
+            "is not being applied"
+        )
+
+    def test_a_trainer_paired_to_someone_else_sees_nothing(self, db):
+        """Two trainers on one truck; the trainee is paired to only one of them.
+        The other must not inherit access by sharing the truck."""
+        when = date.today() - timedelta(days=5)
+        owner = make_employee(db, role="trainer", name="Owning Trainer")
+        other = make_employee(db, role="trainer", name="Other Trainer")
+        trainee = make_employee(db, role="trainee", name="Their Trainee")
+        truck = make_truck(db, name="T-TWOTRAINERS")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, owner, "trainer")
+        make_member(db, a, other, "trainer")
+        tm = make_member(db, a, trainee, "trainee")
+        tm.paired_trainer_id = owner.id
+        db.commit()
+        r = _route(db, a, when)
+        _stop(db, r, total=50, rts=2, walker_id=trainee.id)
+
+        owner_day = get_assignment_history(db, SEED_COMPANY_ID, owner.id, when, when)[0]
+        other_day = get_assignment_history(db, SEED_COMPANY_ID, other.id, when, when)[0]
+
+        assert len(owner_day.supervised) == 1
+        assert other_day.supervised == [], (
+            "a trainer read the record of a trainee paired to a DIFFERENT trainer"
+        )
+
+    def test_supervised_counts_never_merge_into_the_trainers_own(self, db):
+        """ADR-244 attribution. The trainee's 100 packages are the TRAINEE's;
+        a trainer who carried nothing must still show zero for themselves."""
+        when = date.today() - timedelta(days=6)
+        trainer, _ = self._paired_day(db, when)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, trainer.id, when, when)[0]
+
+        assert day.packages_total == 0, (
+            "the trainee's packages leaked into the trainer's own counts"
+        )
+        assert day.rts_count == 0
+        assert day.supervised[0].packages_total == 100
+        assert day.counts_scope == "own"
+
+    def test_trainer_carrying_their_own_route_still_reports_it(self, db):
+        """A trainer who runs their own work sees it — the reason the mobile
+        `isField` gate hiding trainers was wrong."""
+        when = date.today() - timedelta(days=7)
+        trainer = make_employee(db, role="trainer", name="Working Trainer")
+        truck = make_truck(db, name="T-OWNWORK")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, trainer, "trainer")
+        r = _route(db, a, when)
+        _stop(db, r, total=40, rts=3, walker_id=trainer.id)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, trainer.id, when, when)[0]
+
+        assert day.packages_total == 40
+        assert day.rts_count == 3
+        assert day.supervised == [], "no pairing, so nothing supervised"
+
+    def test_non_trainer_roles_never_get_a_supervised_block(self, db):
+        """Guarded on the SLOT role held that day. A walker supervises nobody
+        even if a trainee happens to be on the same truck."""
+        when = date.today() - timedelta(days=8)
+        walker = make_employee(db, role="walker", name="Just A Walker")
+        trainee = make_employee(db, role="trainee", name="Nearby Trainee")
+        truck = make_truck(db, name="T-NOSUP")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, walker, "walker")
+        tm = make_member(db, a, trainee, "trainee")
+        # Even if the FK were wrongly pointed at the walker, the role guard holds.
+        tm.paired_trainer_id = walker.id
+        db.commit()
+        r = _route(db, a, when)
+        _stop(db, r, total=30, rts=1, walker_id=trainee.id)
+
+        day = get_assignment_history(db, SEED_COMPANY_ID, walker.id, when, when)[0]
+        assert day.supervised == []

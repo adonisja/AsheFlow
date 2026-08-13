@@ -54,6 +54,26 @@ type AssignmentDay = {
    *  (only their stops). Must be labelled — a walker's 142 and a driver's
    *  2,865 are different measurements. */
   counts_scope: 'truck' | 'own';
+  /** Trainees the caller was PAIRED with that day (ADR-269). Empty for every
+   *  role but a trainer who was actually paired — the pairing is the
+   *  authorisation, so this is never a filtered view of a longer list. */
+  supervised: SupervisedDay[];
+};
+
+/** A paired trainee's day, as their trainer sees it (ADR-269).
+ *  Same shape the trainee sees for themselves: during training the trainer
+ *  answers for items on this record, so it carries full RTS detail. */
+type SupervisedDay = {
+  employee_id: string;
+  name: string;
+  stops_total: number;
+  packages_total: number;
+  packages_delivered: number;
+  rts_count: number;
+  missing_count: number;
+  rts_rate: number | null;
+  rts_rate_vs_class: number | null;
+  rts_details: RTSDetail[];
 };
 
 const RTS_LABEL: Record<string, string> = {
@@ -180,6 +200,42 @@ function DayRow({ day }: { day: AssignmentDay }) {
           )}
         </>
       )}
+
+      {/* Supervised trainees (ADR-269). Visually SEPARATE from the counts
+          above, never merged into them: the numbers above are the trainer's
+          own executed stops, these are the trainee's. Merging them is the
+          ADR-244 attribution bug and makes both unreadable. */}
+      {day.supervised.map(sup => (
+        <View key={sup.employee_id} style={[s.supervised, { borderLeftColor: c.primary }]}>
+          <Text style={[s.supervisedName, { color: c.foreground }]}>
+            {sup.name}
+            <Text style={[s.supervisedRole, { color: c.mutedForeground }]}> · you supervised</Text>
+          </Text>
+          <Text style={[s.supervisedLine, { color: c.mutedForeground }]}>
+            {sup.packages_delivered}/{sup.packages_total} delivered
+            {sup.rts_count > 0 ? ` · ${sup.rts_count} back` : ''}
+            {/* vs_class, not the raw rate: a trainee on a heavy route is not
+                worse than one on an easy route at the same raw number. */}
+            {sup.rts_rate_vs_class != null ? ` · ${sup.rts_rate_vs_class}× typical` : ''}
+          </Text>
+          {sup.rts_details.map(r => (
+            <View key={r.tba_number}>
+              <Text style={[s.detail, { color: c.mutedForeground }]}>
+                <Text style={{ color: c.foreground }}>
+                  {RTS_LABEL[r.rts_type] ?? r.rts_type}
+                </Text>
+                {r.normalised_address ? ` · ${r.normalised_address}` : ''}
+                {r.is_reattemptable ? '  · retryable' : ''}
+              </Text>
+              {!!r.rts_explanation && (
+                <Text style={[s.explanation, { color: c.mutedForeground }]}>
+                  {r.rts_explanation}
+                </Text>
+              )}
+            </View>
+          ))}
+        </View>
+      ))}
     </View>
   );
 }
@@ -236,4 +292,11 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   policy:    { fontSize: 10, fontStyle: 'italic' },
   detail:    { fontSize: 11 },
   explanation: { fontSize: 11, fontStyle: 'italic', marginLeft: spacing.xs, marginBottom: 2 },
+  // Indented + left rule so a trainee's numbers read as SOMEONE ELSE'S at a
+  // glance. Without the offset they sit in the same visual column as the
+  // trainer's own counts and invite being read as one total.
+  supervised:     { marginTop: spacing.sm, paddingLeft: spacing.sm, borderLeftWidth: 2 },
+  supervisedName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  supervisedRole: { fontSize: 11, fontWeight: fontWeight.regular },
+  supervisedLine: { fontSize: 11, marginBottom: 2 },
 });

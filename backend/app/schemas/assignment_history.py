@@ -40,6 +40,36 @@ class RTSDetailOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SupervisedDayOut(BaseModel):
+    """A paired trainee's day, as their trainer sees it (ADR-269).
+
+    Present only on a day where the caller held the `trainer` slot AND the
+    trainee's member row for that assignment carried
+    `paired_trainer_id == caller.id`. The pairing IS the authorisation, so an
+    unpaired trainer receives an empty list rather than a filtered one.
+
+    Carries RTS details deliberately: during training the trainer answers for
+    items on the trainee's record, and a bare count cannot support that.
+
+    Counts are the trainee's OWN executed stops — never the truck total, and
+    never merged into the trainer's own figures (ADR-244 attribution).
+    """
+    employee_id: str
+    name: str
+
+    stops_total: int = 0
+    packages_total: int = 0
+    packages_delivered: int = 0
+    rts_count: int = 0
+    missing_count: int = 0
+
+    rts_rate: Optional[float] = None
+    rts_rate_vs_class: Optional[float] = None
+    rts_details: List[RTSDetailOut] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AssignmentDayOut(BaseModel):
     route_date: date
     truck_name: Optional[str] = None
@@ -73,6 +103,12 @@ class AssignmentDayOut(BaseModel):
     # The UI MUST label this. A walker's 142 and a driver's 2,865 are different
     # measurements, and showing them identically was the original bug.
     counts_scope: Literal["truck", "own"] = "own"
+
+    # Trainees paired with the caller on THIS date (ADR-269). Empty for every
+    # role but a trainer who was actually paired that day. A named-reputation
+    # surface (ADR-115 D7) — gated by same-day pairing, on an endpoint that is
+    # already self-scoped.
+    supervised: List[SupervisedDayOut] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -89,6 +89,36 @@ class AssignmentDay:
     # driver's 2,865 look like the same measurement.
     counts_scope: str = "own"
 
+    # Trainees this caller was PAIRED WITH on this date (ADR-269). Empty for
+    # every role except a trainer who was actually paired that day — the
+    # pairing IS the authorisation, so an unpaired trainer matches nothing.
+    supervised: list = field(default_factory=list)
+
+
+@dataclass
+class SupervisedDay:
+    """A paired trainee's day, as their trainer sees it (ADR-269).
+
+    The same block the trainee sees for themselves, including RTS details: the
+    trainer has to justify items on that record, and a bare count cannot support
+    that conversation.
+
+    Deliberately NOT merged into the trainer's own counts — that would resurrect
+    the attribution bug ADR-244 fixed and make the trainer's own numbers
+    unreadable. `walker_id` is the executor; a trainer completing a trainee's
+    stop during supervision does not make it the trainer's stop.
+    """
+    employee_id: str
+    name: str
+    stops_total: int = 0
+    packages_total: int = 0
+    packages_delivered: int = 0
+    rts_count: int = 0
+    missing_count: int = 0
+    rts_rate: Optional[float] = None
+    rts_rate_vs_class: Optional[float] = None
+    rts_details: list = field(default_factory=list)
+
 
 def _class_baselines(db: Session, company_id: UUID) -> dict:
     """{effort_class: rts_rate} company-wide, for normalisation.
@@ -255,6 +285,77 @@ def get_assignment_history(
         # within the last 2 days still has them.
         cutoff = today - timedelta(days=ADDRESS_RETENTION_HOURS // 24)
         day.address_detail = "street" if ta.date > cutoff else "block"
+
+        # ── supervised trainees (ADR-269) ────────────────────────────────────
+        # PAIRING IS THE AUTHORISATION. paired_trainer_id lives on the TRAINEE's
+        # member row for this assignment (therefore this date) and points at the
+        # trainer. Matching on it means an unpaired trainer matches nothing —
+        # there is no separate permission rule that could drift out of step with
+        # what dispatch actually recorded.
+        #
+        # Guarded on the caller's slot role for THAT DAY, not their job title:
+        # someone who ran a route as a walker on Tuesday supervises nobody on
+        # Tuesday, whatever their current role says.
+        if member.role == "trainer" and route_ids:
+            paired_rows = (
+                db.query(AssignmentMember, Employee)
+                .join(Employee, Employee.id == AssignmentMember.employee_id)
+                .filter(
+                    AssignmentMember.company_id == company_id,
+                    Employee.company_id == company_id,
+                    AssignmentMember.assignment_id == ta.id,
+                    AssignmentMember.paired_trainer_id == employee_id,
+                )
+                .all()
+            )
+            for pm, pe in paired_rows:
+                sup = SupervisedDay(employee_id=str(pe.id), name=pe.name)
+
+                # The trainee's OWN executed stops — same scope the trainee sees
+                # for themselves, never the truck-wide total.
+                sup_stops = (
+                    db.query(DeliveryStop)
+                    .filter(
+                        DeliveryStop.company_id == company_id,
+                        DeliveryStop.route_id.in_(route_ids),
+                        DeliveryStop.walker_id == pm.employee_id,
+                    )
+                    .all()
+                )
+                sup.stops_total = len(sup_stops)
+                sup.packages_total = sum(s.packages_total or 0 for s in sup_stops)
+                sup.packages_delivered = sum(s.packages_delivered or 0 for s in sup_stops)
+                sup.rts_count = sum(s.rts_count or 0 for s in sup_stops)
+                sup.missing_count = sum(s.missing_count or 0 for s in sup_stops)
+
+                sup_rts = (
+                    db.query(RTSPackage)
+                    .filter(
+                        RTSPackage.company_id == company_id,
+                        RTSPackage.route_id.in_(route_ids),
+                        RTSPackage.walker_id == pm.employee_id,
+                    )
+                    .all()
+                )
+                sup.rts_details = [
+                    RTSDetail(
+                        tba_number=r.tba_number,
+                        rts_type=r.rts_type,
+                        rts_explanation=r.rts_explanation,
+                        is_reattemptable=r.is_reattemptable,
+                        normalised_address=r.normalised_address,
+                    )
+                    for r in sup_rts
+                ]
+
+                if sup.packages_total:
+                    sup.rts_rate = sup.rts_count / sup.packages_total
+                    base = baselines.get(day.effort_class or "")
+                    if base:
+                        sup.rts_rate_vs_class = round(sup.rts_rate / base, 2)
+
+                day.supervised.append(sup)
+
         out.append(day)
 
     return out

@@ -24,7 +24,24 @@ export default function MyPerformanceCard() {
   if (error) return null;   // silent — a stats card shouldn't error the page
   if (!data) return null;
 
-  const isField = ['walker', 'trainee', 'driver'].includes(data.role);
+  // Two different questions, so two different gates (ADR-269).
+  //
+  // isField    — does this person carry a package count of their own?
+  //              Captain joins driver here: ADR-256 made captain truck-scoped
+  //              and TRUCK_SCOPED_ROLES = ("driver","captain"), so the backend
+  //              already returns the whole load for both. Trainer joins too:
+  //              they run their own routes when unpaired or partially
+  //              supervising, and walker_id (the EXECUTOR, ADR-244) is theirs
+  //              on those stops.
+  //
+  // hasHistory — did they hold a slot on a truck at all? That is everyone
+  //              above, and it is what Recent Days needs. Kept separate so
+  //              narrowing the tiles later cannot silently take per-day
+  //              history away with it.
+  //
+  // Must stay identical to mobile/src/components/MyPerformanceCard.tsx.
+  const isField = ['walker', 'trainee', 'driver', 'captain', 'trainer'].includes(data.role);
+  const hasHistory = isField;
   const maxDaily = Math.max(1, ...data.daily_last_week.map(d => Math.max(d.delivered, d.rts)));
   const maxWeek = Math.max(1, ...data.weekly_trend.map(w => w.delivered));
 
@@ -143,7 +160,7 @@ export default function MyPerformanceCard() {
           tiles above answer "how am I doing overall" from the same source, and
           this answers "what was Thursday" — including the difficulty
           normalisation the aggregate numbers cannot apply. */}
-      {isField && <RecentDaysSection />}
+      {hasHistory && <RecentDaysSection />}
     </div>
   );
 }

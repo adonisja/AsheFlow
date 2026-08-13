@@ -2074,6 +2074,37 @@ export interface AssignmentDay {
    * different measurements, and rendering them identically was the bug.
    */
   counts_scope: 'truck' | 'own';
+  /**
+   * Trainees the caller was PAIRED with on this date (ADR-269).
+   *
+   * Empty for every role except a trainer who was actually paired that day —
+   * the pairing IS the authorisation, so this is never a filtered view of a
+   * longer list. Render SEPARATELY from the counts above; merging them
+   * resurrects the ADR-244 attribution bug.
+   */
+  supervised: SupervisedDay[];
+}
+
+/**
+ * A paired trainee's day, as their trainer sees it (ADR-269).
+ *
+ * The same block the trainee sees for themselves, RTS details included:
+ * during training the trainer answers for items on this record, and a bare
+ * count cannot support that conversation. Counts are the trainee's OWN
+ * executed stops, never the truck total.
+ */
+export interface SupervisedDay {
+  employee_id: string;
+  name: string;
+  stops_total: number;
+  packages_total: number;
+  packages_delivered: number;
+  rts_count: number;
+  missing_count: number;
+  rts_rate: number | null;
+  /** Prefer this over rts_rate — same difficulty confound as the parent day. */
+  rts_rate_vs_class: number | null;
+  rts_details: HistoryRTSDetail[];
 }
 
 export interface AssignmentHistoryResponse {
