@@ -53,6 +53,7 @@ OWNERSHIP_ENFORCED = {
     "PATCH /notifications/{notification_id}/read",             # owns notification
     "PATCH /notifications/employee/{employee_id}/read-all",    # caller.id == employee_id
     "POST /employees/me/email/confirm-change",                 # token/code = auth
+    "POST /employees/me/discord/confirm-link",                 # DM code = auth (ADR-270)
     "DELETE /employee-relationships/{employee_relationship_id}",  # owns relationship
     "POST /adp/adjustments/{adjustment_id}/employee-signoff",  # caller.id == employee_id
     "POST /adp/adjustments/{adjustment_id}/reject",            # caller on record or admin

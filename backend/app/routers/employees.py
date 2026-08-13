@@ -8,7 +8,7 @@ from typing import List
 from uuid import UUID
 from botocore.exceptions import ClientError
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 import requests as http_requests
 
@@ -17,11 +17,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, Pagination, get_caller_employee
 from app.core.config import settings
+from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
-from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
+from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
 from app.services.audit import write_audit
 from app.services.email import send_invite_email
 
@@ -1090,3 +1091,169 @@ def confirm_email_change(
     db.commit()
 
     return {"detail": "Email updated successfully.", "email": new_email}
+
+
+# ── Discord account linking (ADR-270) ────────────────────────────────────────
+#
+# WHY THIS IS VERIFIED RATHER THAN A PLAIN FIELD EDIT
+# `employees.discord_id` is not decoration. It is the bot's DM address AND the
+# third step of the auth lookup chain (cognito_sub -> username -> discord_id,
+# see api/deps.py). A user who could set it freely could point their record at
+# a colleague's Discord account and redirect that person's dispatch DMs.
+#
+# So it mirrors the email-change flow directly above: request a code, prove
+# receipt, then write. The difference is where the code lives — Cognito holds
+# the email code for us; for Discord we hold it in Redis with a short TTL.
+#
+# ADR-083 governs the value itself: numeric snowflake, 17-20 digits,
+# VARCHAR(20). `_validate_discord_id` is reused rather than re-implemented so
+# this endpoint cannot drift from EmployeeCreate/EmployeeUpdate.
+
+_DISCORD_CODE_TTL_SECONDS = 600          # 10 minutes, matching typical email codes
+_DISCORD_ATTEMPT_TTL_SECONDS = 3600      # rate-limit window
+_DISCORD_MAX_ATTEMPTS = 5                # requests per window, per caller
+
+
+def _discord_code_key(employee_id: UUID) -> str:
+    return f"discord_link_code:{employee_id}"
+
+
+def _discord_attempt_key(employee_id: UUID) -> str:
+    return f"discord_link_attempts:{employee_id}"
+
+
+class _DiscordLinkRequest(BaseModel):
+    discord_id: str = Field(..., max_length=20)
+
+    @field_validator("discord_id", mode="before")
+    @classmethod
+    def _check(cls, v):
+        # Reuses the ADR-083 validator: a non-snowflake is a 422 here, not a
+        # row we would have to defend against everywhere downstream.
+        validated = _validate_discord_id(v)
+        if validated is None:
+            raise ValueError("discord_id is required")
+        return validated
+
+
+class _DiscordConfirmRequest(_DiscordLinkRequest):
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+@router.post("/me/discord/request-link", status_code=status.HTTP_200_OK)
+def request_discord_link(
+    payload: _DiscordLinkRequest,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(RoleChecker(
+        ["driver", "walker", "trainer", "trainee", "captain",
+         "dispatch", "management", "admin"]
+    )),
+):
+    """Step 1: send a 6-digit code by Discord DM to the claimed account.
+
+    Any authenticated employee may link their OWN account — the write target is
+    `caller`, never an id from the request, so there is nothing to widen.
+
+    The DM is the proof of ownership: only the person holding that Discord
+    account can read the code. A typo therefore DMs a stranger, which is why
+    the message says why it arrived and that it can be ignored.
+    """
+    discord_id = payload.discord_id
+
+    # UNIQUE(company_id, discord_id) — surface the conflict as a 409 rather
+    # than letting the commit fail later with an opaque IntegrityError.
+    taken = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.discord_id == discord_id,
+        Employee.id != caller.id,
+    ).first()
+    if taken:
+        raise HTTPException(
+            status_code=409,
+            detail="That Discord account is already linked to another employee.",
+        )
+
+    r = _get_redis()
+
+    # Rate limit: a code request DMs a third party, so an unbounded endpoint is
+    # a spam vector against arbitrary Discord users.
+    attempts = r.incr(_discord_attempt_key(caller.id))
+    if attempts == 1:
+        r.expire(_discord_attempt_key(caller.id), _DISCORD_ATTEMPT_TTL_SECONDS)
+    if attempts > _DISCORD_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many link attempts. Try again later.",
+        )
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    # Store the code WITH the id it was issued for: confirming must not accept
+    # a code minted for a different account.
+    r.setex(_discord_code_key(caller.id), _DISCORD_CODE_TTL_SECONDS,
+            f"{discord_id}:{code}")
+
+    _fire_discord_dm(
+        discord_id,
+        f"Your AsheFlow verification code is **{code}**.\n"
+        "Someone entered this Discord ID on AsheFlow. If that was not you, "
+        "ignore this message — nothing has been linked.",
+    )
+
+    return {"detail": "Verification code sent by Discord DM."}
+
+
+@router.post("/me/discord/confirm-link", status_code=status.HTTP_200_OK)
+def confirm_discord_link(
+    payload: _DiscordConfirmRequest,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Step 2: confirm the code and write `discord_id` onto the caller."""
+    r = _get_redis()
+    stored = r.get(_discord_code_key(caller.id))
+    if not stored:
+        raise HTTPException(
+            status_code=400,
+            detail="No pending verification, or it expired. Request a new code.",
+        )
+
+    stored_id, _, stored_code = stored.partition(":")
+    # BOTH must match. Checking only the code would let a caller request a code
+    # for an id they control, then confirm it against someone else's id.
+    if stored_id != payload.discord_id or not secrets.compare_digest(
+        stored_code, payload.code
+    ):
+        raise HTTPException(status_code=400, detail="Incorrect verification code.")
+
+    # Re-check uniqueness at write time: another employee may have linked this
+    # id during the 10-minute window.
+    taken = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.discord_id == payload.discord_id,
+        Employee.id != caller.id,
+    ).first()
+    if taken:
+        raise HTTPException(
+            status_code=409,
+            detail="That Discord account is already linked to another employee.",
+        )
+
+    previous = caller.discord_id
+    caller.discord_id = payload.discord_id
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.discord_linked",
+        target_table="employees",
+        target_id=str(caller.id),
+        # No PII: the snowflake is an account identifier, and "who changed
+        # their DM target" is exactly what an audit trail is for.
+        detail={"previous": previous, "new": payload.discord_id},
+    )
+    db.commit()
+
+    r.delete(_discord_code_key(caller.id))
+    return {"detail": "Discord account linked.", "discord_id": payload.discord_id}
