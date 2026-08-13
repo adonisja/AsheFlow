@@ -78,6 +78,33 @@ function returnsLabel(d: { rts: number; damaged: number }): string {
   return parts.join(' · ');
 }
 
+/** Effort class -> bar colour. Difficulty is the story the week tells: a light
+ *  week and a week of heavy routes produce very different numbers, and without
+ *  colour the chart implies they are comparable.
+ *
+ *  Uses the SAME tokens as the effort chip on each day card, so the bar and the
+ *  chip cannot disagree about what "heavy" looks like. */
+function effortColor(effort: string | null, c: ThemeColors): string {
+  if (effort === 'heavy') return c.gold;
+  if (effort === 'easy') return c.info;
+  return c.success;                    // standard, or unknown
+}
+
+/** Who sees the difficulty-normalised rate.
+ *
+ *  The operator's call: it is oversight data, not crew data. A walker being
+ *  told they are "0.48x the rate for heavy routes" is being handed a number
+ *  they cannot act on and did not ask for — worse, it invites self-comparison
+ *  against a company average on a page about their own day.
+ *
+ *  Keyed off the SLOT ROLE held that day, not the job title, so someone who
+ *  ran a route as a walker sees a walker's card for that day. */
+const RATE_VISIBLE_ROLES = ['driver', 'captain', 'dispatch', 'management', 'admin'];
+
+function showsRate(slotRole: string): boolean {
+  return RATE_VISIBLE_ROLES.includes(slotRole);
+}
+
 /** Plain-language reading of rts_rate_vs_class.
  *
  *  "0.33× typical" is meaningless to a walker — the operator asked what it
@@ -193,6 +220,82 @@ function prettyDate(iso: string): string {
   });
 }
 
+/** The selected week as bars, one slot per day Sun-Sat.
+ *
+ *  MOVED here from MyPerformanceCard, where it was a fixed trailing 7 days fed
+ *  by a different endpoint and could not follow the week picker. Built from the
+ *  same `days` the cards below render, so the chart and the cards can never
+ *  disagree, and stepping back a week moves both together.
+ *
+ *  Bar HEIGHT is packages delivered; bar COLOUR is the route's difficulty.
+ *  Height alone implies a light week and a heavy week are comparable, which is
+ *  the confound this whole surface exists to correct for.
+ *
+ *  Days with no assignment render as an empty slot rather than being omitted:
+ *  a gap IS the information ("you did not work Tuesday"), and dropping the slot
+ *  would silently reflow the week. */
+function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
+  const c = useColors();
+  const s = styles(c);
+
+  const byDate = new Map(days.map(d => [d.route_date, d]));
+  const slots = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return { key: ymdOf(d), letter: 'SMTWTFS'[d.getDay()], day: byDate.get(ymdOf(d)) };
+  });
+
+  const max = Math.max(1, ...slots.map(x => x.day?.packages_delivered ?? 0));
+  if (!slots.some(x => x.day)) return null;
+
+  return (
+    <View style={s.chartWrap}>
+      <View style={s.chartRow}>
+        {slots.map(slot => {
+          const delivered = slot.day?.packages_delivered ?? 0;
+          return (
+            <View key={slot.key} style={s.chartCol}>
+              <View style={s.chartBarTrack}>
+                {delivered > 0 && (
+                  <View
+                    style={{
+                      width: '100%',
+                      // 12% floor: a day that was worked must read as a bar, not a
+                      // sliver, even next to a much bigger day.
+                      height: `${Math.max(12, (delivered / max) * 100)}%`,
+                      backgroundColor: effortColor(slot.day?.effort_class ?? null, c),
+                      borderTopLeftRadius: 2,
+                      borderTopRightRadius: 2,
+                    }}
+                  />
+                )}
+              </View>
+              <Text style={[s.chartLabel, { color: c.mutedForeground }]}>{slot.letter}</Text>
+            </View>
+          );
+        })}
+      </View>
+      {/* The legend is the point of the colour — without it the bars are just
+          decorative. Only classes actually present in the week are listed. */}
+      <View style={s.legendRow}>
+        {(['easy', 'standard', 'heavy'] as const)
+          /* `x.day.packages_delivered > 0` is load-bearing: a day with an
+             assignment but no delivered packages draws NO bar, so listing its
+             class advertises a colour the chart never uses. Jul 23 (effort
+             null, 0 delivered) showed a phantom "Standard" entry. */
+          .filter(e => slots.some(x =>
+            x.day && x.day.packages_delivered > 0 && (x.day.effort_class ?? 'standard') === e))
+          .map(e => (
+            <View key={e} style={s.legendItem}>
+              <View style={[s.legendDot, { backgroundColor: effortColor(e, c) }]} />
+              <Text style={[s.legendText, { color: c.mutedForeground }]}>{e}</Text>
+            </View>
+          ))}
+      </View>
+    </View>
+  );
+}
+
 function DayRow({ day }: { day: AssignmentDay }) {
   const c = useColors();
   const s = styles(c);
@@ -211,7 +314,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
     : c.mutedForeground;
 
   return (
-    <View style={[s.row, { borderColor: c.border, backgroundColor: c.background }]}>
+    <View style={[s.row, { borderColor: c.border, backgroundColor: c.surface }]}>
       {/* HEADER — date owns the line. Truck and effort sit on their own row
           beneath it rather than crowding the date: at phone width three items
           on one line left the truck name squeezed between two neighbours, which
@@ -253,7 +356,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
 
       {/* How the day went, in words. "0.48x typical" alone told the reader
           nothing — the phrase carries the meaning and the number backs it up. */}
-      {hasWork && vs !== null && (
+      {hasWork && vs !== null && showsRate(day.slot_role) && (
         <Text style={[s.vsLine, { color: vsColor }]}>
           {vsClassPhrase(vs)}
           <Text style={{ color: c.mutedForeground }}>
@@ -267,7 +370,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
           with no way to see the rest. */}
       {groups.length > 0 && (
         <>
-          <TouchableOpacity onPress={() => setOpenCrew(o => !o)} style={s.toggle}>
+          <TouchableOpacity onPress={() => setOpenCrew(o => !o)} style={[s.toggle, { borderTopColor: c.border }]}>
             <Text style={[s.toggleText, { color: c.mutedForeground }]}>
               {openCrew ? '▾' : '▸'} Crew ({day.crew.length})
             </Text>
@@ -283,20 +386,14 @@ function DayRow({ day }: { day: AssignmentDay }) {
                 </View>
               ))}
             </View>
-          ) : (
-            /* Collapsed peek: role-labelled so it still answers "who drove"
-               without opening, but capped so it cannot overflow the card. */
-            <Text numberOfLines={1} style={[s.crewPeek, { color: c.mutedForeground }]}>
-              {groups.map(g => `${g.label}: ${g.names.join(', ')}`).join('  ·  ')}
-            </Text>
-          )}
+          ) : null}
         </>
       )}
 
       {/* RETURNS — whose, and what kind. "4 came back" said neither. */}
       {day.rts_details.length > 0 && (
         <>
-          <TouchableOpacity onPress={() => setOpenReturns(o => !o)} style={s.toggle}>
+          <TouchableOpacity onPress={() => setOpenReturns(o => !o)} style={[s.toggle, { borderTopColor: c.border }]}>
             <Text style={[s.toggleText, { color: c.mutedForeground }]}>
               {openReturns ? '▾' : '▸'}{' '}
               <Text style={{ color: c.foreground }}>
@@ -340,6 +437,9 @@ function DayRow({ day }: { day: AssignmentDay }) {
               </Text>
               {' delivered'}
             </Text>
+            {/* Kept for the trainer even though a trainer is not in
+                RATE_VISIBLE_ROLES for their OWN day: they answer for this
+                record, which is the whole reason the block exists. */}
             {sup.rts_rate_vs_class != null && (
               <Text style={[s.supervisedLine, {
                 color: sup.rts_rate_vs_class > 1.15 ? c.gold
@@ -355,7 +455,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
               <>
                 <TouchableOpacity
                   onPress={() => setOpenSup(open ? null : sup.employee_id)}
-                  style={s.toggle}
+                  style={[s.toggle, { borderTopColor: c.border }]}
                 >
                   <Text style={[s.toggleText, { color: c.mutedForeground }]}>
                     {open ? '▾' : '▸'}{' '}
@@ -453,6 +553,9 @@ export default function RecentDaysSection() {
         </TouchableOpacity>
       </View>
 
+      {/* The week's shape, immediately under the picker it belongs to. */}
+      {!loading && days && days.length > 0 && <WeekChart days={days} start={start} />}
+
       {loading ? (
         <ActivityIndicator color={c.primary} style={{ marginVertical: spacing.md }} />
       ) : !days || days.length === 0 ? (
@@ -480,7 +583,21 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   weekLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   empty:     { fontSize: 11, fontStyle: 'italic', paddingVertical: spacing.sm, textAlign: 'center' },
 
-  row:       { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, marginBottom: spacing.xs },
+  // Chart, inside the week picker block
+  chartWrap:     { marginBottom: spacing.md },
+  chartRow:      { flexDirection: 'row', height: 76, gap: 6, alignItems: 'flex-end' },
+  chartCol:      { flex: 1, alignItems: 'center' },
+  chartBarTrack: { flex: 1, width: '100%', justifyContent: 'flex-end' },
+  chartLabel:    { fontSize: 9, marginTop: 3 },
+  legendRow:     { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs, justifyContent: 'center' },
+  legendItem:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  legendDot:     { width: 7, height: 7, borderRadius: 2 },
+  legendText:    { fontSize: 9, textTransform: 'capitalize' },
+
+  // Cards get real breathing room and a surface fill, so each day reads as its
+  // own object rather than one continuous wall of text. Spacing alone was not
+  // enough — without the fill the borders were the only separator.
+  row:       { borderWidth: 1, borderRadius: radius.lg, paddingHorizontal: spacing.md, paddingVertical: spacing.md, marginBottom: spacing.sm },
 
   // Date owns its line; the count sits opposite it. Truck/effort/scope drop to
   // a second row so nothing is squeezed between two neighbours at phone width.
@@ -504,7 +621,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   crewRole:  { fontSize: 10, fontWeight: fontWeight.bold, textTransform: 'uppercase', letterSpacing: 0.4, width: 62 },
   crewNames: { fontSize: 11, flex: 1 },
 
-  toggle:    { marginTop: 6 },
+  // A hairline above each expander turns "one wall of lines" into labelled
+  // bands: identity / performance / crew / returns.
+  toggle:    { marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth },
   toggleText:{ fontSize: 11 },
   details:   { marginTop: 4, gap: 2 },
   policy:    { fontSize: 10, fontStyle: 'italic' },

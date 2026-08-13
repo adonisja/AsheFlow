@@ -95,6 +95,29 @@ function returnsLabel(d: { rts: number; damaged: number }): string {
   return parts.join(' · ');
 }
 
+/** Effort class -> bar colour. Difficulty is the story the week tells: a light
+ *  week and a heavy week produce very different numbers, and without colour the
+ *  chart implies they are comparable. Same tokens as the effort chip on each
+ *  card, so bar and chip cannot disagree about what "heavy" looks like. */
+const EFFORT_BAR: Record<string, string> = {
+  easy: 'bg-info', standard: 'bg-success', heavy: 'bg-warning',
+};
+function effortBar(effort: string | null): string {
+  return EFFORT_BAR[effort ?? 'standard'] ?? 'bg-success';
+}
+
+/** Who sees the difficulty-normalised rate.
+ *
+ *  Oversight data, not crew data. A walker told they are "0.48× the rate for
+ *  heavy routes" is handed a number they cannot act on, and it invites
+ *  self-comparison against a company average on a page about their own day.
+ *
+ *  Keyed off the SLOT ROLE held that day, not the job title. */
+const RATE_VISIBLE_ROLES = ['driver', 'captain', 'dispatch', 'management', 'admin'];
+function showsRate(slotRole: string): boolean {
+  return RATE_VISIBLE_ROLES.includes(slotRole);
+}
+
 /** Plain-language reading of rts_rate_vs_class. "0.33× typical" is meaningless
  *  on its own; this is what it means — the return rate against the company
  *  average FOR ROUTES OF THE SAME DIFFICULTY. */
@@ -130,6 +153,74 @@ function groupCrew(crew: { name: string; role: string }[]) {
     }));
 }
 
+/** The selected week as bars, one slot per day Sun–Sat.
+ *
+ *  Lives INSIDE the week picker so it moves with it. Built from the same `days`
+ *  the cards below render, so chart and cards can never disagree.
+ *
+ *  Bar HEIGHT is packages delivered; bar COLOUR is the route's difficulty.
+ *  Height alone implies a light week and a heavy week are comparable, which is
+ *  the confound this surface exists to correct.
+ *
+ *  Days with no assignment render as an empty slot: the gap IS the information
+ *  ("you did not work Tuesday"), and omitting it would reflow the week. */
+function WeekChart({ days, start }: { days: AssignmentDay[]; start: Date }) {
+  const byDate = new Map(days.map(d => [d.route_date, d]));
+  const slots = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return { key: ymdOf(d), letter: 'SMTWTFS'[d.getDay()], day: byDate.get(ymdOf(d)) };
+  });
+
+  const max = Math.max(1, ...slots.map(x => x.day?.packages_delivered ?? 0));
+  if (!slots.some(x => x.day)) return null;
+
+  const present = (['easy', 'standard', 'heavy'] as const).filter(e =>
+    /* `packages_delivered > 0` is load-bearing: a day with an assignment but no
+       delivered packages draws NO bar, so listing its class advertises a colour
+       the chart never uses. */
+    slots.some(x => x.day && x.day.packages_delivered > 0 &&
+                    (x.day.effort_class ?? 'standard') === e));
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-end gap-1.5 h-20">
+        {slots.map(slot => {
+          const delivered = slot.day?.packages_delivered ?? 0;
+          return (
+            <div key={slot.key} className="flex-1 flex flex-col items-center justify-end h-full">
+              {delivered > 0 && (
+                <div
+                  className={`w-full rounded-t ${effortBar(slot.day?.effort_class ?? null)}`}
+                  /* 12% floor: a worked day must read as a bar, not a sliver. */
+                  style={{ height: `${Math.max(12, (delivered / max) * 100)}%` }}
+                  title={`${delivered} delivered · ${slot.day?.effort_class ?? 'standard'}`}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex gap-1.5 mt-1">
+        {slots.map(slot => (
+          <span key={slot.key} className="flex-1 text-center text-[9px] text-muted-foreground">
+            {slot.letter}
+          </span>
+        ))}
+      </div>
+      {/* The legend is the point of the colour — without it the bars are just
+          decorative. Only classes actually drawn are listed. */}
+      <div className="flex justify-center gap-3 mt-1.5">
+        {present.map(e => (
+          <span key={e} className="flex items-center gap-1 text-[9px] text-muted-foreground capitalize">
+            <span className={`w-1.5 h-1.5 rounded-sm ${effortBar(e)}`} />{e}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DayRow({ day }: { day: AssignmentDay }) {
   const [openReturns, setOpenReturns] = useState(false);
   const [openCrew, setOpenCrew] = useState(false);
@@ -146,7 +237,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
     : 'text-muted-foreground';
 
   return (
-    <div className="rounded-lg border border-border bg-background px-3 py-2.5">
+    <div className="rounded-xl border border-border bg-card px-4 py-3.5">
       {/* HEADER — the date owns its line, the count sits opposite. Truck and
           effort drop to a second row rather than being squeezed between two
           neighbours at narrow widths. */}
@@ -185,7 +276,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
 
       {/* How the day went, in words. The multiplier alone told the reader
           nothing — the phrase carries the meaning, the number supports it. */}
-      {hasWork && vs !== null && (
+      {hasWork && vs !== null && showsRate(day.slot_role) && (
         <p className={`text-[11px] font-semibold mt-1 ${vsTone}`}>
           {vsClassPhrase(vs)}
           <span className="font-normal text-muted-foreground">
@@ -200,8 +291,8 @@ function DayRow({ day }: { day: AssignmentDay }) {
         <>
           <button
             onClick={() => setOpenCrew(o => !o)}
-            className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground
-                       hover:text-foreground transition-colors"
+            className="mt-2.5 pt-2.5 border-t border-border/60 w-full flex items-center gap-1
+                       text-[11px] text-muted-foreground hover:text-foreground transition-colors"
           >
             {openCrew ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             <Users className="w-3 h-3" /> Crew ({day.crew.length})
@@ -218,11 +309,7 @@ function DayRow({ day }: { day: AssignmentDay }) {
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-              {groups.map(g => `${g.label}: ${g.names.join(', ')}`).join('  ·  ')}
-            </p>
-          )}
+          ) : null}
         </>
       )}
 
@@ -231,8 +318,8 @@ function DayRow({ day }: { day: AssignmentDay }) {
         <>
           <button
             onClick={() => setOpenReturns(o => !o)}
-            className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground
-                       hover:text-foreground transition-colors text-left"
+            className="mt-2.5 pt-2.5 border-t border-border/60 w-full flex items-center gap-1
+                       text-[11px] text-muted-foreground hover:text-foreground transition-colors text-left"
           >
             {openReturns ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
             <span className="text-foreground font-medium">
@@ -272,6 +359,9 @@ function DayRow({ day }: { day: AssignmentDay }) {
                 {sup.packages_delivered}/{sup.packages_total}
               </span> delivered
             </p>
+            {/* Kept for the trainer even though a trainer is not in
+                RATE_VISIBLE_ROLES for their OWN day: they answer for this
+                record, which is why the block exists. */}
             {sup.rts_rate_vs_class != null && (
               <p className={`text-[11px] ${
                 sup.rts_rate_vs_class > 1.15 ? 'text-warning'
@@ -387,6 +477,9 @@ export default function RecentDaysSection() {
         </button>
       </div>
 
+      {/* The week's shape, immediately under the picker it belongs to. */}
+      {!loading && days && days.length > 0 && <WeekChart days={days} start={start} />}
+
       {loading ? (
         <p className="text-[11px] text-muted-foreground italic py-2 text-center">Loading…</p>
       ) : !days || days.length === 0 ? (
@@ -396,7 +489,7 @@ export default function RecentDaysSection() {
           No assignments {offset === 0 ? 'yet this week' : 'that week'}.
         </p>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2.5">
           {days.map(d => <DayRow key={`${d.route_date}-${d.truck_name ?? ''}`} day={d} />)}
         </div>
       )}

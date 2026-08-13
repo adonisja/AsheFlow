@@ -55,7 +55,6 @@ export default function MyPerformanceCard() {
   //              per-day history away with it.
   const isField = ['walker', 'trainee', 'driver', 'captain', 'trainer'].includes(data.role);
   const hasHistory = isField;
-  const maxDaily = Math.max(1, ...data.daily_last_week.map(d => Math.max(d.delivered, d.rts)));
 
   const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
     <View style={[s.tile, { backgroundColor: c.background, borderColor: c.border }]}>
@@ -88,23 +87,12 @@ export default function MyPerformanceCard() {
             {data.lifetime_rts.toLocaleString()} RTS · {data.lifetime_missing.toLocaleString()} missing (lifetime)
           </Text>
 
-          {/* Last 7 days delivered vs RTS */}
-          <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>LAST 7 DAYS</Text>
-          <View style={s.barRow}>
-            {data.daily_last_week.map(d => (
-              <View key={d.day} style={s.barCol}>
-                <View style={s.barStack}>
-                  {d.rts > 0 && <View style={{ width: '100%', height: `${(d.rts / maxDaily) * 100}%`, backgroundColor: c.gold, borderTopLeftRadius: 2, borderTopRightRadius: 2 }} />}
-                  <View style={{ width: '100%', height: `${(d.delivered / maxDaily) * 100}%`, backgroundColor: c.success }} />
-                </View>
-                <Text style={[s.barLabel, { color: c.mutedForeground }]}>{d.day.slice(5)}</Text>
-              </View>
-            ))}
-          </View>
-          <View style={s.legend}>
-            <View style={s.legendItem}><View style={[s.dot, { backgroundColor: c.success }]} /><Text style={[s.legendText, { color: c.mutedForeground }]}>Delivered</Text></View>
-            <View style={s.legendItem}><View style={[s.dot, { backgroundColor: c.gold }]} /><Text style={[s.legendText, { color: c.mutedForeground }]}>RTS</Text></View>
-          </View>
+          {/* The 7-day chart MOVED to RecentDaysSection (below), inside the
+              week picker. Here it was a fixed trailing week from a different
+              endpoint, so it could not follow the week being viewed and told a
+              story disconnected from the cards underneath it. The lifetime
+              tiles and the 30-day RTS reason breakdown stay: those are
+              genuinely period-independent. */}
 
           {/* 30-day RTS reasons */}
           {data.rts_reasons_30d.length > 0 && (
@@ -154,10 +142,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tileSub:     { fontSize: 10 },
   subLine:     { fontSize: fontSize.xs, marginTop: spacing.sm },
   sectionLabel:{ fontSize: 10, fontWeight: fontWeight.bold, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: spacing.md, marginBottom: spacing.xs },
-  barRow:      { flexDirection: 'row', alignItems: 'flex-end', height: 90, gap: spacing.xs },
-  barCol:      { flex: 1, alignItems: 'center' },
-  barStack:    { width: '100%', height: 74, flexDirection: 'column', justifyContent: 'flex-end' },
-  barLabel:    { fontSize: 9, marginTop: 2 },
   legend:      { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs },
   legendItem:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
   dot:         { width: 8, height: 8, borderRadius: 2 },

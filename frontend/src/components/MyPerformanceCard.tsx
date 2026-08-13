@@ -42,7 +42,6 @@ export default function MyPerformanceCard() {
   // Must stay identical to mobile/src/components/MyPerformanceCard.tsx.
   const isField = ['walker', 'trainee', 'driver', 'captain', 'trainer'].includes(data.role);
   const hasHistory = isField;
-  const maxDaily = Math.max(1, ...data.daily_last_week.map(d => Math.max(d.delivered, d.rts)));
   const maxWeek = Math.max(1, ...data.weekly_trend.map(w => w.delivered));
 
   return (
@@ -82,29 +81,12 @@ export default function MyPerformanceCard() {
             {data.lifetime_rts.toLocaleString()} RTS · {data.lifetime_missing.toLocaleString()} missing (lifetime)
           </p>
 
-          {/* Last 7 days delivered vs RTS */}
-          <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Last 7 days</p>
-            <div className="flex items-end gap-2 h-24">
-              {data.daily_last_week.map(d => (
-                <div key={d.day} className="flex-1 flex flex-col items-center justify-end gap-0.5">
-                  <div className="w-full flex flex-col items-center justify-end gap-0.5" style={{ height: '100%' }}>
-                    <div className="w-full rounded-t bg-emerald-500/80"
-                         style={{ height: `${(d.delivered / maxDaily) * 100}%` }} title={`${d.delivered} delivered`} />
-                    {d.rts > 0 && (
-                      <div className="w-full rounded-t bg-amber-500/80"
-                           style={{ height: `${(d.rts / maxDaily) * 100}%` }} title={`${d.rts} RTS`} />
-                    )}
-                  </div>
-                  <span className="text-[10px] text-muted-foreground">{d.day.slice(5)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-4 mt-1 text-[10px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500/80" /> Delivered</span>
-              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500/80" /> RTS</span>
-            </div>
-          </div>
+          {/* The 7-day chart MOVED to RecentDaysSection, inside the week
+              picker. Here it was a fixed trailing week from a different
+              endpoint, so it could not follow the week being viewed and told a
+              story disconnected from the cards underneath it. The 4-week trend
+              below stays: it answers a different question (am I trending up
+              over a month) and is not duplicated anywhere. */}
 
           {/* 4-week trend */}
           <div>
