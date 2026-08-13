@@ -1,6 +1,7 @@
 """Past assignment history and day replay (ADR-268).
 
   GET /assignment-history/me            any employee — own days only
+  GET /assignment-history/me/stats      any employee — own slim series
   GET /assignment-history/day/{date}    dispatch+   — a whole past day
   GET /assignment-history/{employee_id} dispatch+   — anyone's days
 
@@ -24,8 +25,12 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.schemas.assignment_history import AssignmentHistoryResponse
 from app.schemas.dispatch_replay import DayReplayOut
+from app.schemas.stats_series import LifetimeTotalsOut, MyStatsOut, StatsSeriesOut
 from app.services.assignment_history import get_assignment_history
 from app.services.dispatch_replay import get_day_replay
+from app.services.stats_series import (
+    MAX_LOOKBACK_MONTHS, get_lifetime_totals, get_stats_series,
+)
 
 router = APIRouter(prefix="/assignment-history", tags=["assignment-history"])
 
@@ -137,3 +142,44 @@ def get_day_replay_endpoint(
     is a legitimate answer, and it renders as zeros without a special case.
     """
     return get_day_replay(db, caller.company_id, day)
+
+
+@router.get("/me/stats", response_model=MyStatsOut)
+def get_my_stats(
+    months: int = Query(
+        MAX_LOOKBACK_MONTHS, ge=1, le=MAX_LOOKBACK_MONTHS,
+        description="Lookback in months. Capped — an unbounded window lets one "
+                    "request walk the whole table.",
+    ),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """The caller's own lifetime totals plus a slim daily series (ADR-271).
+
+    ONE request serves the whole drill-down. Year, month and week are all
+    groupings of the same daily rows, so the client aggregates on device rather
+    than asking the server four times for four views of one dataset. Measured:
+    54 bytes per day here against 1,978 for the full history payload, because
+    the crew roster — not the numbers — is what makes that one heavy.
+
+    THE SERIES ENDS YESTERDAY. Today is in flight, so including it would make
+    the payload change under a reader who cached it. Excluding it is what makes
+    the cache safe: nothing here can change after it is served.
+
+    Self-scoped exactly like /me above — the signature takes no employee
+    parameter, so there is nothing a caller could pass to widen it. Ungated by
+    role: everyone may read their own stats, and `role` is echoed back only so
+    the client knows which damage figures apply (ADR-271 F).
+
+    Day DETAIL (truck, crew, RTS explanations) is deliberately NOT here. It is
+    fetched from /assignment-history/me when a day is opened, which is the only
+    level that needs it.
+    """
+    lifetime = get_lifetime_totals(db, caller.company_id, caller.id, caller.role)
+    series = get_stats_series(
+        db, caller.company_id, caller.id, caller.role, months=months
+    )
+    return MyStatsOut(
+        lifetime=LifetimeTotalsOut.model_validate(lifetime, from_attributes=True),
+        series=StatsSeriesOut.model_validate(series, from_attributes=True),
+    )
