@@ -19,18 +19,38 @@
 import { useEffect, useState } from 'react';
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
-import { getLocalYMD } from '../utils/date';
 import type {
   AssignmentDay, AssignmentHistoryResponse, HistoryRTSDetail,
 } from '../api/types';
 import { ChevronDown, ChevronUp, Truck, Users } from 'lucide-react';
 
-const LOOKBACK_DAYS = 30;
+/** Sunday-anchored week containing today, shifted by `offset` weeks.
+ *
+ *  One week at a time, not 30 days: thirty rows of truck + crew + returns is
+ *  more than anyone reads, and a week is the unit people already think in.
+ *
+ *  Built from local Y/M/D parts — `new Date('2026-08-07')` is midnight UTC and
+ *  lands on the 6th in any timezone behind it, shifting the whole week. */
+function weekBounds(offset: number): { start: Date; end: Date } {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const start = new Date(today);
+  start.setDate(today.getDate() - today.getDay() + offset * 7);  // getDay(): 0 = Sunday
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start, end };
+}
 
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function ymdOf(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function weekLabel(offset: number, start: Date, end: Date): string {
+  if (offset === 0) return 'This week';
+  if (offset === -1) return 'Last week';
+  const f = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `${f(start)} – ${f(end)}`;
 }
 
 function prettyDate(iso: string): string {
@@ -51,83 +71,179 @@ const RTS_LABEL: Record<string, string> = {
   customer_cancelled_order: 'Customer cancelled',
 };
 
+/** Returns split into RTS vs DAMAGED, which are not the same outcome.
+ *
+ *  `package_damaged` is one of the six RTS_TYPES on the wire, but the package
+ *  is destroyed rather than merely undelivered — our system tracks it apart
+ *  (DamagedPackage, ADR-190) and Amazon scores it separately. Collapsing both
+ *  into "3 back" hides the one a manager has to act on.
+ *
+ *  Deliberately NOT a per-reason breakdown: the full reason list renders
+ *  immediately below when expanded, so listing it here duplicates the same
+ *  facts twice on one card. */
+function summariseReturns(details: HistoryRTSDetail[]): { rts: number; damaged: number } {
+  let damaged = 0;
+  for (const r of details) if (r.rts_type === 'package_damaged') damaged++;
+  return { rts: details.length - damaged, damaged };
+}
+
+/** "3 RTS", "2 RTS · 1 damaged", "1 damaged". */
+function returnsLabel(d: { rts: number; damaged: number }): string {
+  const parts: string[] = [];
+  if (d.rts > 0) parts.push(`${d.rts} RTS`);
+  if (d.damaged > 0) parts.push(`${d.damaged} damaged`);
+  return parts.join(' · ');
+}
+
+/** Plain-language reading of rts_rate_vs_class. "0.33× typical" is meaningless
+ *  on its own; this is what it means — the return rate against the company
+ *  average FOR ROUTES OF THE SAME DIFFICULTY. */
+function vsClassPhrase(vs: number): string {
+  if (vs < 0.75) return 'fewer returns than usual';
+  if (vs < 0.95) return 'slightly fewer than usual';
+  if (vs <= 1.15) return 'about usual';
+  if (vs <= 1.5) return 'slightly more than usual';
+  return 'more returns than usual';
+}
+
+/** Crew grouped by the role held THAT DAY, in operational reading order.
+ *  `role` was already on every crew member and the UI discarded it — "who was
+ *  the driver" is the first thing anyone asks of a past day. */
+const CREW_ORDER = ['driver', 'captain', 'trainer', 'walker', 'trainee'];
+const CREW_LABEL: Record<string, string> = {
+  driver: 'Driver', captain: 'Captain', trainer: 'Trainer',
+  walker: 'Walkers', trainee: 'Trainees',
+};
+
+function groupCrew(crew: { name: string; role: string }[]) {
+  const by = new Map<string, string[]>();
+  for (const m of crew) (by.get(m.role) ?? by.set(m.role, []).get(m.role)!).push(m.name);
+  return [...by.entries()]
+    .sort((a, b) => {
+      const ia = CREW_ORDER.indexOf(a[0]); const ib = CREW_ORDER.indexOf(b[0]);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    })
+    .map(([role, names]) => ({
+      role,
+      label: CREW_LABEL[role] ?? role.charAt(0).toUpperCase() + role.slice(1),
+      names,
+    }));
+}
+
 function DayRow({ day }: { day: AssignmentDay }) {
-  const [open, setOpen] = useState(false);
+  const [openReturns, setOpenReturns] = useState(false);
+  const [openCrew, setOpenCrew] = useState(false);
+  const [openSup, setOpenSup] = useState<string | null>(null);
+
   const hasWork = day.packages_total > 0;
   const vs = day.rts_rate_vs_class;
+  const groups = groupCrew(day.crew);
+  const supervised = day.supervised ?? [];
+
+  const vsTone = vs === null ? 'text-muted-foreground'
+    : vs < 0.95 ? 'text-success'
+    : vs > 1.15 ? 'text-warning'
+    : 'text-muted-foreground';
 
   return (
-    <div className="rounded-lg border border-border bg-background px-3 py-2">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-foreground">{prettyDate(day.route_date)}</span>
-            {day.truck_name && (
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Truck className="w-3 h-3" />{day.truck_name}
-              </span>
-            )}
-            {day.effort_class && day.effort_class !== 'standard' && (
-              /* Only exceptions earn a chip — 'standard' on every row is noise
-                 that hides the heavy days. */
-              <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide ${
-                day.effort_class === 'heavy' ? 'bg-warning/15 text-warning' : 'bg-info/10 text-info'
-              }`}>
-                {day.effort_class}
-              </span>
-            )}
-          </div>
-          {day.crew.length > 0 && (
-            <p className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
-              <Users className="w-3 h-3 shrink-0" />
-              <span className="truncate">{day.crew.map(c => c.name).join(', ')}</span>
-            </p>
-          )}
-        </div>
-
+    <div className="rounded-lg border border-border bg-background px-3 py-2.5">
+      {/* HEADER — the date owns its line, the count sits opposite. Truck and
+          effort drop to a second row rather than being squeezed between two
+          neighbours at narrow widths. */}
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-base font-bold text-foreground">{prettyDate(day.route_date)}</span>
         {hasWork && (
-          <div className="text-right shrink-0">
-            <p className="text-sm font-semibold text-foreground leading-none">
-              {day.packages_delivered}
-              <span className="text-muted-foreground font-normal">/{day.packages_total}</span>
-            </p>
-            {/* WHOSE numbers these are. A walker's 142 and a driver's 2,865 are
-                different measurements, and rendering them identically was the
-                original bug (ADR-268). */}
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              {day.counts_scope === 'truck' ? 'whole truck' : 'your stops'}
-            </p>
-            {vs !== null ? (
-              /* The verdict. The raw rate alone would mark whoever drew the
-                 heavy routes as worse; this is the comparison that is fair. */
-              <p className={`text-[10px] mt-0.5 ${
-                vs < 0.95 ? 'text-success' : vs > 1.15 ? 'text-warning' : 'text-muted-foreground'
-              }`}>
-                {vs.toFixed(2)}× typical
-              </p>
-            ) : day.rts_count > 0 && (
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                {day.rts_count} returned
-              </p>
-            )}
-          </div>
+          <span className="text-base font-bold text-foreground tabular-nums shrink-0">
+            {day.packages_delivered}
+            <span className="font-normal text-muted-foreground">/{day.packages_total}</span>
+          </span>
         )}
       </div>
 
+      <div className="flex items-center gap-1.5 flex-wrap mt-1">
+        {day.truck_name && (
+          /* A bordered pill, not bare text: the truck is an identifier and was
+             disappearing between the date and the effort chip. */
+          <span className="flex items-center gap-1 text-[11px] font-semibold text-foreground
+                           border border-border rounded px-1.5 py-0.5">
+            <Truck className="w-3 h-3" />{day.truck_name}
+          </span>
+        )}
+        {day.effort_class && day.effort_class !== 'standard' && (
+          <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide font-bold ${
+            day.effort_class === 'heavy' ? 'bg-warning/15 text-warning' : 'bg-info/10 text-info'
+          }`}>
+            {day.effort_class}
+          </span>
+        )}
+        {hasWork && (
+          <span className="text-[10px] text-muted-foreground">
+            {day.counts_scope === 'truck' ? 'whole truck' : 'your stops'}
+          </span>
+        )}
+      </div>
+
+      {/* How the day went, in words. The multiplier alone told the reader
+          nothing — the phrase carries the meaning, the number supports it. */}
+      {hasWork && vs !== null && (
+        <p className={`text-[11px] font-semibold mt-1 ${vsTone}`}>
+          {vsClassPhrase(vs)}
+          <span className="font-normal text-muted-foreground">
+            {' '}({vs.toFixed(2)}× the rate for {day.effort_class ?? 'standard'} routes)
+          </span>
+        </p>
+      )}
+
+      {/* CREW — grouped by role, expandable. The old truncated single line
+          could not answer "who was driving" and ran off the card. */}
+      {groups.length > 0 && (
+        <>
+          <button
+            onClick={() => setOpenCrew(o => !o)}
+            className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground
+                       hover:text-foreground transition-colors"
+          >
+            {openCrew ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            <Users className="w-3 h-3" /> Crew ({day.crew.length})
+          </button>
+          {openCrew ? (
+            <div className="mt-1 space-y-0.5">
+              {groups.map(g => (
+                <div key={g.role} className="flex gap-2 text-[11px]">
+                  <span className="w-16 shrink-0 uppercase tracking-wide font-bold
+                                   text-muted-foreground text-[10px] pt-px">
+                    {g.label}
+                  </span>
+                  <span className="text-foreground">{g.names.join(', ')}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+              {groups.map(g => `${g.label}: ${g.names.join(', ')}`).join('  ·  ')}
+            </p>
+          )}
+        </>
+      )}
+
+      {/* RETURNS — whose, and what kind. "4 came back" said neither. */}
       {day.rts_details.length > 0 && (
         <>
           <button
-            onClick={() => setOpen(o => !o)}
-            className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setOpenReturns(o => !o)}
+            className="mt-1.5 flex items-center gap-1 text-[11px] text-muted-foreground
+                       hover:text-foreground transition-colors text-left"
           >
-            {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-            {day.rts_details.length} came back
+            {openReturns ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+            <span className="text-foreground font-medium">
+              {day.counts_scope === 'truck' ? 'Truck brought back' : 'You brought back'}{' '}
+              {returnsLabel(summariseReturns(day.rts_details))}
+            </span>
           </button>
-          {open && (
+          {openReturns && (
             <div className="mt-1.5 space-y-1">
               {day.address_detail === 'block' && (
-                /* The address is gone by POLICY (ADR-219), not by failure.
-                   Without this the blank reads as lost data. */
+                /* Gone by POLICY (ADR-219), not by failure. */
                 <p className="text-[10px] text-muted-foreground italic">
                   Street addresses are removed 48h after the route.
                 </p>
@@ -138,34 +254,55 @@ function DayRow({ day }: { day: AssignmentDay }) {
         </>
       )}
 
-      {/* Supervised trainees (ADR-269). Rendered SEPARATELY and indented — the
-          counts above are the trainer's own executed stops, these are the
-          trainee's. Merging them is the ADR-244 attribution bug and makes both
-          numbers unreadable.
-
-          Kept field-for-field identical to the mobile RecentDaysSection: two
-          hand-maintained renderers over one endpoint, so any change here lands
-          there in the same commit. */}
-      {(day.supervised ?? []).map(sup => (
-        <div key={sup.employee_id} className="mt-2 pl-2 border-l-2 border-primary/60">
-          <p className="text-xs font-semibold text-foreground">
-            {sup.name}
-            <span className="ml-1 font-normal text-[11px] text-muted-foreground">
-              · you supervised
-            </span>
-          </p>
-          <p className="text-[11px] text-muted-foreground mb-0.5">
-            {sup.packages_delivered}/{sup.packages_total} delivered
-            {sup.rts_count > 0 && ` · ${sup.rts_count} back`}
-            {/* vs_class, not the raw rate: a trainee on a heavy route is not
-                worse than one on an easy route at the same raw number. */}
-            {sup.rts_rate_vs_class != null && ` · ${sup.rts_rate_vs_class}× typical`}
-          </p>
-          <div className="space-y-1">
-            {sup.rts_details.map(r => <RTSRow key={r.tba_number} r={r} />)}
+      {/* SUPERVISED TRAINEES (ADR-269). Separate from the counts above, never
+          merged — that is the ADR-244 attribution bug. Their returns collapse
+          behind their own expander so nine returns do not bury the week. */}
+      {supervised.map(sup => {
+        const open = openSup === sup.employee_id;
+        return (
+          <div key={sup.employee_id} className="mt-2 pl-2 border-l-2 border-primary/60">
+            <p className="text-xs font-semibold text-foreground">
+              {sup.name}
+              <span className="ml-1.5 font-normal text-[10px] text-muted-foreground">
+                trainee you supervised
+              </span>
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground tabular-nums">
+                {sup.packages_delivered}/{sup.packages_total}
+              </span> delivered
+            </p>
+            {sup.rts_rate_vs_class != null && (
+              <p className={`text-[11px] ${
+                sup.rts_rate_vs_class > 1.15 ? 'text-warning'
+                  : sup.rts_rate_vs_class < 0.95 ? 'text-success' : 'text-muted-foreground'
+              }`}>
+                {vsClassPhrase(sup.rts_rate_vs_class)}
+                <span className="text-muted-foreground"> ({sup.rts_rate_vs_class.toFixed(2)}×)</span>
+              </p>
+            )}
+            {sup.rts_details.length > 0 && (
+              <>
+                <button
+                  onClick={() => setOpenSup(open ? null : sup.employee_id)}
+                  className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground
+                             hover:text-foreground transition-colors text-left"
+                >
+                  {open ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+                  <span className="text-foreground font-medium">
+                    Brought back {returnsLabel(summariseReturns(sup.rts_details))}
+                  </span>
+                </button>
+                {open && (
+                  <div className="mt-1 space-y-1">
+                    {sup.rts_details.map(r => <RTSRow key={r.tba_number} r={r} />)}
+                  </div>
+                )}
+              </>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -195,30 +332,74 @@ function RTSRow({ r }: { r: HistoryRTSDetail }) {
 }
 
 export default function RecentDaysSection() {
+  // 0 = this week, -1 = last week. Capped at 0: there is no history for days
+  // that have not happened.
+  const [offset, setOffset] = useState(0);
   const [days, setDays] = useState<AssignmentDay[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const { start, end } = weekBounds(offset);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     axiosClient.get<AssignmentHistoryResponse>('/assignment-history/me', {
-      params: { start_date: daysAgo(LOOKBACK_DAYS), end_date: getLocalYMD() },
+      params: { start_date: ymdOf(start), end_date: ymdOf(end) },
     })
       .then(({ data }) => setDays(data.days))
-      .catch(e => setError(errorText(e, 'Could not load your recent days.')));
-  }, []);
+      .catch(e => setError(errorText(e, 'Could not load your recent days.')))
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offset]);
 
   // Silent on failure, matching MyPerformanceCard: a stats section must not
   // error the account page around it.
-  if (error || !days || days.length === 0) return null;
+  if (error) return null;
 
   return (
     <div className="mt-4 pt-4 border-t border-border">
-      <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm font-semibold text-foreground">Recent days</h3>
-        <span className="text-[11px] text-muted-foreground">last {LOOKBACK_DAYS} days</span>
+      <h3 className="text-sm font-semibold text-foreground mb-2">Recent days</h3>
+
+      {/* Week navigation. Next is disabled at offset 0 rather than hidden, so
+          the control does not move as you step between weeks. */}
+      <div className="flex items-center justify-between mb-2.5">
+        <button
+          onClick={() => setOffset(o => o - 1)}
+          className="px-2 py-0.5 rounded border border-border text-foreground
+                     hover:bg-accent/30 transition-colors"
+          aria-label="Previous week"
+        >
+          ‹
+        </button>
+        <span className="text-sm font-semibold text-foreground">
+          {weekLabel(offset, start, end)}
+        </span>
+        <button
+          onClick={() => setOffset(o => Math.min(0, o + 1))}
+          disabled={offset >= 0}
+          className="px-2 py-0.5 rounded border border-border text-foreground
+                     hover:bg-accent/30 transition-colors disabled:opacity-30
+                     disabled:hover:bg-transparent"
+          aria-label="Next week"
+        >
+          ›
+        </button>
       </div>
-      <div className="space-y-1.5">
-        {days.map(d => <DayRow key={`${d.route_date}-${d.truck_name ?? ''}`} day={d} />)}
-      </div>
+
+      {loading ? (
+        <p className="text-[11px] text-muted-foreground italic py-2 text-center">Loading…</p>
+      ) : !days || days.length === 0 ? (
+        /* An empty week is a real answer — "you did not work" — and must not
+           render as a missing section the way the 30-day view did. */
+        <p className="text-[11px] text-muted-foreground italic py-2 text-center">
+          No assignments {offset === 0 ? 'yet this week' : 'that week'}.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {days.map(d => <DayRow key={`${d.route_date}-${d.truck_name ?? ''}`} day={d} />)}
+        </div>
+      )}
     </div>
   );
 }
