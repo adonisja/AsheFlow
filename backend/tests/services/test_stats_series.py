@@ -422,9 +422,9 @@ class TestPeriodExtras:
         for _ in range(4):
             self._stop_on(db, emp, w2, "W_99_St_900", total=10, rts=1)
 
-        b1, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        b1, _, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                   w1 - timedelta(days=1), w1 + timedelta(days=1))
-        b2, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        b2, _, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                   w2 - timedelta(days=1), w2 + timedelta(days=1))
 
         assert [b.block_key for b in b1] == ["W_11_St_100"]
@@ -444,7 +444,7 @@ class TestPeriodExtras:
         for _ in range(3):
             self._stop_on(db, emp, when, "HARD_St_200", total=10, rts=6)
 
-        blocks, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        blocks, _, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                       when - timedelta(days=1), when + timedelta(days=1))
         assert blocks[0].block_key == "HARD_St_200", (
             "ranked by volume instead of difficulty"
@@ -460,7 +460,7 @@ class TestPeriodExtras:
         for _ in range(4):
             self._stop_on(db, emp, when, "REAL_St_200", total=10, rts=3)  # 30%
 
-        blocks, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        blocks, _, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                       when - timedelta(days=1), when + timedelta(days=1))
         assert blocks[0].block_key == "REAL_St_200", (
             "a 1-stop block with a 100% rate was ranked above a real pattern"
@@ -478,7 +478,7 @@ class TestPeriodExtras:
             ))
         db.commit()
 
-        _, att = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        _, att, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                    base, base + timedelta(days=6))
         assert att.total == 5
         assert att.present == 3 and att.ncns == 1 and att.late == 1
@@ -488,7 +488,7 @@ class TestPeriodExtras:
         """'No roll calls recorded' is not '0% attendance'."""
         from app.services.stats_series import get_period_extras
         emp = make_employee(db, role="walker", name="NoRoll")
-        _, att = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        _, att, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                    date.today() - timedelta(days=5), date.today())
         assert att.total == 0
         assert att.rate is None
@@ -536,7 +536,7 @@ class TestBlocksApplyByRole:
             ))
         db.commit()
 
-        blocks, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+        blocks, _, _reasons = get_period_extras(db, SEED_COMPANY_ID, emp.id,
                                       when - timedelta(days=1), when + timedelta(days=1))
         assert [b.block_key for b in blocks] == ["W_1_St_100"]
         assert blocks[0].rts_rate == 0.2
@@ -605,3 +605,68 @@ class TestTruckScopedCounts:
         s = get_stats_series(db, SEED_COMPANY_ID, drv.id, "driver")
         lt = get_lifetime_totals(db, SEED_COMPANY_ID, drv.id, "driver")
         assert lt.delivered == sum(d.delivered for d in s.days)
+
+
+class TestPeriodReasons:
+    """Why packages came back, scoped to the period AND the role (ADR-271 I).
+
+    The mock's donut was fed by hardcoded data, so the endpoint shipped without
+    reason support at all and the real UI had no donut for anyone. Caught by
+    the operator asking where the driver's donut had gone.
+    """
+
+    def _rts_on(self, db, emp, when, rts_type, carrier=None):
+        truck = make_truck(db, name=f"TR{_n[0]}")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, emp, emp.role)
+        owner = carrier or emp
+        if carrier:
+            make_member(db, a, carrier, "walker")
+        r = _route(db, a, when)
+        _stop(db, r, total=10, rts=1, walker_id=owner.id)
+        _rts(db, r, walker_id=owner.id, rts_type=rts_type)
+        return a
+
+    def test_reasons_are_scoped_to_the_period(self, db):
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="Reasons")
+        old = date.today() - timedelta(days=20)
+        new = date.today() - timedelta(days=3)
+        self._rts_on(db, emp, old, "no_access")
+        self._rts_on(db, emp, new, "business_closed")
+
+        _, _, r = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                    new - timedelta(days=1), new + timedelta(days=1),
+                                    role="walker")
+        assert [x.rts_type for x in r] == ["business_closed"], (
+            "the reason mix is not scoped to the requested period"
+        )
+
+    def test_driver_sees_the_whole_trucks_reasons(self, db):
+        """A driver's counts are truck-wide everywhere else; their donut must
+        match, or it would sit empty beside an RTS figure in the thousands."""
+        from app.services.stats_series import get_period_extras
+        drv = make_employee(db, role="driver", name="DrvReason")
+        wlk = make_employee(db, role="walker", name="WlkReason")
+        when = date.today() - timedelta(days=4)
+        self._rts_on(db, drv, when, "package_damaged", carrier=wlk)
+
+        _, _, r = get_period_extras(db, SEED_COMPANY_ID, drv.id,
+                                    when - timedelta(days=1), when + timedelta(days=1),
+                                    role="driver")
+        assert [x.rts_type for x in r] == ["package_damaged"], (
+            "a driver's reason mix was scoped by walker_id and came back empty"
+        )
+
+    def test_sorted_commonest_first(self, db):
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="SortReason")
+        when = date.today() - timedelta(days=5)
+        for _ in range(3):
+            self._rts_on(db, emp, when, "no_access")
+        self._rts_on(db, emp, when, "inclement_weather")
+
+        _, _, r = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                    when - timedelta(days=1), when + timedelta(days=1),
+                                    role="walker")
+        assert r[0].rts_type == "no_access" and r[0].count == 3

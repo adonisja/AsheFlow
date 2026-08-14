@@ -27,7 +27,7 @@ from app.schemas.assignment_history import AssignmentHistoryResponse
 from app.schemas.dispatch_replay import DayReplayOut
 from app.schemas.stats_series import (
     AttendanceOut, BlockStatOut, LifetimeTotalsOut, MyStatsOut,
-    PeriodExtrasOut, StatsSeriesOut, YearStatOut,
+    PeriodExtrasOut, ReasonStatOut, StatsSeriesOut, YearStatOut,
 )
 from app.services.assignment_history import get_assignment_history
 from app.services.dispatch_replay import get_day_replay
@@ -214,14 +214,16 @@ def get_my_period_extras(
     nothing a caller could pass to widen it.
     """
     _check_range(start_date, end_date)
-    blocks, attendance = get_period_extras(
-        db, caller.company_id, caller.id, start_date, end_date
+    blocks, attendance, reasons = get_period_extras(
+        db, caller.company_id, caller.id, start_date, end_date,
+        role=caller.role,
     )
     return PeriodExtrasOut(
         start_date=start_date,
         end_date=end_date,
         top_blocks=[BlockStatOut.model_validate(b, from_attributes=True) for b in blocks],
         attendance=AttendanceOut.model_validate(attendance, from_attributes=True),
+        reasons=[ReasonStatOut.model_validate(r, from_attributes=True) for r in reasons],
         # Drivers and captains never own stops (walker_id is the executor,
         # ADR-244), so their block list is permanently empty by design. Telling
         # the client lets it hide the panel instead of rendering an empty one.

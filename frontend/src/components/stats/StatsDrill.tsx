@@ -135,6 +135,91 @@ function Bars({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => void })
   );
 }
 
+const RTS_LABEL: Record<string, string> = {
+  no_access: 'No access',
+  business_closed: 'Business closed',
+  package_damaged: 'Damaged',
+  inclement_weather: 'Weather',
+  customer_requested_future_delivery: 'Customer rescheduled',
+  customer_cancelled_order: 'Customer cancelled',
+};
+
+const DONUT_TONE = ['stroke-info', 'stroke-warning', 'stroke-success',
+                    'stroke-danger', 'stroke-muted-foreground'];
+
+/** Why packages came back, for the selected period.
+ *
+ *  stroke-dasharray, one circle per segment — no path math, no arc flags. Capped
+ *  at top 4 + Other: the technique gets fiddly past ~6 segments and there are 6
+ *  RTS types, and a five-slice donut is better information design regardless. */
+function ReasonDonut({ reasons }: { reasons: { rts_type: string; count: number }[] }) {
+  const total = reasons.reduce((n, r) => n + r.count, 0);
+  if (!total) {
+    return (
+      <p className="text-[11px] text-muted-foreground italic">
+        Nothing came back in this period.
+      </p>
+    );
+  }
+  const top = reasons.slice(0, 4);
+  const rest = reasons.slice(4).reduce((n, r) => n + r.count, 0);
+  const slices = rest > 0
+    ? [...top, { rts_type: 'other', count: rest }]
+    : top;
+
+  let offset = 25;   // start at 12 o'clock
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
+      <div className="flex justify-center">
+        <svg viewBox="0 0 42 42" className="w-56 h-56 max-w-full">
+          <circle cx="21" cy="21" r="15.9" fill="none" className="stroke-border"
+                  strokeWidth="6" />
+          {slices.map((r, i) => {
+            const pct = (r.count / total) * 100;
+            const el = (
+              <circle key={r.rts_type} cx="21" cy="21" r="15.9" fill="none"
+                      className={DONUT_TONE[i % DONUT_TONE.length]} strokeWidth="6"
+                      strokeDasharray={`${pct} ${100 - pct}`} strokeDashoffset={offset} />
+            );
+            offset -= pct;
+            return el;
+          })}
+          <text x="21" y="20.5" textAnchor="middle" className="fill-foreground"
+                fontSize="8" fontWeight="700">{total}</text>
+          <text x="21" y="25.5" textAnchor="middle" className="fill-muted-foreground"
+                fontSize="2.8" letterSpacing="0.3">RETURNED</text>
+        </svg>
+      </div>
+      <ul className="space-y-3">
+        {slices.map((r, i) => {
+          const pct = (r.count / total) * 100;
+          return (
+            <li key={r.rts_type}>
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className={`w-2.5 h-2.5 rounded-sm shrink-0
+                                  ${DONUT_TONE[i % DONUT_TONE.length].replace('stroke-', 'bg-')}`} />
+                <span className="text-[15px] text-foreground flex-1">
+                  {r.rts_type === 'other' ? 'Other' : (RTS_LABEL[r.rts_type] ?? r.rts_type)}
+                </span>
+                <span className="text-[15px] font-semibold text-foreground tabular-nums">
+                  {r.count}
+                </span>
+                <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
+                  {Math.round(pct)}%
+                </span>
+              </div>
+              <div className="h-2 rounded-full bg-accent/40 overflow-hidden">
+                <div className={`h-full rounded-full ${DONUT_TONE[i % DONUT_TONE.length].replace('stroke-', 'bg-')}`}
+                     style={{ width: `${pct}%` }} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /** Top blocks + attendance. Week outward only — at a single day "top blocks"
  *  is just "the blocks you worked", which belongs in the day detail. */
 function PeriodPanels({ extras }: { extras: PeriodExtras | null }) {
@@ -455,6 +540,20 @@ export default function StatsDrill() {
               <Bars data={charted} onPick={zoomIn} />
             </div>
             <PeriodPanels extras={extras} />
+
+            {extras && (
+              <div className="pt-5 border-t border-border">
+                <div className="flex items-baseline gap-2 mb-4">
+                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Why packages came back
+                  </p>
+                  <span className="text-[11px] text-muted-foreground/70">
+                    {truckScoped ? 'whole truck' : cursor.label}
+                  </span>
+                </div>
+                <ReasonDonut reasons={extras.reasons} />
+              </div>
+            )}
           </>
         )}
       </div>

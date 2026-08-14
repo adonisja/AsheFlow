@@ -282,6 +282,18 @@ class BlockStat:
 
 
 @dataclass
+class ReasonStat:
+    """One RTS reason within the selected period (ADR-271 I).
+
+    Answers "why did packages come back", which the raw RTS count cannot. The
+    reason mix is what a walker can act on: six 'no access' is a route problem,
+    six 'damaged' is a handling problem.
+    """
+    rts_type: str
+    count: int = 0
+
+
+@dataclass
 class Attendance:
     """Roll-call outcomes for the selected period (ADR-271 I).
 
@@ -395,8 +407,9 @@ def get_period_extras(
     start: date,
     end: date,
     top_n: int = 5,
+    role: str = "walker",
 ) -> tuple:
-    """Top blocks + attendance for ONE period. Returns (blocks, attendance).
+    """Per-period extras. Returns (blocks, attendance, reasons).
 
     SCOPED TO THE PERIOD, deliberately: the operator's requirement was that
     "top 5 for week 1 may not be top 5 for the month". A globally-computed
@@ -451,6 +464,44 @@ def get_period_extras(
                        key=lambda b: -b.stops)
         ranked += extra[: top_n - len(ranked)]
 
+    # ── why packages came back, THIS period ──────────────────────────────────
+    # Scoped like everything else here. A globally-computed reason mix would be
+    # the same at every level and would say nothing about the period on screen.
+    reason_q = (
+        db.query(RTSPackage.rts_type, func.count(RTSPackage.id))
+        .join(Route, Route.id == RTSPackage.route_id)
+        .filter(
+            RTSPackage.company_id == company_id,
+            Route.company_id == company_id,
+            Route.route_date >= start,
+            Route.route_date <= end,
+        )
+    )
+    if role in _TRUCK_SCOPED_ROLES:
+        # A driver answers for the whole truck's returns, matching how their
+        # counts are scoped everywhere else — otherwise their donut would be
+        # empty while their RTS figure showed thousands.
+        reason_q = (
+            reason_q
+            .join(TruckAssignment,
+                  TruckAssignment.id == RTSPackage.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+                TruckAssignment.company_id == company_id,
+            )
+        )
+    else:
+        reason_q = reason_q.filter(RTSPackage.walker_id == employee_id)
+
+    reasons = [
+        ReasonStat(rts_type=t, count=int(n or 0))
+        for t, n in reason_q.group_by(RTSPackage.rts_type).all()
+    ]
+    reasons.sort(key=lambda r: -r.count)
+
     att = Attendance()
     for status, n in (
         db.query(ShiftRollCall.status, func.count(ShiftRollCall.id))
@@ -474,7 +525,7 @@ def get_period_extras(
     if att.total:
         att.rate = round(att.present / att.total * 100, 1)
 
-    return ranked[:top_n], att
+    return ranked[:top_n], att, reasons
 
 
 def get_lifetime_totals(

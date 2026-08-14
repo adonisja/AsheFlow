@@ -2251,11 +2251,20 @@ export interface Attendance {
  *  so this cannot be precomputed into the cached series. Requested from WEEK
  *  outward only — at a single day "top blocks" is just "the blocks you
  *  worked", which belongs in the day detail. */
+/** One RTS reason within the selected period. */
+export interface ReasonStat {
+  rts_type: string;
+  count: number;
+}
+
 export interface PeriodExtras {
   start_date: string;
   end_date: string;
   top_blocks: BlockStat[];
   attendance: Attendance;
+  /** Why packages came back this period. Scoped like the counts: a driver's
+   *  mix covers the whole truck, a walker's covers what they carried. */
+  reasons: ReasonStat[];
   /** False for driver/captain: blocks come from the stop's executor and a
    *  driver does not carry, so HIDE the panel rather than render it empty. */
   blocks_apply: boolean;

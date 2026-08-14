@@ -109,6 +109,14 @@ class AttendanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ReasonStatOut(BaseModel):
+    """One RTS reason within the selected period (ADR-271 I)."""
+    rts_type: str
+    count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PeriodExtrasOut(BaseModel):
     """Per-period extras, requested separately from the cached series.
 
@@ -121,6 +129,9 @@ class PeriodExtrasOut(BaseModel):
     end_date: date
     top_blocks: List[BlockStatOut] = []
     attendance: AttendanceOut = AttendanceOut()
+    # Why packages came back, this period. Scoped like the counts: a driver's
+    # mix covers the whole truck, a walker's covers what they carried.
+    reasons: List[ReasonStatOut] = []
     # False for driver/captain: blocks come from DeliveryStop.walker_id and a
     # driver does not carry, so their list is permanently empty. The client
     # must HIDE the panel rather than render an empty one — an empty panel
