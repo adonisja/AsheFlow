@@ -24,7 +24,7 @@
  */
 import { useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Truck, Package,
+  ChevronLeft, ChevronRight, ChevronUp, TrendingUp, TrendingDown, Truck, Package,
 } from 'lucide-react';
 
 type Grain = 'lifetime' | 'year' | 'month' | 'week' | 'day';
@@ -90,8 +90,11 @@ const DAYS: Bucket[] = [
   { key: 'd2', label: 'Tue 11', short: 'Tue', delivered: 64,  rts: 9, damaged: 2, missing: 1, effort: 'standard', trend: -45.8 },
   { key: 'd3', label: 'Wed 12', short: 'Wed', delivered: 131, rts: 5, damaged: 0, missing: 1, effort: 'heavy',    trend: 104.7 },
   { key: 'd4', label: 'Thu 13', short: 'Thu', delivered: 97,  rts: 6, damaged: 1, missing: 0, effort: 'standard', trend: -26.0 },
-  { key: 'd5', label: 'Fri 14', short: 'Fri', delivered: 152, rts: 3, damaged: 0, missing: 0, effort: 'easy',     trend: 56.7 },
-  { key: 'd6', label: 'Sat 15', short: 'Sat', delivered: 26,  rts: 1, damaged: 0, missing: 0, effort: 'easy',     trend: -82.9 },
+  // Fri 14 is TODAY and Sat 15 is the future. The series excludes today
+  // (ADR-271 C), so both are empty and the entry point is Thu 13 — the most
+  // recent day that actually has data.
+  { key: 'd5', label: 'Fri 14', short: 'Fri', delivered: 0,   rts: 0, damaged: 0, missing: 0, trend: null },
+  { key: 'd6', label: 'Sat 15', short: 'Sat', delivered: 0,   rts: 0, damaged: 0, missing: 0, trend: null },
 ];
 
 const REASONS = [
@@ -285,6 +288,8 @@ function ReasonDonut() {
 }
 
 function DayDetail() {
+  // NOTE: no <Figures> here — the level header above already renders them for
+  // the current cursor. Duplicating produced two stat rows on the day view.
   const crew = [
     { role: 'Driver',   names: ['Driver Test'] },
     { role: 'Captain',  names: ['Marcus Vane'] },
@@ -294,8 +299,6 @@ function DayDetail() {
   ];
   return (
     <div className="space-y-4">
-      <Figures b={DAYS[3]} />
-
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground
                          border border-border rounded-lg px-2 py-1">
@@ -364,44 +367,92 @@ function DayDetail() {
 // ── the drill ───────────────────────────────────────────────────────────────
 
 export default function StatsDrillMock() {
-  // Each hop records WHICH bucket was picked, so the sibling arrows can move
-  // laterally without losing the rest of the trail.
-  const [path, setPath] = useState<{ grain: Grain; label: string; key?: string }[]>([
-    { grain: 'lifetime', label: 'Lifetime' },
-  ]);
-  const here = path[path.length - 1];
+  // ZOOM-OUT model (ADR-271, revised).
+  //
+  // The drill now STARTS at the most recent worked day and expands outward:
+  //
+  //     Day  ->  Week  ->  Month  ->  Year  ->  Lifetime
+  //
+  // Analyst tools drill INWARD from an aggregate because they are hunting an
+  // anomaly nobody has spotted yet (Hex, Bold BI). Personal-stats apps expand
+  // OUTWARD from today because the user already knows what they are asking —
+  // "how did I do, and is that normal for me?" (Apple Fitness, FitnessView).
+  // My Stats is the second kind, and the old model made a walker click four
+  // times to reach the day they actually worked.
+  //
+  // Entry is the most recent day WITH DATA, not literally yesterday: someone
+  // who was off yesterday would otherwise land on an empty screen.
+  const lastWorked = [...DAYS].reverse().find(d => d.delivered > 0) ?? DAYS[0];
+  const isLastShift = (b: Bucket) => b.key === lastWorked.key;
+
+  const [level, setLevel] = useState<Grain>('day');
+  const [cursor, setCursor] = useState<Bucket>(lastWorked);
 
   const dataFor: Record<Grain, Bucket[]> = {
-    lifetime: YEARS, year: MONTHS, month: WEEKS, week: DAYS, day: [],
+    day: DAYS, week: DAYS, month: WEEKS, year: MONTHS, lifetime: YEARS,
   };
-  const nextGrain: Record<Grain, Grain> = {
-    lifetime: 'year', year: 'month', month: 'week', week: 'day', day: 'day',
+  // Zooming OUT: each level's parent.
+  const outer: Record<Grain, Grain | null> = {
+    day: 'week', week: 'month', month: 'year', year: 'lifetime', lifetime: null,
   };
-  const selectorLabel: Record<Grain, string> = {
-    lifetime: 'Year', year: 'Month', month: 'Week', week: 'Day', day: '',
+  const outerLabel: Record<Grain, string> = {
+    day: 'This week', week: 'August', month: '2026', year: 'Lifetime', lifetime: '',
+  };
+  const levelName: Record<Grain, string> = {
+    day: 'Day', week: 'Week', month: 'Month', year: 'Year', lifetime: 'Lifetime',
   };
 
-  const buckets = dataFor[here.grain];
-  const descend = (b: Bucket) =>
-    setPath(p => [...p, { grain: nextGrain[here.grain], label: b.label, key: b.key }]);
-
-  // SIBLINGS of the level being viewed — drawn from the PARENT's bucket list,
-  // since "the month before April" is a peer within the same year.
-  const parent = path.length > 1 ? path[path.length - 2] : null;
-  const siblings = parent ? dataFor[parent.grain] : [];
-  const idx = siblings.findIndex(b => b.key === here.key);
+  // Siblings of the CURRENT cursor, for lateral movement.
+  const siblings = level === 'day' ? DAYS
+                 : level === 'week' ? WEEKS
+                 : level === 'month' ? MONTHS
+                 : level === 'year' ? YEARS : [];
+  const idx = siblings.findIndex(b => b.key === cursor.key);
   const prev = idx > 0 ? siblings[idx - 1] : null;
   const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
-  const goSibling = (b: Bucket) =>
-    setPath(p => [...p.slice(0, -1), { grain: here.grain, label: b.label, key: b.key }]);
 
-  // The aggregate for the level being VIEWED — the sum of its sub-units.
-  const agg: Bucket = {
-    key: 'agg', label: here.label, trend: path.length > 1 ? 12.4 : null,
-    delivered: buckets.reduce((n, b) => n + b.delivered, 0),
-    rts: buckets.reduce((n, b) => n + b.rts, 0),
-    damaged: buckets.reduce((n, b) => n + b.damaged, 0),
-    missing: buckets.reduce((n, b) => n + b.missing, 0),
+  // The buckets CHARTED at this level = its sub-units.
+  const charted = level === 'day' ? []
+                : level === 'week' ? DAYS
+                : level === 'month' ? WEEKS
+                : level === 'year' ? MONTHS : YEARS;
+
+  const agg: Bucket = level === 'day' ? cursor : {
+    key: 'agg', label: cursor.label, trend: cursor.trend,
+    delivered: charted.reduce((n, b) => n + b.delivered, 0),
+    rts: charted.reduce((n, b) => n + b.rts, 0),
+    damaged: charted.reduce((n, b) => n + b.damaged, 0),
+    missing: charted.reduce((n, b) => n + b.missing, 0),
+  };
+
+  // Zoom-out trail, innermost first. Disabled where there is nothing to see:
+  // a level with no data is not worth a click, and an enabled control that
+  // leads to an empty screen is worse than an absent one.
+  const trail: { grain: Grain; label: string; enabled: boolean }[] = [];
+  let g: Grain | null = outer[level];
+  while (g) {
+    const has = (dataFor[g] ?? []).some(b => b.delivered > 0);
+    trail.push({ grain: g, label: outerLabel[level === 'day' && g === 'week'
+      ? 'day' : Object.keys(outer).find(k => outer[k as Grain] === g) as Grain] ?? levelName[g],
+      enabled: has });
+    g = outer[g];
+  }
+
+  const zoomOut = (to: Grain) => {
+    setLevel(to);
+    const pool = to === 'week' ? WEEKS : to === 'month' ? MONTHS
+               : to === 'year' ? YEARS : [];
+    if (pool.length) setCursor(pool[pool.length - 1]);
+  };
+
+  const zoomIn = (b: Bucket) => {
+    const inner: Record<Grain, Grain | null> = {
+      lifetime: 'year', year: 'month', month: 'week', week: 'day', day: null,
+    };
+    const to = inner[level];
+    if (!to || b.delivered === 0) return;
+    setLevel(to);
+    setCursor(b);
   };
 
   return (
@@ -439,35 +490,36 @@ export default function StatsDrillMock() {
         </div>
       </div>
 
-      {/* THE DRILL */}
+      {/* THE DRILL — zoom OUT from the most recent worked day */}
       <div className="card space-y-4">
-        {/* Breadcrumb left, sibling nav right — the pattern dashboards use for
-            period controls, and it keeps the crumb quiet rather than dominant.
-            Short labels ("W2", "Tue") because a full "Aug 9–15" pair eats the
-            row. */}
+        {/* Zoom-out trail left, siblings right. Disabled where a level has no
+            data: zooming out to an empty screen is worse than no control. */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-1 flex-wrap text-sm">
-            {path.map((p, i) => (
-              <span key={i} className="flex items-center gap-1">
-                {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
-                <button
-                  onClick={() => setPath(q => q.slice(0, i + 1))}
-                  disabled={i === path.length - 1}
-                  className={i === path.length - 1
-                    ? 'font-bold text-foreground'
-                    : 'text-primary hover:underline'}
-                >
-                  {p.label}
-                </button>
-              </span>
+          <div className="flex items-center gap-1.5 flex-wrap text-sm">
+            <span className="font-bold text-foreground">{cursor.label}</span>
+            {trail.map(t => (
+              <button
+                key={t.grain}
+                onClick={() => t.enabled && zoomOut(t.grain)}
+                disabled={!t.enabled}
+                title={t.enabled ? `Zoom out to ${levelName[t.grain].toLowerCase()}`
+                                 : 'No data at this level yet'}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg
+                           text-xs text-primary hover:bg-accent/40
+                           disabled:opacity-30 disabled:text-muted-foreground
+                           disabled:hover:bg-transparent transition-colors"
+              >
+                <ChevronUp className="w-3 h-3" />{levelName[t.grain]}
+              </button>
             ))}
           </div>
 
-          {parent && (siblings.length > 1) && (
+          {siblings.length > 1 && (
             <div className="flex items-center gap-1 shrink-0">
               <button
-                onClick={() => prev && goSibling(prev)}
+                onClick={() => prev && setCursor(prev)}
                 disabled={!prev}
+                style={{ visibility: prev ? 'visible' : 'hidden' }}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs
                            text-foreground hover:bg-accent/40 disabled:opacity-30
                            disabled:hover:bg-transparent transition-colors"
@@ -476,8 +528,9 @@ export default function StatsDrillMock() {
                 {prev ? (prev.short ?? prev.label) : ''}
               </button>
               <button
-                onClick={() => next && goSibling(next)}
+                onClick={() => next && setCursor(next)}
                 disabled={!next}
+                style={{ visibility: next ? 'visible' : 'hidden' }}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs
                            text-foreground hover:bg-accent/40 disabled:opacity-30
                            disabled:hover:bg-transparent transition-colors"
@@ -489,48 +542,38 @@ export default function StatsDrillMock() {
           )}
         </div>
 
-        {here.grain !== 'day' ? (
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-lg font-bold text-foreground">
+            {level === 'day' ? cursor.label : `${levelName[level]} · ${cursor.label}`}
+          </h3>
+          {level === 'day' && isLastShift(cursor) && (
+            /* Landing on a date with no explanation reads as arbitrary. */
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-accent/40
+                             text-muted-foreground">your last shift</span>
+          )}
+          <Trend pct={agg.trend} />
+          {agg.trend === null && (
+            <span className="text-[11px] text-muted-foreground">
+              no earlier {levelName[level].toLowerCase()} to compare
+            </span>
+          )}
+        </div>
+
+        <Figures b={agg} />
+
+        {level === 'day' ? (
+          <DayDetail />
+        ) : (
           <>
-            {/* selector — picks the period to VIEW */}
-            <div className="flex items-center gap-2 flex-wrap pb-1">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground
-                               mr-1">
-                Jump to {selectorLabel[here.grain].toLowerCase()}
-              </span>
-              {buckets.map(b => (
-                <button
-                  key={b.key}
-                  onClick={() => b.delivered > 0 && descend(b)}
-                  disabled={b.delivered === 0}
-                  className="px-2.5 py-1 rounded-lg border border-border text-xs
-                             text-foreground hover:bg-accent/30 disabled:opacity-30
-                             disabled:hover:bg-transparent transition-colors"
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-baseline gap-2">
-              <h3 className="text-lg font-bold text-foreground">{here.label}</h3>
-              <Trend pct={agg.trend} />
-              {agg.trend === null && (
-                <span className="text-[11px] text-muted-foreground">
-                  no earlier period to compare
-                </span>
-              )}
-            </div>
-
-            <Figures b={agg} />
-
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
-                Delivered by {selectorLabel[here.grain].toLowerCase()}
+                Delivered by {level === 'week' ? 'day' : level === 'month' ? 'week'
+                              : level === 'year' ? 'month' : 'year'}
                 <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/70">
-                  — click a bar to drill in
+                  — click a bar to zoom in
                 </span>
               </p>
-              <Bars data={buckets} onPick={descend} />
+              <Bars data={charted} onPick={zoomIn} />
             </div>
 
             <div className="pt-5 mt-1 border-t border-border">
@@ -538,15 +581,11 @@ export default function StatsDrillMock() {
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Why packages came back
                 </p>
-                <span className="text-[11px] text-muted-foreground/70">
-                  {here.label}
-                </span>
+                <span className="text-[11px] text-muted-foreground/70">{cursor.label}</span>
               </div>
               <ReasonDonut />
             </div>
           </>
-        ) : (
-          <DayDetail />
         )}
       </div>
     </div>
