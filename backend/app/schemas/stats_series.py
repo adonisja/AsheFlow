@@ -121,6 +121,11 @@ class PeriodExtrasOut(BaseModel):
     end_date: date
     top_blocks: List[BlockStatOut] = []
     attendance: AttendanceOut = AttendanceOut()
+    # False for driver/captain: blocks come from DeliveryStop.walker_id and a
+    # driver does not carry, so their list is permanently empty. The client
+    # must HIDE the panel rather than render an empty one — an empty panel
+    # reads as broken, not as "not applicable to you".
+    blocks_apply: bool = True
 
     model_config = ConfigDict(from_attributes=True)
 

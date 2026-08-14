@@ -492,3 +492,51 @@ class TestPeriodExtras:
                                    date.today() - timedelta(days=5), date.today())
         assert att.total == 0
         assert att.rate is None
+
+
+class TestBlocksApplyByRole:
+    """Blocks are meaningless for truck-scoped roles (ADR-271 I).
+
+    They derive from DeliveryStop.walker_id — the EXECUTOR (ADR-244) — and a
+    driver does not carry, so their list is permanently empty BY DESIGN. The
+    response says so explicitly rather than leaving the client to infer
+    "empty" from "not applicable": an empty panel reads as broken.
+
+    Verified against staging: driver.test and captain.test return zero blocks
+    at every period while showing 170 and 115 truck-damage rows respectively.
+    """
+
+    def test_truck_scoped_roles_are_flagged(self):
+        import inspect
+        from app.routers.assignment_history import get_my_period_extras
+        src = inspect.getsource(get_my_period_extras)
+        assert "blocks_apply=caller.role not in TRUCK_SCOPED_ROLES" in src
+
+    def test_the_constant_is_the_shared_one(self):
+        """Not a re-declared local list that could drift from ADR-256."""
+        from app.services.constants import TRUCK_SCOPED_ROLES
+        assert set(TRUCK_SCOPED_ROLES) == {"driver", "captain"}
+
+    def test_a_walker_still_gets_blocks(self, db):
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="Carrier")
+        when = date.today() - timedelta(days=3)
+        truck = make_truck(db, name="TBK")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, emp, "walker")
+        r = _route(db, a, when)
+        for i in range(4):
+            db.add(DeliveryStop(
+                id=uuid.uuid4(), company_id=SEED_COMPANY_ID, route_id=r.id,
+                truck_assignment_id=a.id, block_key="W_1_St_100",
+                tba_numbers=[], status="completed", stop_sequence=i + 1,
+                packages_total=10, packages_delivered=8, rts_count=2,
+                missing_count=0, effort_class="standard", walker_id=emp.id,
+                completed_at=None,
+            ))
+        db.commit()
+
+        blocks, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                      when - timedelta(days=1), when + timedelta(days=1))
+        assert [b.block_key for b in blocks] == ["W_1_St_100"]
+        assert blocks[0].rts_rate == 0.2

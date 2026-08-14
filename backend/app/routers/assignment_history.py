@@ -31,6 +31,7 @@ from app.schemas.stats_series import (
 )
 from app.services.assignment_history import get_assignment_history
 from app.services.dispatch_replay import get_day_replay
+from app.services.constants import TRUCK_SCOPED_ROLES
 from app.services.stats_series import (
     MAX_LOOKBACK_MONTHS, get_lifetime_totals, get_period_extras,
     get_stats_series, get_year_stats,
@@ -221,4 +222,8 @@ def get_my_period_extras(
         end_date=end_date,
         top_blocks=[BlockStatOut.model_validate(b, from_attributes=True) for b in blocks],
         attendance=AttendanceOut.model_validate(attendance, from_attributes=True),
+        # Drivers and captains never own stops (walker_id is the executor,
+        # ADR-244), so their block list is permanently empty by design. Telling
+        # the client lets it hide the panel instead of rendering an empty one.
+        blocks_apply=caller.role not in TRUCK_SCOPED_ROLES,
     )
