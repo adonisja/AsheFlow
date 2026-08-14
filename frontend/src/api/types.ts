@@ -2188,6 +2188,11 @@ export interface DayStat {
    *  `damaged`; the UI must not sum them. Populated for driver/captain only. */
   truck_damaged: number;
   effort: string | null;
+  /** Per-day reason mix, {abbreviated_rts_type: count}. Folded into the bulk
+   *  payload so every level's donut is a client-side sum (ADR-271 B). */
+  rz: Record<string, number>;
+  /** Roll-call status for the day, or null if none recorded. */
+  rc: string | null;
 }
 
 export interface StatsSeries {

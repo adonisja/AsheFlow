@@ -86,6 +86,28 @@ class DayStat:
     # "5 damaged" is not.
     truck_damaged: int = 0
     effort: Optional[str] = None
+    # Per-day breakdowns folded into the BULK payload so every level's donut
+    # and attendance figure is a client-side sum with no request (ADR-271 B).
+    #
+    # Measured before deciding: reasons 7.1 KB and attendance 3.9 KB across two
+    # years, against 141 KB for per-day BLOCKS — which is why blocks alone stay
+    # on-demand. Short keys because these repeat on every one of ~520 rows.
+    #   rz  {rts_type_abbrev: count}
+    #   rc  roll-call status for the day, or None
+    rz: dict = field(default_factory=dict)
+    rc: Optional[str] = None
+
+
+# rts_type is a long string repeated across hundreds of rows; abbreviating it
+# is most of the reason the reason-map costs 7 KB rather than 20.
+REASON_ABBREV = {
+    "no_access": "na",
+    "business_closed": "bc",
+    "package_damaged": "pd",
+    "inclement_weather": "iw",
+    "customer_requested_future_delivery": "cr",
+    "customer_cancelled_order": "cc",
+}
 
 
 @dataclass
@@ -257,6 +279,54 @@ def get_stats_series(
             if d not in by_day:
                 by_day[d] = DayStat(d=d)
             by_day[d].truck_damaged = int(n or 0)
+
+    # ── per-day reason mix ───────────────────────────────────────────────────
+    reason_q = (
+        db.query(Route.route_date, RTSPackage.rts_type, func.count(RTSPackage.id))
+        .join(Route, Route.id == RTSPackage.route_id)
+        .filter(
+            RTSPackage.company_id == company_id,
+            Route.company_id == company_id,
+            Route.route_date >= start,
+            Route.route_date <= end,
+        )
+    )
+    if truck_wide:
+        reason_q = (
+            reason_q
+            .join(TruckAssignment,
+                  TruckAssignment.id == RTSPackage.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+                TruckAssignment.company_id == company_id,
+            )
+        )
+    else:
+        reason_q = reason_q.filter(RTSPackage.walker_id == employee_id)
+
+    for d, rts_type, n in reason_q.group_by(Route.route_date, RTSPackage.rts_type).all():
+        if d in by_day:
+            key = REASON_ABBREV.get(rts_type, rts_type)
+            by_day[d].rz[key] = by_day[d].rz.get(key, 0) + int(n or 0)
+
+    # ── per-day roll call ────────────────────────────────────────────────────
+    for d, status in (
+        db.query(ShiftRollCall.date, ShiftRollCall.status)
+        .filter(
+            ShiftRollCall.company_id == company_id,
+            ShiftRollCall.employee_id == employee_id,
+            ShiftRollCall.date >= start,
+            ShiftRollCall.date <= end,
+        ).all()
+    ):
+        # A roll call can exist on a day with no delivery stops (rostered but
+        # carried nothing), so create the row rather than dropping the record.
+        if d not in by_day:
+            by_day[d] = DayStat(d=d)
+        by_day[d].rc = status
 
     series.days = [by_day[k] for k in sorted(by_day)]
     return series

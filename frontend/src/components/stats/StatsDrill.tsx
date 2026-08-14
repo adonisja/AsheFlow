@@ -21,8 +21,8 @@ import {
   Truck, Package, MapPin, CalendarCheck,
 } from 'lucide-react';
 import {
-  daysOfWeek, monthsOfYear, weeksOfMonth, yearsFrom, lastWorkedDay,
-  parseYMD, ymd, type Bucket, type Grain,
+  attendanceIn, daysOfWeek, monthsOfYear, reasonsIn, weeksOfMonth, yearsFrom,
+  lastWorkedDay, parseYMD, ymd, type Bucket, type Grain,
 } from './aggregate';
 
 const EFFORT_BG: Record<string, string> = {
@@ -222,9 +222,16 @@ function ReasonDonut({ reasons }: { reasons: { rts_type: string; count: number }
 
 /** Top blocks + attendance. Week outward only — at a single day "top blocks"
  *  is just "the blocks you worked", which belongs in the day detail. */
-function PeriodPanels({ extras }: { extras: PeriodExtras | null }) {
-  if (!extras) return null;
-  const { attendance: a, top_blocks: blocks, blocks_apply } = extras;
+function PeriodPanels({ extras, attendance }: {
+  extras: PeriodExtras | null;
+  attendance: { present: number; late: number; ncns: number; total: number; rate: number | null };
+}) {
+  // Attendance is DERIVED from the cached series — no request. Only the block
+  // ranking still needs one, because per-day blocks measured 141 KB across two
+  // years and would have more than doubled the bulk payload for one panel.
+  const a = attendance;
+  const blocks = extras?.top_blocks ?? [];
+  const blocks_apply = extras?.blocks_apply ?? true;
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 pt-5 border-t border-border">
       {/* Attendance — self-controlled and fair, and it appears nowhere else in
@@ -368,7 +375,19 @@ export default function StatsDrill() {
       .catch(() => setExtras(null));
   }, []);
 
-  useEffect(() => { if (cursor) fetchExtras(cursor); }, [cursor, fetchExtras]);
+  // Blocks alone still need the network. Reasons and attendance are computed
+  // from the series already in memory — the bulk-fetch design as agreed.
+  useEffect(() => {
+    if (cursor && level !== 'day') fetchExtras(cursor);
+  }, [cursor, level, fetchExtras]);
+
+  const reasons = useMemo(
+    () => (cursor ? reasonsIn(days, cursor.start, cursor.end) : []),
+    [cursor, days]);
+  const attendance = useMemo(
+    () => (cursor ? attendanceIn(days, cursor.start, cursor.end)
+                  : { present: 0, late: 0, ncns: 0, total: 0, rate: null }),
+    [cursor, days]);
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!stats || !cursor) {
@@ -543,7 +562,7 @@ export default function StatsDrill() {
             RTS list underneath can run to dozens of rows, so putting the
             summary after it buried the one element that makes a long list
             readable. */}
-        {extras && extras.reasons.length > 0 && (
+        {reasons.length > 0 && (
           <div className="pt-4 border-t border-border">
             <div className="flex items-baseline gap-2 mb-4">
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -553,7 +572,7 @@ export default function StatsDrill() {
                 {truckScoped ? 'whole truck' : cursor.label}
               </span>
             </div>
-            <ReasonDonut reasons={extras.reasons} />
+            <ReasonDonut reasons={reasons} />
           </div>
         )}
 
@@ -571,7 +590,7 @@ export default function StatsDrill() {
               </p>
               <Bars data={charted} onPick={zoomIn} />
             </div>
-            <PeriodPanels extras={extras} />
+            <PeriodPanels extras={extras} attendance={attendance} />
           </>
         )}
 

@@ -175,3 +175,57 @@ export function lastWorkedDay(days: DayStat[]): DayStat | null {
   }
   return days.length ? days[days.length - 1] : null;
 }
+
+/** Expand the abbreviated reason keys the wire uses back to rts_type. */
+const REASON_FULL: Record<string, string> = {
+  na: 'no_access',
+  bc: 'business_closed',
+  pd: 'package_damaged',
+  iw: 'inclement_weather',
+  cr: 'customer_requested_future_delivery',
+  cc: 'customer_cancelled_order',
+};
+
+/** Reason mix for a date range, derived ENTIRELY from the cached series.
+ *
+ *  This is the bulk-fetch design working as intended (ADR-271 B): the per-day
+ *  `rz` map ships once, and every level's donut is a sum over it. No request,
+ *  no per-period endpoint, no cache to invalidate.
+ *
+ *  Measured before choosing this: reasons cost 7.1 KB across two years, so
+ *  folding them in was cheap. Per-day BLOCKS were 141 KB, which is why those
+ *  alone remain an on-demand fetch.
+ */
+export function reasonsIn(days: DayStat[], start: string, end: string):
+    { rts_type: string; count: number }[] {
+  const acc = new Map<string, number>();
+  for (const d of days) {
+    if (d.d < start || d.d > end) continue;
+    for (const [k, n] of Object.entries(d.rz ?? {})) {
+      const full = REASON_FULL[k] ?? k;
+      acc.set(full, (acc.get(full) ?? 0) + n);
+    }
+  }
+  return [...acc.entries()]
+    .map(([rts_type, count]) => ({ rts_type, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+/** Attendance for a date range, derived from the cached series.
+ *
+ *  `rate` is null — never 0 — when nothing was recorded: "no roll calls" and
+ *  "0% attendance" are different facts.
+ */
+export function attendanceIn(days: DayStat[], start: string, end: string):
+    { present: number; late: number; ncns: number; total: number; rate: number | null } {
+  let present = 0, late = 0, ncns = 0;
+  for (const d of days) {
+    if (d.d < start || d.d > end || !d.rc) continue;
+    if (d.rc === 'ncns') ncns++;
+    else if (d.rc === 'late') late++;
+    else present++;
+  }
+  const total = present + late + ncns;
+  return { present, late, ncns, total,
+           rate: total ? Math.round((present / total) * 1000) / 10 : null };
+}

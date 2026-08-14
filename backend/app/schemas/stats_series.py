@@ -6,7 +6,7 @@ names are a real fraction of the bytes. `packages_delivered` repeated 780 times
 is ~8 KB of JSON keys alone.
 """
 from datetime import date
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -25,6 +25,12 @@ class DayStatOut(BaseModel):
     # in_truck). A different event from `damaged`; the UI must not sum them.
     truck_damaged: int = 0
     effort: Optional[str] = None
+    # Per-day breakdowns, folded in so the client derives every level's donut
+    # and attendance without a request (ADR-271 B). Short keys: these repeat on
+    # ~520 rows. `rz` is {abbreviated_rts_type: count}; `rc` is the roll-call
+    # status for the day, or null if none was recorded.
+    rz: Dict[str, int] = {}
+    rc: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
