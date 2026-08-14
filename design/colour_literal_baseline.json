@@ -10,10 +10,10 @@
     "",
     "Do not hand-edit. Run --baseline after genuinely removing literals."
   ],
-  "total": 193,
+  "total": 186,
   "files": {
     "frontend/src/components/CrewStatusPanel.tsx": 13,
-    "frontend/src/components/MyPerformanceCard.tsx": 6,
+    "frontend/src/components/MyPerformanceCard.tsx": 2,
     "frontend/src/components/OperatingZoneMap.tsx": 6,
     "frontend/src/components/ScorecardCard.tsx": 7,
     "frontend/src/components/ZoneDensityMap.tsx": 3,
@@ -45,7 +45,6 @@
     "mobile/src/screens/LocationProfiles/LocationProfilesScreen.tsx": 1,
     "mobile/src/screens/Notifications/NotificationsScreen.tsx": 2,
     "mobile/src/screens/Preferences/PreferencesScreen.tsx": 1,
-    "mobile/src/screens/Profile/AccountSettingsScreen.tsx": 3,
     "mobile/src/screens/Profile/MyScorecardScreen.tsx": 2,
     "mobile/src/screens/Schedule/ScheduleScreen.tsx": 1,
     "mobile/src/screens/ScheduleChanges/ScheduleChangesScreen.tsx": 2,

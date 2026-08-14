@@ -298,7 +298,7 @@ export default function AccountSettingsScreen() {
                   style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: emailBusy ? 0.6 : 1 }]}
                 >
                   {emailBusy
-                    ? <ActivityIndicator size="small" color="#fff" />
+                    ? <ActivityIndicator size="small" color={c.primaryForeground} />
                     : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Send Code</Text>}
                 </TouchableOpacity>
               </View>
@@ -334,7 +334,7 @@ export default function AccountSettingsScreen() {
                   style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: (emailBusy || code.length < 6) ? 0.5 : 1 }]}
                 >
                   {emailBusy
-                    ? <ActivityIndicator size="small" color="#fff" />
+                    ? <ActivityIndicator size="small" color={c.primaryForeground} />
                     : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Confirm</Text>}
                 </TouchableOpacity>
               </View>
@@ -416,7 +416,7 @@ export default function AccountSettingsScreen() {
                   style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: dBusy ? 0.6 : 1 }]}
                 >
                   {dBusy
-                    ? <ActivityIndicator size="small" color="#fff" />
+                    ? <ActivityIndicator size="small" color={c.primaryForeground} />
                     : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Send Code</Text>}
                 </TouchableOpacity>
               </View>
@@ -449,7 +449,7 @@ export default function AccountSettingsScreen() {
                   style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: (dBusy || dCode.length < 6) ? 0.5 : 1 }]}
                 >
                   {dBusy
-                    ? <ActivityIndicator size="small" color="#fff" />
+                    ? <ActivityIndicator size="small" color={c.primaryForeground} />
                     : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Confirm</Text>}
                 </TouchableOpacity>
               </View>
@@ -542,7 +542,7 @@ export default function AccountSettingsScreen() {
                   style={[s.editBtn, s.editBtnPrimary, { backgroundColor: c.primary, opacity: pwBusy ? 0.6 : 1 }]}
                 >
                   {pwBusy
-                    ? <ActivityIndicator size="small" color="#fff" />
+                    ? <ActivityIndicator size="small" color={c.primaryForeground} />
                     : <Text style={[s.editBtnText, { color: c.primaryForeground }]}>Update Password</Text>}
                 </TouchableOpacity>
               </View>
