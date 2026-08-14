@@ -61,6 +61,7 @@ for _T in (GA, PA, JSONB):
 from app.models.company import Company  # noqa: E402
 from app.models.delivery_stop import DeliveryStop  # noqa: E402
 from app.models.rts import DamagedPackage, MissingPackage, RTSPackage  # noqa: E402
+from app.models.shift_roll_call import ShiftRollCall  # noqa: E402
 from app.models.walker_route import (  # noqa: E402
     MisroutedPackageFlag, Route, RouteParticipant,
 )
@@ -84,6 +85,7 @@ def db():
         Route.__table__, RouteParticipant.__table__, DeliveryStop.__table__,
         MisroutedPackageFlag.__table__, RTSPackage.__table__,
         MissingPackage.__table__, DamagedPackage.__table__,
+        ShiftRollCall.__table__,
     ]:
         table.to_metadata(meta)
     meta.create_all(engine)
@@ -384,3 +386,109 @@ class TestYearStats:
         ys = get_year_stats(db, SEED_COMPANY_ID, emp.id, "walker")
         cur = next((y for y in ys if y.year == date.today().year), None)
         assert cur is None or cur.delivered == 0, "today leaked into the year"
+
+
+class TestPeriodExtras:
+    """Top blocks + attendance, SCOPED TO THE SELECTED PERIOD (ADR-271 I).
+
+    The operator's requirement was explicit: "top 5 for week 1 may not be top 5
+    for the month". A globally-computed ranking would be identical at every
+    level and would tell a reader nothing about the period they are viewing.
+    """
+
+    def _stop_on(self, db, emp, when, block, *, total, rts):
+        truck = make_truck(db, name=f"TB{_n[0]}")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, emp, "walker")
+        r = _route(db, a, when)
+        s = DeliveryStop(
+            id=uuid.uuid4(), company_id=SEED_COMPANY_ID, route_id=r.id,
+            truck_assignment_id=a.id, block_key=block, tba_numbers=[],
+            status="completed", stop_sequence=1, packages_total=total,
+            packages_delivered=total - rts, rts_count=rts, missing_count=0,
+            effort_class="standard", walker_id=emp.id, completed_at=None,
+        )
+        db.add(s); db.commit()
+
+    def test_blocks_are_scoped_to_the_period(self, db):
+        """THE REQUIREMENT. A block worked only in week 1 must not appear in a
+        week-2 query."""
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="Blocks")
+        w1 = date.today() - timedelta(days=14)
+        w2 = date.today() - timedelta(days=4)
+        for _ in range(4):
+            self._stop_on(db, emp, w1, "W_11_St_100", total=10, rts=1)
+        for _ in range(4):
+            self._stop_on(db, emp, w2, "W_99_St_900", total=10, rts=1)
+
+        b1, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                  w1 - timedelta(days=1), w1 + timedelta(days=1))
+        b2, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                  w2 - timedelta(days=1), w2 + timedelta(days=1))
+
+        assert [b.block_key for b in b1] == ["W_11_St_100"]
+        assert [b.block_key for b in b2] == ["W_99_St_900"], (
+            "the block ranking is not scoped to the requested period"
+        )
+
+    def test_ranked_by_rts_rate_not_volume(self, db):
+        """'Where do I struggle' is actionable; 'where do I go most' is not."""
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="Ranked")
+        when = date.today() - timedelta(days=3)
+        # High volume, clean record.
+        for _ in range(5):
+            self._stop_on(db, emp, when, "EASY_St_100", total=20, rts=0)
+        # Lower volume, bad record.
+        for _ in range(3):
+            self._stop_on(db, emp, when, "HARD_St_200", total=10, rts=6)
+
+        blocks, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                      when - timedelta(days=1), when + timedelta(days=1))
+        assert blocks[0].block_key == "HARD_St_200", (
+            "ranked by volume instead of difficulty"
+        )
+
+    def test_thin_blocks_do_not_top_the_ranking(self, db):
+        """One returned package on a single stop is not a pattern. Ranking it
+        first would be actively misleading."""
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="Thin")
+        when = date.today() - timedelta(days=5)
+        self._stop_on(db, emp, when, "ONEOFF_St_100", total=1, rts=1)   # 100%
+        for _ in range(4):
+            self._stop_on(db, emp, when, "REAL_St_200", total=10, rts=3)  # 30%
+
+        blocks, _ = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                      when - timedelta(days=1), when + timedelta(days=1))
+        assert blocks[0].block_key == "REAL_St_200", (
+            "a 1-stop block with a 100% rate was ranked above a real pattern"
+        )
+
+    def test_attendance_counts_and_rate(self, db):
+        from app.models.shift_roll_call import ShiftRollCall
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="Attend")
+        base = date.today() - timedelta(days=10)
+        for i, st in enumerate(["present", "present", "present", "ncns", "late"]):
+            db.add(ShiftRollCall(
+                id=uuid.uuid4(), company_id=SEED_COMPANY_ID, employee_id=emp.id,
+                date=base + timedelta(days=i), status=st, confirmed=True,
+            ))
+        db.commit()
+
+        _, att = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                   base, base + timedelta(days=6))
+        assert att.total == 5
+        assert att.present == 3 and att.ncns == 1 and att.late == 1
+        assert att.rate == 60.0
+
+    def test_attendance_rate_is_none_with_no_roll_calls(self, db):
+        """'No roll calls recorded' is not '0% attendance'."""
+        from app.services.stats_series import get_period_extras
+        emp = make_employee(db, role="walker", name="NoRoll")
+        _, att = get_period_extras(db, SEED_COMPANY_ID, emp.id,
+                                   date.today() - timedelta(days=5), date.today())
+        assert att.total == 0
+        assert att.rate is None

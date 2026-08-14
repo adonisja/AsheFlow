@@ -81,6 +81,50 @@ class YearStatOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class BlockStatOut(BaseModel):
+    """One block worked in the selected period (ADR-271 I).
+
+    block_key survives ADR-219's address purge — it is the only geographic
+    signal safe to keep indefinitely, so this carries no PII.
+    """
+    block_key: str
+    stops: int = 0
+    delivered: int = 0
+    rts: int = 0
+    # None, never 0.0, when nothing was attempted there.
+    rts_rate: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AttendanceOut(BaseModel):
+    """Roll-call outcomes for the selected period (ADR-271 I)."""
+    present: int = 0
+    late: int = 0
+    ncns: int = 0
+    total: int = 0
+    # None when nothing was recorded — "no roll calls" is not "0% attendance".
+    rate: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PeriodExtrasOut(BaseModel):
+    """Per-period extras, requested separately from the cached series.
+
+    NOT part of the bulk payload: these are scoped to whichever period the user
+    is looking at ("top 5 for week 1 may not be top 5 for the month"), so they
+    cannot be precomputed for every possible period without exploding the
+    response.
+    """
+    start_date: date
+    end_date: date
+    top_blocks: List[BlockStatOut] = []
+    attendance: AttendanceOut = AttendanceOut()
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MyStatsOut(BaseModel):
     """One request serves the entire drill-down."""
     lifetime: LifetimeTotalsOut

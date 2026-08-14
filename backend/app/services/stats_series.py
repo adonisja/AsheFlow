@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 from app.models.assignment_member import AssignmentMember
 from app.models.delivery_stop import DeliveryStop
 from app.models.rts import DamagedPackage, MissingPackage, RTSPackage
+from app.models.shift_roll_call import ShiftRollCall
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route
 
@@ -226,6 +227,41 @@ def get_stats_series(
 
 
 @dataclass
+class BlockStat:
+    """One block a person worked in the selected period (ADR-271 I).
+
+    `block_key` (W_49_St_200) is on 166k+ stops and is the only geographic
+    signal that survives ADR-219's address purge, so it is safe to keep and
+    show indefinitely — unlike normalised_address, which is nulled after 48h.
+
+    Ranked by RTS RATE, not by volume: "where do I struggle" is actionable in a
+    way that "where do I go most" is not. Volume is still reported so a reader
+    can discount a block they barely worked.
+    """
+    block_key: str
+    stops: int = 0
+    delivered: int = 0
+    rts: int = 0
+    rts_rate: Optional[float] = None
+
+
+@dataclass
+class Attendance:
+    """Roll-call outcomes for the selected period (ADR-271 I).
+
+    Attendance is self-controlled and fair — unlike peer rating, which is
+    opinion — and it appears nowhere else in the product for the person
+    themselves: CrewStatus is a dispatch tool for MARKING people, not a
+    personal history.
+    """
+    present: int = 0
+    late: int = 0
+    ncns: int = 0          # no call, no show
+    total: int = 0
+    rate: Optional[float] = None    # present / total; None when nothing recorded
+
+
+@dataclass
 class YearStat:
     """One calendar year, all-time.
 
@@ -314,6 +350,95 @@ def get_year_stats(
                 by_year[int(y)].damaged = int(n or 0)
 
     return [by_year[k] for k in sorted(by_year)]
+
+
+def get_period_extras(
+    db: Session,
+    company_id: UUID,
+    employee_id: UUID,
+    start: date,
+    end: date,
+    top_n: int = 5,
+) -> tuple:
+    """Top blocks + attendance for ONE period. Returns (blocks, attendance).
+
+    SCOPED TO THE PERIOD, deliberately: the operator's requirement was that
+    "top 5 for week 1 may not be top 5 for the month". A globally-computed
+    top-5 would be the same list at every level, which tells a reader nothing
+    about the period they are actually looking at.
+
+    Not exposed at DAY level by the UI — at one day "top blocks" is just "the
+    blocks you worked", which belongs in the day detail rather than a ranking.
+    The service does not enforce that; it is a presentation choice.
+    """
+    rows = (
+        db.query(
+            DeliveryStop.block_key,
+            func.count(DeliveryStop.id),
+            func.coalesce(func.sum(DeliveryStop.packages_delivered), 0),
+            func.coalesce(func.sum(DeliveryStop.rts_count), 0),
+        )
+        .join(Route, Route.id == DeliveryStop.route_id)
+        .filter(
+            DeliveryStop.company_id == company_id,
+            Route.company_id == company_id,
+            DeliveryStop.walker_id == employee_id,
+            DeliveryStop.block_key.isnot(None),
+            Route.route_date >= start,
+            Route.route_date <= end,
+        )
+        .group_by(DeliveryStop.block_key)
+        .all()
+    )
+
+    blocks = []
+    for bk, stops, delivered, rts in rows:
+        attempted = int(delivered or 0) + int(rts or 0)
+        blocks.append(BlockStat(
+            block_key=bk, stops=int(stops or 0),
+            delivered=int(delivered or 0), rts=int(rts or 0),
+            # None, not 0.0, when nothing was attempted there: "no packages"
+            # and "a perfect record" are different facts.
+            rts_rate=round(int(rts or 0) / attempted, 4) if attempted else None,
+        ))
+
+    # Worst rate first, but only among blocks with enough volume to mean
+    # anything — a single returned package on a one-stop block is not a
+    # pattern, and ranking it top would be actively misleading.
+    MIN_STOPS = 3
+    ranked = [b for b in blocks if b.stops >= MIN_STOPS and b.rts_rate is not None]
+    ranked.sort(key=lambda b: (-(b.rts_rate or 0), -b.stops))
+    if len(ranked) < top_n:
+        # Fall back to volume so a light period still shows where they worked.
+        seen = {b.block_key for b in ranked}
+        extra = sorted((b for b in blocks if b.block_key not in seen),
+                       key=lambda b: -b.stops)
+        ranked += extra[: top_n - len(ranked)]
+
+    att = Attendance()
+    for status, n in (
+        db.query(ShiftRollCall.status, func.count(ShiftRollCall.id))
+        .filter(
+            ShiftRollCall.company_id == company_id,
+            ShiftRollCall.employee_id == employee_id,
+            ShiftRollCall.date >= start,
+            ShiftRollCall.date <= end,
+        )
+        .group_by(ShiftRollCall.status)
+        .all()
+    ):
+        n = int(n or 0)
+        att.total += n
+        if status == "ncns":
+            att.ncns = n
+        elif status == "late":
+            att.late = n
+        else:
+            att.present += n
+    if att.total:
+        att.rate = round(att.present / att.total * 100, 1)
+
+    return ranked[:top_n], att
 
 
 def get_lifetime_totals(

@@ -26,12 +26,14 @@ from app.models.employee import Employee
 from app.schemas.assignment_history import AssignmentHistoryResponse
 from app.schemas.dispatch_replay import DayReplayOut
 from app.schemas.stats_series import (
-    LifetimeTotalsOut, MyStatsOut, StatsSeriesOut, YearStatOut,
+    AttendanceOut, BlockStatOut, LifetimeTotalsOut, MyStatsOut,
+    PeriodExtrasOut, StatsSeriesOut, YearStatOut,
 )
 from app.services.assignment_history import get_assignment_history
 from app.services.dispatch_replay import get_day_replay
 from app.services.stats_series import (
-    MAX_LOOKBACK_MONTHS, get_lifetime_totals, get_stats_series, get_year_stats,
+    MAX_LOOKBACK_MONTHS, get_lifetime_totals, get_period_extras,
+    get_stats_series, get_year_stats,
 )
 
 router = APIRouter(prefix="/assignment-history", tags=["assignment-history"])
@@ -186,4 +188,37 @@ def get_my_stats(
         lifetime=LifetimeTotalsOut.model_validate(lifetime, from_attributes=True),
         years=[YearStatOut.model_validate(y, from_attributes=True) for y in years],
         series=StatsSeriesOut.model_validate(series, from_attributes=True),
+    )
+
+
+@router.get("/me/stats/period", response_model=PeriodExtrasOut)
+def get_my_period_extras(
+    start_date: date = Query(..., description="Start of the selected period"),
+    end_date: date = Query(..., description="End of the selected period"),
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Top blocks + attendance for ONE selected period (ADR-271 I).
+
+    SEPARATE from /me/stats by design. That endpoint serves an immutable,
+    cacheable daily series the client aggregates on device. These two figures
+    cannot work that way: they are scoped to whichever period is on screen —
+    "top 5 for week 1 may not be top 5 for the month" — so precomputing them
+    for every possible period would explode the payload.
+
+    The UI requests this only from WEEK outward. At a single day "top blocks"
+    is just "the blocks you worked", which belongs in the day detail.
+
+    Self-scoped exactly like /me/stats: no employee parameter, so there is
+    nothing a caller could pass to widen it.
+    """
+    _check_range(start_date, end_date)
+    blocks, attendance = get_period_extras(
+        db, caller.company_id, caller.id, start_date, end_date
+    )
+    return PeriodExtrasOut(
+        start_date=start_date,
+        end_date=end_date,
+        top_blocks=[BlockStatOut.model_validate(b, from_attributes=True) for b in blocks],
+        attendance=AttendanceOut.model_validate(attendance, from_attributes=True),
     )
