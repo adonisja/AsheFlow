@@ -13,7 +13,7 @@
  * request fetches top blocks and attendance, because "top 5 for week 1 may not
  * be top 5 for the month" — those cannot be precomputed for every period.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import type { MyStats, PeriodExtras } from '../../api/types';
 import {
@@ -350,10 +350,21 @@ export default function StatsDrill() {
   // outward only (see PeriodPanels), but the REASON MIX is useful on a single
   // day too: the day view lists individual RTS rows, and the donut is what
   // turns nine rows into "mostly no-access".
+  //
+  // CACHED FOR THE SESSION. Every period this can be asked about ended
+  // yesterday or earlier — the series never includes today (ADR-271 C) — so
+  // the answer is IMMUTABLE and re-requesting it on every navigation is pure
+  // latency. Stepping back and forth between two weeks previously refetched
+  // both every time.
+  const extrasCache = useRef<Map<string, PeriodExtras>>(new Map());
+
   const fetchExtras = useCallback((b: Bucket) => {
+    const key = `${b.start}:${b.end}`;
+    const hit = extrasCache.current.get(key);
+    if (hit) { setExtras(hit); return; }          // no request at all
     axiosClient.get<PeriodExtras>('/assignment-history/me/stats/period',
       { params: { start_date: b.start, end_date: b.end } })
-      .then(({ data }) => setExtras(data))
+      .then(({ data }) => { extrasCache.current.set(key, data); setExtras(data); })
       .catch(() => setExtras(null));
   }, []);
 
@@ -571,15 +582,29 @@ export default function StatsDrill() {
 
 /** Day detail — truck, crew, RTS rows. Fetched on demand: this is the
  *  ~2 KB/day part deliberately kept out of the cached series (ADR-271 H). */
+/** Module-level so it survives remounts: DayDetail unmounts every time the user
+ *  zooms out and remounts when they return, which would otherwise re-request a
+ *  day that ended yesterday and can never change. */
+const dayCache = new Map<string, any>();
+
 function DayDetail({ date }: { date: string }) {
-  const [day, setDay] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [day, setDay] = useState<any | null>(() => dayCache.get(date) ?? null);
+  const [loading, setLoading] = useState(!dayCache.has(date));
 
   useEffect(() => {
+    if (dayCache.has(date)) {          // completed day — cannot have changed
+      setDay(dayCache.get(date));
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     axiosClient.get('/assignment-history/me',
       { params: { start_date: date, end_date: date } })
-      .then(({ data }) => setDay((data.days ?? [])[0] ?? null))
+      .then(({ data }) => {
+        const d = (data.days ?? [])[0] ?? null;
+        dayCache.set(date, d);
+        setDay(d);
+      })
       .catch(() => setDay(null))
       .finally(() => setLoading(false));
   }, [date]);
