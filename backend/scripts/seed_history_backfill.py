@@ -313,16 +313,22 @@ def main(months: int, dry_run: bool) -> None:
 
             # Pre-route damage on the truck — the figure drivers and captains
             # see (ADR-271 F). Without rows their damage number is always zero.
-            if rng.random() < 0.20 and not dry_run:
+            #
+            # The RNG draws happen REGARDLESS of dry_run: gating them on it
+            # desynchronises the random stream, so the dry run would predict a
+            # different dataset from the one the real run writes. Only the
+            # db.add is skipped.
+            if rng.random() < 0.20:
                 for _ in range(rng.choice([1, 1, 2])):
                     stage = rng.choice(_DAMAGE_STAGES)
-                    db.add(DamagedPackage(
-                        id=uuid.uuid4(), company_id=cid, route_date=day,
-                        tba_number=f"TBA{uuid.uuid4().hex[:12].upper()}",
-                        truck_assignment_id=ta.id, stage=stage,
-                        damage_notes=_DAMAGE_NOTES[stage],
-                        resolution_status="pending",
-                    ))
+                    if not dry_run:
+                        db.add(DamagedPackage(
+                            id=uuid.uuid4(), company_id=cid, route_date=day,
+                            tba_number=f"TBA{uuid.uuid4().hex[:12].upper()}",
+                            truck_assignment_id=ta.id, stage=stage,
+                            damage_notes=_DAMAGE_NOTES[stage],
+                            resolution_status="pending",
+                        ))
                     n_dmg += 1
 
         if not dry_run and n_days % 40 == 0:
@@ -337,7 +343,7 @@ def main(months: int, dry_run: bool) -> None:
         print(f"Created across {start} .. {end}:")
     print(f"  assignments {n_days}\n  routes      {n_routes}\n"
           f"  stops       {n_stops}\n  rts         {n_rts}\n"
-          f"  missing     {n_miss}\n  truck-damage{n_dmg}")
+          f"  missing     {n_miss}\n  truck-dmg   {n_dmg}")
 
 
 if __name__ == "__main__":
