@@ -343,7 +343,13 @@ export default function StatsDrill() {
           {[
             ['Delivered', lt.delivered.toLocaleString()],
             ['Success', lt.success_pct !== null ? `${lt.success_pct}%` : '—'],
-            ['Trips', lt.trips.toLocaleString()],
+            // TRIPS is a walker's measure: how many route runs they made. A
+            // driver or captain runs the TRUCK, not their own routes, so the
+            // figure is meaningless for them — they get RTS in that slot
+            // instead, which is a number they do answer for.
+            truckScoped
+              ? ['RTS', lt.rts.toLocaleString()]
+              : ['Trips', lt.trips.toLocaleString()],
             [truckScoped ? 'Truck damage' : 'Damaged',
              (truckScoped ? lt.truck_damaged : lt.damaged).toLocaleString()],
           ].map(([l, v]) => (
@@ -354,7 +360,12 @@ export default function StatsDrill() {
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3 mt-3">
-          {[['RTS', lt.rts], ['Missing', lt.missing]].map(([l, v]) => (
+          {(truckScoped
+            // RTS was promoted into the row above for these roles, so showing
+            // it twice would just be noise.
+            ? [['Missing', lt.missing] as [string, number]]
+            : [['RTS', lt.rts] as [string, number], ['Missing', lt.missing]]
+          ).map(([l, v]) => (
             <div key={l as string} className="rounded-lg bg-accent/20 p-2.5">
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{l}</p>
               <p className="text-base font-bold text-foreground tabular-nums">
@@ -481,6 +492,12 @@ function DayDetail({ date }: { date: string }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
+        {day.counts_scope === 'truck' && (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-accent/40
+                           text-muted-foreground uppercase tracking-wide">
+            whole truck
+          </span>
+        )}
         {day.truck_name && (
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold
                            text-foreground border border-border rounded-lg px-2 py-1">
@@ -524,7 +541,12 @@ function DayDetail({ date }: { date: string }) {
       {(day.rts_details ?? []).length > 0 && (
         <div>
           <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
-            Returned {day.rts_details.length}
+            {/* WHOSE returns. assignment_history reports counts_scope ("truck"
+                for driver/captain, "own" otherwise) and the label must honour
+                it: a driver's day legitimately lists the WHOLE truck's 144
+                returns, which read as personal without this. */}
+            {day.counts_scope === 'truck' ? 'Truck returned' : 'You returned'}{' '}
+            {day.rts_details.length}
           </p>
           <div className="space-y-1.5">
             {day.rts_details.map((r: any) => (
