@@ -22,7 +22,7 @@ import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import { Lock, CheckCircle2, Mail, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import Avatar from '../components/ui/Avatar';
-import MyPerformanceCard from '../components/MyPerformanceCard';
+import StatsDrill from '../components/stats/StatsDrill';
 import MyScorecardPanel from '../components/MyScorecardPanel';
 
 type Tab = 'settings' | 'stats' | 'scorecard';
@@ -402,11 +402,10 @@ export default function Account() {
       {tab === 'stats' && (
         <>
           <p className="text-xs text-muted-foreground">
-            AsheFlow's record of your deliveries and peer ratings. Amazon's own
-            weekly assessment is under Scorecard — the two are measured
-            separately and can differ.
+            AsheFlow's record of your deliveries. Amazon's own weekly assessment
+            is under Scorecard — the two are measured separately and can differ.
           </p>
-          <MyPerformanceCard />
+          <StatsDrill />
         </>
       )}
 
