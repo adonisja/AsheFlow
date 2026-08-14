@@ -346,15 +346,18 @@ export default function StatsDrill() {
   }, [level, cursor, days, stats]);
 
   // Period extras: week outward only.
-  const fetchExtras = useCallback((b: Bucket, lvl: Grain) => {
-    if (lvl === 'day') { setExtras(null); return; }
+  // Fetched at EVERY level, including day. Blocks and attendance are week-
+  // outward only (see PeriodPanels), but the REASON MIX is useful on a single
+  // day too: the day view lists individual RTS rows, and the donut is what
+  // turns nine rows into "mostly no-access".
+  const fetchExtras = useCallback((b: Bucket) => {
     axiosClient.get<PeriodExtras>('/assignment-history/me/stats/period',
       { params: { start_date: b.start, end_date: b.end } })
       .then(({ data }) => setExtras(data))
       .catch(() => setExtras(null));
   }, []);
 
-  useEffect(() => { if (cursor) fetchExtras(cursor, level); }, [cursor, level, fetchExtras]);
+  useEffect(() => { if (cursor) fetchExtras(cursor); }, [cursor, fetchExtras]);
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (!stats || !cursor) {
@@ -525,6 +528,24 @@ export default function StatsDrill() {
 
         <Figures b={cursor} truckScoped={truckScoped} />
 
+        {/* OVERVIEW ABOVE, DETAIL BELOW. The donut summarises the period; the
+            RTS list underneath can run to dozens of rows, so putting the
+            summary after it buried the one element that makes a long list
+            readable. */}
+        {extras && extras.reasons.length > 0 && (
+          <div className="pt-4 border-t border-border">
+            <div className="flex items-baseline gap-2 mb-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Why packages came back
+              </p>
+              <span className="text-[11px] text-muted-foreground/70">
+                {truckScoped ? 'whole truck' : cursor.label}
+              </span>
+            </div>
+            <ReasonDonut reasons={extras.reasons} />
+          </div>
+        )}
+
         {level === 'day' ? (
           <DayDetail date={cursor.start} />
         ) : (
@@ -540,22 +561,9 @@ export default function StatsDrill() {
               <Bars data={charted} onPick={zoomIn} />
             </div>
             <PeriodPanels extras={extras} />
-
-            {extras && (
-              <div className="pt-5 border-t border-border">
-                <div className="flex items-baseline gap-2 mb-4">
-                  <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Why packages came back
-                  </p>
-                  <span className="text-[11px] text-muted-foreground/70">
-                    {truckScoped ? 'whole truck' : cursor.label}
-                  </span>
-                </div>
-                <ReasonDonut reasons={extras.reasons} />
-              </div>
-            )}
           </>
         )}
+
       </div>
     </div>
   );
