@@ -2170,3 +2170,93 @@ export interface DayReplay {
   rts_count: number;
   missing_count: number;
 }
+
+// ── My Stats drill-down (ADR-271) ───────────────────────────────────────────
+
+/** One completed day. NEVER today — the series ends yesterday so the payload
+ *  is immutable once fetched, which is what makes client-side caching safe. */
+export interface DayStat {
+  d: string;
+  delivered: number;
+  total: number;
+  rts: number;
+  missing: number;
+  /** Packages the person brought back DAMAGED — a SUBSET of `rts`, since
+   *  package_damaged is one of the six RTS_TYPES. Never add the two. */
+  damaged: number;
+  /** Damage reported on their truck pre-delivery. A different event from
+   *  `damaged`; the UI must not sum them. Populated for driver/captain only. */
+  truck_damaged: number;
+  effort: string | null;
+}
+
+export interface StatsSeries {
+  start_date: string;
+  /** Always yesterday. */
+  end_date: string;
+  role: string;
+  days: DayStat[];
+}
+
+export interface LifetimeTotals {
+  delivered: number;
+  rts: number;
+  missing: number;
+  damaged: number;
+  truck_damaged: number;
+  trips: number;
+  /** Null, never 0, when nothing has been attempted. */
+  success_pct: number | null;
+}
+
+/** Per calendar year, ALL TIME — computed server-side because the daily series
+ *  is capped at 24 months and the lifetime chart is year-over-year. */
+export interface YearStat {
+  year: number;
+  delivered: number;
+  total: number;
+  rts: number;
+  missing: number;
+  damaged: number;
+  truck_damaged: number;
+}
+
+export interface MyStats {
+  lifetime: LifetimeTotals;
+  years: YearStat[];
+  series: StatsSeries;
+}
+
+/** One block worked in the selected period. `block_key` survives ADR-219's
+ *  address purge, so it carries no PII. */
+export interface BlockStat {
+  block_key: string;
+  stops: number;
+  delivered: number;
+  rts: number;
+  /** Null, never 0, when nothing was attempted there. */
+  rts_rate: number | null;
+}
+
+export interface Attendance {
+  present: number;
+  late: number;
+  ncns: number;
+  total: number;
+  /** Null when nothing was recorded — "no roll calls" is not "0% attendance". */
+  rate: number | null;
+}
+
+/** Scoped to ONE period: "top 5 for week 1 may not be top 5 for the month",
+ *  so this cannot be precomputed into the cached series. Requested from WEEK
+ *  outward only — at a single day "top blocks" is just "the blocks you
+ *  worked", which belongs in the day detail. */
+export interface PeriodExtras {
+  start_date: string;
+  end_date: string;
+  top_blocks: BlockStat[];
+  attendance: Attendance;
+  /** False for driver/captain: blocks come from the stop's executor and a
+   *  driver does not carry, so HIDE the panel rather than render it empty. */
+  blocks_apply: boolean;
+}
