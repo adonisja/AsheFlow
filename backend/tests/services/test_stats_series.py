@@ -540,3 +540,68 @@ class TestBlocksApplyByRole:
                                       when - timedelta(days=1), when + timedelta(days=1))
         assert [b.block_key for b in blocks] == ["W_1_St_100"]
         assert blocks[0].rts_rate == 0.2
+
+
+class TestTruckScopedCounts:
+    """A driver's counts come from THEIR TRUCK, not from walker_id (ADR-268).
+
+    THE BUG THIS PINS. stats_series originally scoped every count by walker_id
+    regardless of role. A driver never owns a stop — walker_id is the EXECUTOR
+    (ADR-244) — so driver.test showed 0 delivered while the trucks they drove
+    had delivered 256,733 packages. Every one of the 25 tests that existed at
+    the time passed, because none of them opened the page as a driver.
+
+    assignment_history had solved this from the start with TRUCK_SCOPED_ROLES;
+    the new service simply did not carry the rule across.
+    """
+
+    def _truck_day(self, db, driver, carrier, when):
+        truck = make_truck(db, name=f"TS{_n[0]}")
+        a = make_assignment(db, truck, target_date=when)
+        make_member(db, a, driver, "driver")
+        make_member(db, a, carrier, "walker")
+        r = _route(db, a, when)
+        # The CARRIER owns the stop; the driver owns nothing.
+        _stop(db, r, total=100, rts=6, walker_id=carrier.id)
+        return a
+
+    def test_driver_sees_the_trucks_load(self, db):
+        drv = make_employee(db, role="driver", name="Dee")
+        wlk = make_employee(db, role="walker", name="Wanda")
+        when = date.today() - timedelta(days=3)
+        self._truck_day(db, drv, wlk, when)
+
+        s = get_stats_series(db, SEED_COMPANY_ID, drv.id, "driver")
+        assert len(s.days) == 1, "the driver's day vanished entirely"
+        assert s.days[0].delivered == 94, (
+            "driver scoped by walker_id — they own no stops, so this is 0"
+        )
+        assert s.days[0].rts == 6
+
+    def test_walker_still_sees_only_their_own(self, db):
+        """The counterpart: fixing the driver must not give walkers the whole
+        truck, which would be the ADR-268 bug in reverse."""
+        drv = make_employee(db, role="driver", name="Dee2")
+        wlk = make_employee(db, role="walker", name="Wanda2")
+        other = make_employee(db, role="walker", name="Otto")
+        when = date.today() - timedelta(days=4)
+        a = self._truck_day(db, drv, wlk, when)
+        # A second carrier on the SAME truck, whose work is not Wanda's.
+        make_member(db, a, other, "walker")
+        r2 = _route(db, a, when)
+        _stop(db, r2, total=500, rts=50, walker_id=other.id)
+
+        s = get_stats_series(db, SEED_COMPANY_ID, wlk.id, "walker")
+        assert s.days[0].delivered == 94, "a walker was given the truck's load"
+
+    def test_lifetime_agrees_with_the_series(self, db):
+        """A driver's lifetime total must not contradict the days that make it
+        up — they are computed by separate queries and can drift apart."""
+        drv = make_employee(db, role="driver", name="Dee3")
+        wlk = make_employee(db, role="walker", name="Wanda3")
+        for i in (3, 4, 5):
+            self._truck_day(db, drv, wlk, date.today() - timedelta(days=i))
+
+        s = get_stats_series(db, SEED_COMPANY_ID, drv.id, "driver")
+        lt = get_lifetime_totals(db, SEED_COMPANY_ID, drv.id, "driver")
+        assert lt.delivered == sum(d.delivered for d in s.days)

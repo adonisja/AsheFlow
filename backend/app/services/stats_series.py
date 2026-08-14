@@ -44,6 +44,7 @@ from app.models.rts import DamagedPackage, MissingPackage, RTSPackage
 from app.models.shift_roll_call import ShiftRollCall
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route
+from app.services.constants import TRUCK_SCOPED_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,10 @@ _MAX_LOOKBACK_DAYS = MAX_LOOKBACK_MONTHS * 31
 # packages they personally carried back (ADR-271 F). A captain gets both,
 # reported separately.
 _TRUCK_DAMAGE_ROLES = ("driver", "captain")
+
+# Reuses the shared constant rather than re-declaring it, so this cannot drift
+# from ADR-256 / assignment_history.
+_TRUCK_SCOPED_ROLES = tuple(TRUCK_SCOPED_ROLES)
 _OWN_DAMAGE_ROLES = ("walker", "trainee", "trainer", "captain")
 
 
@@ -113,9 +118,21 @@ def get_stats_series(
         return series
 
     # ── delivered / total / rts / missing, per route_date ────────────────────
-    # walker_id is the EXECUTOR (ADR-244): the stops this person actually
-    # carried, which is what a personal stats page must count.
-    stop_rows = (
+    #
+    # WHOSE numbers are these? The same rule assignment_history has always used
+    # (ADR-268, TRUCK_SCOPED_ROLES):
+    #
+    #   walker/trainee/trainer  the stops THEY executed (walker_id, ADR-244)
+    #   driver/captain          the whole truck's load — they answer for it,
+    #                           and they never own a stop, so scoping them by
+    #                           walker_id returns ZERO for everything
+    #
+    # That zero was a real bug: driver.test showed 0 delivered while the trucks
+    # they drove had delivered 256,733 packages. Found by opening the page as a
+    # driver, not by reading the code.
+    truck_wide = role in _TRUCK_SCOPED_ROLES
+
+    stop_q = (
         db.query(
             Route.route_date,
             func.coalesce(func.sum(DeliveryStop.packages_delivered), 0),
@@ -124,10 +141,29 @@ def get_stats_series(
             func.coalesce(func.sum(DeliveryStop.missing_count), 0),
         )
         .join(Route, Route.id == DeliveryStop.route_id)
-        .filter(
+    )
+    if truck_wide:
+        # Their own assignment is the scope: the stops that rode on a truck
+        # they were rostered to that day.
+        stop_q = (
+            stop_q
+            .join(TruckAssignment,
+                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+                TruckAssignment.company_id == company_id,
+            )
+        )
+    else:
+        stop_q = stop_q.filter(DeliveryStop.walker_id == employee_id)
+
+    stop_rows = (
+        stop_q.filter(
             DeliveryStop.company_id == company_id,
             Route.company_id == company_id,
-            DeliveryStop.walker_id == employee_id,
             Route.route_date >= start,
             Route.route_date <= end,
         )
@@ -451,28 +487,71 @@ def get_lifetime_totals(
     """
     out = LifetimeTotals()
 
-    delivered = (
-        db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
-        .filter(
-            DeliveryStop.company_id == company_id,
-            DeliveryStop.walker_id == employee_id,
-        )
-        .scalar()
-    ) or 0
-    out.delivered = int(delivered)
+    # Same truck-vs-own rule as the series above — a driver's lifetime total
+    # must not disagree with the days that make it up.
+    truck_wide = role in _TRUCK_SCOPED_ROLES
 
-    out.rts = int(
-        db.query(func.count(RTSPackage.id)).filter(
-            RTSPackage.company_id == company_id,
-            RTSPackage.walker_id == employee_id,
-        ).scalar() or 0
-    )
-    out.missing = int(
-        db.query(func.count(MissingPackage.id)).filter(
-            MissingPackage.company_id == company_id,
-            MissingPackage.walker_id == employee_id,
-        ).scalar() or 0
-    )
+    if truck_wide:
+        base = (
+            db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
+            .join(TruckAssignment,
+                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                DeliveryStop.company_id == company_id,
+                TruckAssignment.company_id == company_id,
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+            )
+        )
+        out.delivered = int(base.scalar() or 0)
+        out.rts = int(
+            db.query(func.coalesce(func.sum(DeliveryStop.rts_count), 0))
+            .join(TruckAssignment,
+                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                DeliveryStop.company_id == company_id,
+                TruckAssignment.company_id == company_id,
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+            ).scalar() or 0
+        )
+        out.missing = int(
+            db.query(func.coalesce(func.sum(DeliveryStop.missing_count), 0))
+            .join(TruckAssignment,
+                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                DeliveryStop.company_id == company_id,
+                TruckAssignment.company_id == company_id,
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+            ).scalar() or 0
+        )
+    else:
+        out.delivered = int(
+            db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
+            .filter(
+                DeliveryStop.company_id == company_id,
+                DeliveryStop.walker_id == employee_id,
+            ).scalar() or 0
+        )
+        out.rts = int(
+            db.query(func.count(RTSPackage.id)).filter(
+                RTSPackage.company_id == company_id,
+                RTSPackage.walker_id == employee_id,
+            ).scalar() or 0
+        )
+        out.missing = int(
+            db.query(func.count(MissingPackage.id)).filter(
+                MissingPackage.company_id == company_id,
+                MissingPackage.walker_id == employee_id,
+            ).scalar() or 0
+        )
 
     if role in _OWN_DAMAGE_ROLES:
         out.damaged = int(
