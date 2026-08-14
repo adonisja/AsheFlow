@@ -85,7 +85,23 @@ _SEASON = {
 }
 # The business grows. Without this every year is the same size and the
 # year-over-year chart says nothing.
-_YEAR_ARC = {2023: 0.55, 2024: 0.72, 2025: 0.90, 2026: 1.00}
+#
+# Anchored to the CURRENT year rather than hardcoded, and extrapolated for
+# years outside the table. `.get(year, 1.0)` was a bug: an unlisted year
+# silently became a FULL-SIZE year, so 2022 — which should be the smallest —
+# rendered larger than 2023 and turned the growth story into a dip. There is no
+# sensible "default" size for a year; it has to be derived.
+_ARC_BASE_YEAR = 2026          # the present, = 1.00
+_ARC_DECAY = 0.78              # each year back is 78% of the next
+
+
+def _year_arc(year: int) -> float:
+    """Relative business size for any year, including ones not seen before.
+
+    Extrapolates rather than defaulting, so a backfill that reaches further
+    back than expected still produces a monotonic growth curve.
+    """
+    return round(_ARC_DECAY ** max(0, _ARC_BASE_YEAR - year), 4)
 _WEEKDAY = {0: 1.10, 1: 0.95, 2: 0.98, 3: 1.00, 4: 1.12, 5: 0.70, 6: 0.10}
 
 _EXPLANATIONS = {
@@ -189,7 +205,7 @@ def main(months: int, dry_run: bool) -> None:
             continue
 
         season = _SEASON[day.month] * _year_month_jitter(day.year, day.month)
-        arc = _YEAR_ARC.get(day.year, 1.0)
+        arc = _year_arc(day.year)
 
         # Day shocks — a storm, a depot problem, a surge. Without these every
         # week looks the same shape and the day chart is a flat comb.
@@ -223,7 +239,12 @@ def main(months: int, dry_run: bool) -> None:
                 db.flush()
 
             drv = rng.choice(drivers)
-            crew_n = min(len(available), rng.randint(3, 8))
+            # Crew size relative to the roster, not a flat 3-8. With 191
+            # carriers and ~5 trucks a day, sampling 3-8 each means an
+            # individual appears roughly once every EIGHT days — walker.test
+            # ended up with 2-6 days a month and a two-year hole. A worker
+            # reviewing their own performance needs near-continuous history.
+            crew_n = min(len(available), max(6, int(len(available) * 0.18)))
             crew = rng.sample(available, crew_n)
             if not dry_run:
                 db.add(AssignmentMember(
@@ -258,9 +279,32 @@ def main(months: int, dry_run: bool) -> None:
                     db.flush()
                 n_routes += 1
 
+                # PER-PERSON, PER-WEEK and PER-DAY variance.
+                #
+                # season/arc/weekday/shock are shared by everyone working that
+                # day, so without these two factors every walker's week has the
+                # same shape and only a flat skill offset separates them — the
+                # week and day charts then look identical person to person.
+                #
+                # Hashed, not random, so a given person's given week is stable
+                # across re-runs.
+                iso_y, iso_w, _ = day.isocalendar()
+                wk_h = hashlib.sha256(
+                    f"wk-{member.id}-{iso_y}-{iso_w}".encode()).digest()
+                week_f = 0.70 + (wk_h[0] / 255) * 0.65      # 0.70 .. 1.35
+                dy_h = hashlib.sha256(
+                    f"dy-{member.id}-{day.isoformat()}".encode()).digest()
+                day_f = 0.60 + (dy_h[0] / 255) * 0.85       # 0.60 .. 1.45
+
                 base = rng.randint(*_STOPS_PER_ROUTE)
-                stop_n = max(1, int(round(base * prof["volume"] * shock)))
+                stop_n = max(
+                    1,
+                    int(round(base * prof["volume"] * shock * week_f * day_f)),
+                )
+                # The RATE wobbles per week as well as the volume: a person
+                # who always returns exactly 5% is not a person.
                 rate = min(0.9, _RTS_RATE[effort] * prof["care"]
+                           * (0.75 + (wk_h[1] / 255) * 0.70)
                            * (2.4 if bad_week else 1.0))
 
                 for si in range(1, stop_n + 1):
