@@ -10,10 +10,9 @@
     "",
     "Do not hand-edit. Run --baseline after genuinely removing literals."
   ],
-  "total": 186,
+  "total": 184,
   "files": {
     "frontend/src/components/CrewStatusPanel.tsx": 13,
-    "frontend/src/components/MyPerformanceCard.tsx": 2,
     "frontend/src/components/OperatingZoneMap.tsx": 6,
     "frontend/src/components/ScorecardCard.tsx": 7,
     "frontend/src/components/ZoneDensityMap.tsx": 3,
