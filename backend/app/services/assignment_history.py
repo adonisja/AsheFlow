@@ -25,6 +25,7 @@ from datetime import date, timedelta
 from typing import Optional
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.assignment_member import AssignmentMember
@@ -127,28 +128,33 @@ def _class_baselines(db: Session, company_id: UUID) -> dict:
     dividing by a 12-package baseline would produce ratios that swing wildly on
     one return.
     """
+    # AGGREGATE IN SQL, NOT IN PYTHON. This previously selected three columns
+    # for EVERY completed stop in the company and summed them in a loop — three
+    # rows of work per stop, on every request, to produce at most three numbers.
+    #
+    # That was invisible at ~10k stops and became a >10s response at 1.19M,
+    # which is what the mobile client's 10s axios timeout hit: the endpoint
+    # still returned 200, the client had already given up, and the day detail
+    # rendered as nothing. There are only ever a handful of effort classes, so
+    # GROUP BY returns a handful of rows regardless of how much history exists.
     rows = (
         db.query(
             DeliveryStop.effort_class,
-            DeliveryStop.rts_count,
-            DeliveryStop.packages_total,
+            func.sum(DeliveryStop.rts_count),
+            func.sum(DeliveryStop.packages_total),
         )
         .filter(
             DeliveryStop.company_id == company_id,
             DeliveryStop.status == "completed",
             DeliveryStop.effort_class.isnot(None),
         )
+        .group_by(DeliveryStop.effort_class)
         .all()
     )
-    agg: dict = {}
-    for effort, rts, pkgs in rows:
-        a = agg.setdefault(effort, [0, 0])
-        a[0] += rts or 0
-        a[1] += pkgs or 0
     return {
-        cls: rts / pkgs
-        for cls, (rts, pkgs) in agg.items()
-        if pkgs >= _MIN_CLASS_PACKAGES and pkgs > 0
+        cls: (rts or 0) / pkgs
+        for cls, rts, pkgs in rows
+        if (pkgs or 0) >= _MIN_CLASS_PACKAGES and (pkgs or 0) > 0
     }
 
 

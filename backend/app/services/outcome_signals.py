@@ -35,9 +35,11 @@ from datetime import date, timedelta
 from typing import Optional
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.delivery_stop import DeliveryStop
+from app.models.truck_assignment import TruckAssignment
 
 logger = logging.getLogger(__name__)
 
@@ -91,24 +93,33 @@ class OutcomeSignal:
 
 def _class_baselines(db: Session, company_id: UUID, since: date) -> dict:
     """{effort_class: rts_rate} company-wide over the window."""
+    # AGGREGATE IN SQL, and HONOUR `since`. Two bugs in one query: it pulled
+    # every completed stop in the company into Python to produce three numbers
+    # (a >10s response once history reached 1.19M stops), and it accepted a
+    # `since` window that it never applied — so "over the window" in the
+    # docstring was not true and the baseline silently covered all history.
     rows = (
         db.query(
             DeliveryStop.effort_class,
-            DeliveryStop.rts_count,
-            DeliveryStop.packages_total,
+            func.sum(DeliveryStop.rts_count),
+            func.sum(DeliveryStop.packages_total),
         )
+        .join(TruckAssignment, TruckAssignment.id == DeliveryStop.truck_assignment_id)
         .filter(
             DeliveryStop.company_id == company_id,
             DeliveryStop.status == "completed",
             DeliveryStop.effort_class.isnot(None),
+            # The window comes from the ASSIGNMENT DATE, not a stop timestamp.
+            # DeliveryStop has no created_at, and completed_at is null on every
+            # row in staging (1,194,362 of 1,194,362) because no seeding path
+            # sets it — filtering on it would have emptied the baseline and
+            # silently zeroed every rts_rate_vs_class figure that depends on it.
+            TruckAssignment.date >= since,
         )
+        .group_by(DeliveryStop.effort_class)
         .all()
     )
-    agg: dict = {}
-    for effort, rts, pkgs in rows:
-        a = agg.setdefault(effort, [0, 0])
-        a[0] += rts or 0
-        a[1] += pkgs or 0
+    agg: dict = {effort: [rts or 0, pkgs or 0] for effort, rts, pkgs in rows}
     return {
         cls: rts / pkgs
         for cls, (rts, pkgs) in agg.items()

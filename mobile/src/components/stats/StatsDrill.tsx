@@ -21,6 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet,
+  Platform,
 } from 'react-native';
 import Svg, { Circle, Text as SvgText } from 'react-native-svg';
 import apiClient from '@api/client';
@@ -31,6 +32,7 @@ import {
   lastWorkedDay, parseYMD, type Bucket, type Grain,
 } from './aggregate';
 import type { AssignmentDay, MyStats, PeriodExtras } from './types';
+import { groupCrew, roleTone } from './crew';
 
 const LEVEL_NAME: Record<Grain, string> = {
   day: 'Day', week: 'Week', month: 'Month', year: 'Year', lifetime: 'Lifetime',
@@ -45,7 +47,7 @@ const RTS_LABEL: Record<string, string> = {
   customer_cancelled_order: 'Customer cancelled',
 };
 
-const CREW_ORDER = ['driver', 'captain', 'trainer', 'walker', 'trainee'];
+
 
 /** Module-level so it survives remounts: the day detail unmounts every time the
  *  user zooms out and remounts when they return, which would otherwise
@@ -247,31 +249,45 @@ export default function StatsDrill() {
           ))}
         </View>
 
-        <View style={s.titleRow}>
+        {/* HEADER — the date is the anchor of the card, so it owns its line at
+            display size. The status badge and the trend sit on a metadata row
+            BENEATH it rather than competing with it for the same baseline:
+            three items on one line at phone width is what made this read as
+            cluttered. */}
+        <View style={s.titleBlock}>
           <Text style={[s.drillTitle, { color: c.foreground }]}>
             {level === 'day' || level === 'lifetime'
               ? cursor.label : `${LEVEL_NAME[level]} · ${cursor.label}`}
           </Text>
-          {isEntry && (
-            <Text style={[s.chip, { color: c.mutedForeground, backgroundColor: c.surface }]}>
-              your last shift
-            </Text>
-          )}
+          <View style={s.metaRow}>
+            {isEntry && (
+              /* A GREEN badge, not grey body text. "your last shift" as muted
+                 prose read like a caveat; this is a positive status marker and
+                 should look like one. */
+              <View style={[s.badge, { backgroundColor: c.success + '22' }]}>
+                <View style={[s.badgeDot, { backgroundColor: c.success }]} />
+                <Text style={[s.badgeText, { color: c.success }]}>LATEST</Text>
+              </View>
+            )}
+            {/* A delta, or NOTHING when there is no completed prior period.
+                "Nothing to compare" and "no change" are different facts. */}
+            {cursor.trend !== null ? (
+              <View style={[s.trendPill, {
+                backgroundColor: (cursor.trend >= 0 ? c.success : c.danger) + '1A',
+              }]}>
+                <Text style={[s.trendText, {
+                  color: cursor.trend >= 0 ? c.success : c.danger,
+                }]}>
+                  {cursor.trend >= 0 ? '↑' : '↓'} {Math.abs(cursor.trend).toFixed(1)}%
+                </Text>
+              </View>
+            ) : level !== 'lifetime' ? (
+              <Text style={[s.metaNote, { color: c.mutedForeground }]}>
+                no earlier {LEVEL_NAME[level].toLowerCase()} to compare
+              </Text>
+            ) : null}
+          </View>
         </View>
-
-        {/* A delta, or NOTHING when there is no completed prior period.
-            "Nothing to compare" and "no change" are different facts. */}
-        {cursor.trend !== null ? (
-          <Text style={[s.trend, {
-            color: cursor.trend >= 0 ? c.success : c.danger,
-          }]}>
-            {cursor.trend >= 0 ? '▲' : '▼'} {Math.abs(cursor.trend).toFixed(1)}%
-          </Text>
-        ) : level !== 'lifetime' ? (
-          <Text style={[s.muted, { color: c.mutedForeground }]}>
-            no earlier {LEVEL_NAME[level].toLowerCase()} to compare
-          </Text>
-        ) : null}
 
         {/* Sibling navigation — prev/next within the current grain. */}
         {siblings.length > 1 && (
@@ -585,13 +601,7 @@ function DayDetail({ date, c, s }: { date: string; c: ThemeColors; s: Styles }) 
   if (loading) return <ActivityIndicator color={c.primary} style={{ marginVertical: spacing.md }} />;
   if (!day) return null;
 
-  const groups = new Map<string, string[]>();
-  for (const m of day.crew ?? []) {
-    if (!groups.has(m.role)) groups.set(m.role, []);
-    groups.get(m.role)!.push(m.name);
-  }
-  const ordered = [...groups.entries()].sort(
-    (a, b) => CREW_ORDER.indexOf(a[0]) - CREW_ORDER.indexOf(b[0]));
+  const ordered = groupCrew(day.crew ?? []);
 
   // ADR-269: trainees the caller was PAIRED with that day. `?? []` because the
   // field is optional on the wire — a client can outrun the backend serving it.
@@ -599,48 +609,81 @@ function DayDetail({ date, c, s }: { date: string; c: ThemeColors; s: Styles }) 
 
   return (
     <View style={[s.section, { borderTopColor: c.border }]}>
-      <View style={s.dayHead}>
-        {day.counts_scope === 'truck' && (
-          <Text style={[s.chip, { color: c.mutedForeground, backgroundColor: c.surface }]}>
-            whole truck
-          </Text>
-        )}
-        {!!day.truck_name && (
-          <View style={[s.truckPill, { backgroundColor: c.surface, borderColor: c.border }]}>
-            <Text style={[s.truckText, { color: c.foreground }]}>{day.truck_name}</Text>
+      {/* TRUCK BANNER — the truck is the identity of the day, so it gets a
+          filled row with the vehicle glyph rather than a small outlined pill
+          floating among chips. Effort and scope ride inside it as trailing
+          metadata, which keeps the whole "where was I" answer on one line. */}
+      {(!!day.truck_name || day.counts_scope === 'truck') && (
+        <View style={[s.truckBanner, { backgroundColor: c.surface, borderColor: c.border }]}>
+          <View style={[s.truckGlyph, { backgroundColor: c.primary + '26' }]}>
+            <Text style={[s.truckGlyphText, { color: c.primary }]}>🚚</Text>
           </View>
-        )}
-        {!!day.effort_class && day.effort_class !== 'standard' && (
-          /* Only exceptions get a chip — 'standard' on every row is noise that
-             hides the heavy days. */
-          <Text style={[s.chip, {
-            color: day.effort_class === 'heavy' ? c.warning : c.info,
-            backgroundColor: c.surface,
-          }]}>
-            {day.effort_class}
-          </Text>
-        )}
-      </View>
+          <View style={s.truckMeta}>
+            <Text style={[s.truckName, { color: c.foreground }]} numberOfLines={1}>
+              {day.truck_name ?? 'Assigned'}
+            </Text>
+            <Text style={[s.truckSub, { color: c.mutedForeground }]}>
+              {day.counts_scope === 'truck' ? 'whole truck' : 'your stops'}
+              {!!day.slot_role && ` · ${day.slot_role}`}
+            </Text>
+          </View>
+          {/* Only exceptions get a chip — 'standard' on every row is noise that
+              hides the heavy days. */}
+          {!!day.effort_class && day.effort_class !== 'standard' && (
+            <View style={[s.effortChip, {
+              backgroundColor: (day.effort_class === 'heavy' ? c.warning : c.info) + '26',
+            }]}>
+              <Text style={[s.effortText, {
+                color: day.effort_class === 'heavy' ? c.warning : c.info,
+              }]}>
+                {day.effort_class.toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
 
       {ordered.length > 0 && (
-        <>
-          <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>CREW</Text>
+        <View style={s.crewBlock}>
+          <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>
+            CREW · {(day.crew ?? []).length}
+          </Text>
           {ordered.map(([role, names]) => (
-            <View key={role} style={s.crewRow}>
-              <Text style={[s.crewRole, { color: c.mutedForeground }]}>{role.toUpperCase()}</Text>
-              <View style={s.crewNames}>
+            <View key={role} style={s.crewGroup}>
+              {/* Role as a full-width header rather than a fixed-width gutter
+                  column. The gutter forced every name to start at the same x
+                  no matter how long the role word was, and left a ragged
+                  channel down the middle. */}
+              <View style={s.crewGroupHead}>
+                <View style={[s.roleDot, { backgroundColor: roleTone(role, c) }]} />
+                <Text style={[s.crewRole, { color: c.mutedForeground }]}>
+                  {role.toUpperCase()}
+                </Text>
+                <View style={[s.crewRule, { backgroundColor: c.border }]} />
+                <Text style={[s.crewCount, { color: c.mutedForeground }]}>{names.length}</Text>
+              </View>
+              {/* FIXED TWO-COLUMN GRID, not flexWrap. Wrapping variable-width
+                  pills is what produced the zig-zag the operator flagged:
+                  every row broke at a different point, so no name lined up
+                  with the one above it. Each cell is exactly 50% wide, so the
+                  left and right columns are true columns. */}
+              <View style={s.crewGrid}>
                 {names.map(n => (
-                  <View key={n} style={[s.crewPill, { backgroundColor: c.surface }]}>
-                    <View style={[s.avatar, { backgroundColor: c.primary + '33' }]}>
-                      <Text style={[s.avatarText, { color: c.primary }]}>{initials(n)}</Text>
+                  <View key={n} style={s.crewCell}>
+                    <View style={[s.avatar, { backgroundColor: roleTone(role, c) + '26' }]}>
+                      <Text style={[s.avatarText, { color: roleTone(role, c) }]}>
+                        {initials(n)}
+                      </Text>
                     </View>
-                    <Text style={[s.crewName, { color: c.foreground }]}>{n}</Text>
+                    <Text style={[s.crewName, { color: c.foreground }]} numberOfLines={1}>
+                      {n}
+                    </Text>
                   </View>
                 ))}
               </View>
             </View>
           ))}
-        </>
+        </View>
       )}
 
       {(day.rts_details ?? []).length > 0 && (
@@ -652,47 +695,122 @@ function DayDetail({ date, c, s }: { date: string; c: ThemeColors; s: Styles }) 
             {day.counts_scope === 'truck' ? 'TRUCK RETURNED' : 'YOU RETURNED'}{' '}
             {day.rts_details.length}
           </Text>
-          {day.rts_details.map(r => (
-            <View key={r.tba_number} style={s.rtsRow}>
-              <Text style={[s.rtsType, { color: c.foreground }]}>
-                {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
-                {r.is_reattemptable && (
-                  <Text style={[s.retry, { color: c.info }]}>{'  '}retryable</Text>
+          {/* Each return is a CARD with a coloured left edge keyed to the
+              reason, not a run of flat text lines. A returned package is a
+              discrete event the walker may have to account for, and nine
+              identical grey paragraphs gave no way to scan for the one that
+              matters. Damage is red — it is the reason with consequences. */}
+          {day.rts_details.map(r => {
+            const tone = r.rts_type === 'package_damaged' ? c.danger
+                       : r.is_reattemptable ? c.info : c.warning;
+            return (
+              <View key={r.tba_number}
+                    style={[s.rtsCard, { backgroundColor: c.surface, borderLeftColor: tone }]}>
+                <View style={s.rtsHead}>
+                  <Text style={[s.rtsType, { color: c.foreground }]}>
+                    {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
+                  </Text>
+                  {r.is_reattemptable && (
+                    <View style={[s.retryChip, { backgroundColor: c.info + '26' }]}>
+                      <Text style={[s.retryText, { color: c.info }]}>RETRYABLE</Text>
+                    </View>
+                  )}
+                </View>
+                {/* THE TBA IS THE PACKAGE'S IDENTITY. Dropped when these rows
+                    became cards, which left a return the walker could not tie
+                    to an actual package — the one field that makes the row
+                    actionable in a dispute. Monospaced and selectable so it can
+                    be read aloud or copied into a lookup. */}
+                <Text style={[s.rtsTba, { color: c.mutedForeground }]} selectable>
+                  {r.tba_number}
+                </Text>
+                {!!r.rts_explanation && (
+                  <Text style={[s.rtsWhy, { color: c.mutedForeground }]}>{r.rts_explanation}</Text>
                 )}
-              </Text>
-              {!!r.rts_explanation && (
-                <Text style={[s.rtsWhy, { color: c.mutedForeground }]}>{r.rts_explanation}</Text>
-              )}
-            </View>
-          ))}
+              </View>
+            );
+          })}
         </>
       )}
 
       {/* SUPERVISED TRAINEES (ADR-269). Rendered SEPARATELY from the counts
           above — merging them resurrects the ADR-244 attribution bug, where a
           trainee's returns land on the trainer's own record. */}
-      {supervised.map(sup => (
-        <View key={sup.employee_id} style={[s.supervised, { borderLeftColor: c.primary }]}>
-          <Text style={[s.supName, { color: c.foreground }]}>
-            {sup.name}
-            <Text style={[s.supRole, { color: c.mutedForeground }]}>
-              {'  '}trainee you supervised
-            </Text>
-          </Text>
-          <Text style={[s.supLine, { color: c.mutedForeground }]}>
-            <Text style={{ color: c.foreground, fontWeight: fontWeight.semibold }}>
-              {sup.packages_delivered}/{sup.packages_total}
-            </Text>
-            {' delivered'}
-            {sup.rts_count > 0 && `  ·  ${sup.rts_count} RTS`}
-          </Text>
-          {sup.rts_details.length > 0 && sup.rts_details.map(r => (
-            <Text key={r.tba_number} style={[s.supRts, { color: c.mutedForeground }]}>
-              • {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
-            </Text>
-          ))}
-        </View>
-      ))}
+      {supervised.length > 0 && (
+        <Text style={[s.sectionLabel, { color: c.mutedForeground, marginTop: spacing.md }]}>
+          YOU SUPERVISED · {supervised.length}
+        </Text>
+      )}
+      {supervised.map(sup => {
+        const pct = sup.packages_total
+          ? Math.round((sup.packages_delivered / sup.packages_total) * 100) : null;
+        return (
+          /* A CARD, not a text run. This is the record the trainer answers for
+             (ADR-269), so it gets the same weight as their own numbers: an
+             identity row, a delivered/total figure with a progress bar, and
+             the returns as chips. The old version buried all of that in three
+             lines of muted body copy. */
+          <View key={sup.employee_id}
+                style={[s.supCard, { backgroundColor: c.surface, borderColor: c.border }]}>
+            <View style={s.supHead}>
+              <View style={[s.avatar, { backgroundColor: c.success + '26' }]}>
+                <Text style={[s.avatarText, { color: c.success }]}>{initials(sup.name)}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.supName, { color: c.foreground }]} numberOfLines={1}>
+                  {sup.name}
+                </Text>
+                <Text style={[s.supRole, { color: c.mutedForeground }]}>
+                  trainee you supervised
+                </Text>
+              </View>
+              {pct !== null && (
+                <Text style={[s.supPct, { color: c.foreground }]}>{pct}%</Text>
+              )}
+            </View>
+
+            <View style={s.supStatRow}>
+              <Text style={[s.supStat, { color: c.foreground }]}>
+                {sup.packages_delivered}
+                <Text style={{ color: c.mutedForeground, fontWeight: fontWeight.regular }}>
+                  {' / '}{sup.packages_total} delivered
+                </Text>
+              </Text>
+              {sup.rts_count > 0 && (
+                <Text style={[s.supRtsCount, { color: c.warning }]}>{sup.rts_count} RTS</Text>
+              )}
+            </View>
+
+            {pct !== null && (
+              <View style={[s.supBarTrack, { backgroundColor: c.border }]}>
+                <View style={[s.supBarFill, { width: `${pct}%`, backgroundColor: c.success }]} />
+              </View>
+            )}
+
+            {/* Reason AND package. A chip naming only the reason tells the
+                trainer three came back but not WHICH three, and the whole point
+                of the block is that they can discuss specific packages with the
+                trainee (ADR-269). */}
+            {sup.rts_details.length > 0 && (
+              <View style={s.supRtsList}>
+                {sup.rts_details.map(r => (
+                  <View key={r.tba_number} style={s.supRtsRow}>
+                    <View style={[s.supRtsDot, {
+                      backgroundColor: r.rts_type === 'package_damaged' ? c.danger : c.warning,
+                    }]} />
+                    <Text style={[s.supRtsLabel, { color: c.foreground }]} numberOfLines={1}>
+                      {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
+                    </Text>
+                    <Text style={[s.supRtsTba, { color: c.mutedForeground }]} selectable>
+                      {r.tba_number}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -718,12 +836,20 @@ const styles = (c: ThemeColors) => StyleSheet.create({
                  paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   trailText:   { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
-  titleRow:    { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap',
-                 gap: spacing.xs, marginTop: spacing.sm },
-  drillTitle:  { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
+  titleBlock:  { marginTop: spacing.sm, gap: spacing.xs },
+  /* Display size: the date is the anchor of the whole card, and at 20px it was
+     competing with the section labels rather than leading them. */
+  drillTitle:  { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, letterSpacing: -0.5 },
+  metaRow:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs },
+  badge:       { flexDirection: 'row', alignItems: 'center', gap: 5,
+                 paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
+  badgeDot:    { width: 6, height: 6, borderRadius: 3 },
+  badgeText:   { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.6 },
+  trendPill:   { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
+  trendText:   { fontSize: fontSize.xs, fontWeight: fontWeight.bold },
+  metaNote:    { fontSize: fontSize.xs },
   chip:        { fontSize: fontSize.xs, paddingHorizontal: spacing.sm, paddingVertical: 2,
                  borderRadius: radius.sm, overflow: 'hidden' },
-  trend:       { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   navRow:      { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.xs },
   navBtn:      { borderWidth: 1, borderRadius: radius.md,
@@ -773,29 +899,62 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   blockRate:   { fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
                  width: 44, textAlign: 'right' },
 
-  dayHead:     { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs },
-  truckPill:   { borderWidth: 1, borderRadius: radius.md,
-                 paddingHorizontal: spacing.sm, paddingVertical: 3 },
-  truckText:   { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
-  crewRow:     { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
-  crewRole:    { width: 60, fontSize: 9, fontWeight: fontWeight.bold, paddingTop: 6 },
-  crewNames:   { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  crewPill:    { flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
-                 borderRadius: 999, paddingLeft: 3, paddingRight: spacing.sm, paddingVertical: 2 },
-  avatar:      { width: 20, height: 20, borderRadius: 10,
+  truckBanner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+                 borderWidth: 1, borderRadius: radius.md, padding: spacing.sm },
+  truckGlyph:  { width: 34, height: 34, borderRadius: radius.md,
                  alignItems: 'center', justifyContent: 'center' },
-  avatarText:  { fontSize: 9, fontWeight: fontWeight.bold },
-  crewName:    { fontSize: fontSize.xs },
+  truckGlyphText: { fontSize: 16 },
+  truckMeta:   { flex: 1 },
+  truckName:   { fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  truckSub:    { fontSize: fontSize.xs, marginTop: 1 },
+  effortChip:  { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
+  effortText:  { fontSize: 9, fontWeight: fontWeight.bold, letterSpacing: 0.5 },
 
-  rtsRow:      { paddingVertical: 3 },
-  rtsType:     { fontSize: fontSize.sm },
-  retry:       { fontSize: 9 },
+  crewBlock:   { gap: spacing.sm },
+  crewGroup:   { gap: spacing.xs },
+  crewGroupHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  roleDot:     { width: 7, height: 7, borderRadius: 4 },
+  crewRole:    { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.6 },
+  crewRule:    { flex: 1, height: 1 },
+  crewCount:   { fontSize: 10, fontWeight: fontWeight.semibold },
+  /* Fixed two-column grid. `flexWrap` on variable-width pills is what produced
+     the ragged zig-zag; a 50% basis makes the columns actually align. */
+  crewGrid:    { flexDirection: 'row', flexWrap: 'wrap', rowGap: spacing.xs },
+  crewCell:    { width: '50%', flexDirection: 'row', alignItems: 'center',
+                 gap: spacing.xs, paddingRight: spacing.xs },
+  avatar:      { width: 26, height: 26, borderRadius: 13,
+                 alignItems: 'center', justifyContent: 'center' },
+  avatarText:  { fontSize: 10, fontWeight: fontWeight.bold },
+  crewName:    { flex: 1, fontSize: fontSize.xs },
+
+  rtsCard:     { borderLeftWidth: 3, borderRadius: radius.sm,
+                 paddingHorizontal: spacing.sm, paddingVertical: spacing.xs,
+                 marginTop: spacing.xs, gap: 2 },
+  rtsHead:     { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  rtsType:     { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  retryChip:   { paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.full },
+  retryText:   { fontSize: 8, fontWeight: fontWeight.bold, letterSpacing: 0.5 },
+  /* Monospaced: a TBA is a machine identifier read digit by digit, and a
+     proportional font makes 1/l and 0/O ambiguous when reading one aloud. */
+  rtsTba:      { fontSize: 10, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+                 letterSpacing: 0.3 },
   rtsWhy:      { fontSize: fontSize.xs, fontStyle: 'italic' },
 
-  supervised:  { borderLeftWidth: 3, paddingLeft: spacing.sm, marginTop: spacing.md,
-                 gap: 2 },
-  supName:     { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  supRole:     { fontSize: fontSize.xs, fontWeight: fontWeight.regular },
-  supLine:     { fontSize: fontSize.xs },
-  supRts:      { fontSize: fontSize.xs, paddingLeft: spacing.xs },
+  supCard:     { borderWidth: 1, borderRadius: radius.md, padding: spacing.sm,
+                 marginTop: spacing.xs, gap: spacing.xs },
+  supHead:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  supName:     { fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  supRole:     { fontSize: fontSize.xs },
+  supPct:      { fontSize: fontSize.md, fontWeight: fontWeight.bold },
+  supStatRow:  { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  supStat:     { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  supRtsCount: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  supBarTrack: { height: 5, borderRadius: 3, overflow: 'hidden' },
+  supBarFill:  { height: '100%', borderRadius: 3 },
+  supRtsList:  { gap: 3, marginTop: 2 },
+  supRtsRow:   { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  supRtsDot:   { width: 5, height: 5, borderRadius: 3 },
+  supRtsLabel: { flex: 1, fontSize: fontSize.xs },
+  supRtsTba:   { fontSize: 10, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+                 letterSpacing: 0.3 },
 });

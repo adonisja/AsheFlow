@@ -722,11 +722,20 @@ function DayDetail({ date }: { date: string }) {
                 <Package className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
                 <div>
                   <p className="text-foreground">
-                    {r.rts_type.replace(/_/g, ' ')}
+                    {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
                     {r.is_reattemptable && (
                       <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-info/10
                                        text-info uppercase tracking-wide">retryable</span>
                     )}
+                  </p>
+                  {/* THE TBA IS THE PACKAGE'S IDENTITY. It was carried only as
+                      a React key, so a return could not be tied to an actual
+                      package — the one field that makes the row actionable in
+                      a dispute. Monospaced: a TBA is read digit by digit, and
+                      a proportional font makes 1/l and 0/O ambiguous. */}
+                  <p className="font-mono text-[10px] text-muted-foreground tracking-wide
+                                select-all">
+                    {r.tba_number}
                   </p>
                   {r.rts_explanation && (
                     <p className="text-muted-foreground italic">{r.rts_explanation}</p>
@@ -762,9 +771,16 @@ function DayDetail({ date }: { date: string }) {
             </span> delivered
             {sup.rts_count > 0 && ` · ${sup.rts_count} RTS`}
           </p>
+          {/* Reason AND package: naming only the reason tells the trainer three
+              came back but not WHICH three, and the point of the block is that
+              they can discuss specific packages with the trainee (ADR-269). */}
           {(sup.rts_details ?? []).map((r: any) => (
-            <p key={r.tba_number} className="text-[11px] text-muted-foreground pl-2">
-              • {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
+            <p key={r.tba_number} className="text-[11px] text-muted-foreground pl-2
+                                             flex items-baseline gap-1.5">
+              <span>• {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}</span>
+              <span className="font-mono text-[10px] tracking-wide select-all">
+                {r.tba_number}
+              </span>
             </p>
           ))}
         </div>
