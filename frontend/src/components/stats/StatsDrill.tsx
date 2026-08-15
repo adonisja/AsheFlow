@@ -25,6 +25,18 @@ import {
   lastWorkedDay, parseYMD, ymd, type Bucket, type Grain,
 } from './aggregate';
 
+/** One hue per role, so the eye can group the crew without reading the labels.
+ *  Mirrors `roleTone()` in mobile/src/components/stats/crew.ts. */
+const ROLE_DOT: Record<string, string> = {
+  driver: 'bg-warning', captain: 'bg-gold', trainer: 'bg-info',
+  trainee: 'bg-success', walker: 'bg-primary',
+};
+const ROLE_TINT: Record<string, string> = {
+  driver: 'bg-warning/15 text-warning', captain: 'bg-gold/15 text-gold',
+  trainer: 'bg-info/15 text-info', trainee: 'bg-success/15 text-success',
+  walker: 'bg-primary/15 text-primary',
+};
+
 const EFFORT_BG: Record<string, string> = {
   easy: 'bg-info', standard: 'bg-success', heavy: 'bg-warning',
 };
@@ -41,8 +53,9 @@ function Trend({ pct }: { pct: number | null }) {
   const up = pct >= 0;
   const Icon = up ? TrendingUp : TrendingDown;
   return (
-    <span className={`inline-flex items-center gap-0.5 text-[11px] font-semibold ${
-      up ? 'text-success' : 'text-danger'}`}>
+    <span className={`inline-flex items-center gap-0.5 text-[11px] font-bold
+                      px-2 py-0.5 rounded-full ${
+      up ? 'text-success bg-success/10' : 'text-danger bg-danger/10'}`}>
       <Icon className="w-3 h-3" />{Math.abs(pct).toFixed(1)}%
     </span>
   );
@@ -193,17 +206,36 @@ function LineChart({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => vo
   const peak = data.reduce((b, d, i) => (d.delivered > data[b].delivered ? i : b), 0);
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-48" preserveAspectRatio="none">
+      {/* preserveAspectRatio is NOT "none": stretching the viewBox to the
+          container squashed the line flat on a wide screen and distorted the
+          point markers into ellipses. The plot keeps its aspect and the
+          container scales it. */}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-52" preserveAspectRatio="xMidYMid meet">
+        <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD}
+              className="stroke-border" strokeWidth="1" />
         <polyline points={area} className="fill-primary/15" />
         <polyline points={pts} className="stroke-primary fill-none"
-                  strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"
-                  vectorEffect="non-scaling-stroke" />
-      </svg>
-      {/* Labels and hit targets OUTSIDE the svg: preserveAspectRatio="none"
-          stretches the plot to the container, which would distort any text
-          drawn inside it. */}
-      <div className="flex gap-1 -mt-1">
+                  strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+        {/* Point markers, as on mobile: without them a reader cannot tell where
+            a month actually falls, only the shape between months. */}
         {data.map((d, i) => (
+          <circle key={d.key} cx={x(i)} cy={y(d.delivered)} r={i === peak ? 5 : 3.5}
+                  className={i === peak ? 'fill-primary stroke-primary' : 'fill-card stroke-primary'}
+                  strokeWidth="2" />
+        ))}
+        {/* The peak label lives INSIDE the svg, in the headroom reserved by
+            TOP. On the axis row it pushed its own month chip down out of line
+            with the other eleven. */}
+        <text x={x(peak)} y={Math.max(13, y(data[peak].delivered) - 11)}
+              textAnchor="middle" className="fill-foreground"
+              fontSize="13" fontWeight="700">
+          {data[peak].delivered.toLocaleString()}
+        </text>
+      </svg>
+      {/* Hit targets OUTSIDE the svg: a full-height column is a better click
+          target than a 5px circle. */}
+      <div className="flex gap-1 -mt-2">
+        {data.map(d => (
           <button
             key={d.key}
             onClick={() => d.delivered > 0 && onPick(d)}
@@ -211,11 +243,6 @@ function LineChart({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => vo
             title={`${d.label}: ${d.delivered.toLocaleString()} delivered`}
             className="flex-1 text-center disabled:cursor-default group"
           >
-            {i === peak && (
-              <span className="block text-[11px] font-bold text-foreground tabular-nums">
-                {d.delivered.toLocaleString()}
-              </span>
-            )}
             {/* THREE letters: Jan/Jun/Jul all start with J, so one letter made
                 a third of the axis ambiguous. */}
             <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded transition-colors ${
@@ -690,22 +717,32 @@ export default function StatsDrill() {
           )}
         </div>
 
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <h3 className="text-lg font-bold text-foreground">
+        {/* HEADER — the date is the anchor of the card, so it owns its line at
+            display size; status and trend sit on a metadata row BENEATH it
+            rather than competing for the same baseline (ADR-271 §P). */}
+        <div>
+          <h3 className="text-2xl font-bold text-foreground tracking-tight">
             {level === 'day' || level === 'lifetime'
               ? cursor.label : `${LEVEL_NAME[level]} · ${cursor.label}`}
           </h3>
-          {isEntry && (
-            <span className="text-[11px] px-1.5 py-0.5 rounded bg-accent/40 text-muted-foreground">
-              your last shift
-            </span>
-          )}
-          <Trend pct={cursor.trend} />
-          {cursor.trend === null && level !== 'lifetime' && (
-            <span className="text-[11px] text-muted-foreground">
-              no earlier {LEVEL_NAME[level].toLowerCase()} to compare
-            </span>
-          )}
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            {isEntry && (
+              /* A GREEN badge, not grey body text. "your last shift" as muted
+                 prose read like a caveat; this is a positive status marker. */
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold
+                               tracking-wider px-2 py-0.5 rounded-full
+                               bg-success/15 text-success">
+                <span className="w-1.5 h-1.5 rounded-full bg-success" />
+                LATEST
+              </span>
+            )}
+            <Trend pct={cursor.trend} />
+            {cursor.trend === null && level !== 'lifetime' && (
+              <span className="text-[11px] text-muted-foreground">
+                no earlier {LEVEL_NAME[level].toLowerCase()} to compare
+              </span>
+            )}
+          </div>
         </div>
 
         <Figures b={cursor} truckScoped={truckScoped} />
@@ -821,44 +858,69 @@ function DayDetail({ date }: { date: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        {day.counts_scope === 'truck' && (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-accent/40
-                           text-muted-foreground uppercase tracking-wide">
-            whole truck
+      {/* TRUCK BANNER — the truck is the identity of the day, so it gets a
+          filled row with the vehicle glyph rather than a small outlined pill
+          floating among chips. Effort and scope ride inside it as trailing
+          metadata (ADR-271 §P). */}
+      {(day.truck_name || day.counts_scope === 'truck') && (
+        <div className="flex items-center gap-3 rounded-xl border border-border
+                        bg-accent/20 p-3">
+          <span className="w-9 h-9 rounded-lg bg-primary/15 text-primary
+                           grid place-items-center shrink-0">
+            <Truck className="w-4 h-4" />
           </span>
-        )}
-        {day.truck_name && (
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold
-                           text-foreground border border-border rounded-lg px-2 py-1">
-            <Truck className="w-3.5 h-3.5" />{day.truck_name}
-          </span>
-        )}
-        {day.effort_class && day.effort_class !== 'standard' && (
-          <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-wide font-bold ${
-            day.effort_class === 'heavy' ? 'bg-warning/15 text-warning' : 'bg-info/10 text-info'}`}>
-            {day.effort_class}
-          </span>
-        )}
-      </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-foreground truncate">
+              {day.truck_name ?? 'Assigned'}
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              {day.counts_scope === 'truck' ? 'whole truck' : 'your stops'}
+              {day.slot_role && ` · ${day.slot_role}`}
+            </p>
+          </div>
+          {/* Only exceptions get a chip — 'standard' on every row is noise. */}
+          {day.effort_class && day.effort_class !== 'standard' && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase
+                              tracking-wide font-bold shrink-0 ${
+              day.effort_class === 'heavy' ? 'bg-warning/15 text-warning' : 'bg-info/10 text-info'}`}>
+              {day.effort_class}
+            </span>
+          )}
+        </div>
+      )}
 
       {ordered.length > 0 && (
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Crew</p>
-          <div className="space-y-2">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
+            Crew · {(day.crew ?? []).length}
+          </p>
+          <div className="space-y-3">
             {ordered.map(([role, names]) => (
-              <div key={role} className="flex gap-3 items-start">
-                <span className="w-16 shrink-0 text-[10px] uppercase tracking-wide
-                                 font-bold text-muted-foreground pt-1.5">{role}</span>
-                <div className="flex flex-wrap gap-1.5">
+              <div key={role}>
+                {/* Role as a full-width header with a coloured dot, rule and
+                    count — not a fixed-width gutter column, which left a ragged
+                    channel down the middle (ADR-271 §P). */}
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${ROLE_DOT[role] ?? 'bg-primary'}`} />
+                  <span className="text-[10px] uppercase tracking-wider font-bold
+                                   text-muted-foreground">{role}</span>
+                  <span className="flex-1 h-px bg-border" />
+                  <span className="text-[10px] font-semibold text-muted-foreground">
+                    {names.length}
+                  </span>
+                </div>
+                {/* A GRID, not flex-wrap. Wrapping variable-width pills breaks
+                    each row at a different point, so no name lines up with the
+                    one above it — the zig-zag the operator flagged. */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5">
                   {names.map(n => (
-                    <span key={n} className="inline-flex items-center gap-1.5 rounded-full
-                                             bg-accent/30 pl-1 pr-2.5 py-0.5">
-                      <span className="w-5 h-5 rounded-full bg-primary/20 text-primary
-                                       text-[9px] font-bold grid place-items-center">
-                        {n.split(' ').map((x: string) => x[0]).join('').slice(0, 2)}
+                    <span key={n} className="inline-flex items-center gap-1.5 min-w-0">
+                      <span className={`w-6 h-6 rounded-full shrink-0 text-[9px] font-bold
+                                        grid place-items-center
+                                        ${ROLE_TINT[role] ?? 'bg-primary/15 text-primary'}`}>
+                        {n.split(' ').map((x: string) => x[0]).join('').slice(0, 2).toUpperCase()}
                       </span>
-                      <span className="text-[11px] text-foreground">{n}</span>
+                      <span className="text-[11px] text-foreground truncate">{n}</span>
                     </span>
                   ))}
                 </div>
@@ -878,12 +940,20 @@ function DayDetail({ date }: { date: string }) {
             {day.counts_scope === 'truck' ? 'Truck returned' : 'You returned'}{' '}
             {day.rts_details.length}
           </p>
+          {/* Each return is a CARD with a coloured left edge keyed to the
+              reason, not a run of flat text lines: nine identical grey
+              paragraphs gave no way to scan for the one that matters. Damage
+              is red — it is the reason with consequences (ADR-271 §P). */}
           <div className="space-y-1.5">
             {day.rts_details.map((r: any) => (
-              <div key={r.tba_number} className="flex gap-2 text-[11px]">
+              <div key={r.tba_number}
+                   className={`flex gap-2 text-[11px] rounded-r bg-accent/20 px-2 py-1.5
+                               border-l-[3px] ${
+                     r.rts_type === 'package_damaged' ? 'border-danger'
+                     : r.is_reattemptable ? 'border-info' : 'border-warning'}`}>
                 <Package className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-foreground">
+                  <p className="text-foreground font-semibold">
                     {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
                     {r.is_reattemptable && (
                       <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-info/10
@@ -919,34 +989,74 @@ function DayDetail({ date }: { date: string }) {
           the omission would have silently deleted a shipped trainer feature
           rather than failing loudly. `?? []` because the field is optional on
           the wire — a client can outrun the backend serving it. */}
-      {(day.supervised ?? []).map((sup: any) => (
-        <div key={sup.employee_id} className="mt-2 pl-2 border-l-2 border-primary/60">
-          <p className="text-xs font-semibold text-foreground">
-            {sup.name}
-            <span className="ml-1.5 font-normal text-[10px] text-muted-foreground">
-              trainee you supervised
-            </span>
-          </p>
-          <p className="text-[11px] text-muted-foreground">
-            <span className="font-semibold text-foreground tabular-nums">
-              {sup.packages_delivered}/{sup.packages_total}
-            </span> delivered
-            {sup.rts_count > 0 && ` · ${sup.rts_count} RTS`}
-          </p>
-          {/* Reason AND package: naming only the reason tells the trainer three
-              came back but not WHICH three, and the point of the block is that
-              they can discuss specific packages with the trainee (ADR-269). */}
-          {(sup.rts_details ?? []).map((r: any) => (
-            <p key={r.tba_number} className="text-[11px] text-muted-foreground pl-2
-                                             flex items-baseline gap-1.5">
-              <span>• {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}</span>
-              <span className="font-mono text-[10px] tracking-wide select-all">
-                {r.tba_number}
+      {(day.supervised ?? []).length > 0 && (
+        <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-4 mb-1">
+          You supervised · {(day.supervised ?? []).length}
+        </p>
+      )}
+      {(day.supervised ?? []).map((sup: any) => {
+        const pct = sup.packages_total
+          ? Math.round((sup.packages_delivered / sup.packages_total) * 100) : null;
+        return (
+          /* A CARD, not a text run. This is the record the trainer answers for
+             (ADR-269), so it gets the same weight as their own numbers: an
+             identity row, a delivered/total figure with a progress bar, and the
+             returns with their TBAs (ADR-271 §P). */
+          <div key={sup.employee_id}
+               className="rounded-xl border border-border bg-accent/20 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-full bg-success/15 text-success shrink-0
+                               text-[10px] font-bold grid place-items-center">
+                {sup.name.split(' ').map((x: string) => x[0]).join('').slice(0, 2).toUpperCase()}
               </span>
-            </p>
-          ))}
-        </div>
-      ))}
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-foreground truncate">{sup.name}</p>
+                <p className="text-[11px] text-muted-foreground">trainee you supervised</p>
+              </div>
+              {pct !== null && (
+                <span className="text-lg font-bold text-foreground tabular-nums">{pct}%</span>
+              )}
+            </div>
+
+            <div className="flex items-baseline justify-between">
+              <p className="text-[13px] font-bold text-foreground tabular-nums">
+                {sup.packages_delivered}
+                <span className="font-normal text-muted-foreground">
+                  {' / '}{sup.packages_total} delivered
+                </span>
+              </p>
+              {sup.rts_count > 0 && (
+                <span className="text-[11px] font-semibold text-warning">
+                  {sup.rts_count} RTS
+                </span>
+              )}
+            </div>
+
+            {pct !== null && (
+              <div className="h-1.5 rounded-full bg-border overflow-hidden">
+                <div className="h-full rounded-full bg-success" style={{ width: `${pct}%` }} />
+              </div>
+            )}
+
+            {/* Reason AND package: naming only the reason tells the trainer three
+                came back but not WHICH three, and the point of the block is that
+                they can discuss specific packages with the trainee (ADR-269). */}
+            {(sup.rts_details ?? []).map((r: any) => (
+              <p key={r.tba_number}
+                 className="text-[11px] text-muted-foreground flex items-baseline gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                  r.rts_type === 'package_damaged' ? 'bg-danger' : 'bg-warning'}`} />
+                <span className="flex-1">
+                  {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
+                </span>
+                <span className="font-mono text-[10px] tracking-wide select-all">
+                  {r.tba_number}
+                </span>
+              </p>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
