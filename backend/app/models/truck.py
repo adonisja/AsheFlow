@@ -25,6 +25,15 @@ class Truck(Base):
     company_id         = Column(UUID(as_uuid=True), nullable=False, index=True)
     name               = Column(String(100),        nullable=False, index=True)
     is_active          = Column(Boolean,            nullable=False, default=True, index=True)
+    # ADR-274: a hub is a KIND of truck, not a status a truck is in. Hubs are
+    # excluded from run_dispatch — crew is placed on them by hand for intra-day
+    # assembly. INDEPENDENT of is_active: a hub is an active truck that is simply
+    # not auto-assignable.
+    #
+    # This replaces the ADR-125 inference (`status == 'planned'`), which matched
+    # EVERY truck before publish and put a "Publish Hub" button on all of them.
+    is_hub             = Column(Boolean,            nullable=False,
+                                default=False, server_default="false", index=True)
     discord_channel_id = Column(BigInteger,         nullable=True)
 
     # Anchor point 1 — primary dispatch-configured territory seed.
