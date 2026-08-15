@@ -944,7 +944,15 @@ function DayDetail({ date }: { date: string }) {
               reason, not a run of flat text lines: nine identical grey
               paragraphs gave no way to scan for the one that matters. Damage
               is red — it is the reason with consequences (ADR-271 §P). */}
-          <div className="space-y-1.5">
+          {/* TWO COLUMNS on desktop. A card uses about a third of the width
+              here, so a single column turned a driver's 125 returns into an
+              enormous scroll of mostly-empty rows. Still one column on narrow
+              viewports, where the card genuinely needs the full width.
+
+              `items-start` matters: without it the grid stretches every card in
+              a row to the tallest, so a one-line reason next to a wrapped
+              explanation gets padded out. */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5 items-start">
             {day.rts_details.map((r: any) => (
               <div key={r.tba_number}
                    className={`flex gap-2 text-[11px] rounded-r bg-accent/20 px-2 py-1.5
