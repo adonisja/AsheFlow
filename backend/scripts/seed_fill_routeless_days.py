@@ -31,8 +31,18 @@ IDEMPOTENT: an assignment that already has a route is never touched, so this is
 safe to re-run. Seeded RNG is keyed on the assignment id, so a re-run after a
 partial failure reproduces the same data.
 
+Each real run writes the route ids it created to a manifest, and --purge deletes
+exactly those. The purge is keyed on that owned id list and never on a
+timestamp — see `purge()` and ADR-271 §N for the incident that established this.
+
     python scripts/seed_fill_routeless_days.py --dry-run
     python scripts/seed_fill_routeless_days.py
+    python scripts/seed_fill_routeless_days.py --purge   # undo the last run
+
+NOTE: --dry-run skips every db.add, so it exercises NO model constructor. It
+validates the query side and the arithmetic only. Constructor kwargs and
+non-null columns are checked statically instead (see the journal for the AST
+passes that catch both).
 """
 import argparse
 import hashlib
@@ -40,7 +50,7 @@ import os
 import random
 import sys
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -67,18 +77,32 @@ from seed_history_backfill import (                         # noqa: E402
 _CARRIER_ROLES = ("walker", "trainer", "trainee")
 
 
-def purge(db, since) -> None:
-    """Remove routes this script generated, so a bad run can be replaced.
+def purge(db, manifest_path: str) -> None:
+    """Delete the routes listed in a manifest written by a previous fill run.
 
-    Targets ONLY assignments whose routes all carry the fill marker
-    (route_number set with block_keys empty is not distinctive enough), so it
-    is keyed on the route ids created at or after `since`. Deliberately narrow:
-    a purge that over-reaches would delete the backfill's history too.
+    KEYED ON AN OWNED ID LIST, NOT ON TIME (ADR-271 §N). The first version of
+    this filtered `Route.created_at >= since`. `created_at` is
+    `server_default=func.now()`, so it records INSERTION time — and the backfill
+    had written into the same window hours earlier. A purge meant to remove
+    5,101 routes removed 54,973, taking 1,190,342 stops and two years of history
+    with it.
+
+    "Rows I created" and "rows created since T" are the same set only while
+    nothing else writes. That is an assumption about the whole system, held by a
+    script that cannot see it. So the fill run now records exactly what it
+    wrote, and the purge reads that file back — it can only ever delete rows
+    this script created.
+
+    Children (stops, RTS, missing) are ON DELETE CASCADE from routes, so
+    removing the routes removes them; they are deleted explicitly first only to
+    report accurate counts.
     """
-    ids = [r for (r,) in db.query(Route.id).filter(Route.created_at >= since).all()]
+    with open(manifest_path) as fh:
+        ids = [line.strip() for line in fh if line.strip()]
     if not ids:
-        print("purge: nothing matched")
+        print("purge: manifest empty — nothing to do")
         return
+    print(f"purge: manifest lists {len(ids)} routes")
     for model in (RTSPackage, MissingPackage, DeliveryStop):
         n = db.query(model).filter(model.route_id.in_(ids)).delete(
             synchronize_session=False)
@@ -88,8 +112,9 @@ def purge(db, since) -> None:
     db.commit()
 
 
-def main(dry_run: bool) -> None:
+def main(dry_run: bool, manifest_path: str | None = None) -> None:
     db = SessionLocal()
+    created_ids: list[str] = []          # what this run owns, for --purge
     try:
         # D1 NOTE (ADR-115): these reads are deliberately NOT company-scoped.
         # This is an offline seeding tool with no caller and no request context,
@@ -162,6 +187,7 @@ def main(dry_run: bool) -> None:
                 if not dry_run:
                     db.add(route)
                     db.flush()
+                    created_ids.append(str(route.id))
                 n_routes += 1
 
                 iso_y, iso_w, _ = day.isocalendar()
@@ -254,6 +280,13 @@ def main(dry_run: bool) -> None:
             print("DRY RUN — nothing written")
         else:
             db.commit()
+            # Written AFTER the commit: a manifest naming rows that were rolled
+            # back would point --purge at ids belonging to nobody, or later to
+            # someone else.
+            if manifest_path:
+                with open(manifest_path, "w") as fh:
+                    fh.write("\n".join(created_ids))
+                print(f"manifest: {len(created_ids)} route ids -> {manifest_path}")
 
         print(f"routes={n_routes} stops={n_stops} rts={n_rts} "
               f"missing={n_miss} damaged={n_dmg}")
@@ -264,15 +297,19 @@ def main(dry_run: bool) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--purge-since", metavar="ISO_TS",
-                    help="delete routes created at/after this timestamp, then exit "
-                         "(use to undo a bad fill run before re-running)")
+    ap.add_argument("--manifest", metavar="PATH",
+                    default="/tmp/fill_routes_manifest.txt",
+                    help="where to record the route ids this run creates; "
+                         "--purge reads it back (default: %(default)s)")
+    ap.add_argument("--purge", metavar="PATH", nargs="?", const="",
+                    help="delete ONLY the routes listed in this manifest, then "
+                         "exit. Undoes a bad fill run. Defaults to --manifest.")
     a = ap.parse_args()
-    if a.purge_since:
+    if a.purge is not None:
         db = SessionLocal()
         try:
-            purge(db, datetime.fromisoformat(a.purge_since))
+            purge(db, a.purge or a.manifest)
         finally:
             db.close()
     else:
-        main(a.dry_run)
+        main(a.dry_run, a.manifest)
