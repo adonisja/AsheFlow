@@ -533,12 +533,25 @@ function Bars({ data, onPick, c, s }: {
           );
         })}
       </View>
+      {/* Same affordance as the month line: a bucket with work reads as a
+          control, an empty one stays flat. The bar itself is the touch target
+          (these labels sit under it), so this is a visual cue only. */}
       <View style={s.barLabels}>
-        {data.map(d => (
-          <Text key={d.key} style={[s.barLabel, { color: c.mutedForeground }]} numberOfLines={1}>
-            {d.short}
-          </Text>
-        ))}
+        {data.map(d => {
+          const on = d.delivered > 0;
+          return (
+            <View key={d.key} style={s.barLabelCell}>
+              <View style={[s.monthChip, on && { backgroundColor: c.primary + '1F' }]}>
+                <Text style={[s.monthLabel, {
+                  color: on ? c.primary : c.mutedForeground + '66',
+                  fontWeight: on ? fontWeight.semibold : fontWeight.regular,
+                }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                  {d.short}
+                </Text>
+              </View>
+            </View>
+          );
+        })}
       </View>
     </View>
   );
@@ -608,22 +621,37 @@ function LineChart({ data, onPick, c, s }: {
           hit-testing on small circles is unreliable, and a full-height column
           is a far better thumb target anyway. */}
       <View style={s.lineTapRow}>
-        {data.map(d => (
-          <TouchableOpacity
-            key={d.key}
-            style={s.lineTapCol}
-            onPress={() => d.delivered > 0 && onPick(d)}
-            disabled={d.delivered === 0}
-            accessibilityRole="button"
-            accessibilityLabel={`${d.label}: ${d.delivered} delivered`}
-          >
-            <Text style={[s.barLabel, {
-              color: d.delivered > 0 ? c.mutedForeground : c.mutedForeground + '66',
-            }]} numberOfLines={1}>
-              {d.short.slice(0, 1)}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {data.map(d => {
+          const on = d.delivered > 0;
+          return (
+            <TouchableOpacity
+              key={d.key}
+              style={s.lineTapCol}
+              onPress={() => on && onPick(d)}
+              disabled={!on}
+              accessibilityRole="button"
+              accessibilityLabel={`${d.label}: ${d.delivered} delivered`}
+            >
+              {/* A VISUAL AFFORDANCE, not just the instruction in the heading.
+                  Most people skim past a heading; a tappable month has to LOOK
+                  tappable. Months with work get a filled chip in the primary
+                  tint and primary text — the same treatment as the zoom-out
+                  buttons, so the shape already reads as "control" on this
+                  screen. Months with no work stay flat and dimmed, which
+                  doubles as the disabled state. */}
+              <View style={[s.monthChip, on && { backgroundColor: c.primary + '1F' }]}>
+                <Text style={[s.monthLabel, {
+                  color: on ? c.primary : c.mutedForeground + '66',
+                  fontWeight: on ? fontWeight.semibold : fontWeight.regular,
+                }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                  {/* THREE letters, not one. Jan/Jun/Jul all start with J, so a
+                      single letter made a third of the axis ambiguous. */}
+                  {d.short}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </View>
   );
@@ -1074,7 +1102,22 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   barValueInside: { fontSize: 9, fontWeight: fontWeight.bold,
                     textAlign: 'center', paddingTop: 3 },
   lineTapRow:  { flexDirection: 'row', marginTop: spacing.xs },
+  /* paddingVertical on the COLUMN, not the chip: the touch target stays a full
+     comfortable height while the chip itself remains compact. */
   lineTapCol:  { flex: 1, alignItems: 'center', paddingVertical: spacing.xs },
+  /* NO minWidth, and tight padding. A 12-column axis on a 393pt screen leaves
+     27.4pt per column; minWidth:30 plus 5pt padding each side made the chip
+     40pt, so "May" and "Aug" truncated to "M..." and "A...". Text-only width
+     for three characters at fontSize 10 is ~16.5pt, so 4pt of padding each
+     side fits with room to spare. */
+  monthChip:   { paddingHorizontal: 3, paddingVertical: 3, borderRadius: radius.sm,
+                 alignItems: 'center' },
+  /* adjustsFontSizeToFit on the Text handles the residual: estimating glyph
+     widths was wrong twice ("May" is wider than "Mar" at the same character
+     count because y is a wide glyph), so the label shrinks itself the last
+     point or two rather than truncating to "M...". */
+  monthLabel:  { fontSize: 10 },
+  barLabelCell:{ flex: 1, alignItems: 'center' },
   barLabels:   { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.xs },
   barLabel:    { flex: 1, fontSize: fontSize.xs, textAlign: 'center' },
 

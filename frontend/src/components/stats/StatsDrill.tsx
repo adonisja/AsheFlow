@@ -141,10 +141,21 @@ function Bars({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => void })
           );
         })}
       </div>
+      {/* A VISUAL AFFORDANCE, not just the instruction in the heading. Most
+          people skim past a heading, so a clickable bucket has to LOOK
+          clickable; an empty one stays flat, which doubles as its disabled
+          state. */}
       <div className="flex gap-3 mt-2">
         {data.map(d => (
-          <span key={d.key} className="flex-1 text-center text-[11px] text-muted-foreground">
-            {d.label}
+          <span key={d.key} className="flex-1 flex justify-center">
+            {/* `label`, not `short`: web has the width for "Sun 26", and the
+                date number is real information the phone has to drop. */}
+            <span className={`text-[11px] px-1.5 py-0.5 rounded whitespace-nowrap ${
+              d.delivered > 0
+                ? 'bg-primary/10 text-primary font-semibold'
+                : 'text-muted-foreground/40'}`}>
+              {d.label}
+            </span>
           </span>
         ))}
       </div>
@@ -198,16 +209,21 @@ function LineChart({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => vo
             onClick={() => d.delivered > 0 && onPick(d)}
             disabled={d.delivered === 0}
             title={`${d.label}: ${d.delivered.toLocaleString()} delivered`}
-            className="flex-1 text-center text-[11px] disabled:cursor-default
-                       hover:text-foreground transition-colors
-                       disabled:text-muted-foreground/40 text-muted-foreground"
+            className="flex-1 text-center disabled:cursor-default group"
           >
             {i === peak && (
               <span className="block text-[11px] font-bold text-foreground tabular-nums">
                 {d.delivered.toLocaleString()}
               </span>
             )}
-            {d.short}
+            {/* THREE letters: Jan/Jun/Jul all start with J, so one letter made
+                a third of the axis ambiguous. */}
+            <span className={`inline-block text-[11px] px-1.5 py-0.5 rounded transition-colors ${
+              d.delivered > 0
+                ? 'bg-primary/10 text-primary font-semibold group-hover:bg-primary/20'
+                : 'text-muted-foreground/40'}`}>
+              {d.short}
+            </span>
           </button>
         ))}
       </div>
