@@ -562,19 +562,36 @@ export default function StatsDrill() {
             RTS list underneath can run to dozens of rows, so putting the
             summary after it buried the one element that makes a long list
             readable. */}
-        {reasons.length > 0 && (
-          <div className="pt-4 border-t border-border">
-            <div className="flex items-baseline gap-2 mb-4">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Why packages came back
-              </p>
-              <span className="text-[11px] text-muted-foreground/70">
-                {truckScoped ? 'whole truck' : cursor.label}
-              </span>
-            </div>
-            <ReasonDonut reasons={reasons} />
+        {/* Rendered even when EMPTY. Hiding the whole block on a day with no
+            returns makes the section look broken — the operator reported
+            exactly that, having stepped onto days that genuinely had none.
+            A stated "nothing came back" is an answer; a section that silently
+            vanishes is not.
+
+            THREE distinct states, and collapsing them loses the distinction
+            the operator needs:
+              carried, some back  -> the donut
+              carried, none back  -> "nothing came back" (a GOOD day)
+              never loaded        -> "rostered, no route assigned"
+            The third is not a clean sheet: the person was on a truck and the
+            day produced no route, which is an operational fact, not a zero. */}
+        <div className="pt-4 border-t border-border">
+          <div className="flex items-baseline gap-2 mb-4">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Why packages came back
+            </p>
+            <span className="text-[11px] text-muted-foreground/70">
+              {truckScoped ? 'whole truck' : cursor.label}
+            </span>
           </div>
-        )}
+          {cursor.total === 0 && cursor.delivered === 0 && cursor.rts === 0 ? (
+            <p className="text-[13px] text-muted-foreground py-6 text-center">
+              Rostered, but no route was assigned{level === 'day' ? ' this day' : ' in this period'}.
+            </p>
+          ) : (
+            <ReasonDonut reasons={reasons} />
+          )}
+        </div>
 
         {level === 'day' ? (
           <DayDetail date={cursor.start} />
