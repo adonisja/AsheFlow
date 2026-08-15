@@ -219,6 +219,21 @@ done
 # .obsidian/ is excluded: per-machine editor state, not documentation. The vault
 # has its own git repo (docs/.git) for history; this sync is a backup mirror.
 echo ""
+# Regenerate the ADR catalog BEFORE mirroring, so the copy that lands in the
+# private repo is current. CLAUDE.md points every session at this index first,
+# and nothing was regenerating it: on 2026-08-14 it stopped at ADR-253 while the
+# repo had 271 decisions. A stale index is worse than none — it answers
+# confidently and wrongly, so nobody looks further.
+# $PUBLIC_ROOT, not a relative path: by this point the script has cd'd into the
+# temp clone of the private repo (line ~90), so `.githooks/...` would miss.
+if [ -f "$PUBLIC_ROOT/.githooks/gen_adr_catalog.py" ]; then
+  echo "Regenerating ADR catalog..."
+  (cd "$PUBLIC_ROOT" && python3 .githooks/gen_adr_catalog.py) || {
+    echo "ERROR: ADR catalog generation failed. Push aborted." >&2
+    exit 1
+  }
+fi
+
 echo "Copying docs..."
 # docs/business/ is NOT excluded from the mirror by accident — it is populated
 # further down from pricing_analysis_*.md at the repo root, which has no
