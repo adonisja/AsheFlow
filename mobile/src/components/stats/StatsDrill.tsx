@@ -184,10 +184,21 @@ export default function StatsDrill() {
       setCursor(ys.find(b => b.key === String(dt.getFullYear())) ?? ys[ys.length - 1]);
     } else {
       const ys = yearsFrom(stats.years);
-      setCursor({ ...(ys[ys.length - 1] ?? cursor), key: 'lifetime', label: 'Lifetime',
-                  short: 'All', delivered: lt.delivered, rts: lt.rts,
-                  damaged: lt.damaged, truckDamaged: lt.truck_damaged,
-                  missing: lt.missing, total: 0, effort: null, trend: null });
+      // START/END MUST SPAN EVERYTHING. This used to spread the LAST year
+      // bucket (falling back to the current cursor when there were no years at
+      // all), which left the range set to one year — or, in the fallback, to a
+      // single DAY. Attendance and the reason donut are both derived from
+      // cursor.start/end, so Lifetime reported "1 of 1 shifts" while the year
+      // it came from had 101 of 110.
+      const first = ys[0], last = ys[ys.length - 1];
+      setCursor({
+        key: 'lifetime', label: 'Lifetime', short: 'All',
+        start: first ? first.start : days[0]?.d ?? cursor.start,
+        end:   last  ? last.end    : days[days.length - 1]?.d ?? cursor.end,
+        delivered: lt.delivered, rts: lt.rts,
+        damaged: lt.damaged, truckDamaged: lt.truck_damaged,
+        missing: lt.missing, total: 0, effort: null, trend: null,
+      });
     }
   };
 
@@ -586,21 +597,26 @@ function LineChart({ data, onPick, c, s }: {
   // its point, and with a symmetric pad the label sat ON the line at the very
   // point it was labelling. The extra headroom is reserved for it.
   const W = 320, H = 150, PAD = 8, TOP = 24;
-  const step = data.length > 1 ? (W - PAD * 2) / (data.length - 1) : 0;
-  const x = (i: number) => PAD + i * step;
+  // CELL CENTRES, not edge-to-edge. The label row below is a row of N equal
+  // flex cells with the text centred in each, so label i sits at (i + 0.5)/N of
+  // the width. Spacing the points PAD..W-PAD instead put point 0 hard against
+  // the left edge and point N-1 against the right, so the dots drifted out of
+  // line with their labels — worst at the ends, invisible in the middle.
+  const cell = W / data.length;
+  const x = (i: number) => cell * (i + 0.5);
   const y = (v: number) => H - PAD - (v / max) * (H - PAD - TOP);
 
   const pts = data.map((d, i) => `${x(i)},${y(d.delivered)}`).join(' ');
   // Closed area under the line, so the shape reads as volume rather than as a
   // bare stroke floating in space.
-  const area = `${PAD},${H - PAD} ${pts} ${x(data.length - 1)},${H - PAD}`;
+  const area = `${x(0)},${H - PAD} ${pts} ${x(data.length - 1)},${H - PAD}`;
   const peak = data.reduce((b, d, i) => (d.delivered > data[b].delivered ? i : b), 0);
 
   return (
     <View>
       <Svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
         {/* Baseline only. Gridlines at this size are more ink than information. */}
-        <Line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD}
+        <Line x1={x(0)} y1={H - PAD} x2={x(data.length - 1)} y2={H - PAD}
               stroke={c.border} strokeWidth="1" />
         <Polyline points={area} fill={c.primary + '22'} stroke="none" />
         <Polyline points={pts} fill="none" stroke={c.primary}

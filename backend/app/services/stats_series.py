@@ -424,7 +424,16 @@ def get_year_stats(
         if db.bind and db.bind.dialect.name == "sqlite" \
         else func.extract("year", Route.route_date)
 
-    rows = (
+    # ROLE-SCOPED, exactly as the daily series is. This filtered on
+    # DeliveryStop.walker_id for EVERY role — but walker_id is the stop's
+    # EXECUTOR (ADR-244), and a driver or captain executes none, so their years
+    # array came back EMPTY. The client then had no year buckets: zooming out to
+    # Year set the cursor to undefined and left the day cursor in place, so the
+    # Year view reported a single day's attendance ("1 of 1 shifts" against a
+    # real 101 of 110), and Lifetime rendered as one bar.
+    truck_wide = role in _TRUCK_SCOPED_ROLES
+
+    q = (
         db.query(
             yr.label("y"),
             func.coalesce(func.sum(DeliveryStop.packages_delivered), 0),
@@ -433,10 +442,29 @@ def get_year_stats(
             func.coalesce(func.sum(DeliveryStop.missing_count), 0),
         )
         .join(Route, Route.id == DeliveryStop.route_id)
-        .filter(
+    )
+    if truck_wide:
+        # Their own assignment is the scope: the stops that rode on a truck they
+        # were rostered to that day.
+        q = (
+            q
+            .join(TruckAssignment,
+                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+                TruckAssignment.company_id == company_id,
+            )
+        )
+    else:
+        q = q.filter(DeliveryStop.walker_id == employee_id)
+
+    rows = (
+        q.filter(
             DeliveryStop.company_id == company_id,
             Route.company_id == company_id,
-            DeliveryStop.walker_id == employee_id,
             Route.route_date <= end,
         )
         .group_by(yr)
@@ -466,6 +494,34 @@ def get_year_stats(
         ):
             if y is not None and int(y) in by_year:
                 by_year[int(y)].damaged = int(n or 0)
+
+    # ── damaged: TRUCK, per year ─────────────────────────────────────────────
+    # Without this a driver's year bars carried truck_damaged=0 while the
+    # lifetime header showed the real figure — the same number disagreeing with
+    # itself on one screen. Attributed via the person's OWN assignment, not via
+    # reported_by, matching the daily series.
+    if role in _TRUCK_DAMAGE_ROLES:
+        dyr = func.cast(func.strftime("%Y", DamagedPackage.route_date), Integer) \
+            if db.bind and db.bind.dialect.name == "sqlite" \
+            else func.extract("year", DamagedPackage.route_date)
+        for y, n in (
+            db.query(dyr, func.count(DamagedPackage.id))
+            .join(TruckAssignment,
+                  TruckAssignment.id == DamagedPackage.truck_assignment_id)
+            .join(AssignmentMember,
+                  AssignmentMember.assignment_id == TruckAssignment.id)
+            .filter(
+                DamagedPackage.company_id == company_id,
+                TruckAssignment.company_id == company_id,
+                AssignmentMember.company_id == company_id,
+                AssignmentMember.employee_id == employee_id,
+                DamagedPackage.route_date <= end,
+            )
+            .group_by(dyr)
+            .all()
+        ):
+            if y is not None and int(y) in by_year:
+                by_year[int(y)].truck_damaged = int(n or 0)
 
     return [by_year[k] for k in sorted(by_year)]
 
