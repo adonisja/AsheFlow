@@ -23,7 +23,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet,
   Platform,
 } from 'react-native';
-import Svg, { Circle, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Line, Polyline, Text as SvgText } from 'react-native-svg';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
@@ -336,9 +336,22 @@ export default function StatsDrill() {
             <View style={[s.section, { borderTopColor: c.border }]}>
               <Text style={[s.sectionLabel, { color: c.mutedForeground }]}>
                 DELIVERED BY {level === 'week' ? 'DAY' : level === 'month' ? 'WEEK'
-                              : level === 'year' ? 'MONTH' : 'YEAR'} · tap a bar to zoom in
+                              : level === 'year' ? 'MONTH' : 'YEAR'}
+                {!(level === 'lifetime' && charted.length < 2) &&
+                  ` · tap ${level === 'year' ? 'a month' : 'a bar'} to zoom in`}
               </Text>
-              <Bars data={charted} onPick={zoomIn} c={c} s={s} />
+              {/* THREE presentations, because the levels ask different
+                  questions and 12 thin bars answer none of them:
+                    year     -> 12 months as a LINE (a trend)
+                    lifetime -> under 2 years, figures instead of one bar
+                    else     -> bars (few enough buckets to compare directly) */}
+              {level === 'year' ? (
+                <LineChart data={charted} onPick={zoomIn} c={c} s={s} />
+              ) : level === 'lifetime' && charted.length < 2 ? (
+                <LifetimeSummary years={charted} lt={lt} onPick={zoomIn} c={c} s={s} />
+              ) : (
+                <Bars data={charted} onPick={zoomIn} c={c} s={s} />
+              )}
             </View>
             <PeriodPanels extras={extras} attendance={attendance} c={c} s={s} />
           </>
@@ -466,14 +479,28 @@ function Bars({ data, onPick, c, s }: {
       </Text>
     );
   }
-  const EFFORT_TONE: Record<string, string> = {
-    easy: c.info, standard: c.success, heavy: c.warning,
-  };
+  // A ROTATING PALETTE, one tone per bucket. Effort class only ever varies at
+  // DAY grain — a week or month mixes efforts, so every coarse bar fell back to
+  // one flat primary and the chart read as a single undifferentiated block.
+  // Distinct tones let the eye track "which week was that" between the chart
+  // and the sibling nav.
+  const TONES = [c.primary, c.success, c.info, c.warning, c.gold, c.danger];
+  const toneFor = (d: Bucket, i: number) =>
+    d.effort ? ({ easy: c.info, standard: c.success, heavy: c.warning }[d.effort] ?? c.primary)
+             : TONES[i % TONES.length];
+
   return (
     <View>
       <View style={[s.barsRow, { borderBottomColor: c.border }]}>
-        {data.map(d => {
+        {data.map((d, i) => {
           const empty = d.delivered === 0;
+          const pct = Math.max(4, (d.delivered / max) * 100);
+          // THE LABEL GOES INSIDE ONCE THE BAR IS TALL. Rendered above the bar
+          // in a fixed-height column, the tallest bar's number is pushed out of
+          // the plot and collides with the heading above it — which is exactly
+          // what happened to the 84 on Mon. Inside, it can never overflow, and
+          // the biggest bar is the one you most want to read.
+          const inside = pct > 78;
           return (
             <TouchableOpacity
               key={d.key}
@@ -483,16 +510,24 @@ function Bars({ data, onPick, c, s }: {
               accessibilityRole="button"
               accessibilityLabel={`${d.label}: ${d.delivered} delivered`}
             >
-              <Text style={[s.barValue, { color: empty ? 'transparent' : c.mutedForeground }]}>
-                {d.delivered > 0 ? d.delivered.toLocaleString() : ''}
-              </Text>
+              {!inside && (
+                <Text style={[s.barValue, { color: empty ? 'transparent' : c.mutedForeground }]}>
+                  {d.delivered > 0 ? d.delivered.toLocaleString() : ''}
+                </Text>
+              )}
               {empty ? (
                 <View style={[s.barEmpty, { backgroundColor: c.border }]} />
               ) : (
                 <View style={[s.bar, {
-                  backgroundColor: d.effort ? EFFORT_TONE[d.effort] ?? c.primary : c.primary,
-                  height: `${Math.max(4, (d.delivered / max) * 100)}%`,
-                }]} />
+                  backgroundColor: toneFor(d, i),
+                  height: `${pct}%`,
+                }]}>
+                  {inside && (
+                    <Text style={[s.barValueInside, { color: c.background }]} numberOfLines={1}>
+                      {d.delivered.toLocaleString()}
+                    </Text>
+                  )}
+                </View>
               )}
             </TouchableOpacity>
           );
@@ -505,6 +540,155 @@ function Bars({ data, onPick, c, s }: {
           </Text>
         ))}
       </View>
+    </View>
+  );
+}
+
+/** Month-by-month as a LINE, not bars.
+ *
+ *  Twelve bars across a phone are ~24px wide each: too thin to carry a value
+ *  label and too chunky to show a trend. A line answers the question a year
+ *  view is actually asked — "which way is this going" — and twelve points is
+ *  where a line starts beating bars.
+ *
+ *  MONTHS WITH NO WORK ARE DRAWN AS ZERO, not as a break in the line. The
+ *  operator's reasoning, which overrode the usual missing-data convention:
+ *  field staff take breaks, so a quiet month is a REAL zero that the person
+ *  lived through. A gap in this domain reads as a data-collection failure,
+ *  which would be the misleading reading, not the honest one.
+ */
+function LineChart({ data, onPick, c, s }: {
+  data: Bucket[]; onPick: (b: Bucket) => void; c: ThemeColors; s: Styles;
+}) {
+  const max = Math.max(1, ...data.map(d => d.delivered));
+  if (!data.some(d => d.delivered > 0)) {
+    return (
+      <Text style={[s.emptyNote, { color: c.mutedForeground }]}>
+        Nothing delivered in this period.
+      </Text>
+    );
+  }
+
+  // TOP PAD is larger than the others: the peak's value label is drawn above
+  // its point, and with a symmetric pad the label sat ON the line at the very
+  // point it was labelling. The extra headroom is reserved for it.
+  const W = 320, H = 150, PAD = 8, TOP = 24;
+  const step = data.length > 1 ? (W - PAD * 2) / (data.length - 1) : 0;
+  const x = (i: number) => PAD + i * step;
+  const y = (v: number) => H - PAD - (v / max) * (H - PAD - TOP);
+
+  const pts = data.map((d, i) => `${x(i)},${y(d.delivered)}`).join(' ');
+  // Closed area under the line, so the shape reads as volume rather than as a
+  // bare stroke floating in space.
+  const area = `${PAD},${H - PAD} ${pts} ${x(data.length - 1)},${H - PAD}`;
+  const peak = data.reduce((b, d, i) => (d.delivered > data[b].delivered ? i : b), 0);
+
+  return (
+    <View>
+      <Svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
+        {/* Baseline only. Gridlines at this size are more ink than information. */}
+        <Line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD}
+              stroke={c.border} strokeWidth="1" />
+        <Polyline points={area} fill={c.primary + '22'} stroke="none" />
+        <Polyline points={pts} fill="none" stroke={c.primary}
+                  strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+        {data.map((d, i) => (
+          <Circle key={d.key} cx={x(i)} cy={y(d.delivered)} r={i === peak ? 4 : 2.5}
+                  fill={i === peak ? c.primary : c.card}
+                  stroke={c.primary} strokeWidth="1.5" />
+        ))}
+        {/* Only the PEAK is labelled. Twelve labels on a phone overlap into
+            noise; the high point is the one that answers "how good did it get". */}
+        <SvgText x={x(peak)} y={Math.max(11, y(data[peak].delivered) - 9)}
+                 textAnchor="middle" fill={c.foreground} fontSize="11" fontWeight="700">
+          {data[peak].delivered.toLocaleString()}
+        </SvgText>
+      </Svg>
+      {/* Tap targets sit UNDER the svg rather than on it: react-native-svg
+          hit-testing on small circles is unreliable, and a full-height column
+          is a far better thumb target anyway. */}
+      <View style={s.lineTapRow}>
+        {data.map(d => (
+          <TouchableOpacity
+            key={d.key}
+            style={s.lineTapCol}
+            onPress={() => d.delivered > 0 && onPick(d)}
+            disabled={d.delivered === 0}
+            accessibilityRole="button"
+            accessibilityLabel={`${d.label}: ${d.delivered} delivered`}
+          >
+            <Text style={[s.barLabel, {
+              color: d.delivered > 0 ? c.mutedForeground : c.mutedForeground + '66',
+            }]} numberOfLines={1}>
+              {d.short.slice(0, 1)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/** Lifetime for an account with too little history to chart.
+ *
+ *  One bar labelled "2026" is not a chart — it is a rectangle, and it read as a
+ *  rendering fault. Below two years the honest presentation is the numbers
+ *  themselves, plus a statement of when the chart will appear, so the absence
+ *  is explained rather than merely rendered. */
+function LifetimeSummary({ years, lt, onPick, c, s }: {
+  years: Bucket[];
+  lt: { delivered: number; trips: number; success_pct: number | null };
+  onPick: (b: Bucket) => void;
+  c: ThemeColors; s: Styles;
+}) {
+  const best = years.reduce<Bucket | null>(
+    (b, y) => (!b || y.delivered > b.delivered ? y : b), null);
+  const span = years.length === 1 ? years[0].label
+             : `${years[0]?.label}–${years[years.length - 1]?.label}`;
+  // ZOOMING IN MUST STILL BE POSSIBLE. Every other level offers a bar to tap;
+  // replacing the single year bar with figures removed the ONLY way back in
+  // from Lifetime — and Lifetime is the one level with no zoom-out trail
+  // either, so the screen became a dead end. The year tile is the control.
+  const target = years.length === 1 ? years[0] : best;
+  return (
+    <View>
+      <View style={s.tileRow}>
+        {([
+          ['Delivered', lt.delivered.toLocaleString(), null],
+          ['Best year', best ? best.delivered.toLocaleString() : '—', null],
+          ['Trips', lt.trips.toLocaleString(), null],
+          [years.length === 1 ? 'Only year' : 'Span', span || '—', target],
+        ] as [string, string, Bucket | null][]).map(([l, v, tap]) => {
+          const body = (
+            <>
+              <Text style={[s.tileLabel, { color: c.mutedForeground }]}>{l}</Text>
+              <Text style={[s.tileValue, { color: c.foreground }]}>{v}</Text>
+              {!!tap && (
+                <Text style={[s.tileHint, { color: c.primary }]}>tap to open →</Text>
+              )}
+            </>
+          );
+          return tap ? (
+            <TouchableOpacity
+              key={l}
+              onPress={() => onPick(tap)}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${tap.label}`}
+              style={[s.tile, { backgroundColor: c.background, borderColor: c.primary }]}
+            >
+              {body}
+            </TouchableOpacity>
+          ) : (
+            <View key={l}
+                  style={[s.tile, { backgroundColor: c.background, borderColor: c.border }]}>
+              {body}
+            </View>
+          );
+        })}
+      </View>
+      <Text style={[s.emptyNote, { color: c.mutedForeground }]}>
+        A year-by-year chart appears once you have two full years of history.
+      </Text>
     </View>
   );
 }
@@ -830,6 +1014,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tileLabel:   { fontSize: fontSize.xs, letterSpacing: 0.5 },
   tileValue:   { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
   tileSub:     { fontSize: fontSize.xs, marginTop: 2 },
+  tileHint:    { fontSize: 10, fontWeight: fontWeight.semibold, marginTop: 3 },
 
   trailRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   trailBtn:    { borderWidth: 1, borderRadius: radius.md,
@@ -884,6 +1069,12 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   bar:         { width: '100%', borderTopLeftRadius: radius.sm, borderTopRightRadius: radius.sm },
   barEmpty:    { width: '100%', height: 2, borderRadius: 1 },
   barValue:    { fontSize: 9 },
+  /* Inside the bar once it is tall enough to push a label out of the plot.
+     Padded from the top so it sits just under the bar's cap. */
+  barValueInside: { fontSize: 9, fontWeight: fontWeight.bold,
+                    textAlign: 'center', paddingTop: 3 },
+  lineTapRow:  { flexDirection: 'row', marginTop: spacing.xs },
+  lineTapCol:  { flex: 1, alignItems: 'center', paddingVertical: spacing.xs },
   barLabels:   { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.xs },
   barLabel:    { flex: 1, fontSize: fontSize.xs, textAlign: 'center' },
 

@@ -92,11 +92,20 @@ function Bars({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => void })
       </p>
     );
   }
+  // A ROTATING PALETTE, one tone per bucket. Effort class only ever varies at
+  // DAY grain — a week or month mixes efforts, so every coarse bar fell back to
+  // one flat primary and the chart read as a single undifferentiated block.
+  const TONES = ['bg-primary', 'bg-success', 'bg-info', 'bg-warning', 'bg-gold', 'bg-danger'];
   return (
     <div>
       <div className="flex items-end gap-3 h-48 border-b border-border">
-        {data.map(d => {
+        {data.map((d, i) => {
           const empty = d.delivered === 0;
+          const pct = Math.max(4, (d.delivered / max) * 100);
+          // THE LABEL GOES INSIDE ONCE THE BAR IS TALL. Rendered above the bar
+          // in a fixed-height column, the tallest bar's number is pushed out of
+          // the plot and collides with the heading above it.
+          const inside = pct > 78;
           return (
             <button
               key={d.key}
@@ -106,19 +115,27 @@ function Bars({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => void })
                          group disabled:cursor-default"
               title={`${d.label}: ${d.delivered.toLocaleString()} delivered`}
             >
-              <span className={`text-[10px] tabular-nums transition-colors ${
-                empty ? 'text-transparent' : 'text-muted-foreground group-hover:text-foreground'}`}>
-                {d.delivered > 0 ? d.delivered.toLocaleString() : ''}
-              </span>
+              {!inside && (
+                <span className={`text-[10px] tabular-nums transition-colors ${
+                  empty ? 'text-transparent' : 'text-muted-foreground group-hover:text-foreground'}`}>
+                  {d.delivered > 0 ? d.delivered.toLocaleString() : ''}
+                </span>
+              )}
               {empty ? (
                 <div className="w-full h-[2px] bg-border rounded-full" />
               ) : (
                 <div
                   className={`w-full rounded-t-md transition-all
-                              ${d.effort ? EFFORT_BG[d.effort] : 'bg-primary'}
+                              ${d.effort ? EFFORT_BG[d.effort] : TONES[i % TONES.length]}
                               opacity-85 group-hover:opacity-100`}
-                  style={{ height: `${Math.max(4, (d.delivered / max) * 100)}%` }}
-                />
+                  style={{ height: `${pct}%` }}
+                >
+                  {inside && (
+                    <span className="block text-[10px] font-bold tabular-nums text-background pt-1">
+                      {d.delivered.toLocaleString()}
+                    </span>
+                  )}
+                </div>
               )}
             </button>
           );
@@ -131,6 +148,125 @@ function Bars({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => void })
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Month-by-month as a LINE, not bars.
+ *
+ *  Twelve bars are too thin to carry a value label and too chunky to show a
+ *  trend. A line answers the question a year view is actually asked — "which
+ *  way is this going".
+ *
+ *  MONTHS WITH NO WORK ARE DRAWN AS ZERO, not as a break in the line. Field
+ *  staff take breaks, so a quiet month is a REAL zero the person lived through;
+ *  in this domain a gap reads as a data-collection failure, which would be the
+ *  misleading reading rather than the honest one (ADR-271 §R).
+ */
+function LineChart({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => void }) {
+  const max = Math.max(1, ...data.map(d => d.delivered));
+  if (!data.some(d => d.delivered > 0)) {
+    return (
+      <p className="text-[11px] text-muted-foreground italic text-center py-8">
+        Nothing delivered in this period.
+      </p>
+    );
+  }
+  // TOP pad reserved for the peak's value label, drawn above its point.
+  const W = 640, H = 200, PAD = 12, TOP = 28;
+  const step = data.length > 1 ? (W - PAD * 2) / (data.length - 1) : 0;
+  const x = (i: number) => PAD + i * step;
+  const y = (v: number) => H - PAD - (v / max) * (H - PAD - TOP);
+  const pts = data.map((d, i) => `${x(i)},${y(d.delivered)}`).join(' ');
+  const area = `${PAD},${H - PAD} ${pts} ${x(data.length - 1)},${H - PAD}`;
+  const peak = data.reduce((b, d, i) => (d.delivered > data[b].delivered ? i : b), 0);
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-48" preserveAspectRatio="none">
+        <polyline points={area} className="fill-primary/15" />
+        <polyline points={pts} className="stroke-primary fill-none"
+                  strokeWidth="3" strokeLinejoin="round" strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke" />
+      </svg>
+      {/* Labels and hit targets OUTSIDE the svg: preserveAspectRatio="none"
+          stretches the plot to the container, which would distort any text
+          drawn inside it. */}
+      <div className="flex gap-1 -mt-1">
+        {data.map((d, i) => (
+          <button
+            key={d.key}
+            onClick={() => d.delivered > 0 && onPick(d)}
+            disabled={d.delivered === 0}
+            title={`${d.label}: ${d.delivered.toLocaleString()} delivered`}
+            className="flex-1 text-center text-[11px] disabled:cursor-default
+                       hover:text-foreground transition-colors
+                       disabled:text-muted-foreground/40 text-muted-foreground"
+          >
+            {i === peak && (
+              <span className="block text-[11px] font-bold text-foreground tabular-nums">
+                {d.delivered.toLocaleString()}
+              </span>
+            )}
+            {d.short}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Lifetime for an account with too little history to chart. One bar labelled
+ *  "2026" is not a chart — it is a rectangle, and it reads as a rendering
+ *  fault. Below two years, show the numbers and say when the chart arrives. */
+function LifetimeSummary({ years, lt, onPick }: {
+  years: Bucket[];
+  lt: { delivered: number; trips: number };
+  onPick: (b: Bucket) => void;
+}) {
+  const best = years.reduce<Bucket | null>(
+    (b, y) => (!b || y.delivered > b.delivered ? y : b), null);
+  const span = years.length === 1 ? years[0].label
+             : `${years[0]?.label}–${years[years.length - 1]?.label}`;
+  // ZOOMING IN MUST STILL BE POSSIBLE. Every other level offers a bar to click;
+  // replacing the single year bar with figures removed the ONLY way back in
+  // from Lifetime — and Lifetime has no zoom-out trail either, so the screen
+  // became a dead end. The year tile is the control.
+  const target = years.length === 1 ? years[0] : best;
+  return (
+    <div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {([
+          ['Delivered', lt.delivered.toLocaleString(), null],
+          ['Best year', best ? best.delivered.toLocaleString() : '—', null],
+          ['Trips', lt.trips.toLocaleString(), null],
+          [years.length === 1 ? 'Only year' : 'Span', span || '—', target],
+        ] as [string, string, Bucket | null][]).map(([l, v, tap]) => {
+          const body = (
+            <>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{l}</p>
+              <p className="text-xl font-bold text-foreground tabular-nums">{v}</p>
+              {!!tap && <p className="text-[10px] font-semibold text-primary mt-0.5">
+                click to open →
+              </p>}
+            </>
+          );
+          return tap ? (
+            <button key={l} onClick={() => onPick(tap)}
+                    title={`Open ${tap.label}`}
+                    className="rounded-lg border border-primary bg-background p-3 text-left
+                               hover:bg-accent/30 transition-colors">
+              {body}
+            </button>
+          ) : (
+            <div key={l} className="rounded-lg border border-border bg-background p-3">
+              {body}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-muted-foreground italic text-center py-4">
+        A year-by-year chart appears once you have two full years of history.
+      </p>
     </div>
   );
 }
@@ -601,11 +737,21 @@ export default function StatsDrill() {
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
                 Delivered by {level === 'week' ? 'day' : level === 'month' ? 'week'
                               : level === 'year' ? 'month' : 'year'}
-                <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/70">
-                  — click a bar to zoom in
-                </span>
+                {!(level === 'lifetime' && charted.length < 2) && (
+                  <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/70">
+                    — click {level === 'year' ? 'a month' : 'a bar'} to zoom in
+                  </span>
+                )}
               </p>
-              <Bars data={charted} onPick={zoomIn} />
+              {/* THREE presentations, because the levels ask different
+                  questions and 12 thin bars answer none of them (ADR-271 §R). */}
+              {level === 'year' ? (
+                <LineChart data={charted} onPick={zoomIn} />
+              ) : level === 'lifetime' && charted.length < 2 ? (
+                <LifetimeSummary years={charted} lt={lt} onPick={zoomIn} />
+              ) : (
+                <Bars data={charted} onPick={zoomIn} />
+              )}
             </div>
             <PeriodPanels extras={extras} attendance={attendance} />
           </>
