@@ -2,7 +2,7 @@
  * My Amazon scorecard — latest week plus trend.
  *
  * This is AMAZON'S assessment of the individual, not AsheFlow's. The distinction
- * matters and is stated on screen: MyPerformanceCard (the "My Stats" tab) is
+ * matters and is stated on screen: StatsDrill (the "My Stats" tab) is
  * computed from our own DeliveryStop / RTS / rating records, while these figures
  * come from Amazon's weekly scorecard. They are independent sources and can
  * legitimately disagree — that disagreement is exactly what the appeals process

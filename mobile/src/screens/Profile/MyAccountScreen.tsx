@@ -28,7 +28,7 @@ import PageHeader from '@components/ui/PageHeader';
 
 import AccountSettingsScreen from './AccountSettingsScreen';
 import MyScorecardScreen from './MyScorecardScreen';
-import MyPerformanceCard from '@components/MyPerformanceCard';
+import StatsDrill from '@components/stats/StatsDrill';
 
 type Tab = 'settings' | 'stats' | 'scorecard';
 
@@ -80,15 +80,18 @@ export default function MyAccountScreen() {
         {activeTab === 'settings'  && <AccountSettingsScreen />}
         {activeTab === 'scorecard' && <MyScorecardScreen />}
         {activeTab === 'stats' && (
-          <ScrollView contentContainerStyle={s.statsContent}>
+          /* StatsDrill owns its own ScrollView (ADR-271): nesting it inside
+             another breaks scrolling on both platforms, so the attribution
+             rides above it rather than sharing a scroll container. */
+          <View style={{ flex: 1 }}>
             {/* Attribution, so two differing numbers do not read as a bug */}
             <Text style={[s.attribution, { color: c.mutedForeground }]}>
               AsheFlow's record of your deliveries and peer ratings. Amazon's own
               weekly assessment is under Scorecard — the two are measured
               separately and can differ.
             </Text>
-            <MyPerformanceCard />
-          </ScrollView>
+            <StatsDrill />
+          </View>
         )}
       </View>
     </SafeAreaView>
@@ -106,5 +109,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tabIndicator: { position: 'absolute', bottom: 0, left: spacing.md, right: spacing.md,
                   height: 2, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
   statsContent: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  attribution:  { fontSize: fontSize.xs, lineHeight: 17, marginBottom: spacing.md },
+  /* Own horizontal padding: this text no longer sits inside `statsContent`,
+     because StatsDrill brings its own scroll container. Without it the
+     attribution runs to the screen edge. */
+  attribution:  { fontSize: fontSize.xs, lineHeight: 17, marginBottom: spacing.md,
+                  paddingHorizontal: spacing.md, paddingTop: spacing.md },
 });

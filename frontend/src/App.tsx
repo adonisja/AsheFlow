@@ -33,7 +33,6 @@ import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
 // TEMPORARY design-review route for the ADR-271 drill-down mock. Remove with
 // the mock once the wired version lands.
-import StatsDrillMock from './components/stats/StatsDrillMock';
 import AuditLog from './pages/AuditLog';
 import SortPage from './pages/Sort';
 import PrintLoadSheets from './pages/PrintLoadSheets';
@@ -271,14 +270,6 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Preferences />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/stats-mock"
-              element={
-                <ProtectedRoute>
-                  <StatsDrillMock />
                 </ProtectedRoute>
               }
             />

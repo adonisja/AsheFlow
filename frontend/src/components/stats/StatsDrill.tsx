@@ -737,6 +737,38 @@ function DayDetail({ date }: { date: string }) {
           </div>
         </div>
       )}
+
+      {/* SUPERVISED TRAINEES (ADR-269). Rendered SEPARATELY from the counts
+          above — merging them resurrects the ADR-244 attribution bug, where a
+          trainee's returns land on the trainer's own record.
+
+          Nearly LOST in this rewrite: the block lived in RecentDaysSection,
+          which ADR-271 absorbed, and the first cut of this drill simply did not
+          carry it across. Nothing on web mounts RecentDaysSection any more, so
+          the omission would have silently deleted a shipped trainer feature
+          rather than failing loudly. `?? []` because the field is optional on
+          the wire — a client can outrun the backend serving it. */}
+      {(day.supervised ?? []).map((sup: any) => (
+        <div key={sup.employee_id} className="mt-2 pl-2 border-l-2 border-primary/60">
+          <p className="text-xs font-semibold text-foreground">
+            {sup.name}
+            <span className="ml-1.5 font-normal text-[10px] text-muted-foreground">
+              trainee you supervised
+            </span>
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            <span className="font-semibold text-foreground tabular-nums">
+              {sup.packages_delivered}/{sup.packages_total}
+            </span> delivered
+            {sup.rts_count > 0 && ` · ${sup.rts_count} RTS`}
+          </p>
+          {(sup.rts_details ?? []).map((r: any) => (
+            <p key={r.tba_number} className="text-[11px] text-muted-foreground pl-2">
+              • {RTS_LABEL[r.rts_type] ?? r.rts_type.replace(/_/g, ' ')}
+            </p>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
