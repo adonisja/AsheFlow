@@ -458,14 +458,17 @@ function CurrentAssignments() {
   // the call site, which would hide a real mismatch if the body grows.
   const handleAddUnavailableStaff = async (member: { id: string; name: string; role: string }) => {
     if (!dispatchData) return;
-    // For drivers: find first truck with no driver. For others: find first truck at all.
+    // ONE PER TRUCK roles (driver, captain) need a truck that lacks that role;
+    // everyone else can join any truck. Captain was missing here, so adding one
+    // dropped them onto the first truck in the list even if it already had a
+    // captain (ADR-256).
     let targetTruckId: string | undefined;
-    if (member.role === 'driver') {
+    if (member.role === 'driver' || member.role === 'captain') {
       const entry = Object.entries(dispatchData.assigned_crews).find(
-        ([, crew]) => !crew.some((m: any) => m.role === 'driver')
+        ([, crew]) => !crew.some((m: any) => m.role === member.role)
       );
       if (!entry) {
-        setError('All trucks already have a driver. Use the unassigned panel to place manually.');
+        setError(`All trucks already have a ${member.role}. Use the unassigned panel to place manually.`);
         return;
       }
       targetTruckId = entry[0];
@@ -499,8 +502,11 @@ function CurrentAssignments() {
       const allRes = await axiosClient.get('/employees/');
       const allEmpMap: Record<string, any> = allRes.data.reduce((acc: any, e: any) => ({ ...acc, [e.id]: e }), {});
 
-      // Include all dispatch-eligible roles from the availability-filtered response
-      ['driver', 'trainer', 'walker', 'trainee'].forEach(role => {
+      // Include all dispatch-eligible roles from the availability-filtered
+      // response. CAPTAIN belongs here (ADR-256): omitting it meant a captain
+      // removed from a truck never reappeared in the unassigned list, so they
+      // looked deleted rather than unassigned.
+      ['driver', 'captain', 'trainer', 'walker', 'trainee'].forEach(role => {
         (res.data[role] || []).forEach((e: any) => { pool[e.id] = allEmpMap[e.id] || e; });
       });
 
@@ -742,9 +748,15 @@ function CurrentAssignments() {
     const roleA = (employees[a.employee_id || a.id]?.role || a.role || 'walker').toLowerCase();
     const roleB = (employees[b.employee_id || b.id]?.role || b.role || 'walker').toLowerCase();
     
-    const roleOrder: Record<string, number> = { driver: 1, trainer: 2, trainee: 3, walker: 4 };
-    const orderA = roleOrder[roleA] || 5;
-    const orderB = roleOrder[roleB] || 5;
+    // CAPTAIN SITS DIRECTLY UNDER DRIVER (ADR-256): the two run the truck and
+    // belong together above the people who carry. Missing from this map, a
+    // captain fell through to the `|| 5` default and sorted BELOW walkers — the
+    // opposite of their standing on the truck.
+    const roleOrder: Record<string, number> = {
+      driver: 1, captain: 2, trainer: 3, trainee: 4, walker: 5,
+    };
+    const orderA = roleOrder[roleA] || 6;
+    const orderB = roleOrder[roleB] || 6;
     
     if (orderA !== orderB) return orderA - orderB;
     

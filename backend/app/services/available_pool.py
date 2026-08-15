@@ -91,7 +91,14 @@ def get_unavailable_staff(db: Session, target_date: date = None, roles: list = N
     target_date = target_date or company_today(db, company_id)
     day_name = target_date.strftime("%A")
 
-    allowed_roles = [r for r in (roles or ["driver", "trainer", "walker"]) if r != "trainee"]
+    # Captain in the default (ADR-256): a captain excluded by PTO belongs in the
+    # call-in list like any other truck role. The endpoint passes roles
+    # explicitly, but a direct caller relying on this default would silently
+    # miss them.
+    allowed_roles = [
+        r for r in (roles or ["driver", "captain", "trainer", "walker"])
+        if r != "trainee"
+    ]
 
     employees = (
         db.query(Employee)

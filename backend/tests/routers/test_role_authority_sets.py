@@ -145,3 +145,63 @@ class TestGatesUseTheSharedSets:
         from app.routers import walker_routes, rts, building_profiles, crew_status
         for mod in (walker_routes, rts, building_profiles, crew_status):
             assert not hasattr(mod, "_allow_captain"), f"{mod.__name__} still exports _allow_captain"
+
+
+class TestCaptainInDispatchRoleLiterals:
+    """The bug this file's docstring predicted, in the form it actually took.
+
+    The sets above are all guarded. What was NOT guarded were the hardcoded role
+    LISTS scattered through routers and services — literals that no constant
+    covers, so no membership test could see them.
+
+    Three of them omitted captain, and the operator hit two on one page:
+
+      * `/schedule/available` built its response dict WITHOUT a "captain" key,
+        and its `if role in pool` guard then discarded every captain silently —
+        no error, no log. A captain removed from a truck never reappeared in the
+        unassigned list, so they looked deleted rather than unassigned, and
+        could not be dragged back.
+      * `/dispatch/unavailable-staff` defaulted to driver/trainer/walker, so a
+        captain on approved PTO was invisible in the call-in list — the one
+        person who could staff a captainless truck, missing from the screen
+        warning about it.
+
+    Read the source rather than calling the endpoints: the failure is a literal
+    in a signature or a dict, and that is exactly what needs pinning.
+    """
+
+    def _source(self, relpath: str) -> str:
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]   # backend/
+        return (root / relpath).read_text(encoding="utf-8")
+
+    def test_available_pool_response_has_captain_key(self):
+        src = self._source("app/routers/schedule.py")
+        assert '"captain": []' in src, (
+            "/schedule/available must build a captain bucket — without the key, "
+            "`if role in pool` drops captains silently"
+        )
+
+    def test_unavailable_staff_default_roles_include_captain(self):
+        src = self._source("app/routers/dispatch.py")
+        line = next(
+            (ln for ln in src.splitlines() if "roles: List[str] = Query(default=" in ln),
+            None,
+        )
+        assert line is not None, "unavailable-staff roles default not found"
+        assert "captain" in line, (
+            "a captain excluded by PTO belongs in the call-in list like any "
+            f"other truck role — got: {line.strip()}"
+        )
+
+    def test_available_pool_service_default_includes_captain(self):
+        src = self._source("app/services/available_pool.py")
+        assert 'roles or ["driver", "captain", "trainer", "walker"]' in src, (
+            "get_unavailable_staff's fallback default must include captain, so a "
+            "direct caller behaves like the endpoint"
+        )
+
+    def test_available_pool_service_queries_captains(self):
+        # The service was already correct; pin it so the two stay in agreement.
+        src = self._source("app/services/available_pool.py")
+        assert '"captain"' in src and '"captains"' in src
