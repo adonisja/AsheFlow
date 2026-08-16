@@ -172,3 +172,50 @@ class TestHubManifestIsolation:
         # anti-pattern D4 rejected for truck creation.
         src = self._upload_source()
         assert "No hub assignment for" in src
+
+
+class TestHubRemoval:
+    """ADR-274 D8 — one hub can be removed without clearing the day.
+
+    The guard that matters is the NEGATIVE one: this endpoint must never become
+    a way to dismantle a balanced dispatch one truck at a time. Regular trucks
+    arrive as a set from run_dispatch with crew balanced across them; removing
+    one would strand its crew and under-load the rest with no re-balance.
+    """
+
+    def _source(self) -> str:
+        import inspect
+        from app.routers import dispatch as dispatchmod
+        return inspect.getsource(dispatchmod.remove_hub)
+
+    def test_rejects_a_non_hub_truck(self):
+        src = self._source()
+        assert "if not truck.is_hub:" in src, (
+            "remove_hub must 422 on a regular truck, or it becomes a backdoor "
+            "for taking a balanced dispatch apart"
+        )
+
+    def test_rejection_points_at_the_right_tool(self):
+        # "invalid" leaves the dispatcher stuck; this names Clear Dispatch.
+        src = self._source()
+        assert "Clear Dispatch" in src or "Run Dispatch" in src
+
+    def test_does_not_touch_date_keyed_station_artifacts(self):
+        # Zones, transfers, check-offs and dock assignments belong to the day's
+        # OTHER trucks. clear_daily_dispatch wipes them BY DATE; removing one
+        # hub must not, or it destroys work the hub never produced.
+        src = self._source()
+        for table in ("TruckZone", "ToteTransfer", "ToteLoadCheck", "DockAssignment"):
+            assert table not in src, (
+                f"remove_hub must not delete {table} — it is date-keyed and "
+                f"belongs to the other trucks"
+            )
+
+    def test_reports_whether_the_hub_was_published(self):
+        # The UI warns about already-notified crew; it needs this to know.
+        src = self._source()
+        assert "was_published" in src and "crew_removed" in src
+
+    def test_writes_an_audit_row(self):
+        src = self._source()
+        assert "write_audit" in src and "dispatch.hub_removed" in src

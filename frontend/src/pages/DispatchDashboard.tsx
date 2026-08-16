@@ -133,6 +133,7 @@ function CurrentAssignments() {
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
   const [isCreatingHub, setIsCreatingHub] = useState(false);
   const [publishingHubTruckId, setPublishingHubTruckId] = useState<string | null>(null);
+  const [removingHubTruckId, setRemovingHubTruckId] = useState<string | null>(null);
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
   const [dialog, setDialog] = useState<DialogConfig | null>(null);
@@ -718,6 +719,42 @@ function CurrentAssignments() {
     } finally {
       setIsCreatingHub(false);
     }
+  };
+
+  const handleRemoveHub = (truckId: string, crewCount: number, published: boolean) => {
+    const truckName = trucks[truckId]?.name || 'Hub';
+    // WARN, DO NOT BLOCK (ADR-274 D8). A published hub has crew who were
+    // notified and may have confirmed; removing it does not un-notify them.
+    // Blocking would leave no recovery from a published mistake, and silent
+    // removal would leave people holding a shift that no longer exists.
+    const notified = published && crewCount > 0
+      ? ` ${crewCount} crew member${crewCount === 1 ? ' was' : 's were'} already notified on Discord — `
+        + `removing will NOT tell them, so message them yourself.`
+      : '';
+    openDialog({
+      title: `Remove ${truckName}?`,
+      message:
+        `This deletes the hub assignment for ${selectedDate}`
+        + (crewCount > 0 ? ` and unassigns ${crewCount} crew member${crewCount === 1 ? '' : 's'}` : '')
+        + `.${notified}`,
+      confirmLabel: 'Remove hub',
+      variant: 'danger',
+      onConfirm: async () => {
+        closeDialog();
+        setRemovingHubTruckId(truckId);
+        setError(null);
+        try {
+          await axiosClient.delete(`/dispatch/hubs/${truckId}`, {
+            params: { target_date: selectedDate },
+          });
+          await fetchDispatchData();
+        } catch (err: unknown) {
+          setError(errorText(err, 'Failed to remove hub.'));
+        } finally {
+          setRemovingHubTruckId(null);
+        }
+      },
+    });
   };
 
   const handlePublishHub = (truckId: string) => {
@@ -1417,6 +1454,29 @@ function CurrentAssignments() {
                              ? <div className="w-3 h-3 border border-success border-t-transparent rounded-full animate-spin" />
                              : <Send className="w-3 h-3" />}
                            Publish Hub
+                         </button>
+                       )}
+                       {/* REMOVE — hubs only (ADR-274 D8). A hub is created one
+                           at a time by hand, so it must be removable one at a
+                           time; a mistake should not cost the whole day via
+                           Clear Dispatch. Regular trucks have no equivalent:
+                           they arrive as a balanced SET from Run Dispatch. */}
+                       {isHub && (
+                         <button
+                           onClick={() => handleRemoveHub(
+                             truckId,
+                             (crew as any[]).length,
+                             (dispatchData?.truck_assignments || [])
+                               .find((a: any) => a.truck_id === truckId)?.status !== 'planned',
+                           )}
+                           disabled={removingHubTruckId === truckId}
+                           className="flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           title="Remove this hub assignment"
+                         >
+                           {removingHubTruckId === truckId
+                             ? <div className="w-3 h-3 border border-danger border-t-transparent rounded-full animate-spin" />
+                             : <Trash2 className="w-3 h-3" />}
+                           Remove
                          </button>
                        )}
                        <div className={`px-2 py-1 text-xs font-semibold rounded-full ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
