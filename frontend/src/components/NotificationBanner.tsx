@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin, ChevronDown } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
 import type { Notification } from '../contexts/NotificationContext';
+import { partitionNotifications } from './notifications/classify';
 
 function styleForType(type: string): { bg: string; border: string; icon: React.ReactNode } {
   if (type === 'dispatch_assignment' || type === 'dispatch_assignment_info') {
@@ -62,6 +63,14 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
   };
 }
 
+/** Notification messages carry Discord-flavoured markdown (**bold**) because
+ *  the same string is posted to a channel. The banner renders plain text, so
+ *  the asterisks leak through as literal characters — "**Falcon**" was visible
+ *  in the collapsed row's preview. Same implementation mobile already uses. */
+function stripMarkdown(text: string): string {
+  return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
+}
+
 type ResponseMap = Record<string, 'confirmed' | 'declined'>;
 type ConfirmationStatusMap = Record<string, 'pending' | 'confirmed' | 'declined' | null>;
 
@@ -70,6 +79,7 @@ const NotificationBanner: React.FC = () => {
   const [responses, setResponses] = useState<ResponseMap>({});
   const [responding, setResponding] = useState<string | null>(null);
   const [confirmationStatus, setConfirmationStatus] = useState<ConfirmationStatusMap>({});
+  const [infoOpen, setInfoOpen] = useState(false);
   const fetchedDates = useRef<Set<string>>(new Set());
 
   // Fetch confirmation window status for any new dispatch_assignment notifications
@@ -106,13 +116,10 @@ const NotificationBanner: React.FC = () => {
   const dismiss = (id: string) => markRead(id);
 
   const dismissAll = async () => {
-    const requiresResponse = (n: Notification) =>
-      n.type === 'dispatch_assignment' &&
-      !responses[n.id] &&
-      n.dispatch_date &&
-      confirmationStatus[n.dispatch_date] === 'pending';
-
-    const toRemove = notifications.filter(n => !requiresResponse(n));
+    // Never bulk-dismiss something awaiting an answer (ADR-275 D1). Uses the
+    // SAME classifier as the render split — this used to be a second, subtly
+    // different copy of the rule inline.
+    const toRemove = info;
     if (toRemove.some(n => n.type !== 'dispatch_assignment')) {
       await markAllRead();
     } else {
@@ -140,10 +147,21 @@ const NotificationBanner: React.FC = () => {
     }
   };
 
+  // ADR-275 D1 — what needs an answer vs what is only news.
+  const { action, info } = partitionNotifications(notifications, {
+    answeredInSession: responses,
+    confirmationStatus,
+  });
+
   if (notifications.length === 0) return null;
 
   return (
-    <div className="w-full space-y-2 animate-slide-up">
+    /* HEIGHT CAP (ADR-275 D3) — a safety net, not the mechanism. D1 bounds the
+       informational side; the action side is deliberately uncapped because
+       hiding an unanswered assignment can strand a truck. This guarantees page
+       content stays visible even on a genuine multi-truck day. If this cap is
+       ever doing real work, the classification is wrong. */
+    <div className="w-full space-y-2 animate-slide-up max-h-[40vh] overflow-y-auto pr-1">
       <div className="flex items-center justify-between mb-1">
         <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           <Bell className="w-3.5 h-3.5" />
@@ -168,7 +186,7 @@ const NotificationBanner: React.FC = () => {
         </span>
       </div>
 
-      {notifications.map(n => {
+      {action.map(n => {
         const style = styleForType(n.type);
 
         if (n.type === 'dispatch_assignment') {
@@ -245,40 +263,73 @@ const NotificationBanner: React.FC = () => {
           );
         }
 
-        if (n.type === 'dispatch_assignment_info') {
-          return (
-            <div
-              key={n.id}
-              className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
-            >
-              {style.icon}
-              <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
-              <button
-                onClick={() => dismiss(n.id)}
-                className="text-muted-foreground hover:text-foreground transition-colors ml-2"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          );
-        }
-
-        return (
-          <div
-            key={n.id}
-            className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
-          >
-            {style.icon}
-            <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
-            <button
-              onClick={() => dismiss(n.id)}
-              className="text-muted-foreground hover:text-foreground transition-colors ml-2"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        );
+        // UNREACHABLE BY CONSTRUCTION. `action` only ever contains
+        // dispatch_assignment (isActionRequired returns false for every other
+        // type, verified), so the old dispatch_assignment_info and generic
+        // branches that lived here were dead once the partition landed. Every
+        // other type now renders through InfoCard below.
+        return null;
       })}
+
+      {/* INFORMATIONAL GROUP (ADR-275 D2). One row when there is more than one;
+          a lone update renders as a normal card, because collapsing a single
+          item hides it behind a click for no saving. */}
+      {info.length === 1 && <InfoCard n={info[0]} onDismiss={dismiss} />}
+
+      {info.length > 1 && (
+        <div className="rounded-xl border border-border bg-accent/20 overflow-hidden">
+          <button
+            onClick={() => setInfoOpen(o => !o)}
+            aria-expanded={infoOpen}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-left
+                       hover:bg-accent/30 transition-colors"
+          >
+            <ChevronDown
+              className={`w-4 h-4 text-muted-foreground shrink-0 transition-transform
+                          ${infoOpen ? '' : '-rotate-90'}`}
+            />
+            <span className="flex-1 text-sm font-medium text-foreground">
+              {info.length} more update{info.length === 1 ? '' : 's'}
+            </span>
+            {/* A preview of the most recent, so the row says something even
+                closed — "12 more updates" alone gives no reason to open it. */}
+            <span className="hidden sm:block max-w-[45%] truncate text-xs text-muted-foreground">
+              {stripMarkdown(info[0].message)}
+            </span>
+          </button>
+
+          {infoOpen && (
+            <div className="px-2 pb-2 space-y-1.5">
+              {info.map(n => (
+                <InfoCard key={n.id} n={n} onDismiss={dismiss} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** One informational row. Extracted because the collapsed group and the
+ *  single-item case render the same thing — two copies would drift. */
+const InfoCard: React.FC<{ n: Notification; onDismiss: (id: string) => void }> = ({
+  n,
+  onDismiss,
+}) => {
+  const style = styleForType(n.type);
+  return (
+    <div
+      className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
+    >
+      {style.icon}
+      <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
+      <button
+        onClick={() => onDismiss(n.id)}
+        className="text-muted-foreground hover:text-foreground transition-colors ml-2"
+      >
+        <X className="w-4 h-4" />
+      </button>
     </div>
   );
 };

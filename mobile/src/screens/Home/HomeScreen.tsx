@@ -18,6 +18,7 @@ import {
   getRoleColor, getRoleLight, ROLE_LABELS, type ThemeColors,
 } from '@theme/index';
 import { Avatar, Skeleton } from '@components/ui/primitives';
+import { partitionNotifications } from '@components/notifications/classify';
 import CompanyStandingCard from '@components/CompanyStandingCard';
 
 function greet() {
@@ -77,6 +78,11 @@ export default function HomeScreen() {
   const [unreadCount,   setUnreadCount]   = useState(0);
   const [latestMessage, setLatestMessage] = useState<string | null>(null);
   const [notifLoad,     setNotifLoad]     = useState(true);
+  /* ADR-275 D4 — is a dispatch response still outstanding? The card already
+     navigates to confirm/decline; what it never said was that anyone was
+     waiting. Same classifier as the web banner, driving a badge rather than a
+     layout. */
+  const [needsResponse, setNeedsResponse] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -134,6 +140,23 @@ export default function HomeScreen() {
       const list: any[] = res.data ?? [];
       setUnreadCount(list.filter(n => !n.is_read).length);
       setLatestMessage(list[0]?.message ?? null);
+
+      // Confirmation status decides whether the window is still open; without
+      // it an already-answered assignment would keep nagging.
+      let confirmationStatus: Record<string, any> = {};
+      try {
+        const conf = await apiClient.get(`/dispatch/${today}/my-confirmation`);
+        confirmationStatus = { [today]: conf.data?.status ?? null };
+      } catch {
+        // Unknown window -> isActionRequired treats it as open, which is the
+        // safe direction: better a badge that should not be there than a
+        // missed confirmation.
+      }
+      const { action } = partitionNotifications(
+        list.filter(n => !n.is_read),
+        { confirmationStatus },
+      );
+      setNeedsResponse(action.length > 0);
     } catch {
       setUnreadCount(0);
     } finally {
@@ -216,12 +239,31 @@ export default function HomeScreen() {
         {/* ── Today's assignment ── */}
         <Text style={s.sectionLabel}>TODAY'S ASSIGNMENT</Text>
         <TouchableOpacity
-          style={[s.assignCard, { backgroundColor: c.card, borderColor: truckName ? roleColor : c.border }]}
+          style={[s.assignCard, {
+            backgroundColor: c.card,
+            // An outstanding response outranks the role colour: the card's job
+            // in that moment is to say "someone is waiting on you".
+            borderColor: needsResponse ? c.warning : truckName ? roleColor : c.border,
+            borderWidth: needsResponse ? 2 : 1,
+          }]}
           onPress={() => navigation.navigate('TodayAssignment')}
           activeOpacity={0.75}
+          accessibilityLabel={needsResponse
+            ? 'Today\'s assignment — needs your response'
+            : "Today's assignment"}
         >
           {/* Color accent stripe */}
-          <View style={[s.assignStripe, { backgroundColor: truckName ? roleColor : c.surfaceMuted }]} />
+          <View style={[s.assignStripe, {
+            backgroundColor: needsResponse ? c.warning : truckName ? roleColor : c.surfaceMuted,
+          }]} />
+
+          {/* ADR-275 D4 — the one piece of state the card never showed. It
+              already navigates to confirm/decline; this says why to tap. */}
+          {needsResponse && (
+            <View style={[s.needsResponsePill, { backgroundColor: c.warning }]}>
+              <Text style={s.needsResponseText}>NEEDS YOUR RESPONSE</Text>
+            </View>
+          )}
 
           <View style={s.assignBody}>
             {/* Icon + truck info */}
@@ -460,6 +502,10 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     marginBottom: spacing.xs,
     overflow: 'hidden',
   },
+  needsResponsePill: { alignSelf: 'flex-start', marginBottom: 6,
+                       paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  needsResponseText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.6,
+                       color: c.primaryForeground },
   notifStripe:   { height: 3 },
   notifInner:    { flexDirection: 'row', alignItems: 'center', padding: spacing.md, gap: spacing.sm },
   notifIconWell: { width: 48, height: 48, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
