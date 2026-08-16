@@ -246,6 +246,7 @@ def _enriching_key(company_id: str, sort_date: str) -> str:
 def upload_manifest(
     sort_date: date = Form(...),
     file: UploadFile = File(...),
+    truck_id: Optional[UUID] = Form(None),
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_sort),
     db: Session = Depends(get_db),
@@ -335,6 +336,107 @@ def upload_manifest(
                 "This usually means an already-enriched export was uploaded instead of the raw "
                 "Amazon manifest. Upload the raw manifest (with a 'Tracking ID' column)."
             ),
+        )
+
+    # ── HUB MANIFEST (ADR-274 D7) ────────────────────────────────────────────
+    # A hub carries its own packages, out of the company zone, and they never
+    # enter the sort. This branch returns BEFORE every destructive step below:
+    # a hub upload must not clear the day's zones, routes, centroids, transfers,
+    # check-offs or dock assignments, all of which belong to the other trucks.
+    #
+    # Placed after parsing so the file is still validated the same way — a bad
+    # hub manifest fails with the same messages as a bad company one.
+    if truck_id is not None:
+        truck = db.query(Truck).filter(
+            Truck.id == truck_id,
+            Truck.company_id == caller.company_id,
+        ).first()
+        if not truck:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found.",
+            )
+        if not truck.is_hub:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"{truck.name} is not a hub truck. The company manifest is "
+                    f"uploaded without a truck; only hubs take their own."
+                ),
+            )
+
+        # The assignment must exist first (D7). Creating one as a side effect of
+        # a file upload is the anti-pattern D4 rejected for truck creation, and
+        # it would leave packages with nothing to belong to.
+        assignment = db.query(TruckAssignment).filter(
+            TruckAssignment.truck_id == truck_id,
+            TruckAssignment.date == sort_date,
+            TruckAssignment.company_id == caller.company_id,
+        ).first()
+        if not assignment:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"No hub assignment for {truck.name} on {sort_date}. "
+                    f"Create it with \u201c+ Add Hub\u201d first, then upload."
+                ),
+            )
+
+        cid_str = str(caller.company_id)
+        date_str = sort_date.isoformat()
+        tid_str = str(truck_id)
+
+        cfg = db.query(CompanyConfig).filter(
+            CompanyConfig.company_id == caller.company_id).first()
+        borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough
+                   else _infer_borough(result.packages) or "manhattan")
+
+        # NAMESPACED DATE, not a separate task. enrich_manifest_packages derives
+        # its Redis key internally as manifest:{company}:{sort_date} and takes
+        # no key override, so passing the bare date would OVERWRITE the company
+        # manifest with the hub's out-of-zone packages — the exact contamination
+        # D7 exists to prevent. The task treats sort_date as an opaque string,
+        # so "{date}#hub:{truck}" gives the hub its own key with no task change.
+        hub_scope = f"{date_str}#hub:{tid_str}"
+
+        r = _redis()
+        r.delete(_manifest_key(cid_str, hub_scope))
+        r.setex(_enriching_key(cid_str, hub_scope), _ENRICHING_KEY_TTL, "1")
+
+        # Enriched like any other package (D7): a hub delivery is still a
+        # delivery to a real address, so route ordering, misroute detection and
+        # the stop drill-down keep working.
+        enrich_manifest_packages.delay(
+            company_id=cid_str,
+            sort_date=hub_scope,
+            packages=[
+                {
+                    "tba":          p.tba,
+                    "lat":          p.lat,
+                    "lng":          p.lng,
+                    "address":      p.address,
+                    "bag_id":       p.bag_id,
+                    "bag_color":    p.bag_color,
+                    "tag_number":   p.tag_number,
+                    "package_type": p.package_type,
+                }
+                for p in result.packages
+            ],
+            borough=borough,
+        )
+
+        logger.info(
+            "hub_manifest_uploaded",
+            extra={
+                "company_id": cid_str, "truck": truck.name,
+                "sort_date": date_str, "packages": len(result.packages),
+            },
+        )
+        return ManifestUploadResponse(
+            sort_date=sort_date,
+            package_count=len(result.packages),
+            pending_count=len(result.pending),
+            warnings=result.warnings,
+            status="enriching",
         )
 
     # ── ADR-177 decision (b): a new manifest invalidates the day's station

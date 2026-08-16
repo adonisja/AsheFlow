@@ -100,3 +100,75 @@ class TestCreateHubRejectsNonHubTrucks:
         # one points at the Trucks page.
         src = _src("app/routers/dispatch.py")
         assert "is not a hub truck" in src and "Trucks" in src
+
+
+class TestHubManifestIsolation:
+    """ADR-274 D7 — a hub's manifest never touches the company's.
+
+    Two failure modes, both silent and both expensive:
+
+      * a hub upload running the ADR-177 same-day clear would wipe the OTHER
+        trucks' zones, routes, centroids, transfers and dock assignments
+      * passing the bare date to enrich_manifest_packages would overwrite
+        manifest:{company}:{date} with the hub's out-of-zone packages, dragging
+        every truck's clustering toward points nothing should route to
+
+    Neither raises. Both are pinned structurally, because a behavioural test
+    would need Redis, Celery and a full manifest fixture to assert what two
+    string checks assert exactly.
+    """
+
+    def _upload_source(self) -> str:
+        import inspect
+        from app.routers import sort as sortmod
+        return inspect.getsource(sortmod.upload_manifest)
+
+    def test_hub_branch_precedes_the_destructive_clear(self):
+        src = self._upload_source()
+        assert src.index("HUB MANIFEST (ADR-274 D7)") < src.index("ADR-177 decision (b)"), (
+            "the hub branch must come BEFORE the same-day state clear, or a hub "
+            "upload wipes the other trucks' sort"
+        )
+
+    def test_hub_branch_returns_before_the_destructive_clear(self):
+        src = self._upload_source()
+        between = src[src.index("HUB MANIFEST (ADR-274 D7)"):src.index("ADR-177 decision (b)")]
+        assert "return ManifestUploadResponse" in between, (
+            "the hub branch must RETURN, not fall through into the clear"
+        )
+
+    def test_hub_packages_use_a_namespaced_redis_scope(self):
+        # Asserts on the CODE, not the prose. The first version of this test
+        # checked for "#hub:" anywhere in the branch and passed against a
+        # planted bug, because the explanatory comment above the assignment
+        # also contains "#hub:". A test a comment can satisfy protects nothing.
+        src = self._upload_source()
+        between = src[src.index("HUB MANIFEST (ADR-274 D7)"):src.index("ADR-177 decision (b)")]
+        # Drop comment LINES only. Do not strip at the first "#" — the scope
+        # string itself contains "#hub:", and splitting on it truncated the
+        # very line under test to `hub_scope = f"{date_str}`.
+        code = [
+            ln.strip()
+            for ln in between.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        assign = [ln for ln in code if ln.startswith("hub_scope")]
+        assert assign, "hub_scope is never assigned"
+        assert any("date_str" in ln and "tid_str" in ln for ln in assign), (
+            "enrich_manifest_packages derives manifest:{company}:{sort_date} "
+            "internally, so hub_scope must combine the date AND the truck id — "
+            f"otherwise the hub overwrites the company manifest. Got: {assign}"
+        )
+        assert any("sort_date=hub_scope" in ln for ln in code), (
+            "the namespaced scope must actually be PASSED to the task"
+        )
+
+    def test_hub_branch_rejects_a_non_hub_truck(self):
+        src = self._upload_source()
+        assert "is not a hub truck" in src
+
+    def test_hub_branch_requires_the_assignment_first(self):
+        # Creating an assignment as a side effect of a file upload is the
+        # anti-pattern D4 rejected for truck creation.
+        src = self._upload_source()
+        assert "No hub assignment for" in src

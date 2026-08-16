@@ -353,6 +353,11 @@ function ManifestUploadPanel({
 }) {
   const [phase, setPhase]                       = useState<UploadPhase>('idle');
   const [uploadDate, setUploadDate]             = useState(today);
+  /* ADR-274 D7 — a hub carries its own manifest. Empty string = the COMPANY
+     manifest, which is the common case and therefore the default; a hub upload
+     is the deliberate exception. */
+  const [hubTruckId, setHubTruckId]             = useState<string>('');
+  const [hubTrucks, setHubTrucks]               = useState<{ id: string; name: string }[]>([]);
   const [file, setFile]                         = useState<File | null>(null);
   const [packageCount, setPackageCount]         = useState(0);
   const [failedCount, setFailedCount]           = useState(0);
@@ -367,6 +372,16 @@ function ManifestUploadPanel({
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   useEffect(() => () => stopPoll(), []);
+
+  // Only fetch hubs — a normal truck can never take a manifest, so listing
+  // every truck would offer choices the backend rejects.
+  useEffect(() => {
+    axiosClient.get('/trucks/')
+      .then(({ data }) => setHubTrucks(
+        (data ?? []).filter((t: any) => t.is_hub).map((t: any) => ({ id: t.id, name: t.name })),
+      ))
+      .catch(() => setHubTrucks([]));
+  }, []);
 
   // On mount, check if a manifest is already in flight from another page/tool.
   useEffect(() => {
@@ -432,6 +447,9 @@ function ManifestUploadPanel({
       const form = new FormData();
       form.append('file', file);
       form.append('sort_date', uploadDate);
+      // Omitted entirely for a company manifest — the backend branches on the
+      // field being absent, not on an empty string.
+      if (hubTruckId) form.append('truck_id', hubTruckId);
       const { data } = await axiosClient.post('/sort/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -439,7 +457,17 @@ function ManifestUploadPanel({
       setWarnings(data.warnings ?? []);
       enrichStartRef.current = Date.now();
       setPhase('enriching');
-      startPolling(uploadDate);
+      // A HUB UPLOAD DOES NOT POLL. /sort/manifest/{date}/status reads the
+      // COMPANY key, so polling after a hub upload would report the company
+      // manifest's state — "ready" from an unrelated upload, or "not_found" —
+      // and neither describes the hub. The hub's packages are enriched in the
+      // background under their own scope and never feed a sort, so there is no
+      // sort-readiness to wait for (ADR-274 D7).
+      if (hubTruckId) {
+        setPhase('ready');
+      } else {
+        startPolling(uploadDate);
+      }
     } catch (err: unknown) {
       const detail = errorText(err, 'Upload failed.');
       setErrorMsg(typeof detail === 'string' ? detail : JSON.stringify(detail));
@@ -534,6 +562,27 @@ function ManifestUploadPanel({
                     className="input-field text-sm h-9 w-40"
                   />
                 </div>
+                {/* HUB SELECTOR (ADR-274 D7). Only rendered when a hub exists,
+                    so a company with none never sees a control that can only
+                    say "Company manifest". Defaults to the company manifest —
+                    a hub upload is the deliberate exception, not the norm. */}
+                {hubTrucks.length > 0 && (
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">
+                      Manifest for
+                    </label>
+                    <select
+                      value={hubTruckId}
+                      onChange={e => setHubTruckId(e.target.value)}
+                      className="input-field text-sm h-9 w-48"
+                    >
+                      <option value="">Company manifest (sorted)</option>
+                      {hubTrucks.map(t => (
+                        <option key={t.id} value={t.id}>{t.name} (hub only)</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Manifest file (CSV / XLSX)</label>
                   <input
