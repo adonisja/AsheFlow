@@ -1,29 +1,42 @@
-fastapi
-sqlalchemy
-uvicorn
-psycopg2-binary
-pydantic[email]
+# PINNED. Every version here is what the staging container actually runs
+# (`pip freeze`, 2026-08-16), so CI, staging and a local checkout resolve the
+# same tree.
+#
+# WHY: 16 of 25 lines used to be unpinned, so every CI run resolved whatever was
+# newest on PyPI that day. That produced three different SQLAlchemy versions at
+# once — CI on one, staging on 2.0.52, a local checkout on 2.0.49 — and a
+# green build could go red with no code change. It did: a UUID result processor
+# raised `'float' object has no attribute 'replace'` in CI only, at a line
+# number that did not exist in the local install.
+#
+# An unpinned dependency is a test you cannot re-run and a deploy you cannot
+# reproduce. Bump these deliberately, in their own commit, with the suite green.
+fastapi==0.141.1
+sqlalchemy==2.0.52
+uvicorn==0.52.3
+psycopg2-binary==2.9.12
+pydantic[email]==2.13.4
 pydantic-settings==2.2.1
 pyjwt==2.13.0
 cryptography==50.0.0
-alembic
-boto3
+alembic==1.19.1
+boto3==1.43.72
 redis[asyncio]==5.0.1
 aiohttp==3.14.3
 celery[redis]==5.3.6
 requests==2.33.0
 httpx==0.28.1
 slowapi==0.1.9
-pytest
-pytest-mock
-pytest-asyncio
-hypothesis
+pytest==9.1.1
+pytest-mock==3.15.1
+pytest-asyncio==1.4.0
+hypothesis==6.165.9
 
-openpyxl
-python-multipart
+openpyxl==3.1.5
+python-multipart==0.0.32
 
 # Geographic clustering — tier 1 tote verification + tier 2 walker routing
-scikit-learn
-scipy
-alphashape
-shapely
+scikit-learn==1.9.0
+scipy==1.18.0
+alphashape==1.3.1
+shapely==2.1.2
