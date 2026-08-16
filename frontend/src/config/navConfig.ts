@@ -75,10 +75,11 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/sort',                  label: 'Station Sort',      icon: Route,          roles: ['admin', 'dispatch', 'driver'] },
   { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
-  // /trainer-dashboard is a trainer's Dashboard landing (homeRouteForGroups),
-  // so it needs no separate tab for trainers. Kept as an admin tab only, since
-  // admin's Dashboard lands on /admin.
-  { path: '/trainer-dashboard',     label: 'Trainer Dash',      icon: ClipboardCheck, roles: ['admin'] },
+  // /trainer-dashboard has NO nav tab. It is a trainer's Dashboard landing
+  // (homeRouteForGroups), so trainers reach it without one; the admin tab was
+  // removed on request — admin oversight of training lives on /trainee-management,
+  // and a second entry point to a role-specific dashboard was noise.
+  // The ROUTE remains (App.tsx) so trainer landing and direct links still work.
   { path: '/walker-performance',    label: 'Walkers',           icon: Star,           roles: ['admin', 'management'] },
 ];
 
