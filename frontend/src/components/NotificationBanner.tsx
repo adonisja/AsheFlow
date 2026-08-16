@@ -63,12 +63,28 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
   };
 }
 
-/** Notification messages carry Discord-flavoured markdown (**bold**) because
- *  the same string is posted to a channel. The banner renders plain text, so
- *  the asterisks leak through as literal characters — "**Falcon**" was visible
- *  in the collapsed row's preview. Same implementation mobile already uses. */
+/** Notification messages carry Discord-flavoured markdown (**bold**) because the
+ *  same string is posted to a channel. Rendered as plain text the asterisks leak
+ *  through — "**Falcon**" was visible on screen. */
 function stripMarkdown(text: string): string {
   return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
+}
+
+/** RENDER the bold rather than strip it. The bolded span is always the thing
+ *  that matters — the truck name, the date — so flattening it throws away the
+ *  one bit of emphasis the message author encoded. Split on the delimiters and
+ *  emit <strong>; no markdown library for one rule.
+ *
+ *  Used for full message text. The collapsed preview still STRIPS, because a
+ *  one-line truncated summary should not carry weight changes. */
+function renderMessage(text: string): React.ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
+      <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    ),
+  );
 }
 
 type ResponseMap = Record<string, 'confirmed' | 'declined'>;
@@ -202,7 +218,7 @@ const NotificationBanner: React.FC = () => {
             >
               <div className="flex items-start gap-3">
                 {style.icon}
-                <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
+                <p className="flex-1 text-sm text-foreground">{renderMessage(n.message)}</p>
               </div>
 
               {response ? (
@@ -298,8 +314,12 @@ const NotificationBanner: React.FC = () => {
             </span>
           </button>
 
+          {/* Inset and separated, so the expanded items read as CONTENTS of the
+              group rather than siblings that escaped it. Without the divider
+              and the left inset the cards looked like they had broken out of
+              the container they belong to. */}
           {infoOpen && (
-            <div className="px-2 pb-2 space-y-1.5">
+            <div className="border-t border-border/60 bg-background/40 px-2 py-2 space-y-1.5">
               {info.map(n => (
                 <InfoCard key={n.id} n={n} onDismiss={dismiss} />
               ))}
@@ -323,7 +343,7 @@ const InfoCard: React.FC<{ n: Notification; onDismiss: (id: string) => void }> =
       className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
     >
       {style.icon}
-      <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
+      <p className="flex-1 text-sm text-foreground">{renderMessage(n.message)}</p>
       <button
         onClick={() => onDismiss(n.id)}
         className="text-muted-foreground hover:text-foreground transition-colors ml-2"

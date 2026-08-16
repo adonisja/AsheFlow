@@ -143,19 +143,29 @@ export default function HomeScreen() {
 
       // Confirmation status decides whether the window is still open; without
       // it an already-answered assignment would keep nagging.
-      let confirmationStatus: Record<string, any> = {};
-      try {
-        const conf = await apiClient.get(`/dispatch/${today}/my-confirmation`);
-        confirmationStatus = { [today]: conf.data?.status ?? null };
-      } catch {
-        // Unknown window -> isActionRequired treats it as open, which is the
-        // safe direction: better a badge that should not be there than a
-        // missed confirmation.
-      }
-      const { action } = partitionNotifications(
-        list.filter(n => !n.is_read),
-        { confirmationStatus },
-      );
+      //
+      // PER NOTIFICATION DATE, not just today. Fetching only `today` left every
+      // OTHER date unknown, and isActionRequired reads unknown as open — so two
+      // already-confirmed assignments for the 14th and 15th lit the badge on a
+      // day with no assignment at all ("NEEDS YOUR RESPONSE" above "No
+      // assignment today").
+      const unread = list.filter(n => !n.is_read);
+      const dates = [...new Set(
+        unread.filter(n => n.type === 'dispatch_assignment' && n.dispatch_date)
+              .map(n => n.dispatch_date as string),
+      )];
+      const confirmationStatus: Record<string, any> = {};
+      await Promise.all(dates.map(async d => {
+        try {
+          const conf = await apiClient.get(`/dispatch/${d}/my-confirmation`);
+          confirmationStatus[d] = conf.data?.status ?? null;
+        } catch {
+          // Leave unset -> treated as open. Safe direction: better a badge that
+          // should not be there than a missed confirmation.
+        }
+      }));
+
+      const { action } = partitionNotifications(unread, { confirmationStatus });
       setNeedsResponse(action.length > 0);
     } catch {
       setUnreadCount(0);
@@ -243,27 +253,22 @@ export default function HomeScreen() {
             backgroundColor: c.card,
             // An outstanding response outranks the role colour: the card's job
             // in that moment is to say "someone is waiting on you".
-            borderColor: needsResponse ? c.warning : truckName ? roleColor : c.border,
-            borderWidth: needsResponse ? 2 : 1,
+            // Gated on truckName: a warning border over "No assignment today"
+            // told the walker to respond to something that does not exist.
+            borderColor: needsResponse && truckName ? c.warning : truckName ? roleColor : c.border,
+            borderWidth: needsResponse && truckName ? 2 : 1,
           }]}
           onPress={() => navigation.navigate('TodayAssignment')}
           activeOpacity={0.75}
-          accessibilityLabel={needsResponse
+          accessibilityLabel={needsResponse && truckName
             ? 'Today\'s assignment — needs your response'
             : "Today's assignment"}
         >
           {/* Color accent stripe */}
           <View style={[s.assignStripe, {
-            backgroundColor: needsResponse ? c.warning : truckName ? roleColor : c.surfaceMuted,
+            backgroundColor: needsResponse && truckName ? c.warning
+              : truckName ? roleColor : c.surfaceMuted,
           }]} />
-
-          {/* ADR-275 D4 — the one piece of state the card never showed. It
-              already navigates to confirm/decline; this says why to tap. */}
-          {needsResponse && (
-            <View style={[s.needsResponsePill, { backgroundColor: c.warning }]}>
-              <Text style={s.needsResponseText}>NEEDS YOUR RESPONSE</Text>
-            </View>
-          )}
 
           <View style={s.assignBody}>
             {/* Icon + truck info */}
@@ -281,13 +286,25 @@ export default function HomeScreen() {
                   <>
                     <Text style={[s.assignEyebrow, { color: c.mutedForeground }]}>ASSIGNED TRUCK</Text>
                     <Text style={[s.assignTruck, { color: c.foreground }]}>{truckName}</Text>
-                    {myRole && (
-                      <View style={[s.rolePill, { backgroundColor: roleLight }]}>
-                        <Text style={[s.rolePillText, { color: roleColor }]}>
-                          {ROLE_LABELS[myRole] ?? myRole}
-                        </Text>
-                      </View>
-                    )}
+                    {/* ADR-275 D4 — inline with the truck it refers to, and in
+                        the SAME row as the role pill. Floating above the body it
+                        sat in dead space with nothing to attach to. */}
+                    <View style={s.assignPillRow}>
+                      {myRole && (
+                        <View style={[s.rolePill, { backgroundColor: roleLight }]}>
+                          <Text style={[s.rolePillText, { color: roleColor }]}>
+                            {ROLE_LABELS[myRole] ?? myRole}
+                          </Text>
+                        </View>
+                      )}
+                      {needsResponse && (
+                        <View style={[s.rolePill, { backgroundColor: c.warning }]}>
+                          <Text style={[s.rolePillText, { color: c.primaryForeground }]}>
+                            NEEDS YOUR RESPONSE
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                   </>
                 ) : (
                   <>
@@ -502,10 +519,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     marginBottom: spacing.xs,
     overflow: 'hidden',
   },
-  needsResponsePill: { alignSelf: 'flex-start', marginBottom: 6,
-                       paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
-  needsResponseText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.6,
-                       color: c.primaryForeground },
+  assignPillRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   notifStripe:   { height: 3 },
   notifInner:    { flexDirection: 'row', alignItems: 'center', padding: spacing.md, gap: spacing.sm },
   notifIconWell: { width: 48, height: 48, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
