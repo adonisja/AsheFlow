@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup"]
 )
 
 celery_app.conf.update(
@@ -83,6 +83,16 @@ celery_app.conf.beat_schedule = {
     "prune-notifications-nightly": {
         "task": "app.tasks.cleanup.prune_notifications",
         "schedule": crontab(hour=3, minute=15),
+    },
+    # 03:45 AM Eastern — roll yesterday's sort decisions into route_sort_daily
+    # (ADR-273). Each company rolls up ITS OWN yesterday, so completed-day-only
+    # holds across timezones. Runs BEFORE the 04:00 address nulling: the rollup
+    # reads DeliveryStop counts (never addresses), so the order is not a
+    # dependency — but keeping it earlier means a same-night manual backfill
+    # sees the day intact.
+    "roll-up-sort-metrics-nightly": {
+        "task": "app.tasks.sort_rollup.roll_up_sort_metrics",
+        "schedule": crontab(hour=3, minute=45),
     },
     # 04:00 AM Eastern — null delivery-row customer addresses older than
     # delivery_address_retention_hours (default 48h, ADR-219). Keeps block_key + counts.

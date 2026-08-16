@@ -146,6 +146,18 @@ class CompanyConfigResponse(BaseModel):
     scorecard_speeding_rate_target:   Optional[float] = None
     scorecard_signsignal_rate_target: Optional[float] = None
     scorecard_dvic_target:            Optional[float] = None
+    # Route-sort tuning (ADR-273). None = using the code default.
+    sort_w_dense:                     Optional[float] = None
+    sort_w_time:                      Optional[float] = None
+    sort_w_diff:                      Optional[float] = None
+    sort_w_doorman:                   Optional[float] = None
+    sort_walk_budget_m:               Optional[float] = None
+    sort_span_cap_m:                  Optional[float] = None
+    sort_max_consecutive_no_fit:      Optional[int]   = None
+    sort_f5_load_floor_hs:            Optional[int]   = None
+    sort_f5_max_hops:                 Optional[int]   = None
+    sort_f5_walk_radius_km:           Optional[float] = None
+    route_assembly_mode:              Optional[str]   = None
 
     model_config = {"from_attributes": True}
 
@@ -195,6 +207,17 @@ class CompanyConfigResponse(BaseModel):
             scorecard_speeding_rate_target=obj.scorecard_speeding_rate_target,
             scorecard_signsignal_rate_target=obj.scorecard_signsignal_rate_target,
             scorecard_dvic_target=obj.scorecard_dvic_target,
+            sort_w_dense=obj.sort_w_dense,
+            sort_w_time=obj.sort_w_time,
+            sort_w_diff=obj.sort_w_diff,
+            sort_w_doorman=obj.sort_w_doorman,
+            sort_walk_budget_m=obj.sort_walk_budget_m,
+            sort_span_cap_m=obj.sort_span_cap_m,
+            sort_max_consecutive_no_fit=obj.sort_max_consecutive_no_fit,
+            sort_f5_load_floor_hs=obj.sort_f5_load_floor_hs,
+            sort_f5_max_hops=obj.sort_f5_max_hops,
+            sort_f5_walk_radius_km=obj.sort_f5_walk_radius_km,
+            route_assembly_mode=obj.route_assembly_mode,
         )
 
 
@@ -561,7 +584,18 @@ def bootstrap_company_admin(
 # ---------------------------------------------------------------------------
 
 # Fields only super_admin may touch
-_SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"})
+# ADR-273: route-sort tuning is super-admin only. These change how routes are
+# built for the entire tenant, and the telemetry that says which one to move is
+# only readable at that level — a company admin can see their routes, not the
+# cross-run series that justifies a weight change.
+_SORT_TUNING_FIELDS = frozenset({
+    "sort_w_dense", "sort_w_time", "sort_w_diff", "sort_w_doorman",
+    "sort_walk_budget_m", "sort_span_cap_m", "sort_max_consecutive_no_fit",
+    "sort_f5_load_floor_hs", "sort_f5_max_hops", "sort_f5_walk_radius_km",
+    "route_assembly_mode",
+})
+
+_SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"}) | _SORT_TUNING_FIELDS
 
 # All editable config fields with their types (used for validation messaging)
 _TIME_FIELDS = frozenset({"shift_start", "shift_end", "checkin_open", "checkin_close", "dispatch_confirmation_cutoff"})
@@ -627,6 +661,44 @@ class CompanyConfigUpdate(BaseModel):
     # Manifest ingestion
     ingestion_mode:                  Optional[str]   = None
 
+    # Route-sort tuning (ADR-273). Super-admin only — these change how routes
+    # are built for the whole tenant, and the telemetry that tells you which one
+    # to move is only readable at that level. Bounded per Dimension 9: every one
+    # is attacker-controlled input that feeds a hot algorithm loop.
+    #
+    # Weights: 0–5 is generous. The invariant that matters (W_TIME/W_DIFF above
+    # W_DENSE, so a KNOWN urgent block outranks the densest unknown-easy one) is
+    # not expressible as a per-field bound — it is validated below.
+    sort_w_dense:                    Optional[float] = Field(None, ge=0.0, le=5.0)
+    sort_w_time:                     Optional[float] = Field(None, ge=0.0, le=5.0)
+    sort_w_diff:                     Optional[float] = Field(None, ge=0.0, le=5.0)
+    sort_w_doorman:                  Optional[float] = Field(None, ge=0.0, le=5.0)
+    # Traversal guards. Floors are non-zero: a 0 m budget would close every
+    # route after its seed block.
+    sort_walk_budget_m:              Optional[float] = Field(None, ge=100.0, le=10000.0)
+    sort_span_cap_m:                 Optional[float] = Field(None, ge=100.0, le=10000.0)
+    sort_max_consecutive_no_fit:     Optional[int]   = Field(None, ge=1, le=20)
+    # F5 thin-block consolidation. load_floor is in HALF-slots (6 ≈ 3 totes).
+    sort_f5_load_floor_hs:           Optional[int]   = Field(None, ge=0, le=40)
+    sort_f5_max_hops:                Optional[int]   = Field(None, ge=1, le=6)
+    sort_f5_walk_radius_km:          Optional[float] = Field(None, ge=0.1, le=5.0)
+    # Route assembly mode (ADR-272): "block_completion" | "group_first".
+    # max_length in addition to the enum validator below: bounding the field is
+    # what stops an oversized string reaching the validator at all (Dimension 9).
+    route_assembly_mode:             Optional[str]   = Field(None, max_length=20)
+
+    @field_validator("route_assembly_mode")
+    @classmethod
+    def _valid_assembly_mode(cls, v):
+        if v is None:
+            return v
+        from app.services.sort_tuning import VALID_ASSEMBLY_MODES
+        if v not in VALID_ASSEMBLY_MODES:
+            raise ValueError(
+                f"route_assembly_mode must be one of {sorted(VALID_ASSEMBLY_MODES)}"
+            )
+        return v
+
     # Amazon scorecard tier targets (ADR-262). Bounded per Dimension 9 — these
     # are attacker-controlled input. Percentages 0–100; DPMO 0–1,000,000 (a
     # defect rate cannot exceed one million per million); FICO on its real
@@ -661,6 +733,31 @@ def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, al
         if field in _TIME_FIELDS and value is not None:
             value = _parse_time(value, field)
         setattr(config, field, value)
+
+    # ADR-273: the seed-priority invariant is a RELATIONSHIP between weights, so
+    # it cannot be expressed as a per-field bound and has to be checked on the
+    # merged state (a PATCH may set only one of them).
+    #
+    # ADR-186 D3: W_TIME and W_DIFF sit ABOVE W_DENSE so a KNOWN urgent or hard
+    # block outranks the densest unknown-easy one. Invert that and a block with a
+    # cutoff 20 minutes away loses to whichever block happens to hold the most
+    # totes — the failure ADR-189 called out as needing structure, not weights.
+    from app.services.sort_tuning import (
+        DEFAULT_W_DENSE, DEFAULT_W_TIME, DEFAULT_W_DIFF,
+    )
+    if any(f in data for f in ("sort_w_dense", "sort_w_time", "sort_w_diff")):
+        w_dense = config.sort_w_dense if config.sort_w_dense is not None else DEFAULT_W_DENSE
+        w_time  = config.sort_w_time  if config.sort_w_time  is not None else DEFAULT_W_TIME
+        w_diff  = config.sort_w_diff  if config.sort_w_diff  is not None else DEFAULT_W_DIFF
+        if w_time < w_dense or w_diff < w_dense:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "sort_w_time and sort_w_diff must each be >= sort_w_dense, so a "
+                    "known-urgent or known-hard block still outranks the densest "
+                    "unknown-easy one (ADR-186 D3)."
+                ),
+            )
 
     if not config.is_configured:
         all_set = all(getattr(config, f) is not None for f in _REQUIRED_FIELDS)

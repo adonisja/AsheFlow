@@ -79,6 +79,27 @@ class Route(Base):
     # Wave tracking — 1 = initial sort assignment; 2+ = post-return reassignment (ADR-139)
     wave_number           = Column(Integer(), nullable=False, default=1)
 
+    # ── Sort-decision telemetry (ADR-273) ────────────────────────────────────
+    # WHY the route looks the way it does, not just what it contains. All
+    # nullable: rows predating the columns, and any path that builds a Route
+    # outside the sort (wave reassignment, emergency split), leave them null.
+    #
+    # closed_reason is the highest-value field here: ADR-272's whole diagnosis
+    # is that routes close for the WRONG reason (capacity consumed by a
+    # neighbour while the seed block still had totes), and without this column
+    # that is invisible in production.
+    seed_block_key        = Column(String(100), nullable=True)
+    # Blocks the traversal WALKED (ADR-235 walked_blocks) — always >= the count
+    # of blocks it collected from, so drift across skipped blocks is observable.
+    blocks_walked         = Column(Integer(), nullable=True)
+    # capacity | no_adjacent_fit | group_complete | no_fit_streak |
+    # walk_budget | span_cap | forced_single
+    closed_reason         = Column(String(30), nullable=True)
+    # The decision record this route came from. No FK: RouteSortRun outlives the
+    # Route (re-sort deletes routes, never runs), so a FK would either block the
+    # delete or cascade away the telemetry we are keeping.
+    sort_run_id           = Column(UUID(as_uuid=True), nullable=True, index=True)
+
     # Status lifecycle
     status                = Column(String(20), nullable=False, default="unassigned")  # unassigned|assigned|in_progress|completed
     departed_at           = Column(DateTime(timezone=True), nullable=True)

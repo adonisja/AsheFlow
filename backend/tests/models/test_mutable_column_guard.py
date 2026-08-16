@@ -44,6 +44,18 @@ REASSIGN_ONLY = {
     # seed data as a unit, so there is no in-place-mutation path to lose.
     "TrainingCurriculum.roles":             "seed-managed; assigned as a whole list",
 
+    # ADR-273 sort telemetry. Every one of these is a histogram computed in a
+    # single pass (compute_sort_metrics / roll_up_company_day) and assigned as a
+    # whole dict. RouteSortRun is append-only by design — a re-sort writes a new
+    # row rather than editing one — so its columns have no mutation path at all.
+    # RouteSortDaily is refreshed by re-running the rollup for a date, which
+    # likewise reassigns the whole dict.
+    "RouteSortRun.block_group_sizes":       "computed once per run; run rows are never edited",
+    "RouteSortRun.blocks_per_route_hist":   "computed once per run; run rows are never edited",
+    "RouteSortRun.closed_reason_hist":      "computed once per run; run rows are never edited",
+    "RouteSortDaily.blocks_per_route_hist": "assigned wholesale by the nightly rollup",
+    "RouteSortDaily.by_effort_class":       "assigned wholesale by the nightly rollup",
+
     # Write-once payload snapshots — captured at creation, never edited.
     "ADPTimeCard.raw_payload":              "immutable API capture",
     "TimeCardAdjustment.adp_response_payload": "immutable API capture",

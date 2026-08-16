@@ -124,6 +124,41 @@ class CompanyConfig(Base):
     scorecard_signsignal_rate_target = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 15.0)
     scorecard_dvic_target            = Column(Float,   nullable=True)  # %, higher better (e.g. 95.0)
 
+    # ── Route-sort tuning (ADR-273) ───────────────────────────────────────────
+    # These were hardcoded module constants in route_sort.py. Telemetry
+    # (route_sort_runs / route_sort_daily) exists to tell an operator WHICH of
+    # them to move, so they have to be movable without a deploy.
+    #
+    # ALL NULLABLE, and null means "use the code default" — deliberately NOT in
+    # _REQUIRED_FIELDS. A null in that tuple 503s the entire tenant (see the
+    # scorecard-target comment above), and a tenant that has never opened this
+    # page must keep sorting on the defaults. Every read site resolves via
+    # `cfg.x if cfg and cfg.x is not None else DEFAULT`.
+    #
+    # Seed priority (ADR-186 D3): W_TIME/W_DIFF sit above W_DENSE so a KNOWN
+    # urgent/hard block outranks the densest unknown-easy one.
+    sort_w_dense              = Column(Float(), nullable=True)   # default 1.0
+    sort_w_time               = Column(Float(), nullable=True)   # default 1.5
+    sort_w_diff               = Column(Float(), nullable=True)   # default 1.3
+    sort_w_doorman            = Column(Float(), nullable=True)   # default 0.5 (subtracted)
+
+    # Traversal guards (ADR-235). Both are inert when block centroids are
+    # missing (_centroid_gap_m returns 0.0), so raising them cannot rescue a
+    # coordinate-less run — see ADR-272 "Bug 3".
+    sort_walk_budget_m        = Column(Float(), nullable=True)   # default 900.0
+    sort_span_cap_m           = Column(Float(), nullable=True)   # default 700.0
+    sort_max_consecutive_no_fit = Column(Integer(), nullable=True)  # default 2
+
+    # F5 thin-block consolidation (ADR-197, reworked ADR-234). Retained under
+    # ADR-272 but expected to fire far less once group-first lands.
+    sort_f5_load_floor_hs     = Column(Integer(), nullable=True)  # default 6
+    sort_f5_max_hops          = Column(Integer(), nullable=True)  # default 2
+    sort_f5_walk_radius_km    = Column(Float(), nullable=True)    # default 0.8
+
+    # Route assembly mode (ADR-272). Default null -> "block_completion".
+    # "group_first" enables the ADR-272 branch. This is the switch Phase 3 flips.
+    route_assembly_mode       = Column(String(20), nullable=True)
+
     # ── Manifest ingestion mode ───────────────────────────────────────────────
     ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
 
