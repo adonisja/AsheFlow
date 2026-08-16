@@ -21,6 +21,11 @@ export interface Truck {
   id: string;
   name: string;
   is_active: boolean;
+  /** A hub truck (ADR-274): excluded from run_dispatch and staffed by hand for
+   *  intra-day assembly. Independent of is_active — a hub is an active truck
+   *  that is simply not auto-assignable. Its Discord room is the same
+   *  discord_channel_id every other truck uses. */
+  is_hub?: boolean;
   discord_channel_id?: string | null;
   initial_anchor_lat?: number | null;
   initial_anchor_lng?: number | null;
@@ -178,7 +183,15 @@ export interface DispatchWarning {
 export interface DispatchResult {
   date: string;
   assigned_crews: Record<string, CrewMember[]>;
-  truck_assignments?: { truck_id: string; status: string }[];
+  truck_assignments?: {
+    truck_id: string;
+    status: string;
+    /** TruckAssignment id — mobile AP Sort / My Route resolve the truck with it. */
+    assignment_id?: string;
+    /** From the TRUCK, not derived from status (ADR-274). The old client-side
+     *  derivation (`status === 'planned'`) matched every truck before publish. */
+    is_hub?: boolean;
+  }[];
   workflow_status?: 'dispatched' | 'published' | 'finalized';
   warnings: DispatchWarning[];
 }

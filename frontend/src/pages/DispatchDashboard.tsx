@@ -902,11 +902,15 @@ function CurrentAssignments() {
     };
   }, [dispatchData, confirmations, trucks, workflowStep]);
 
-  // Hub trucks = assignments in 'planned' status while the overall workflow is published/finalized.
-  // These were created via "+ Add Hub" and haven't had Publish Hub called yet.
+  // Hub trucks come from the TRUCK, not from a status (ADR-274).
+  //
+  // This used to filter `status === 'planned'` with no workflow-phase term, and
+  // before publish EVERY assignment is 'planned' — so every card showed a
+  // "Publish Hub" button instead of "Publish Crew". Hub-ness is a property of
+  // the truck; the backend now sends it as one.
   const hubTruckIds: Set<string> = new Set(
     (dispatchData?.truck_assignments || [])
-      .filter((a: any) => a.status === 'planned')
+      .filter((a: any) => a.is_hub)
       .map((a: any) => a.truck_id)
   );
 
@@ -1724,26 +1728,42 @@ function CurrentAssignments() {
               </button>
             </div>
             <p className="text-xs text-subtle">
-              Create an empty truck assignment for hub operations. After creation, drag staff from the unassigned panel onto the hub truck, then click <strong>Publish Hub</strong> to notify them.
+              Create today's assignment for a hub truck. Hub crew is never assigned
+              automatically — drag staff from the unassigned panel onto the hub, then
+              click <strong>Publish Hub</strong> to notify them.
             </p>
             <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Select Truck</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">Select Hub</label>
               <select
                 value={hubModalTruckId}
                 onChange={e => setHubModalTruckId(e.target.value)}
                 className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
               >
-                <option value="">Choose a truck…</option>
+                <option value="">Choose a hub…</option>
+                {/* HUB TRUCKS ONLY (ADR-274). This offered every truck, so a hub
+                    could be created on a delivery truck — which is what made
+                    "hub" a state rather than a thing. */}
                 {Object.entries(trucks)
-                  .filter(([id]) => !assignedTruckIds.has(id))
+                  .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
                   .map(([id, t]: [string, any]) => (
                     <option key={id} value={id}>{t.name}</option>
                   ))
                 }
               </select>
-              {Object.keys(trucks).length > 0 && Object.keys(trucks).every(id => assignedTruckIds.has(id)) && (
-                <p className="text-xs text-warning mt-1">All trucks already have assignments for this date.</p>
-              )}
+              {/* Three distinct states, because "no options" has three causes and
+                  a silently empty dropdown explains none of them. */}
+              {Object.values(trucks).every((t: any) => !t.is_hub) ? (
+                <p className="text-xs text-warning mt-1">
+                  No hub trucks configured. Create one on the Trucks page with
+                  “Hub truck” ticked, and set its Discord channel there.
+                </p>
+              ) : Object.entries(trucks)
+                    .filter(([, t]: [string, any]) => t.is_hub)
+                    .every(([id]) => assignedTruckIds.has(id)) ? (
+                <p className="text-xs text-warning mt-1">
+                  Every hub already has an assignment for this date.
+                </p>
+              ) : null}
             </div>
             <div className="flex gap-2 pt-1">
               <button onClick={() => setShowHubModal(false)} className="btn-ghost flex-1 text-sm py-2">Cancel</button>

@@ -58,6 +58,7 @@ type TruckRecord = {
   name: string;
   is_active: boolean;
   discord_channel_id: string | null;
+  is_hub?: boolean;
   initial_anchor_address: string | null;
   initial_anchor_display_address: string | null;
   initial_anchor_lat: number | null;
@@ -428,7 +429,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
 
 type TruckModalProps = {
   initial?: Partial<TruckRecord>;
-  onSave: (data: { name: string; discord_channel_id: string | null }) => Promise<void>;
+  onSave: (data: { name: string; is_hub: boolean; discord_channel_id: string | null }) => Promise<void>;
   onClose: () => void;
   isCreate: boolean;
 };
@@ -438,6 +439,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
   const [channelId, setChannelId] = useState(
     initial.discord_channel_id ? String(initial.discord_channel_id) : ''
   );
+  const [isHub, setIsHub] = useState(Boolean(initial.is_hub));
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState('');
 
@@ -451,6 +453,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
     try {
       await onSave({
         name,
+        is_hub: isHub,
         // Send as string — Discord snowflake IDs exceed Number.MAX_SAFE_INTEGER.
         // Backend TruckUpdate accepts Optional[int] and Pydantic coerces string → int.
         discord_channel_id: channelId.trim() || null,
@@ -519,6 +522,26 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
               </p>
             )}
           </div>
+
+          {/* HUB TOGGLE (ADR-274). Sits under the Discord field deliberately: a
+              hub's Discord room IS the channel above, so the two read as one
+              setup step and there is no separate "hub room" config to find. */}
+          <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border
+                            border-border bg-accent/20 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={isHub}
+              onChange={e => setIsHub(e.target.checked)}
+              className="mt-0.5 accent-primary w-4 h-4 shrink-0"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-foreground">Hub truck</span>
+              <span className="block text-xs text-muted-foreground mt-0.5">
+                Never receives crew from dispatch — staff are placed by hand for
+                intra-day assembly. Crew notifications post to the Discord channel above.
+              </span>
+            </span>
+          </label>
 
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="btn-ghost px-4">Cancel</button>
@@ -1443,15 +1466,26 @@ function TruckCard({
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-foreground truncate">{truck.name}</p>
-          <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full mt-1 ${
-            truck.is_active
-              ? 'bg-success/10 text-success'
-              : 'bg-accent text-muted-foreground'
-          }`}>
-            {truck.is_active
-              ? <><CheckCircle2 className="w-3 h-3" /> Active</>
-              : 'Inactive'}
-          </span>
+          <div className="flex items-center gap-1.5 flex-wrap mt-1">
+            <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full ${
+              truck.is_active
+                ? 'bg-success/10 text-success'
+                : 'bg-accent text-muted-foreground'
+            }`}>
+              {truck.is_active
+                ? <><CheckCircle2 className="w-3 h-3" /> Active</>
+                : 'Inactive'}
+            </span>
+            {/* A hub reads differently from a delivery truck at a glance, so the
+                admin can see WHY it never appears in a dispatch (ADR-274).
+                Separate from Active: a hub is active AND a hub. */}
+            {truck.is_hub && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium
+                               px-2 py-0.5 rounded-full bg-info/10 text-info">
+                Hub
+              </span>
+            )}
+          </div>
         </div>
         <button
           onClick={onEdit}
@@ -1565,13 +1599,13 @@ function FleetTab() {
 
   useEffect(() => { load(); }, []);
 
-  const handleCreate = async (data: { name: string; discord_channel_id: string | null }) => {
+  const handleCreate = async (data: { name: string; is_hub: boolean; discord_channel_id: string | null }) => {
     const res = await axiosClient.post('/trucks/', data);
     setTrucks(prev => [...prev, res.data]);
     setShowModal(false);
   };
 
-  const handleEdit = async (data: { name: string; discord_channel_id: string | null }) => {
+  const handleEdit = async (data: { name: string; is_hub: boolean; discord_channel_id: string | null }) => {
     if (!editTarget) return;
     const res = await axiosClient.put(`/trucks/${editTarget.id}`, data);
     setTrucks(prev => prev.map(t => t.id === editTarget.id ? res.data : t));
