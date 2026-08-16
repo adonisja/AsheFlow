@@ -2023,8 +2023,15 @@ function TruckPicker({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // HUBS ARE NOT DISPATCHABLE (ADR-274 D2). run_dispatch excludes them and the
+  // assign endpoint rejects them, so offering one here only produced "One or
+  // more selected trucks are not available for your company" and blocked the
+  // whole run — the backend was fixed without the picker being fixed with it.
+  //
+  // A hub gets its day through "+ Add Hub", which creates the assignment
+  // directly; crew is then dragged on by hand.
   const active = Object.values(trucks)
-    .filter((t: any) => t.is_active !== false)
+    .filter((t: any) => t.is_active !== false && !t.is_hub)
     .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
   const allIds = active.map((t: any) => t.id);
 
