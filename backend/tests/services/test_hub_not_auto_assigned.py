@@ -79,3 +79,24 @@ class TestHubIsAColumnNotAStatus:
             "GET /dispatch/{date} must send is_hub per truck assignment "
             "(ADR-274) — deriving it client-side is the bug this replaced"
         )
+
+
+class TestCreateHubRejectsNonHubTrucks:
+    """The UI offers hub trucks only, but the ENDPOINT is the boundary.
+
+    Without this guard a direct caller could create a hub assignment on a
+    delivery truck — reintroducing "hub is a state some truck is in", which is
+    the thing ADR-274 removed.
+    """
+
+    def test_create_hub_checks_is_hub(self):
+        src = _src("app/routers/dispatch.py")
+        assert "if not truck.is_hub:" in src, (
+            "POST /dispatch/hubs must reject a truck that is not a hub"
+        )
+
+    def test_rejection_names_the_fix(self):
+        # An error that says only "invalid" leaves the dispatcher stuck; this
+        # one points at the Trucks page.
+        src = _src("app/routers/dispatch.py")
+        assert "is not a hub truck" in src and "Trucks" in src
