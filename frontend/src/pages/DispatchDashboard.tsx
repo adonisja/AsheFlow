@@ -1333,17 +1333,22 @@ function CurrentAssignments() {
               <Truck className="w-5 h-5 text-primary" />
               Assignments for {selectedDate}
             </h2>
-            {workflowStep !== 'none' && (
-              <button
-                onClick={() => { setShowHubModal(true); setHubModalTruckId(''); }}
-                disabled={isLoading}
-                className="flex items-center gap-1.5 text-sm font-medium bg-muted text-foreground hover:bg-muted/80 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-border"
-                title="Create an empty hub truck assignment"
-              >
-                <Plus className="w-4 h-4" />
-                Add Hub
-              </button>
-            )}
+            {/* ALWAYS AVAILABLE (ADR-274). This was gated on
+                `workflowStep !== 'none'`, i.e. only after dispatch had run —
+                which fit ADR-125, where a hub was an intra-day addition to a
+                RUNNING dispatch. Under ADR-274 a hub is its own truck that
+                never joins dispatch at all, so on a fresh day the only control
+                for creating one was invisible. A hub day should be creatable
+                before, during or after the main dispatch. */}
+            <button
+              onClick={() => { setShowHubModal(true); setHubModalTruckId(''); }}
+              disabled={isLoading}
+              className="flex items-center gap-1.5 text-sm font-medium bg-muted text-foreground hover:bg-muted/80 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-border"
+              title="Create a hub truck assignment for this date"
+            >
+              <Plus className="w-4 h-4" />
+              Add Hub
+            </button>
           </div>
 
           {!dispatchData ? (
