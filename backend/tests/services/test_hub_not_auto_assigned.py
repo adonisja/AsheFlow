@@ -219,3 +219,69 @@ class TestHubRemoval:
     def test_writes_an_audit_row(self):
         src = self._source()
         assert "write_audit" in src and "dispatch.hub_removed" in src
+
+
+class TestHubManifestBecomesRoutes:
+    """ADR-274 D7 — a hub's own manifest reaches its crew (commit_sort).
+
+    A hub never runs the station sort, so no TruckZone exists to supply TBAs.
+    Its manifest IS the TBA list. Everything after that point is the SAME code
+    a regular truck uses — same splitting, same ordering, same Route rows — so
+    the hub crew gets the same My Route screen.
+    """
+
+    def _commit_source(self) -> str:
+        import inspect
+        from app.routers import walker_routes
+        return inspect.getsource(walker_routes.commit_sort)
+
+    def test_hub_takes_tbas_from_its_own_manifest_not_a_zone(self):
+        src = self._commit_source()
+        assert "#hub:" in src and "is_hub" in src, (
+            "commit_sort must source a hub's TBAs from its namespaced manifest "
+            "scope — a hub has no TruckZone and never will"
+        )
+
+    def test_non_hub_still_requires_a_zone(self):
+        # The hub path must be a BRANCH, not a replacement: a regular truck
+        # committing without a zone is still an error.
+        src = self._commit_source()
+        assert "No active TruckZone found" in src
+
+    def test_hub_error_names_the_fix(self):
+        src = self._commit_source()
+        assert "No hub manifest for" in src and "Manifest for" in src
+
+
+class TestBagFieldsSurviveCommitSort:
+    """Two bugs found while wiring the hub — BOTH on the normal path.
+
+    The operator caught the framing: a hub manifest has the same structure as a
+    regular one ("their contents are simply kept separate"), so anything that
+    breaks for a hub breaks for every truck.
+    """
+
+    def _commit_source(self) -> str:
+        import inspect
+        from app.routers import walker_routes
+        return inspect.getsource(walker_routes.commit_sort)
+
+    def test_bag_id_none_does_not_reach_pydantic(self):
+        # enrich_manifest ALWAYS writes the bag_id key, setting it to None when
+        # the row had no resolvable bag label. `.get("bag_id", "")` therefore
+        # returns None — the default never fires — and PackageInput(bag_id: str)
+        # rejects it. One unlabelled package 422'd the whole commit.
+        src = self._commit_source()
+        assert 'pkg.get("bag_id") or ""' in src, (
+            'bag_id must use `or ""`, not a .get default — the key is always '
+            "present and its VALUE is None"
+        )
+        assert 'pkg.get("bag_id", "")' not in src
+
+    def test_bag_color_is_passed_through(self):
+        # ADR-230: parsed by the ingestor, cached by enrichment, accepted by
+        # PackageInput, consumed by route_sort — and dropped at this one hop,
+        # so every bag rendered neutral.
+        src = self._commit_source()
+        assert 'bag_color           = pkg.get("bag_color")' in src or \
+               'bag_color' in src, "the ADR-230 bag colour must reach route_sort"
