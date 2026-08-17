@@ -1,4 +1,9 @@
-"""The ONLY module in AsheFlow that reads Building Library tables (ADR-237 D1).
+"""The ONLY module in AsheFlow that reads PlaceType building tables (ADR-237 D1).
+
+The Library is named **PlaceType** (ADR-237 D6): one product, two datasets —
+building intelligence (this client) and street topology (`services/segment_map`).
+The package is still `app.library` on purpose; renaming an internal module ahead
+of the physical split (D3) would churn imports for no boundary gain.
 
 WHY THIS EXISTS
 ---------------
