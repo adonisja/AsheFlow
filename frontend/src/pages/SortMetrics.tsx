@@ -130,7 +130,7 @@ export default function SortMetrics() {
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2">
-          <RouteIcon className="w-5 h-5 text-violet-500" />
+          <RouteIcon className="w-5 h-5 text-brand" />
           <h1 className="text-lg font-semibold text-foreground">Sort Metrics</h1>
         </div>
         <div className="flex items-center gap-2">
@@ -141,7 +141,7 @@ export default function SortMetrics() {
                 onClick={() => setWindowDays(w.days)}
                 className={`px-3 py-1.5 text-sm transition-colors ${
                   windowDays === w.days
-                    ? 'bg-violet-500 text-white'
+                    ? 'bg-brand text-brand-foreground'
                     : 'bg-background text-muted-foreground hover:text-foreground'
                 }`}
               >
@@ -173,8 +173,8 @@ export default function SortMetrics() {
       )}
 
       {thin && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 flex gap-2.5">
-          <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+        <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 flex gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
           <div className="text-xs text-foreground/90 leading-relaxed">
             <span className="font-semibold">Small sample — {truckDays} truck-days.</span>{' '}
             Read these as individual days, not as a trend. Sorts run every other day or so
@@ -185,7 +185,7 @@ export default function SortMetrics() {
 
       {mixedVersions && (
         <div className="rounded-xl border border-border bg-accent/30 px-4 py-3 flex gap-2.5">
-          <Info className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+          <Info className="w-4 h-4 text-brand shrink-0 mt-0.5" />
           <div className="text-xs text-foreground/90 leading-relaxed">
             <span className="font-semibold">This window spans more than one algorithm.</span>{' '}
             {versions.map(([v, n]) => `${v} (${n} truck-days)`).join(', ')}. Compare within a
@@ -259,7 +259,7 @@ export default function SortMetrics() {
 function Stat({ label, value, sub, tone }: {
   label: string; value: string; sub?: string; tone?: 'good' | 'warn';
 }) {
-  const color = tone === 'warn' ? 'text-amber-500' : tone === 'good' ? 'text-emerald-500' : 'text-foreground';
+  const color = tone === 'warn' ? 'text-warning' : tone === 'good' ? 'text-success' : 'text-foreground';
   return (
     <div className="bg-accent/40 rounded-xl p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
@@ -293,7 +293,7 @@ function BlocksPerRouteBar({ hist }: { hist: Record<string, number> }) {
             <span className="w-6 text-xs text-muted-foreground font-mono text-right">{blocks}</span>
             <div className="flex-1 bg-accent/40 rounded h-4 overflow-hidden">
               <div
-                className={`h-full ${Number(blocks) <= 2 ? 'bg-emerald-500/70' : 'bg-amber-500/70'}`}
+                className={`h-full ${Number(blocks) <= 2 ? 'bg-success/70' : 'bg-warning/70'}`}
                 style={{ width: `${(100 * n) / total}%` }}
               />
             </div>
@@ -313,7 +313,7 @@ function Td({ children, right, tone }: {
   children: React.ReactNode; right?: boolean; tone?: 'warn';
 }) {
   return (
-    <td className={`px-3 py-2 ${right ? 'text-right font-mono' : ''} ${tone === 'warn' ? 'text-amber-500 font-semibold' : 'text-foreground'}`}>
+    <td className={`px-3 py-2 ${right ? 'text-right font-mono' : ''} ${tone === 'warn' ? 'text-warning font-semibold' : 'text-foreground'}`}>
       {children}
     </td>
   );

@@ -664,7 +664,7 @@ function ConfigEditorCard({
                   {editing ? (
                     f.type === 'select' ? (
                       <select
-                        className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-violet-500"
+                        className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand"
                         value={draft[String(f.key)] ?? ''}
                         onChange={e => setDraft(prev => ({ ...prev, [String(f.key)]: e.target.value }))}
                       >
