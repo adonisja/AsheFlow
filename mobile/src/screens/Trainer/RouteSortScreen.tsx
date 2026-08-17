@@ -148,6 +148,9 @@ export default function RouteSortScreen() {
   const [taId,       setTaId]       = useState<string | null>(null);
   const [truckName,  setTruckName]  = useState<string>('');
   const [zoned,      setZoned]      = useState(false);
+  /* ADR-274 D9 — a hub's packages come from its OWN manifest, never the station
+     sort. Same readiness flag, different evidence, so only the copy changes. */
+  const [isHub,      setIsHub]      = useState(false);
   const [zonePkgs,   setZonePkgs]   = useState(0);
   const [crew,       setCrew]       = useState<CrewMember[]>([]);
   const [members,    setMembers]    = useState<AssignmentMemberRow[]>([]);   // ADR-197 crew-status rows
@@ -238,6 +241,7 @@ export default function RouteSortScreen() {
       if (zoneRes.status === 'fulfilled') {
         const mine = (zoneRes.value.data?.trucks ?? []).find((t: any) => t.truck_id === myTruckId);
         setZoned(!!mine?.zoned);
+        setIsHub(!!mine?.is_hub);
         setZonePkgs(mine?.package_count ?? 0);
         setTruckName(mine?.truck_name ?? '');
       }
@@ -738,7 +742,11 @@ export default function RouteSortScreen() {
           {zoned ? (
             <>
               <Text style={s.cardTitle}>Ready to sort</Text>
-              <Text style={s.cardSub}>{zonePkgs} packages zoned to this truck by station sort.</Text>
+              <Text style={s.cardSub}>
+                {isHub
+                  ? `${zonePkgs} packages on this hub's manifest.`
+                  : `${zonePkgs} packages zoned to this truck by station sort.`}
+              </Text>
               <TouchableOpacity style={[s.primaryBtn, { backgroundColor: c.primary }]} onPress={commitSort} disabled={committing}>
                 {committing
                   ? <ActivityIndicator color={c.primaryForeground} />
@@ -747,8 +755,14 @@ export default function RouteSortScreen() {
             </>
           ) : (
             <>
-              <Text style={s.cardTitle}>Waiting on station sort</Text>
-              <Text style={s.cardSub}>This truck has no zoned packages yet — check back after the station finishes sorting.</Text>
+              <Text style={s.cardTitle}>
+                {isHub ? 'Waiting on the hub manifest' : 'Waiting on station sort'}
+              </Text>
+              <Text style={s.cardSub}>
+                {isHub
+                  ? 'No manifest uploaded for this hub yet. Dispatch uploads it on the Sort page.'
+                  : 'This truck has no zoned packages yet — check back after the station finishes sorting.'}
+              </Text>
             </>
           )}
         </View>

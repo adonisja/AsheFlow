@@ -915,6 +915,7 @@ function TruckSortPanel({
   trainers,
   routeDate,
   zoneExists,
+  isHub,
   onCommit,
   onDistribute,
   onArrivalConfirm,
@@ -926,6 +927,9 @@ function TruckSortPanel({
   trainers: Employee[];
   routeDate: string;
   zoneExists: boolean;
+  /* ADR-274 D9 — a hub's packages come from its OWN manifest, never the
+     station sort. Readiness is the same flag; only the copy differs. */
+  isHub: boolean;
   onCommit: (taId: string) => Promise<void>;
   onDistribute: (taId: string, assignments: WaveAssignmentEntry[], trainerId: string, traineeId?: string, traineePhase?: number) => Promise<void>;
   onArrivalConfirm: (taId: string, trainerId: string, traineeId: string) => Promise<void>;
@@ -1195,7 +1199,9 @@ function TruckSortPanel({
                 ) : (
                   <div className="flex items-center gap-2 p-3 rounded-xl bg-accent/40 border border-border text-xs text-muted-foreground">
                     <Layers className="w-3.5 h-3.5 shrink-0" />
-                    Run Zone Assignment on Station Sort first to assign packages to this truck.
+                    {isHub
+                      ? 'Upload this hub\u2019s manifest on Station Sort first \u2014 a hub carries its own packages and is never fed by the truck sort.'
+                      : 'Run Zone Assignment on Station Sort first to assign packages to this truck.'}
                   </div>
                 )
               ) : (
@@ -1536,6 +1542,7 @@ export default function WalkerSortMonitor() {
   const [walkers, setWalkers]           = useState<Employee[]>([]);
   const [trainers, setTrainers]         = useState<Employee[]>([]);
   const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
+  const [hubTruckIds,   setHubTruckIds]   = useState<Set<string>>(new Set());
   const [scopedTruckIds, setScopedTruckIds] = useState<Set<string>>(new Set());  // ADR-185: driver's own truck(s)
   const [stationInfo, setStationInfo]   = useState<Map<string, StationTruckInfo>>(new Map());
   const [loading, setLoading]           = useState(true);
@@ -1579,7 +1586,7 @@ export default function WalkerSortMonitor() {
     // zone-status (ADR-185) replaces the dispatch-only /sort/{date} zones call so
     // a driver's page can read its own truck's zoned state. Scoped for drivers.
     const [zoneRes, rosterRes] = await Promise.allSettled([
-      axiosClient.get<{ trucks: { truck_id: string; zoned: boolean }[] }>(`/sort/${today}/zone-status`),
+      axiosClient.get<{ trucks: { truck_id: string; zoned: boolean; is_hub?: boolean }[] }>(`/sort/${today}/zone-status`),
       axiosClient.get<RostersResponse>(`/sort/${today}/rosters`, { params: isTruckScoped ? { mine: true } : {} }),
     ]);
     if (rosterRes.status === 'fulfilled') {
@@ -1603,6 +1610,7 @@ export default function WalkerSortMonitor() {
     if (zoneRes.status === 'fulfilled') {
       const trucks = zoneRes.value.data.trucks ?? [];
       setZonedTruckIds(new Set(trucks.filter(t => t.zoned).map(t => t.truck_id)));
+      setHubTruckIds(new Set(trucks.filter(t => t.is_hub).map(t => t.truck_id)));
       // For a scoped driver/trainer, zone-status returns ONLY their truck — use
       // it to filter the page to their own truck card.
       if (isTruckScoped) {
@@ -1826,6 +1834,7 @@ export default function WalkerSortMonitor() {
               trainers={trainers}
               routeDate={today}
               zoneExists={zonedTruckIds.has(state.ta.truck_id)}
+              isHub={hubTruckIds.has(state.ta.truck_id)}
               station={stationInfo.get(state.ta.truck_id)}
               onCommit={handleCommit}
               onDistribute={handleDistribute}

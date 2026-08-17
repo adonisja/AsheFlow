@@ -2158,8 +2158,15 @@ class AddFreightResponse(RostersResponse):
 class ZoneStatusOut(BaseModel):
     truck_id: UUID
     truck_name: Optional[str] = None
-    zoned: bool                      # active zone with non-empty package_tbas
+    # "ready to commit". For a normal truck that means an active TruckZone with
+    # packages. For a HUB it means its own manifest is loaded — a hub never runs
+    # the station sort and has no zone by design (ADR-274 D2/D7), so gating it
+    # on one left the commit button permanently disabled.
+    zoned: bool
     package_count: int = 0
+    # Copy only: lets the UI say "manifest loaded" rather than "zoned by station
+    # sort", which would be a lie on a hub.
+    is_hub: bool = False
 
 class ZoneStatusResponse(BaseModel):
     sort_date: date
@@ -3393,29 +3400,63 @@ def get_zone_status(
     scope = _caller_truck_id(db, caller, sort_date) if caller.role in TRUCK_SCOPED_ROLES else None
 
     zones = _active_zones(db, caller.company_id, sort_date)
-    truck_names = {
-        t.id: t.name
-        for t in db.query(Truck).filter(Truck.company_id == caller.company_id).all()
-    }
+    all_trucks = db.query(Truck).filter(Truck.company_id == caller.company_id).all()
+    truck_names = {t.id: t.name for t in all_trucks}
+    hub_ids = {t.id for t in all_trucks if t.is_hub}
+
     by_truck: dict = {}
     for z in zones:
         cur = by_truck.setdefault(z.truck_id, 0)
         by_truck[z.truck_id] = cur + len(z.package_tbas or [])
 
+    # HUB READINESS COMES FROM ITS OWN MANIFEST (ADR-274 D9). A hub is excluded
+    # from run_sort, so it has no TruckZone and never will — reading `zoned` off
+    # zones alone left every hub permanently un-committable, with the backend
+    # route path built and unreachable from both UIs.
+    #
+    # Only for hubs that actually have an assignment today: a hub truck with no
+    # assignment is not "ready", it is simply not running.
+    hub_assigned: set = set()
+    if hub_ids:
+        hub_assigned = {
+            ta.truck_id
+            for ta in db.query(TruckAssignment).filter(
+                TruckAssignment.company_id == caller.company_id,
+                TruckAssignment.date == sort_date,
+                TruckAssignment.truck_id.in_(hub_ids),
+            ).all()
+        }
+
+    hub_counts: dict = {}
+    if hub_assigned:
+        r = _redis()
+        cid_str = str(caller.company_id)
+        for tid in hub_assigned:
+            raw = r.get(_manifest_key(cid_str, f"{sort_date.isoformat()}#hub:{tid}"))
+            if raw:
+                try:
+                    hub_counts[tid] = len(json.loads(raw))
+                except (json.JSONDecodeError, TypeError):
+                    hub_counts[tid] = 0
+
     if scope is not None:
         truck_ids = [scope]
     else:
-        truck_ids = list(by_truck.keys())
+        # Hubs with an assignment belong in the oversight list even before their
+        # manifest lands — otherwise dispatch cannot see a hub is waiting on one.
+        truck_ids = list(dict.fromkeys(list(by_truck.keys()) + list(hub_assigned)))
 
-    trucks = [
-        ZoneStatusOut(
+    trucks = []
+    for tid in truck_ids:
+        is_hub = tid in hub_ids
+        count = hub_counts.get(tid, 0) if is_hub else by_truck.get(tid, 0)
+        trucks.append(ZoneStatusOut(
             truck_id=tid,
             truck_name=truck_names.get(tid),
-            zoned=by_truck.get(tid, 0) > 0,
-            package_count=by_truck.get(tid, 0),
-        )
-        for tid in truck_ids
-    ]
+            zoned=count > 0,
+            package_count=count,
+            is_hub=is_hub,
+        ))
     return ZoneStatusResponse(sort_date=sort_date, trucks=trucks)
 
 
