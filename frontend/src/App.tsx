@@ -35,6 +35,8 @@ import Account from './pages/Account';
 // the mock once the wired version lands.
 import AuditLog from './pages/AuditLog';
 import SortPage from './pages/Sort';
+import SortMetricsPage from './pages/SortMetrics';
+import { routeRoles } from './config/navConfig';
 import PrintLoadSheets from './pages/PrintLoadSheets';
 import ReturnsManifestPrint from './pages/ReturnsManifestPrint';
 import WalkerSortMonitor from './pages/WalkerSort';
@@ -507,6 +509,16 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
                   <SortPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-273. Roles come from navConfig so the tab and the gate cannot
+                drift — the failure the 2026-07-03 access audit fixed. */}
+            <Route
+              path="/sort-metrics"
+              element={
+                <ProtectedRoute allowedRoles={routeRoles('/sort-metrics')}>
+                  <SortMetricsPage />
                 </ProtectedRoute>
               }
             />

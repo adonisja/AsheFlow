@@ -73,6 +73,9 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/schedule-changes',      label: 'Schedule Changes',  icon: RefreshCw,      roles: ['admin', 'dispatch', 'driver', 'trainer', 'trainee', 'walker'] },
   { path: '/settings',              label: 'Settings',          icon: Settings,       roles: ['admin'] },
   { path: '/sort',                  label: 'Station Sort',      icon: Route,          roles: ['admin', 'dispatch', 'driver'] },
+  // ADR-273: cross-run algorithm telemetry used to justify a tenant-wide tuning
+  // change. Management+admin only — dispatch is not management (ADR-242).
+  { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'] },
   { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
   // /trainer-dashboard has NO nav tab. It is a trainer's Dashboard landing
