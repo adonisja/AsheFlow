@@ -252,3 +252,84 @@ def test_max_window_is_enforced_at_the_schema_bound():
     end = __import__("datetime").date(2026, 8, 16)
     start = end - __import__("datetime").timedelta(days=MAX_WINDOW_DAYS - 1)
     assert (end - start).days + 1 == MAX_WINDOW_DAYS
+
+
+# ── ADR-272 Phase 1: decision metadata ───────────────────────────────────────
+#
+# Phase 1 is a PURE REFACTOR: _build_routes records why each route closed and
+# changes no route. These pin the recording; the byte-equality of the routes
+# themselves was verified against the pre-refactor implementation over 12 seeded
+# days x 6 trucks (see the ADR-272 journal).
+
+CLOSED_REASONS = {
+    "capacity", "group_complete", "no_adjacent_fit",
+    "no_fit_streak", "walk_budget", "span_cap", "forced_single",
+}
+
+
+def _one_block_totes(n_totes: int, block: str = "W_40_St_100"):
+    """n totes all dominant on one block, 10 packages each."""
+    from app.services.route_sort import _Tote, _Package
+
+    out = {}
+    for i in range(n_totes):
+        t = _Tote(bag_id=f"BAG{i:04d}")
+        for j in range(10):
+            t.packages.append(_Package(
+                tba_number=f"TBA{i}{j}", bag_id=t.bag_id, block_key=block,
+                lat=None, lng=None,
+            ))
+        out[t.bag_id] = t
+    return out
+
+
+def test_every_route_records_a_seed_and_a_reason():
+    from app.services.route_sort import _build_routes
+
+    routes = _build_routes(_one_block_totes(14), block_workloads={}, difficulty_flags={})
+    assert routes, "expected at least one route"
+    for r in routes:
+        assert r.seed_block_key == "W_40_St_100"
+        assert r.closed_reason in CLOSED_REASONS, r.closed_reason
+
+
+def test_a_full_route_closes_on_capacity():
+    """More totes than one route holds -> the first route fills and stops."""
+    from app.services.route_sort import _build_routes
+
+    routes = _build_routes(_one_block_totes(20), block_workloads={}, difficulty_flags={})
+    assert routes[0].closed_reason == "capacity"
+
+
+def test_the_last_route_of_an_exhausted_pool_is_group_complete():
+    """Nothing left anywhere -> the route finished its territory, it did not
+    hit a dead end. The two are different diagnoses and must not be conflated."""
+    from app.services.route_sort import _build_routes
+
+    routes = _build_routes(_one_block_totes(3), block_workloads={}, difficulty_flags={})
+    assert routes[-1].closed_reason == "group_complete"
+
+
+def test_blocks_walked_is_at_least_blocks_collected():
+    """ADR-235's invariant, now observable: the traversal is a superset of what
+    the route actually took totes from."""
+    from app.services.route_sort import _build_routes
+
+    for r in _build_routes(_one_block_totes(14), block_workloads={}, difficulty_flags={}):
+        assert r.blocks_walked >= len(set(r.block_keys))
+
+
+def test_telemetry_fields_are_write_only():
+    """Nothing in the builder may READ these back — a field that influences the
+    algorithm is no longer a pure recording, and Phase 1's whole claim is that
+    it changes no route."""
+    import inspect
+    from app.services import route_sort
+
+    src = inspect.getsource(route_sort._build_routes)
+    for field in ("closed_reason", "seed_block_key", "blocks_walked"):
+        for line in src.splitlines():
+            if field in line:
+                assert "route." + field + " =" in line or line.strip().startswith("#"), (
+                    f"{field} is read, not just written, on: {line.strip()}"
+                )

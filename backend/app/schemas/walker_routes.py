@@ -177,6 +177,12 @@ class RouteOut(BaseModel):
     segment_ids: list[str] = []
     stops: list[StopOut] = []       # delivered-set drill-down: block → address → tbas (ADR-194)
     misrouted_packages: list[MisroutedPackageOut] = []
+    # ── Decision telemetry (ADR-273 / ADR-272 Phase 1) ────────────────────────
+    # Why this route looks the way it does. Defaulted so any caller building a
+    # RouteOut outside the sort (tests, wave reassignment) stays valid.
+    seed_block_key: Optional[str] = None
+    blocks_walked: int = 0
+    closed_reason: Optional[str] = None
 
 
 class SortResult(BaseModel):
