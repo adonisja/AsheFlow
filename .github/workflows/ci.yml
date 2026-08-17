@@ -78,6 +78,15 @@ jobs:
       - name: Text on button fills meets AA (mobile + web)
         run: python design/check_text_on_fill.py
 
+      # ADR-271 B and ADR-275 D1 put client-side logic on BOTH surfaces, so it
+      # exists twice on purpose. Both files say "a change lands on both in the
+      # same commit" — and both were kept in step by a diff someone had to
+      # remember to run. That failed once already: porting the notification
+      # classifier, the per-date confirmation fetch was simplified to a single
+      # date, and "NEEDS YOUR RESPONSE" rendered above "No assignment today".
+      - name: Shared web/mobile copies are identical
+        run: python scripts/check_shared_copies.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
