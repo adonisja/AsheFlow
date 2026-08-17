@@ -333,3 +333,127 @@ def test_telemetry_fields_are_write_only():
                 assert "route." + field + " =" in line or line.strip().startswith("#"), (
                     f"{field} is read, not just written, on: {line.strip()}"
                 )
+
+
+# ── ADR-272 Phase 2: group-first assembly ────────────────────────────────────
+#
+# Default-off: block_completion is byte-identical to the pre-Phase-1 output,
+# verified over 12 seeded days x 6 trucks (see the ADR-272 journal). These pin
+# the behaviours that differ once the mode is switched on.
+
+def _blocks(spec: dict[str, int], pkgs_per_tote: int = 10):
+    """{block_key: n_totes} -> tote dict, each tote dominant on its block."""
+    from app.services.route_sort import _Tote, _Package
+
+    out, i = {}, 0
+    for bk, n in spec.items():
+        for _ in range(n):
+            t = _Tote(bag_id=f"BAG{i:04d}")
+            for j in range(pkgs_per_tote):
+                t.packages.append(_Package(
+                    tba_number=f"TBA{i}_{j}", bag_id=t.bag_id, block_key=bk,
+                    lat=None, lng=None,
+                ))
+            out[t.bag_id] = t
+            i += 1
+    return out
+
+
+def _routes(totes, mode):
+    from app.services.route_sort import _build_routes
+    return _build_routes(totes, block_workloads={}, difficulty_flags={}, assembly_mode=mode)
+
+
+def _block_of(route, totes):
+    return {totes[b].dominant_block_key for b in route.tote_ids}
+
+
+def test_group_first_never_half_takes_a_block_that_fits():
+    """The field report: W_46_St_100 had 5 totes, a route holds 6, and it was
+    split across five routes anyway."""
+    from app.services.route_sort import ASSEMBLY_GROUP_FIRST
+
+    # Two blocks of 4 totes. A route holds 6, so block_completion will take 4+2
+    # and strand 2; group-first must refuse the partial second block.
+    totes = _blocks({"W_40_St_100": 4, "W_40_St_200": 4})
+    routes = _routes(totes, ASSEMBLY_GROUP_FIRST)
+
+    where = {}
+    for i, r in enumerate(routes):
+        for b in _block_of(r, totes):
+            where.setdefault(b, set()).add(i)
+    split = [b for b, rs in where.items() if len(rs) > 1]
+    assert not split, f"group-first split {split}"
+
+
+def test_block_completion_still_splits_that_case():
+    """Guards the comparison itself: if the baseline stopped splitting, the
+    Phase 2 measurement would be meaningless."""
+    from app.services.route_sort import ASSEMBLY_BLOCK_COMPLETION
+
+    totes = _blocks({"W_40_St_100": 4, "W_40_St_200": 4})
+    routes = _routes(totes, ASSEMBLY_BLOCK_COMPLETION)
+    where = {}
+    for i, r in enumerate(routes):
+        for b in _block_of(r, totes):
+            where.setdefault(b, set()).add(i)
+    assert any(len(rs) > 1 for rs in where.values())
+
+
+def test_an_oversized_block_is_split_but_its_remainder_seeds_the_next_route():
+    """THE PIN. A block bigger than one route must still be delivered, and its
+    remainder must seed the NEXT route — not re-enter global ranking, where
+    having lost totes lowers its density score and strands it."""
+    from app.services.route_sort import ASSEMBLY_GROUP_FIRST
+
+    # 9 totes on one block (route holds 6) plus a smaller rival block that would
+    # otherwise outrank the depleted remainder on density.
+    totes = _blocks({"W_40_St_100": 9, "W_50_St_100": 4})
+    routes = _routes(totes, ASSEMBLY_GROUP_FIRST)
+
+    big = [i for i, r in enumerate(routes) if "W_40_St_100" in _block_of(r, totes)]
+    assert len(big) == 2, "the oversized block should occupy exactly two routes"
+    assert big[1] == big[0] + 1, (
+        f"remainder landed on route {big[1]} instead of immediately after {big[0]} "
+        "— the pin did not hold"
+    )
+
+
+def test_no_tote_is_lost_or_duplicated_in_either_mode():
+    """Declining a group must not delete it from the pool — the bug that a naive
+    `block_totes = []` introduces."""
+    from app.services.route_sort import ASSEMBLY_GROUP_FIRST, ASSEMBLY_BLOCK_COMPLETION
+
+    spec = {"W_40_St_100": 4, "W_40_St_200": 3, "W_43_St_100": 5, "W_50_St_100": 2}
+    totes = _blocks(spec)
+    for mode in (ASSEMBLY_BLOCK_COMPLETION, ASSEMBLY_GROUP_FIRST):
+        placed = [b for r in _routes(totes, mode) for b in r.tote_ids]
+        assert sorted(placed) == sorted(totes), f"{mode}: totes lost or duplicated"
+        assert len(placed) == len(set(placed)), f"{mode}: a tote appears twice"
+
+
+def test_group_first_still_terminates_when_nothing_fits():
+    """Every block oversized for a route: the seed exception must fire each time
+    or the outer loop spins forever."""
+    from app.services.route_sort import ASSEMBLY_GROUP_FIRST
+
+    totes = _blocks({"W_40_St_100": 8, "W_50_St_100": 8})
+    routes = _routes(totes, ASSEMBLY_GROUP_FIRST)
+    assert sum(len(r.tote_ids) for r in routes) == 16
+
+
+def test_mode_constants_do_not_drift_between_modules():
+    """route_sort duplicates the mode strings rather than importing sort_tuning
+    (it must stay importable without the public config service). Duplication is
+    a drift risk, so pin it: a rename in one file and not the other would make
+    resolve_sort_tuning return a value _build_routes silently ignores."""
+    from app.services.sort_tuning import (
+        MODE_BLOCK_COMPLETION, MODE_GROUP_FIRST, VALID_ASSEMBLY_MODES,
+    )
+    from app.services.route_sort import (
+        ASSEMBLY_BLOCK_COMPLETION, ASSEMBLY_GROUP_FIRST,
+    )
+
+    assert MODE_BLOCK_COMPLETION == ASSEMBLY_BLOCK_COMPLETION
+    assert MODE_GROUP_FIRST == ASSEMBLY_GROUP_FIRST
+    assert VALID_ASSEMBLY_MODES == {ASSEMBLY_BLOCK_COMPLETION, ASSEMBLY_GROUP_FIRST}
