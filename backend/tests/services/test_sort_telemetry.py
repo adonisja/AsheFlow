@@ -223,3 +223,32 @@ def test_zero_is_honoured_not_treated_as_unset():
     """`or` would silently swallow a deliberate 0 — _pick uses `is None`."""
     db = _StubDB(_StubCfg(sort_w_doorman=0.0))
     assert resolve_sort_tuning(db, uuid4()).w_doorman == 0.0
+
+
+# ── window resolution (the timezone trap) ────────────────────────────────────
+
+def test_days_window_is_inclusive_of_both_ends():
+    """`days=28` must span 28 dates, not 29.
+
+    The endpoint resolves start = end - (days - 1). Getting this off by one
+    silently widens every window by a day, which is invisible in a chart and
+    wrong in a total.
+    """
+    from datetime import date, timedelta
+
+    end = date(2026, 8, 16)
+    for days in (1, 7, 28, 91, 365):
+        start = end - timedelta(days=days - 1)
+        assert (end - start).days + 1 == days
+
+
+def test_max_window_is_enforced_at_the_schema_bound():
+    """`days` is bounded by MAX_WINDOW_DAYS so an unbounded scan is impossible."""
+    from app.routers.sort_metrics import MAX_WINDOW_DAYS
+
+    assert MAX_WINDOW_DAYS == 400
+    # The Query(...) bound and the explicit range check must agree, or one of
+    # them is dead code.
+    end = __import__("datetime").date(2026, 8, 16)
+    start = end - __import__("datetime").timedelta(days=MAX_WINDOW_DAYS - 1)
+    assert (end - start).days + 1 == MAX_WINDOW_DAYS

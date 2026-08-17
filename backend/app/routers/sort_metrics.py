@@ -105,6 +105,11 @@ class SortMetricsResponse(BaseModel):
 
 @router.get("", response_model=SortMetricsResponse)
 def get_sort_metrics(
+    days: Optional[int] = Query(
+        None, ge=1, le=MAX_WINDOW_DAYS,
+        description="Window length ending yesterday, in COMPANY time. Prefer this over "
+                    "start/end: the client's clock may be in a different timezone.",
+    ),
     start: Optional[date] = Query(None, description="Inclusive start date (default: 28 days back)."),
     end: Optional[date] = Query(None, description="Inclusive end date (default: yesterday)."),
     truck_id: Optional[UUID] = Query(None, description="Restrict to one truck."),
@@ -116,13 +121,21 @@ def get_sort_metrics(
 
     The series ends yesterday by default: today's sort is still in flight and
     the rollup only writes completed days (ADR-273).
+
+    THE CLIENT MUST NOT COMPUTE THESE DATES.
+    "Yesterday" is a company-timezone question, and a browser answers it with
+    its own clock. Near midnight UTC those disagree: at 01:46 UTC it is still
+    the previous evening in New York, so a client-derived "yesterday" asks for a
+    day the company has not finished — silently dropping the most recent
+    completed day from the default view. Pass `days` and let the server resolve
+    the window against `company_today`.
     """
     from app.models.route_sort_run import RouteSortDaily
     from app.services.local_date import company_today
 
     today = company_today(db, caller.company_id)
     end = end or (today - timedelta(days=1))
-    start = start or (end - timedelta(days=27))
+    start = start or (end - timedelta(days=(days or 28) - 1))
 
     if start > end:
         raise HTTPException(

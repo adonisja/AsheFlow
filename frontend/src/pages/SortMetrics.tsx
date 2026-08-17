@@ -87,6 +87,8 @@ function num(v: number | null | undefined, digits = 0): string {
 }
 
 function fmtDate(iso: string): string {
+  // 'T00:00:00' with no Z parses as LOCAL midnight. Appending 'Z' would shift
+  // the label back a day for anyone west of UTC.
   const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
@@ -101,13 +103,13 @@ export default function SortMetrics() {
     setLoading(true);
     setError(null);
     try {
-      const end = new Date();
-      end.setDate(end.getDate() - 1);            // series ends yesterday
-      const start = new Date(end);
-      start.setDate(start.getDate() - (windowDays - 1));
-      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      // Send a WINDOW LENGTH, never dates. "Yesterday" is a company-timezone
+      // question and this browser may be anywhere: at 01:46 UTC it is still the
+      // previous evening in New York, so a locally-derived date would ask for a
+      // day the company has not finished and silently drop the most recent
+      // completed one. The server resolves the window against company_today.
       const res = await axiosClient.get<SortMetricsResponse>('/sort-metrics', {
-        params: { start: iso(start), end: iso(end) },
+        params: { days: windowDays },
       });
       setData(res.data);
     } catch {
