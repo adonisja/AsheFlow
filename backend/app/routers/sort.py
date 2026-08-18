@@ -401,6 +401,15 @@ def upload_manifest(
         r = _redis()
         r.delete(_manifest_key(cid_str, hub_scope))
         r.setex(_enriching_key(cid_str, hub_scope), _ENRICHING_KEY_TTL, "1")
+        # ADR-274 D11: same worker_unreachable sentinel the company path writes.
+        # Without it, a dead Celery worker leaves the hub manifest key unwritten
+        # forever, and the commit gate reports "Waiting on the hub manifest" —
+        # identical to a healthy upload still enriching. Nobody learns it failed.
+        # enrich_manifest_packages keys this off the sort_date string it is
+        # given, so the hub scope namespaces the sentinel too: the task clears it
+        # on receipt, re-sets it on a real failure, and deletes it on success,
+        # all without knowing hubs exist.
+        r.setex(f"manifest_failed:{cid_str}:{hub_scope}", _REDIS_TTL_SECONDS, "worker_unreachable")
 
         # Enriched like any other package (D7): a hub delivery is still a
         # delivery to a real address, so route ordering, misroute detection and
@@ -2167,6 +2176,14 @@ class ZoneStatusOut(BaseModel):
     # Copy only: lets the UI say "manifest loaded" rather than "zoned by station
     # sort", which would be a lie on a hub.
     is_hub: bool = False
+    # ADR-274 D11 — hub only, and only while `zoned` is false, so the UI can tell
+    # the three not-ready states apart. They look identical without it:
+    #   "enriching" — upload accepted, Celery still working; just wait
+    #   "failed"    — enrichment died; re-upload, waiting will never resolve
+    #   None        — nothing uploaded yet
+    # /sort/manifest/{date}/status cannot answer this for a hub: it is keyed on
+    # the date alone and would report the COMPANY manifest's state.
+    hub_manifest_state: Optional[str] = None
 
 class ZoneStatusResponse(BaseModel):
     sort_date: date
@@ -3428,16 +3445,40 @@ def get_zone_status(
         }
 
     hub_counts: dict = {}
+    hub_states: dict = {}
     if hub_assigned:
         r = _redis()
         cid_str = str(caller.company_id)
         for tid in hub_assigned:
-            raw = r.get(_manifest_key(cid_str, f"{sort_date.isoformat()}#hub:{tid}"))
+            hub_scope = f"{sort_date.isoformat()}#hub:{tid}"
+            raw = r.get(_manifest_key(cid_str, hub_scope))
             if raw:
                 try:
                     hub_counts[tid] = len(json.loads(raw))
                 except (json.JSONDecodeError, TypeError):
                     hub_counts[tid] = 0
+            # ADR-274 D11: only resolve WHY a hub isn't ready when it isn't —
+            # a loaded manifest needs no explanation, and this saves two Redis
+            # reads per hub on the steady-state poll.
+            if not hub_counts.get(tid):
+                failed = r.get(f"manifest_failed:{cid_str}:{hub_scope}")
+                enriching = r.exists(_enriching_key(cid_str, hub_scope))
+                # ENRICHING WINS WHILE BOTH KEYS EXIST. The upload writes the
+                # enriching sentinel AND a worker_unreachable failure key at the
+                # same moment; the Celery task clears the failure key only once
+                # it actually starts. So "both present" is the NORMAL first
+                # seconds of every upload, not a failure — reporting `failed`
+                # there told a dispatcher to re-upload a healthy manifest.
+                #
+                # worker_unreachable is a DEFERRED signal: it only means what it
+                # says once the 5-minute enriching key has expired without the
+                # task ever starting. A real failure from the task itself
+                # (internal_error, or a reason string) is reported immediately,
+                # because the task deletes the enriching key on its way out.
+                if enriching:
+                    hub_states[tid] = "enriching"
+                elif failed:
+                    hub_states[tid] = "failed"
 
     if scope is not None:
         truck_ids = [scope]
@@ -3456,6 +3497,7 @@ def get_zone_status(
             zoned=count > 0,
             package_count=count,
             is_hub=is_hub,
+            hub_manifest_state=hub_states.get(tid) if is_hub else None,
         ))
     return ZoneStatusResponse(sort_date=sort_date, trucks=trucks)
 

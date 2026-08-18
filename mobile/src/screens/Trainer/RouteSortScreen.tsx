@@ -151,6 +151,8 @@ export default function RouteSortScreen() {
   /* ADR-274 D9 — a hub's packages come from its OWN manifest, never the station
      sort. Same readiness flag, different evidence, so only the copy changes. */
   const [isHub,      setIsHub]      = useState(false);
+  /* ADR-274 D11 — why a hub isn't ready: 'enriching' | 'failed' | null. */
+  const [hubState,   setHubState]   = useState<string | null>(null);
   const [zonePkgs,   setZonePkgs]   = useState(0);
   const [crew,       setCrew]       = useState<CrewMember[]>([]);
   const [members,    setMembers]    = useState<AssignmentMemberRow[]>([]);   // ADR-197 crew-status rows
@@ -242,6 +244,7 @@ export default function RouteSortScreen() {
         const mine = (zoneRes.value.data?.trucks ?? []).find((t: any) => t.truck_id === myTruckId);
         setZoned(!!mine?.zoned);
         setIsHub(!!mine?.is_hub);
+        setHubState(mine?.hub_manifest_state ?? null);
         setZonePkgs(mine?.package_count ?? 0);
         setTruckName(mine?.truck_name ?? '');
       }
@@ -756,12 +759,22 @@ export default function RouteSortScreen() {
           ) : (
             <>
               <Text style={s.cardTitle}>
-                {isHub ? 'Waiting on the hub manifest' : 'Waiting on station sort'}
+                {!isHub
+                  ? 'Waiting on station sort'
+                  : hubState === 'failed'
+                    ? 'Hub manifest failed'
+                    : hubState === 'enriching'
+                      ? 'Preparing the hub manifest'
+                      : 'Waiting on the hub manifest'}
               </Text>
               <Text style={s.cardSub}>
-                {isHub
-                  ? 'No manifest uploaded for this hub yet. Dispatch uploads it on the Sort page.'
-                  : 'This truck has no zoned packages yet — check back after the station finishes sorting.'}
+                {!isHub
+                  ? 'This truck has no zoned packages yet — check back after the station finishes sorting.'
+                  : hubState === 'failed'
+                    ? 'The upload could not be processed. Ask dispatch to upload it again — waiting will not clear this.'
+                    : hubState === 'enriching'
+                      ? 'Dispatch uploaded it and we are looking up the addresses. This usually takes a minute.'
+                      : 'No manifest uploaded for this hub yet. Dispatch uploads it on the Sort page.'}
               </Text>
             </>
           )}
