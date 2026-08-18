@@ -61,6 +61,14 @@ backend/app/services/assign_clusters.py
 backend/app/services/assign_totes.py
 backend/app/services/cluster_packages.py
 backend/app/services/persist_zones.py
+# tote_roster.py was EXTRACTED from persist_zones (ADR-274 D12) so a hub could
+# build the same roster from its own manifest. The code is generic bag-grouping,
+# but its docstrings describe how the station sort assembles totes, dock tags and
+# rider counts — so it is classified with its parent, not by the genericness of
+# the code alone. Its test (tests/services/test_hub_loading_stage.py) is PUBLIC
+# and deliberately un-skip-guarded: CI copies this file in before pytest runs, so
+# a guard would convert a failed private pull into silently skipped tests.
+backend/app/services/tote_roster.py
 backend/app/services/sort_analysis.py
 backend/app/services/derive_block_key.py
 backend/app/services/seed_manifest.py

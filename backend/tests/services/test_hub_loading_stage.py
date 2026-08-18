@@ -26,13 +26,11 @@ from pathlib import Path
 
 import pytest
 
-try:
-    from app.services.tote_roster import build_tote_roster, roster_inputs_from_packages
-except ImportError:  # pragma: no cover
-    # tote_roster is gitignored proprietary (ADR-274 D12) — absent in the public
-    # checkout, where an unguarded import crashes COLLECTION and takes the whole
-    # suite with it, not just this module.
-    pytest.skip("proprietary sort services not available (CI skip)", allow_module_level=True)
+# tote_roster is gitignored proprietary (ADR-274 D12), and CI copies it in from
+# AsheFlow-private BEFORE pytest runs. Deliberately NOT skip-guarded: a guard
+# would turn a failed private-repo pull into 16 silently skipped tests instead of
+# a loud collection error. The loud failure is the one worth having.
+from app.services.tote_roster import build_tote_roster, roster_inputs_from_packages
 
 
 BACKEND = Path(__file__).resolve().parents[2]
@@ -119,7 +117,6 @@ class TestRosterFromManifest:
 class TestOneImplementation:
     """The extraction must not become a copy (the reason it was extracted)."""
 
-    @pytest.mark.skipif(not PERSIST.exists(), reason="persist_zones is proprietary")
     def test_persist_zones_delegates_rather_than_duplicates(self):
         src = PERSIST.read_text(encoding="utf-8")
         assert "from app.services.tote_roster import build_tote_roster" in src
