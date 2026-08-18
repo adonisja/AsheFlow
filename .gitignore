@@ -178,6 +178,10 @@ backend/app/services/assign_clusters.py
 backend/app/services/assign_totes.py
 backend/app/services/cluster_packages.py
 backend/app/services/persist_zones.py
+# ADR-274 D12: extracted FROM persist_zones, and its docstrings describe how the
+# station sort assembles totes, dock tags and rider counts. Classified with its
+# parent rather than by the genericness of the code alone.
+backend/app/services/tote_roster.py
 backend/app/services/sort_analysis.py
 backend/app/services/derive_block_key.py
 backend/app/services/seed_manifest.py

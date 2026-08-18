@@ -584,7 +584,8 @@ export default function ToteRosterPanel({ date, mode }: Props) {
       <div className="p-4 text-sm text-muted-foreground border border-dashed border-border rounded-xl">
         <Package className="w-4 h-4 inline mr-1.5" />
         Tote rosters appear here after the next sort run (zones from before roster
-        persistence show counts only).
+        persistence show counts only). A hub's totes come from its own manifest
+        instead — upload it on Station Sort and they appear here without a sort run.
       </div>
     );
   }

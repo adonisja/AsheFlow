@@ -2252,6 +2252,119 @@ def _active_zones(db: Session, company_id, sort_date: date) -> list:
     )
 
 
+class _HubZone:
+    """Stand-in for a TruckZone a hub will never have (ADR-274 D12).
+
+    Every loading endpoint reads the same handful of attributes off a zone. A
+    hub can answer all of them from its manifest, so one shim keeps a single
+    render/confirm path instead of a parallel hub branch in four endpoints.
+
+    `id = truck_id` gives the row a stable unique key — consumers use zone_id
+    only as a React key — without persisting a TruckZone that would claim the
+    station sort had run for a truck it deliberately skips.
+    """
+
+    __slots__ = ("id", "truck_id", "zone_label", "tote_roster", "tote_count", "is_hub")
+
+    def __init__(self, truck_id, name, roster):
+        self.id = truck_id
+        self.truck_id = truck_id
+        self.zone_label = name or "Hub"
+        self.tote_roster = roster
+        self.tote_count = len(roster)
+        self.is_hub = True
+
+
+def _no_roster_detail(db: Session, company_id, truck_id) -> str:
+    """404 copy that tells the reader what they are actually waiting for."""
+    t = db.query(Truck).filter(
+        Truck.id == truck_id, Truck.company_id == company_id,
+    ).first()
+    if t is not None and t.is_hub:
+        return (
+            "No manifest loaded for this hub yet. Dispatch uploads it on the "
+            "Sort page — a hub is never fed by the station sort."
+        )
+    return "No active zone for that truck on this date."
+
+
+def _zones_for_truck(db: Session, company_id, sort_date: date, truck_id, truck_name=None) -> list:
+    """Active zones for one truck, or its hub stand-in (ADR-274 D12).
+
+    The loading endpoints all began with the same "zones for this truck, else
+    404" line, which is exactly what excluded hubs from every one of them.
+    """
+    zones = [z for z in _active_zones(db, company_id, sort_date) if z.truck_id == truck_id]
+    if zones:
+        return zones
+    roster = _hub_rosters(db, company_id, sort_date).get(truck_id)
+    if roster is None:
+        return []
+    if truck_name is None:
+        t = db.query(Truck).filter(
+            Truck.id == truck_id, Truck.company_id == company_id,
+        ).first()
+        truck_name = t.name if t else None
+    return [_HubZone(truck_id, truck_name, roster)]
+
+
+def _hub_rosters(db: Session, company_id, sort_date: date) -> dict:
+    """truck_id → tote roster, for every HUB running on `sort_date` (ADR-274 D12).
+
+    A hub has no TruckZone by design (D2), so every loading endpoint — which all
+    resolve their work through `_active_zones` — 404'd for a hub, and a hub
+    driver could not tell dispatch the truck was loaded. ADR-181's handoff had a
+    permanent hole.
+
+    The roster does not really depend on the sort: it is a pure function of
+    manifest packages. This builds it with the SAME function persist_zones uses,
+    so a tote means the same thing on both kinds of truck.
+
+    Returns {} when no hub is running, so callers can skip the work entirely.
+    Only hubs with an assignment AND a manifest appear: a hub truck sitting idle
+    is not "unloaded", and one still enriching has nothing to check off yet.
+    """
+    hub_trucks = db.query(Truck).filter(
+        Truck.company_id == company_id, Truck.is_hub.is_(True),
+    ).all()
+    if not hub_trucks:
+        return {}
+
+    hub_ids = {t.id for t in hub_trucks}
+    assigned = {
+        ta.truck_id for ta in db.query(TruckAssignment).filter(
+            TruckAssignment.company_id == company_id,
+            TruckAssignment.date == sort_date,
+            TruckAssignment.truck_id.in_(hub_ids),
+        ).all()
+    }
+    if not assigned:
+        return {}
+
+    from app.services.tote_roster import build_tote_roster, roster_inputs_from_packages
+
+    r = _redis()
+    cid = str(company_id)
+    out: dict = {}
+    for t in hub_trucks:
+        if t.id not in assigned:
+            continue
+        raw = r.get(_manifest_key(cid, f"{sort_date.isoformat()}#hub:{t.id}"))
+        if not raw:
+            continue
+        try:
+            pkgs = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            # A corrupt hub manifest must never take the dock down for the
+            # other trucks on the date.
+            continue
+        tba_bag, pkg_info = roster_inputs_from_packages(pkgs)
+        out[t.id] = build_tote_roster(
+            [p["tba"] for p in pkgs if p.get("tba")], tba_bag, pkg_info,
+        )
+    return out
+
+
 def _transfer_out(t, truck_names: dict, drivers: dict) -> "ToteTransferOut":
     return ToteTransferOut(
         id=t.id,
@@ -2353,10 +2466,15 @@ def get_load_rosters(
         if r.status == "flagged" and getattr(r, "pull_point", "station") == "station"
     )
 
+    hub_zones = [
+        _HubZone(tid, truck_names.get(tid), roster)
+        for tid, roster in _hub_rosters(db, caller.company_id, sort_date).items()
+    ]
+
     rosters: list[TruckRosterOut] = []
     total_unchecked = 0
     roster_available = False
-    for z in zones:
+    for z in list(zones) + hub_zones:
         roster = z.tote_roster or []
         if roster:
             roster_available = True
@@ -2450,12 +2568,21 @@ def check_tote(
 
     zones = _active_zones(db, caller.company_id, sort_date)
     home_zone = next((z for z in zones if any(e["bag_id"] == bag_id for e in (z.tote_roster or []))), None)
-    if home_zone is None:
+    # ADR-274 D12: a hub's totes come from its own manifest, not a TruckZone.
+    # Only consulted when the zones do not own the bag, so a normal truck costs
+    # no extra query.
+    home_truck_id = home_zone.truck_id if home_zone is not None else None
+    if home_truck_id is None:
+        for _tid, _roster in _hub_rosters(db, caller.company_id, sort_date).items():
+            if any(e["bag_id"] == bag_id for e in _roster):
+                home_truck_id = _tid
+                break
+    if home_truck_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tote not found in any active zone for this date.")
 
     if caller.role in TRUCK_SCOPED_ROLES:
         own = _caller_truck_id(db, caller, sort_date)
-        if own != home_zone.truck_id:
+        if own != home_truck_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only check totes on your own truck.")
 
     # ADR-181: once the driver confirms the handoff, the truck's contents are
@@ -2465,7 +2592,7 @@ def check_tote(
         .filter(
             LoadConfirmation.company_id == caller.company_id,
             LoadConfirmation.load_date == sort_date,
-            LoadConfirmation.truck_id == home_zone.truck_id,
+            LoadConfirmation.truck_id == home_truck_id,
         )
         .first()
     )
@@ -2492,7 +2619,7 @@ def check_tote(
             id=_uuid_mod.uuid4(),
             company_id=caller.company_id,
             load_date=sort_date,
-            truck_id=home_zone.truck_id,
+            truck_id=home_truck_id,
             bag_id=bag_id,
             checked_by=caller.id,
             checked_by_name=caller.name,
@@ -2505,7 +2632,7 @@ def check_tote(
                 ToteTransfer.transfer_date == sort_date,
                 ToteTransfer.bag_id == bag_id,
                 ToteTransfer.status == "confirmed",
-                ToteTransfer.to_truck_id == home_zone.truck_id,
+                ToteTransfer.to_truck_id == home_truck_id,
             )
             .first()
         )
@@ -2525,8 +2652,9 @@ def check_tote(
         actor_id=caller.id,
         action_type=action,
         target_table="tote_load_checks",
-        target_id=home_zone.id,
-        after_snapshot={"bag_id": bag_id, "truck_id": str(home_zone.truck_id), "date": sort_date.isoformat()},
+        # A hub has no zone row; its truck id identifies the target.
+        target_id=str(home_zone.id) if home_zone is not None else str(home_truck_id),
+        after_snapshot={"bag_id": bag_id, "truck_id": str(home_truck_id), "date": sort_date.isoformat()},
     ))
     db.commit()
     return get_load_rosters(sort_date=sort_date, mine=False, caller=caller, _={}, db=db)
@@ -2707,9 +2835,14 @@ def check_all_totes(
     from app.models.audit_log import AuditLog
     from app.models.tote_ops import ToteTransfer, ToteLoadCheck, LoadConfirmation
 
-    zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
+    zones = _zones_for_truck(db, caller.company_id, sort_date, truck_id)
     if not zones:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+        # A hub reaches here when its manifest has not landed yet (no zone is
+        # ever coming for it, so "waiting for the sort" would be wrong).
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_no_roster_detail(db, caller.company_id, truck_id),
+        )
 
     # ADR-181: a confirmed truck is locked — no bulk check-off either.
     if db.query(LoadConfirmation).filter(
@@ -2794,9 +2927,14 @@ def confirm_load(
     from app.models.employee import Employee as _Emp
     from app.services.constants import OVERSIGHT_ROLES
 
-    zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
+    zones = _zones_for_truck(db, caller.company_id, sort_date, truck_id)
     if not zones:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+        # A hub reaches here when its manifest has not landed yet (no zone is
+        # ever coming for it, so "waiting for the sort" would be wrong).
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_no_roster_detail(db, caller.company_id, truck_id),
+        )
 
     # Object-level ownership — a driver/trainer confirms only their own truck.
     if caller.role in TRUCK_SCOPED_ROLES:
@@ -2893,9 +3031,14 @@ def unconfirm_load(
     from app.models.employee import Employee as _Emp
     from app.services.constants import OVERSIGHT_ROLES
 
-    zones = [z for z in _active_zones(db, caller.company_id, sort_date) if z.truck_id == truck_id]
+    zones = _zones_for_truck(db, caller.company_id, sort_date, truck_id)
     if not zones:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active zone for that truck on this date.")
+        # A hub reaches here when its manifest has not landed yet (no zone is
+        # ever coming for it, so "waiting for the sort" would be wrong).
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_no_roster_detail(db, caller.company_id, truck_id),
+        )
 
     # Object-level ownership — a driver/trainer reopens only their own truck.
     if caller.role in TRUCK_SCOPED_ROLES:
