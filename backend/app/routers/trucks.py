@@ -133,6 +133,17 @@ def create_truck(
 ):
     db_truck = Truck(company_id=caller.company_id, **truck.model_dump())
     db.add(db_truck)
+    db.flush()
+    write_audit(
+        db,
+        action_type="truck.created",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"name": db_truck.name, "is_hub": db_truck.is_hub,
+               "is_active": db_truck.is_active},
+    )
     db.commit()
     db.refresh(db_truck)
     return db_truck
@@ -182,9 +193,21 @@ def update_truck(
     if not db_truck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
 
-    for key, value in truck.model_dump(exclude_unset=True).items():
+    changed = truck.model_dump(exclude_unset=True)
+    before = {k: getattr(db_truck, k, None) for k in changed}
+    for key, value in changed.items():
         setattr(db_truck, key, value)
 
+    write_audit(
+        db,
+        action_type="truck.updated",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before=before,
+        after=changed,
+    )
     db.commit()
     db.refresh(db_truck)
     return db_truck
@@ -246,6 +269,19 @@ def reactivate_truck(
     if not db_truck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Truck not found")
     db_truck.is_active = True
+    # deactivate_truck and delete_truck already audit; reactivate is their exact
+    # inverse and did not, so a truck could be taken out of service with a record
+    # and put back without one (ADR-274 D14).
+    write_audit(
+        db,
+        action_type="truck.reactivated",
+        target_table="trucks",
+        target_id=str(db_truck.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        before={"is_active": False},
+        after={"is_active": True, "name": db_truck.name},
+    )
     db.commit()
     db.refresh(db_truck)
     return db_truck

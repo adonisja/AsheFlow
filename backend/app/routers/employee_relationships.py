@@ -148,6 +148,21 @@ def create_employee_relationship(
         company_id=caller.company_id,
     )
     db.add(db_relationship)
+    db.flush()
+    # The delete side is audited (ADR-132 DP-3/DP-5) and the clear side now is
+    # too (D13) — create was the remaining hole, so a relationship could appear
+    # with no record and be removed with one.
+    write_audit(
+        db,
+        action_type="employee_relationship.create",
+        target_table="employee_relationships",
+        target_id=str(db_relationship.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"employee_id": str(db_relationship.employee_id),
+               "target_employee_id": str(db_relationship.target_employee_id),
+               "relationship_type": db_relationship.relationship_type},
+    )
     db.commit()
     # refresh to populate server-generated fields (e.g. id, created_at) before returning
     db.refresh(db_relationship)

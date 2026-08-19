@@ -14,7 +14,7 @@ from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
 from app.services.company_config import _REQUIRED_FIELDS
 from app.core.config import settings
 from app.database import get_db
-from app.services.audit import write_audit
+from app.services.audit import write_audit, super_admin_identity
 from app.models.company import Company, CompanyConfig
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
@@ -26,27 +26,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/companies", tags=["companies"])
 
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
-
-
-def _super_admin_identity(claims: dict) -> dict:
-    """Who the platform owner is, for an audit row's PAYLOAD (ADR-274 D13).
-
-    Deliberately not `actor_id`. That column is `ForeignKey("employees.id")` and
-    a super admin has NO Employee row by design (`get_super_admin` never touches
-    the table) — writing their Cognito sub there raises ForeignKeyViolation and
-    500s the endpoint. The first version of this did exactly that, and staging
-    caught it.
-
-    Super-admin rows therefore leave `actor_id` NULL, which the column already
-    documents as "system actions", and carry the identity here instead: JSONB
-    has no constraint. The `company.*` action_type plus this field keep the
-    actor unambiguous when the log is read.
-    """
-    return {
-        "actor_kind": "super_admin",
-        "actor_cognito_sub": claims.get("id"),
-        "actor_email": claims.get("email"),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +315,7 @@ def create_company(
         action_type="company.create",
         target_table="companies",
         target_id=str(company.id),
-        after={**_super_admin_identity(_), "name": company.name, "slug": company.slug,
+        after={**super_admin_identity(_), "name": company.name, "slug": company.slug,
                "amazon_dsp_code": company.amazon_dsp_code, "timezone": company.timezone},
     )
     db.commit()
@@ -424,7 +403,7 @@ def update_company(
         target_table="companies",
         target_id=str(company.id),
         before=before,
-        after={**_super_admin_identity(_), **data},
+        after={**super_admin_identity(_), **data},
     )
     db.commit()
     db.refresh(company)
@@ -493,7 +472,7 @@ def deactivate_company(
         target_table="companies",
         target_id=str(company.id),
         before={"is_active": True},
-        after={**_super_admin_identity(_), "is_active": False, "name": company.name},
+        after={**super_admin_identity(_), "is_active": False, "name": company.name},
     )
     db.commit()
     db.refresh(company)
@@ -521,7 +500,7 @@ def reactivate_company(
         target_table="companies",
         target_id=str(company.id),
         before={"is_active": False},
-        after={**_super_admin_identity(_), "is_active": True, "name": company.name},
+        after={**super_admin_identity(_), "is_active": True, "name": company.name},
     )
     db.commit()
     db.refresh(company)
@@ -624,7 +603,7 @@ def bootstrap_company_admin(
         action_type="company.bootstrap_admin",
         target_table="employees",
         target_id=str(employee.id),
-        after={**_super_admin_identity(_), "employee_id": str(employee.id), "role": employee.role,
+        after={**super_admin_identity(_), "employee_id": str(employee.id), "role": employee.role,
                "invite_expires_at": expires_at.isoformat()},
     )
     db.commit()
@@ -864,7 +843,7 @@ def update_company_config_super_admin(
         target_table="company_configs",
         target_id=str(config.id),
         before=before,
-        after={**_super_admin_identity(_), **changed},
+        after={**super_admin_identity(_), **changed},
     )
     db.commit()
     db.refresh(config)
@@ -1211,7 +1190,7 @@ def update_company_discord_config(
         target_table="company_configs",
         target_id=str(config.id),
         before=before,
-        after={**_super_admin_identity(_), **changed},
+        after={**super_admin_identity(_), **changed},
     )
     db.commit()
     db.refresh(config)

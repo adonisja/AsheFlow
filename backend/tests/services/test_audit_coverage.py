@@ -48,14 +48,11 @@ _WRITE_VERBS = {"post", "patch", "put", "delete"}
 # Adding a line here is a decision: it says "this write is routine operational
 # traffic and auditing it would dilute the log", NOT "I could not be bothered".
 _NO_AUDIT = {
-    "adp.py::upload_flex_timesheets",
     "anchor_points.py::arrive_anchor_point",
     "anchor_points.py::confirm_anchor_point",
     "anchor_points.py::depart_anchor_point",
     "assignment_change_requests.py::submit_change_request",
     "assignment_members.py::create_assignment_member",
-    "building_profile_library.py::promote_to_library",
-    "building_profile_library.py::update_library_status",
     "building_profiles.py::lock_building_profile",
     "building_profiles.py::set_operational_note",
     "building_profiles.py::submit_building_profile",
@@ -67,7 +64,6 @@ _NO_AUDIT = {
     "driver_surveys.py::activate_survey",
     "driver_surveys.py::submit_response",
     "employee_off_days.py::create_employee_off_day",
-    "employee_relationships.py::create_employee_relationship",
     "employees.py::confirm_email_change",
     "employees.py::request_discord_link",
     "employees.py::request_email_change",
@@ -102,7 +98,6 @@ _NO_AUDIT = {
     "sort.py::seed_manifest",
     "training.py::add_manager_comment",
     "training.py::add_trainer_comment",
-    "training.py::reassign_trainee",
     "training.py::submit_phase4_observation",
     "training.py::submit_trainee_review",
     "training.py::submit_training_record",
@@ -110,24 +105,14 @@ _NO_AUDIT = {
     "truck_assignments.py::create_assignment",
     "truck_assignments.py::update_assignment",
     "truck_transfers.py::create_transfers",
-    "trucks.py::create_truck",
-    "trucks.py::reactivate_truck",
-    "trucks.py::update_truck",
 }
 
-# Of the above, these are genuine follow-ups rather than settled decisions —
-# they change access, money-adjacent records, or shared reference data, and
-# should get audit rows in a later pass (ADR-274 D13, "still open").
-_DEFERRED_NOT_SETTLED = {
-    "building_profile_library.py::promote_to_library",
-    "building_profile_library.py::update_library_status",
-    "trucks.py::create_truck",
-    "trucks.py::update_truck",
-    "trucks.py::reactivate_truck",
-    "adp.py::upload_flex_timesheets",
-    "training.py::reassign_trainee",
-    "employee_relationships.py::create_employee_relationship",
-}
+# Follow-ups from D13 that D14 closed: truck CRUD, PlaceType Library
+# promotion/status, ADP timesheet upload, trainee reassignment, and relationship
+# creation. Empty on purpose — every entry left in _NO_AUDIT above is now a
+# settled decision that the write is routine operational traffic, not a backlog
+# item. Re-populate it if a future pass defers something again.
+_DEFERRED_NOT_SETTLED: set[str] = set()
 
 
 def _audited_names(tree: ast.AST) -> set[str]:
@@ -255,6 +240,15 @@ class TestPrivilegedTierIsAudited:
         "assignment_change_requests.py::cancel_change_request",
         "assignment_change_requests.py::purge_pending_request",
         "schedule_change_requests.py::cancel_schedule_change_request",
+        # D14 — the eight D13 flagged as follow-ups rather than settled
+        "trucks.py::create_truck",
+        "trucks.py::update_truck",
+        "trucks.py::reactivate_truck",
+        "building_profile_library.py::promote_to_library",
+        "building_profile_library.py::update_library_status",
+        "adp.py::upload_flex_timesheets",
+        "training.py::reassign_trainee",
+        "employee_relationships.py::create_employee_relationship",
     ])
     def test_endpoint_is_audited(self, entry: str):
         assert entry not in set(_write_endpoints_without_audit()), (
@@ -305,11 +299,17 @@ class TestSuperAdminActorHandling:
 
     def test_super_admin_identity_travels_in_the_payload(self):
         src = self._companies_src()
-        assert "_super_admin_identity" in src, (
+        assert "super_admin_identity" in src, (
             "super-admin audit rows must carry the actor in the JSONB payload, "
             "which has no FK constraint"
         )
-        assert '"actor_kind": "super_admin"' in src
+        # The literal lives in the shared helper (services/audit.py), which is
+        # where a second super-admin surface can reach it (ADR-274 D14).
+        audit_src = (ROUTERS.parent / "services" / "audit.py").read_text(encoding="utf-8")
+        assert '"actor_kind": "super_admin"' in audit_src, (
+            "super_admin_identity no longer stamps actor_kind — an audit row "
+            "would record the action with no identifiable actor"
+        )
 
     def test_every_audit_block_identifies_its_actor(self):
         # A row with neither actor_id nor an identity payload records that
@@ -321,8 +321,51 @@ class TestSuperAdminActorHandling:
         for m in re.finditer(r"    write_audit\(\n(?:.*?\n)*?    \)\n", src):
             block = m.group(0)
             action = re.search(r'action_type="([^"]+)"', block)
-            if "_super_admin_identity" not in block and "actor_id=" not in block:
+            if "super_admin_identity" not in block and "actor_id=" not in block:
                 anonymous.append(action.group(1) if action else "?")
         assert not anonymous, (
             f"audit blocks with no actor at all: {anonymous}"
+        )
+
+
+class TestClaimKeyNames:
+    """Reading a claim that does not exist fails silently (ADR-274 D14).
+
+    `get_current_user` returns exactly four keys — id, email, username,
+    cognito_groups — and `get_super_admin` passes that dict through untouched.
+    `building_profile_library` read `super_admin.get("sub")`, which is not one of
+    them, so `admin_id` was **always None** and every provenance column
+    (promoted_by, created_by, updated_by, note_verified_by) was written null.
+
+    `.get()` on a missing key raises nothing. There is no type error, no 500, no
+    log line — the data is simply anonymous, and stays that way until someone
+    asks who promoted an entry and finds no answer.
+    """
+
+    _CLAIM_KEYS = {"id", "email", "username", "cognito_groups"}
+
+    def test_get_current_user_still_returns_the_expected_keys(self):
+        # If this changes, the assertion below is testing the wrong contract.
+        deps = (ROUTERS.parent / "api" / "deps.py").read_text(encoding="utf-8")
+        block = deps[deps.index("def get_current_user"):]
+        block = block[:block.index("def ", 10)]
+        import re
+        keys = set(re.findall(r'^\s+"(\w+)":', block, re.M))
+        assert self._CLAIM_KEYS <= keys, (
+            f"get_current_user no longer returns {self._CLAIM_KEYS - keys}"
+        )
+        assert "sub" not in keys, (
+            "a 'sub' key now exists — the guard below is obsolete and the "
+            "historical bug it describes can no longer occur"
+        )
+
+    def test_no_router_reads_a_sub_claim(self):
+        offenders = []
+        for path in sorted(ROUTERS.glob("*.py")):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if '.get("sub")' in line and not line.strip().startswith("#"):
+                    offenders.append(f"{path.name}:{n}")
+        assert not offenders, (
+            "these read a 'sub' claim that get_current_user never sets, so the "
+            f"value is always None: {offenders}"
         )

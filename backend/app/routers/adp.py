@@ -206,6 +206,18 @@ async def upload_flex_timesheets(
             ))
             created += 1
     
+    # Payroll-adjacent: these rows feed break-compliance and the ADP mismatch
+    # detector, so a bulk overwrite of someone's recorded breaks needs a record
+    # of who uploaded it. Bulk shape — counts, not per-row snapshots.
+    write_audit(
+        db,
+        action_type="flex_timesheet.upload",
+        target_table="flex_timesheets",
+        target_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"created": created, "updated": updated},
+    )
     db.commit()
     return {"created": created, "updated": updated}
 
