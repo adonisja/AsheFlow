@@ -133,6 +133,18 @@ function CurrentAssignments() {
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
   const [isCreatingHub, setIsCreatingHub] = useState(false);
   const [publishingHubTruckId, setPublishingHubTruckId] = useState<string | null>(null);
+
+  /* ── Dock zones (ADR-274 D17) ──────────────────────────────────────────────
+     The physical bay a truck collects from. `suggestions` holds each truck's
+     last known bay plus its recent ones; a value that came from history renders
+     muted until dispatch confirms or edits it.
+
+     Publish applies an unconfirmed suggestion anyway (the backend resolves it),
+     so this UI is about VISIBILITY — which bays have actually been looked at —
+     not about whether the driver gets one. */
+  const [dockDrafts, setDockDrafts] = useState<Record<string, string>>({});
+  const [dockSuggest, setDockSuggest] = useState<Record<string, { prefill: string; recent: string[] }>>({});
+  const [dockSaving, setDockSaving] = useState<string | null>(null);
   const [removingHubTruckId, setRemovingHubTruckId] = useState<string | null>(null);
 
   type DialogConfig = { title: string; message: string; confirmLabel: string; variant: 'danger' | 'warning' | 'default'; onConfirm: () => void };
@@ -213,6 +225,17 @@ function CurrentAssignments() {
   const fetchDispatchPhaseOnce = useCallback(async (date: string): Promise<boolean> => {
     try {
       const res = await axiosClient.get(`/dispatch/${date}`);
+      // Best-effort: a failed suggestion fetch leaves the fields empty and
+      // typeable, which is strictly better than blocking the board on it.
+      axiosClient.get(`/dispatch/${date}/dock-suggestions`)
+        .then(r => {
+          const map: Record<string, { prefill: string; recent: string[] }> = {};
+          for (const t of r.data?.trucks ?? []) {
+            map[t.truck_id] = { prefill: t.prefill, recent: t.recent ?? [] };
+          }
+          setDockSuggest(map);
+        })
+        .catch(() => {/* no history yet — dispatch types the bay */});
       const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
       const hasStatus = !!res.data.workflow_status;
       setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
@@ -755,6 +778,64 @@ function CurrentAssignments() {
         }
       },
     });
+  };
+
+  /* ── Dock zone handlers (ADR-274 D17) ─────────────────────────────────── */
+
+  /** The bay showing for a truck, and whether it is confirmed or inherited.
+   *  `saved` — dispatch set it for today (or publish already resolved one)
+   *  `suggested` — the truck's last known bay, offered but not yet confirmed */
+  const dockStateFor = (truckId: string): { value: string; suggested: boolean } => {
+    if (truckId in dockDrafts) return { value: dockDrafts[truckId], suggested: false };
+    const saved = (dispatchData?.truck_assignments || [])
+      .find((a: any) => a.truck_id === truckId)?.dock_zone;
+    if (saved) return { value: saved, suggested: false };
+    return { value: dockSuggest[truckId]?.prefill || '', suggested: true };
+  };
+
+  const saveDockZone = async (truckId: string, value: string) => {
+    setDockSaving(truckId);
+    try {
+      await axiosClient.patch(
+        `/dispatch/${selectedDate}/trucks/${truckId}/dock`,
+        { dock_zone: value.trim() },
+      );
+      // Refresh so the field flips from suggested to confirmed from the SERVER's
+      // answer rather than optimistically — a rejected save must not look saved.
+      setDockDrafts(prev => {
+        const next = { ...prev }; delete next[truckId]; return next;
+      });
+      await fetchDispatchPhaseOnce(selectedDate);
+    } catch {
+      setError('Could not save the dock zone. Try again.');
+    } finally {
+      setDockSaving(null);
+    }
+  };
+
+  /** Commit every truck still showing an unconfirmed suggestion.
+   *  Publish would apply these anyway; this makes the decision explicit and
+   *  visible, so dispatch can see at a glance what they have vetted. */
+  const confirmAllSuggestedDocks = async () => {
+    const pending = Object.keys(dispatchData?.assigned_crews || {})
+      .map(id => ({ id, ...dockStateFor(id) }))
+      .filter(d => d.suggested && d.value);
+    if (pending.length === 0) return;
+    setDockSaving('__all__');
+    try {
+      for (const d of pending) {
+        await axiosClient.patch(
+          `/dispatch/${selectedDate}/trucks/${d.id}/dock`,
+          { dock_zone: d.value },
+        );
+      }
+      await fetchDispatchPhaseOnce(selectedDate);
+      setError(null);
+    } catch {
+      setError('Some dock zones could not be confirmed. Check and retry.');
+    } finally {
+      setDockSaving(null);
+    }
   };
 
   const handlePublishHub = (truckId: string) => {
@@ -1418,6 +1499,35 @@ function CurrentAssignments() {
                 </div>
               );
             })()}
+            {/* Confirm-all (ADR-274 D17). Publish applies unconfirmed suggestions
+                anyway, so this is about making the decision explicit — one click
+                instead of tabbing through every truck on a morning when nothing
+                moved. Hidden when there is nothing left to confirm. */}
+            {(() => {
+              const pending = Object.keys(dispatchData.assigned_crews)
+                .map(id => dockStateFor(id))
+                .filter(d => d.suggested && d.value).length;
+              if (pending === 0) return null;
+              return (
+                <div className="flex items-center justify-between gap-3 mb-3 px-3 py-2 rounded-xl border border-dashed border-border bg-surface-muted/30">
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">{pending}</span>{' '}
+                    dock zone{pending === 1 ? '' : 's'} suggested from each truck&apos;s last run.
+                    They publish as-is — confirm to mark them checked.
+                  </p>
+                  <button
+                    onClick={confirmAllSuggestedDocks}
+                    disabled={dockSaving !== null}
+                    className="shrink-0 flex items-center gap-1 text-[11px] font-semibold bg-primary/10 text-primary hover:bg-primary/20 px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                  >
+                    {dockSaving === '__all__'
+                      ? <div className="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin" />
+                      : <CheckCircle2 className="w-3 h-3" />}
+                    Confirm all suggested
+                  </button>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                {Object.entries(dispatchData.assigned_crews).map(([truckId, crew]) => {
                  const isHub = hubTruckIds.has(truckId);
@@ -1440,6 +1550,49 @@ function CurrentAssignments() {
                          {isHub && (
                            <span className="text-[9px] font-bold uppercase tracking-widest text-primary">Hub</span>
                          )}
+                         {/* Dock zone (ADR-274 D17) — the bay this truck collects
+                             from. A value inherited from the truck's last run
+                             renders muted until dispatch confirms or edits it;
+                             publish applies it either way. */}
+                         {(() => {
+                           const d = dockStateFor(truckId);
+                           const listId = `dock-opts-${truckId}`;
+                           return (
+                             <div className="flex items-center gap-1 mt-0.5">
+                               <span className="text-[9px] uppercase tracking-wider text-muted-foreground">Dock</span>
+                               <input
+                                 list={listId}
+                                 value={d.value}
+                                 placeholder="set one…"
+                                 maxLength={50}
+                                 disabled={dockSaving !== null}
+                                 onChange={e => setDockDrafts(prev => ({ ...prev, [truckId]: e.target.value }))}
+                                 onBlur={e => {
+                                   const v = e.target.value.trim();
+                                   // Save an edited value, and also a suggestion the
+                                   // dispatcher tabbed through — touching the field is
+                                   // the confirmation.
+                                   if (truckId in dockDrafts || (d.suggested && v)) saveDockZone(truckId, v);
+                                 }}
+                                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                 className={`w-20 px-1 py-0.5 text-[11px] font-mono rounded border bg-transparent
+                                   focus:outline-none focus:ring-1 focus:ring-primary
+                                   ${d.suggested && d.value
+                                     ? 'border-dashed border-border text-muted-foreground italic'
+                                     : 'border-border text-foreground'}`}
+                                 title={d.suggested && d.value
+                                   ? `Suggested from this truck's last run — confirm or change it`
+                                   : 'Bay this truck collects from'}
+                               />
+                               <datalist id={listId}>
+                                 {(dockSuggest[truckId]?.recent ?? []).map(z => <option key={z} value={z} />)}
+                               </datalist>
+                               {dockSaving === truckId && (
+                                 <div className="w-2.5 h-2.5 border border-primary border-t-transparent rounded-full animate-spin" />
+                               )}
+                             </div>
+                           );
+                         })()}
                        </div>
                      </div>
                      <div className="flex items-center gap-2">

@@ -191,6 +191,10 @@ export interface DispatchResult {
     /** From the TRUCK, not derived from status (ADR-274). The old client-side
      *  derivation (`status === 'planned'`) matched every truck before publish. */
     is_hub?: boolean;
+    /** Physical bay this truck collects from (ADR-274 D17). Null until dispatch
+     *  sets one or publish inherits the truck's last known bay. The Discord bot
+     *  reads this same payload, so the DM and this board cannot disagree. */
+    dock_zone?: string | null;
   }[];
   workflow_status?: 'dispatched' | 'published' | 'finalized';
   warnings: DispatchWarning[];

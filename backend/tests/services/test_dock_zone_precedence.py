@@ -162,3 +162,70 @@ class TestDriverActuallySeesIt:
         # "Dock: None", which reads as a system fault to the driver.
         src = BOT.read_text(encoding="utf-8")
         assert 'if dock_zone else ""' in src
+
+
+class TestDispatchUI:
+    """The board lets dispatch set a bay, and shows which are unvetted."""
+
+    @pytest.fixture(scope="class")
+    def page(self) -> str:
+        return (BACKEND.parent / "frontend" / "src" / "pages" / "DispatchDashboard.tsx").read_text(encoding="utf-8")
+
+    def test_the_field_saves_to_the_dock_endpoint(self, page: str):
+        assert "/dock` " in page or "/dock`," in page or "/dock`" in page, (
+            "no call to PATCH /dispatch/{date}/trucks/{id}/dock — the field "
+            "cannot persist anything"
+        )
+        assert "saveDockZone" in page
+
+    def test_suggestions_are_fetched(self, page: str):
+        assert "dock-suggestions" in page, (
+            "the board never fetches prefills, so every morning is retyping"
+        )
+
+    def test_suggested_and_confirmed_render_differently(self, page: str):
+        # The operator asked for this explicitly: dispatch must be able to see
+        # which bays they have actually looked at, even though both publish.
+        #
+        # Scoped to the INPUT's className. `border-dashed` also styles the
+        # confirm-all banner, so an unscoped substring check passes against a
+        # field that renders both states identically — it did, until this was
+        # tightened.
+        assert "dockStateFor" in page
+        i = page.index("list={listId}")
+        field = page[i:page.index("</datalist>", i)]
+        assert "d.suggested && d.value" in field, (
+            "the input does not branch on suggested-vs-confirmed"
+        )
+        assert "border-dashed" in field, (
+            "a suggested bay renders identically to a confirmed one, so there "
+            "is no way to tell what has been vetted"
+        )
+
+    def test_confirm_all_exists(self, page: str):
+        # Both the definition AND a wired-up onClick. Checking the name alone
+        # passes if it is merely renamed consistently, which is not a working
+        # button — a planted rename proved exactly that.
+        assert "const confirmAllSuggestedDocks = async () =>" in page, (
+            "no bulk-confirm handler — eight trucks means eight interactions "
+            "on a morning when nothing moved"
+        )
+        assert "onClick={confirmAllSuggestedDocks}" in page, (
+            "the bulk-confirm handler exists but no button calls it"
+        )
+
+    def test_save_refreshes_from_the_server(self, page: str):
+        # Not optimistic: a rejected save must not leave the field looking
+        # confirmed. The refresh is what flips suggested -> confirmed.
+        i = page.index("const saveDockZone")
+        body = page[i:page.index("const confirmAllSuggestedDocks")]
+        assert "fetchDispatchPhaseOnce(selectedDate)" in body, (
+            "the field would show 'confirmed' even when the PATCH failed"
+        )
+
+    def test_type_carries_dock_zone(self):
+        types = (BACKEND.parent / "frontend" / "src" / "api" / "types.ts").read_text(encoding="utf-8")
+        assert "dock_zone?: string | null;" in types, (
+            "types.ts is hand-maintained (no codegen) — without this the board "
+            "cannot read the saved bay"
+        )
