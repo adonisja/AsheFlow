@@ -897,7 +897,12 @@ export default function RouteSortScreen() {
                   ) : (
                     <View style={{ backgroundColor: c.warning + '15', borderRadius: radius.md, borderWidth: 1, borderColor: c.warning + '40', padding: spacing.sm }}>
                       <Text style={{ fontSize: fontSize.xs, color: c.warning, fontWeight: fontWeight.semibold, textAlign: 'center' }}>
-                        No covering route — flag for captain to reassign
+                        {/* ADR-274 D18: a hub has no captain — the driver
+                            leading this sort IS the route lead, so telling
+                            them to escalate names someone who does not exist. */}
+                        {isHub
+                          ? 'No covering route — reassign it yourself or return it to the station'
+                          : 'No covering route — flag for captain to reassign'}
                       </Text>
                     </View>
                   )}
