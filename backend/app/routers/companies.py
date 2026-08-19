@@ -14,6 +14,7 @@ from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
 from app.services.company_config import _REQUIRED_FIELDS
 from app.core.config import settings
 from app.database import get_db
+from app.services.audit import write_audit
 from app.models.company import Company, CompanyConfig
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
@@ -25,6 +26,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/companies", tags=["companies"])
 
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
+
+
+def _super_admin_identity(claims: dict) -> dict:
+    """Who the platform owner is, for an audit row's PAYLOAD (ADR-274 D13).
+
+    Deliberately not `actor_id`. That column is `ForeignKey("employees.id")` and
+    a super admin has NO Employee row by design (`get_super_admin` never touches
+    the table) — writing their Cognito sub there raises ForeignKeyViolation and
+    500s the endpoint. The first version of this did exactly that, and staging
+    caught it.
+
+    Super-admin rows therefore leave `actor_id` NULL, which the column already
+    documents as "system actions", and carry the identity here instead: JSONB
+    has no constraint. The `company.*` action_type plus this field keep the
+    actor unambiguous when the log is read.
+    """
+    return {
+        "actor_kind": "super_admin",
+        "actor_cognito_sub": claims.get("id"),
+        "actor_email": claims.get("email"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +330,15 @@ def create_company(
 
     db.add(CompanyConfig(company_id=company.id))
 
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.create",
+        target_table="companies",
+        target_id=str(company.id),
+        after={**_super_admin_identity(_), "name": company.name, "slug": company.slug,
+               "amazon_dsp_code": company.amazon_dsp_code, "timezone": company.timezone},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -382,9 +413,19 @@ def update_company(
                 detail=f"A company with slug '{data['slug']}' already exists.",
             )
 
+    before = {k: getattr(company, k) for k in data}
     for field, value in data.items():
         setattr(company, field, value)
 
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.update",
+        target_table="companies",
+        target_id=str(company.id),
+        before=before,
+        after={**_super_admin_identity(_), **data},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -443,6 +484,17 @@ def deactivate_company(
         raise HTTPException(status_code=400, detail="Company is already inactive.")
 
     company.is_active = False
+    # The highest-impact action in this router: every employee of the tenant
+    # loses access. Recording who and when is the point of an audit trail.
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.deactivate",
+        target_table="companies",
+        target_id=str(company.id),
+        before={"is_active": True},
+        after={**_super_admin_identity(_), "is_active": False, "name": company.name},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -462,6 +514,15 @@ def reactivate_company(
         raise HTTPException(status_code=400, detail="Company is already active.")
 
     company.is_active = True
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.reactivate",
+        target_table="companies",
+        target_id=str(company.id),
+        before={"is_active": False},
+        after={**_super_admin_identity(_), "is_active": True, "name": company.name},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -554,6 +615,18 @@ def bootstrap_company_admin(
     ))
 
     employee.invited_at = datetime.now(timezone.utc)
+    # Account provisioning: this creates the tenant's FIRST admin and the invite
+    # that grants them access. The token itself is never recorded — an audit row
+    # is readable by other admins, and a live invite token is a credential.
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company.bootstrap_admin",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={**_super_admin_identity(_), "employee_id": str(employee.id), "role": employee.role,
+               "invite_expires_at": expires_at.isoformat()},
+    )
     db.commit()
     db.refresh(employee)
 
@@ -781,7 +854,18 @@ def update_company_config_super_admin(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
     _apply_config_update(config, payload, allow_super_admin_fields=True)
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after={**_super_admin_identity(_), **changed},
+    )
     db.commit()
     db.refresh(config)
     return CompanyConfigResponse.from_orm_obj(config)
@@ -859,7 +943,21 @@ def update_my_company_config(
                 ),
             )
 
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
     _apply_config_update(config, payload, allow_super_admin_fields=False)
+    # Config drives dispatch weighting, attendance cutoffs and scorecard targets —
+    # a silent change here reshapes operational outcomes company-wide.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="company_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after=changed,
+    )
     db.commit()
     db.refresh(config)
     return CompanyConfigResponse.from_orm_obj(config)
@@ -965,6 +1063,16 @@ def add_check_in_deadline(
         company_id=caller.company_id, sequence=next_seq, offset_minutes=payload.offset_minutes,
     )
     db.add(row)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="check_in_deadline.create",
+        target_table="check_in_deadlines",
+        target_id=str(row.id),
+        after={"sequence": next_seq, "offset_minutes": payload.offset_minutes},
+    )
     db.commit()
     db.refresh(row)
     return row
@@ -994,6 +1102,17 @@ def delete_check_in_deadline(
                 "remove from the end so the earlier deadlines keep their order."
             ),
         )
+    # Snapshot BEFORE the delete — after it, the row's fields are gone.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="check_in_deadline.delete",
+        target_table="check_in_deadlines",
+        target_id=str(existing[-1].id),
+        before={"sequence": existing[-1].sequence,
+                "offset_minutes": existing[-1].offset_minutes},
+    )
     db.delete(existing[-1])
     db.commit()
     return {"deleted_sequence": sequence, "remaining": len(existing) - 1}
@@ -1031,9 +1150,21 @@ def update_my_discord_config(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
+    for field, value in changed.items():
         setattr(config, field, value)
 
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="company_discord_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after=changed,
+    )
     db.commit()
     db.refresh(config)
     return DiscordConfigResponse.from_config(config)
@@ -1068,9 +1199,20 @@ def update_company_discord_config(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
+    for field, value in changed.items():
         setattr(config, field, value)
 
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company_discord_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after={**_super_admin_identity(_), **changed},
+    )
     db.commit()
     db.refresh(config)
     return DiscordConfigResponse.from_config(config)

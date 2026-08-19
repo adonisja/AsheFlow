@@ -13,6 +13,7 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.api.ratelimit import limiter
 from app.core.config import settings
 from app.database import get_db
+from app.services.audit import write_audit
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.services.email import send_invite_email, send_credentials_email
@@ -165,6 +166,20 @@ def send_invite(
         )
 
     employee.invited_at = datetime.now(timezone.utc)
+    # Access-control event: an invite is the credential that lets someone into the
+    # tenant. The token itself is deliberately NOT recorded — an audit row is
+    # readable by other admins, and a live token is a working credential.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="employee.invite_sent",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={"employee_id": str(employee.id),
+               "account_status": employee.account_status,
+               "expires_at": record.expires_at.isoformat() if record.expires_at else None},
+    )
     db.commit()
 
     return {"detail": f"Invite sent to {employee.email}."}
@@ -222,6 +237,22 @@ def resend_credentials(
     except ClientError as e:
         logger.error("admin_set_user_password failed for %s: %s", employee.username, e.response["Error"]["Code"])
         raise HTTPException(status_code=502, detail="Failed to reset credentials. Please try again.")
+
+    # Audit BEFORE the email: the password has already been reset in Cognito at
+    # this point, and the email step below can raise a 502. Auditing after it
+    # would leave a successful credential reset with no record whenever delivery
+    # failed — the case most worth having a record of. This endpoint performs no
+    # other DB write, so it commits the audit row itself.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="employee.credentials_reset",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={"username": employee.username, "permanent": False},
+    )
+    db.commit()
 
     try:
         send_credentials_email(
@@ -388,6 +419,20 @@ def complete_registration(
     employee.phone_number = body.phone_number
 
     record.used = True
+    # No caller: this endpoint is public and authenticated by the invite token.
+    # The actor IS the invitee, so actor_id is their own employee id — this is the
+    # row that records a Cognito account being created and added to a role group.
+    write_audit(
+        db=db,
+        company_id=str(employee.company_id),
+        actor_id=str(employee.id),
+        action_type="employee.registration_complete",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={"username": username, "role": employee.role,
+               "cognito_sub_set": cognito_sub is not None,
+               "discord_linked": body.discord_id is not None},
+    )
     db.commit()
 
     # Send one branded email with both username and temp password

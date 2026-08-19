@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db, SessionLocal
+from app.services.audit import write_audit
 from app.api.deps import RoleChecker, get_caller_employee, Pagination, _resolve_employee_from_cognito
 from app.core.security import verify_cognito_token
 from app.models.employee import Employee
@@ -144,6 +145,18 @@ def prune_notifications(
             ),
         )
         .delete(synchronize_session=False)
+    )
+    # ADR-132 DP-1 shape: a bulk delete records the COUNT and the criteria, since
+    # the rows themselves are gone and cannot be snapshotted individually.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="notification.prune",
+        target_table="notifications",
+        target_id=str(caller.company_id),
+        before={"deleted_count": deleted},
+        after={"cutoff": cutoff.isoformat(), "days": days},
     )
     db.commit()
     return {"deleted": deleted, "cutoff": cutoff.date().isoformat(), "days": days}

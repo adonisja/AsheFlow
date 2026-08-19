@@ -6,6 +6,7 @@ from sqlalchemy import and_
 
 
 from app.database import get_db
+from app.services.audit import write_audit
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
@@ -206,10 +207,29 @@ def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db
     if not employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    db.query(EmployeeRelationship).filter(
+    # Snapshot before deleting: ADR-132 DP-3/DP-5 audited the sibling
+    # `delete_employee_relationships` for exactly this (GDPR Art. 17); this
+    # bulk-clear path was missed and deleted the same personal data silently.
+    doomed = db.query(EmployeeRelationship).filter(
         EmployeeRelationship.employee_id == employee_id,
         EmployeeRelationship.company_id == caller.company_id,
-    ).delete()
+    ).all()
+    before = {
+        "count": len(doomed),
+        "relationship_ids": [str(r.id) for r in doomed],
+    }
+    for r in doomed:
+        db.delete(r)
+
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="employee_relationship.clear",
+        target_table="employee_relationships",
+        target_id=str(employee_id),
+        before=before,
+    )
     db.commit()
 
 @router.delete("/{employee_relationship_id}", status_code=status.HTTP_204_NO_CONTENT)

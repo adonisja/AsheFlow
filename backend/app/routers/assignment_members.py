@@ -116,6 +116,17 @@ def remove_assignment_member(
     if not member:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
 
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="assignment_member.remove",
+        target_table="assignment_members",
+        target_id=str(member.id),
+        before={"assignment_id": str(member.assignment_id),
+                "employee_id": str(member.employee_id),
+                "role": member.role},
+    )
     db.delete(member)
     db.commit()
 
