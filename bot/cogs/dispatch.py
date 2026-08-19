@@ -376,6 +376,12 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             return
 
         truck_map = {str(t["id"]): t for t in trucks}
+        # ADR-274 D17: dock zones travel on the dispatch payload (the bot
+        # fetches its own data), keyed by truck for the driver DM below.
+        dock_by_truck = {
+            str(ts["truck_id"]): ts.get("dock_zone")
+            for ts in dispatch.get("truck_assignments", [])
+        }
         assigned_crews: dict[str, list] = dispatch.get("assigned_crews", {})
 
         if not assigned_crews:
@@ -414,7 +420,9 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 role = member.get("role", "walker")
 
                 if role == "driver":
-                    dm_embed = self._build_driver_dm(truck_name, dispatch_date)
+                    dm_embed = self._build_driver_dm(
+                        truck_name, dispatch_date, dock_by_truck.get(str(truck_id)),
+                    )
                 else:
                     dm_embed = await self._build_crew_dm(member, crew, dispatch_date)
 
@@ -440,11 +448,18 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
         logger.info("Dispatch published for %s. DM failures: %s", dispatch_date, dm_failures)
 
-    def _build_driver_dm(self, truck_name: str, dispatch_date: str) -> discord.Embed:
+    def _build_driver_dm(
+        self, truck_name: str, dispatch_date: str, dock_zone: str | None = None,
+    ) -> discord.Embed:
+        # ADR-274 D17: the bay dispatch set, so the driver knows where to collect
+        # the truck without asking. Omitted entirely when unset — a "Dock: —"
+        # line is worse than no line.
+        dock_line = f"**Dock:** {dock_zone}\n" if dock_zone else ""
         return discord.Embed(
             title=f"🚛 Your Assignment — {dispatch_date}",
             description=(
                 f"**Truck:** {truck_name}\n"
+                f"{dock_line}"
                 f"**Your role:** {ROLE_LABELS.get('driver', 'Driver')}\n\n"
                 "Please **confirm** your assignment by **08:20 AM**.\n"
                 "After confirming, proceed to sign in on Amazon Flex and head to the offsite."

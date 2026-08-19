@@ -89,9 +89,20 @@ class TestHubDockIsSeeded:
         )
 
     def test_label_fits_the_column(self, src: str):
-        # dock_zone is String(50); a long truck name would raise on insert.
-        assert '(truck.name or "Hub")[:50]' in src, (
-            "dock label is not truncated to the column width"
+        # dock_zone is String(50); a long name would raise on insert.
+        assert '[:50]' in src, "dock label is not truncated to the column width"
+
+    def test_a_dispatch_set_bay_wins_over_the_truck_name(self, src: str):
+        # ADR-274 D17: the truck-name default exists so the card is never blank
+        # on a first run. Re-publishing must not overwrite a bay dispatch
+        # actually set — which is what an unconditional truck.name would do.
+        assert '_resolve_dock_zone(db, caller.company_id, assignment)' in src, (
+            "publish no longer resolves the bay, so a re-publish would overwrite "
+            "the one dispatch set with the truck name"
+        )
+        assert 'or truck.name or "Hub"' in src, (
+            "the truck-name last resort is gone — a hub with no dock history "
+            "would publish with a blank dock line (ADR-274 D16)"
         )
 
     def test_actor_name_fits_the_column(self, src: str):
