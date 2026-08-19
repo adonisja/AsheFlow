@@ -407,12 +407,18 @@ function ManifestUploadPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [today]);
 
-  const startPolling = (sortDate: string) => {
+  /* ADR-274 D15: `hubId` polls the HUB's own manifest scope. A hub upload used
+     to skip polling entirely and jump to 'ready', which told the dispatcher
+     "N packages ready — run sort below" while enrichment was still running, for
+     a truck that never runs the sort. */
+  const startPolling = (sortDate: string, hubId?: string | null) => {
     stopPoll();
     if (!enrichStartRef.current) enrichStartRef.current = Date.now();
     pollRef.current = setInterval(async () => {
       try {
-        const { data } = await axiosClient.get(`/sort/manifest/${sortDate}/status`);
+        const { data } = await axiosClient.get(`/sort/manifest/${sortDate}/status`, {
+          params: hubId ? { hub_truck_id: hubId } : {},
+        });
         if (data.status === 'enriching') {
           if (data.packages_processed != null) setProcessedCount(data.packages_processed);
           if (data.packages_total != null) setTotalCount(data.packages_total);
@@ -425,7 +431,10 @@ function ManifestUploadPanel({
           enrichStartRef.current = null;
           setPhase('ready');
           setExpanded(false);
-          onReady(sortDate);
+          // A hub's manifest never feeds the station sort (ADR-274 D2), so it
+          // must not unlock the company sort controls. Its readiness is consumed
+          // by the hub crew's route-sort gate instead.
+          if (!hubId) onReady(sortDate);
         } else if (data.status === 'failed') {
           stopPoll();
           setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
@@ -457,17 +466,11 @@ function ManifestUploadPanel({
       setWarnings(data.warnings ?? []);
       enrichStartRef.current = Date.now();
       setPhase('enriching');
-      // A HUB UPLOAD DOES NOT POLL. /sort/manifest/{date}/status reads the
-      // COMPANY key, so polling after a hub upload would report the company
-      // manifest's state — "ready" from an unrelated upload, or "not_found" —
-      // and neither describes the hub. The hub's packages are enriched in the
-      // background under their own scope and never feed a sort, so there is no
-      // sort-readiness to wait for (ADR-274 D7).
-      if (hubTruckId) {
-        setPhase('ready');
-      } else {
-        startPolling(uploadDate);
-      }
+      // Both kinds poll (ADR-274 D15). The status endpoint takes an optional
+      // hub_truck_id and reads that hub's own scope, so a hub upload now shows
+      // real geocoding progress and a real failure instead of jumping to a
+      // "ready" that was neither true nor actionable.
+      startPolling(uploadDate, hubTruckId);
     } catch (err: unknown) {
       const detail = errorText(err, 'Upload failed.');
       setErrorMsg(typeof detail === 'string' ? detail : JSON.stringify(detail));
@@ -504,7 +507,13 @@ function ManifestUploadPanel({
         ? `Geocoding — ${Math.round((processedCount / totalCount) * 100)}% (${processedCount.toLocaleString()} / ${totalCount.toLocaleString()})`
         : `Geocoding ${packageCount > 0 ? packageCount.toLocaleString() + ' packages' : '…'}`
     ) :
-    phase === 'ready'     ? `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — run sort below.` :
+    phase === 'ready'     ? (
+      // A hub never runs the station sort, so "run sort below" would send the
+      // dispatcher to a control that does nothing for this manifest (ADR-274 D15).
+      hubTruckId
+        ? `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — the hub crew can commit their route sort now.`
+        : `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — run sort below.`
+    ) :
                             (errorMsg ?? 'Upload failed.');
 
   return (

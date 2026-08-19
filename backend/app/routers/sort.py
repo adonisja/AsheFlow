@@ -593,24 +593,52 @@ def upload_manifest(
 @router.get("/manifest/{sort_date}/status", response_model=ManifestStatusResponse)
 def get_manifest_status(
     sort_date: date,
+    hub_truck_id: Optional[UUID] = None,
     caller: Employee = Depends(get_caller_employee),
     _: dict = Depends(allow_sort),
+    db: Session = Depends(get_db),
 ):
-    """Poll whether the manifest for a given date is ready to sort.
+    """Poll whether a manifest is ready.
 
     Returns:
       "enriching"  — upload accepted, Celery task still running
-      "ready"      — enriched packages are cached in Redis; sort is runnable
+      "ready"      — enriched packages are cached in Redis
+      "failed"     — enrichment died; re-upload (waiting will not clear it)
       "not_found"  — no manifest uploaded for this date (or cache expired)
+
+    ADR-274 D15: `hub_truck_id` polls a HUB's manifest instead of the company's.
+    Without it this endpoint could only answer for the company key, so the Sort
+    page skipped polling entirely after a hub upload and jumped straight to
+    "ready" — telling the dispatcher "N packages ready, run sort below" while
+    enrichment was still running, for a truck that never runs the sort.
+
+    Every read below derives from `scope`, so the hub path is the same code with
+    a different key: `{date}` for the company, `{date}#hub:{truck}` for a hub
+    (the same namespace the upload and commit-sort use).
     """
     cid_str = str(caller.company_id)
     date_str = sort_date.isoformat()
+    scope = date_str
+    if hub_truck_id is not None:
+        # Validate rather than trust the query param: an arbitrary UUID would
+        # simply return not_found forever, which reads as "nothing uploaded"
+        # rather than "you asked about a truck that is not a hub".
+        truck = db.query(Truck).filter(
+            Truck.id == hub_truck_id,
+            Truck.company_id == caller.company_id,
+        ).first()
+        if truck is None or not truck.is_hub:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No hub truck with that id for your company.",
+            )
+        scope = f"{date_str}#hub:{hub_truck_id}"
     r = _redis()
 
-    enriching = r.exists(_enriching_key(cid_str, date_str))
-    failed_reason = r.get(f"manifest_failed:{cid_str}:{date_str}")
-    raw = r.get(_manifest_key(cid_str, date_str))
-    progress_raw = r.get(f"manifest_progress:{cid_str}:{date_str}")
+    enriching = r.exists(_enriching_key(cid_str, scope))
+    failed_reason = r.get(f"manifest_failed:{cid_str}:{scope}")
+    raw = r.get(_manifest_key(cid_str, scope))
+    progress_raw = r.get(f"manifest_progress:{cid_str}:{scope}")
 
     # Enriching sentinel takes priority over stale cached data. Without this check,
     # a re-upload for the same date would immediately return "ready" with the old
