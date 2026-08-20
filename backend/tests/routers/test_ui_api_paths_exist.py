@@ -91,7 +91,25 @@ class TestDetectorIsSound:
     """Guards the guard — a parser that finds nothing passes vacuously."""
 
     def test_it_finds_routes_and_calls(self):
-        assert len(_registered()) > 100, "route extraction is broken"
+        # Self-diagnosing: when this fires in an environment you cannot attach a
+        # debugger to (CI), the message has to carry enough to identify WHICH
+        # assumption broke — the app object, the prefix, or the checkout.
+        reg = _registered()
+        if len(reg) <= 100:
+            paths = [getattr(r, "path", "") for r in app.routes]
+            prefixes = sorted({"/".join(p.split("/")[:3]) for p in paths})[:12]
+            raise AssertionError(
+                "route extraction is broken.\n"
+                f"  app object:      {app!r}\n"
+                f"  app module:      {type(app).__module__}\n"
+                f"  total routes:    {len(paths)}\n"
+                f"  /api/v1 matches: {len(reg)}\n"
+                f"  prefixes seen:   {prefixes}\n"
+                f"  sample paths:    {sorted(paths)[:6]}\n"
+                "If total routes is large but /api/v1 matches is 0, the mount "
+                "prefix changed. If total routes is ~4, an import failed and "
+                "only the default routes exist."
+            )
         assert len(_ui_paths()) > 40, "UI call extraction is broken"
 
     def test_a_known_good_path_resolves(self):
@@ -112,6 +130,19 @@ class TestNoUiCallsAMissingRoute:
         people to ignore this test.
         """
         registered = _registered()
+        # Sanity-gate the BASELINE before comparing against it. Without this,
+        # an empty/degenerate `registered` makes EVERY UI path look missing,
+        # and the failure reads as "200 broken endpoints" when the truth is
+        # "one broken assumption". That is what this test did on its first CI
+        # run: it printed a 200-line wall of healthy endpoints, burying the
+        # real signal (its own detector had returned nothing).
+        #
+        # A comparison is only meaningful when both sides loaded.
+        assert len(registered) > 100, (
+            f"refusing to report missing paths: only {len(registered)} server "
+            "routes were extracted, so the comparison baseline is broken, not "
+            "the UI. See TestDetectorIsSound for the diagnosis."
+        )
         missing = {
             p: sorted(set(files))
             for p, files in _ui_paths().items()
