@@ -60,6 +60,7 @@ from app.models.company import Company                    # noqa: E402
 from app.models.delivery_stop import DeliveryStop         # noqa: E402
 from app.models.rts import RTSPackage, RTS_TYPES, is_reattemptable  # noqa: E402
 from app.models.walker_route import Route                 # noqa: E402
+from _seed_guard import seed_target
 
 # Deterministic: the same run produces the same data, so a number seen on a
 # screen can be traced back to a specific row rather than to chance.
@@ -86,10 +87,9 @@ _EXPLANATIONS = {
 
 def main(dry_run: bool = False) -> None:
     db = SessionLocal()
-    company = db.query(Company).first()
-    if company is None:
-        print("no company — nothing to do")
-        return
+    # ADR-280 D3: refuses a live tenant, and is deterministic — the bare
+    # .first() this replaces had no filter and no ordering.
+    company = seed_target(db)
 
     today = date.today()
     routes = (

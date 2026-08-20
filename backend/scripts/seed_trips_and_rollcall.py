@@ -46,6 +46,7 @@ from app.models.company import Company                      # noqa: E402
 from app.models.delivery_stop import DeliveryStop           # noqa: E402
 from app.models.shift_roll_call import ShiftRollCall        # noqa: E402
 from app.models.truck_assignment import TruckAssignment     # noqa: E402
+from _seed_guard import seed_target
 
 
 def _reliability(emp_id) -> dict:
@@ -65,10 +66,9 @@ def _reliability(emp_id) -> dict:
 
 def main(dry_run: bool) -> None:
     db = SessionLocal()
-    company = db.query(Company).first()
-    if company is None:
-        print("No company — nothing to do.")
-        return
+    # ADR-280 D3: refuses a live tenant, and is deterministic — the bare
+    # .first() this replaces had no filter and no ordering.
+    company = seed_target(db)
     cid = company.id
     today = date.today()
 

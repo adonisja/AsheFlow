@@ -19,6 +19,25 @@ class Company(Base):
     amazon_dsp_code  = Column(String(20),         nullable=True)
     timezone         = Column(String(64),         nullable=False, default="America/New_York")
     is_active        = Column(Boolean,            nullable=False, default=True, index=True)
+    # ADR-280: is this tenant's data real?
+    #
+    #   live — real operational data. Seed scripts refuse it, fault injection
+    #          refuses it, and analytics counts only this.
+    #   seed — script-generated. Disposable: wipeable, re-generatable, and a
+    #          legitimate fuzz/chaos target.
+    #   demo — synthetic but CURATED, shown to prospects. Non-live like `seed`,
+    #          but not something a chaos run may corrupt mid-demo.
+    #
+    # The default is `live` deliberately (D2). A company created by any path
+    # that does not know about this column is treated as real, so the failure
+    # mode is "a seeded tenant was mistakenly protected", never "a live tenant
+    # was mistakenly wiped".
+    #
+    # Tenant-level rather than per-row (D1): every seeded row already descends
+    # from a seeded company via company_id (ADR-064), so the tenancy boundary
+    # already IS the provenance boundary. A per-row is_seed would be 14 models
+    # and 14 places for a future write path to forget.
+    data_class       = Column(String(10),         nullable=False, server_default="live", index=True)
     created_at       = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     config = relationship("CompanyConfig", back_populates="company", uselist=False)

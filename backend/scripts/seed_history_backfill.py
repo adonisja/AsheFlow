@@ -72,6 +72,7 @@ from app.models.rts import (                                # noqa: E402
 from app.models.truck import Truck                          # noqa: E402
 from app.models.truck_assignment import TruckAssignment     # noqa: E402
 from app.models.walker_route import Route                   # noqa: E402
+from _seed_guard import seed_target
 
 # ── shape, measured from the existing month on staging ──────────────────────
 _STOPS_PER_ROUTE = (18, 30)      # observed avg 23.5
@@ -151,10 +152,9 @@ def _person(emp_id) -> dict:
 
 def main(months: int, dry_run: bool) -> None:
     db = SessionLocal()
-    company = db.query(Company).first()
-    if company is None:
-        print("No company — nothing to do.")
-        return
+    # ADR-280 D3: refuses a live tenant, and is deterministic — the bare
+    # .first() this replaces had no filter and no ordering.
+    company = seed_target(db)
     cid = company.id
 
     trucks = db.query(Truck).filter(Truck.company_id == cid).all()

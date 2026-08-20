@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.database import SessionLocal
 from app.models.training import TrainingCurriculum
+from _seed_guard import assert_seedable, seed_targets
 
 # ---------------------------------------------------------------------------
 # Curriculum data
@@ -704,13 +705,17 @@ if __name__ == "__main__":
 
     db = SessionLocal()
     try:
-        # Optional company id argument; default = seed every company.
+        # ADR-280 D3: default is every SEEDABLE company, not every company.
+        # This previously read `db.query(Company).all()` — on a database with a
+        # live tenant that wrote a curriculum straight into real customer data.
         if len(sys.argv) > 1:
-            targets = [sys.argv[1]]
+            # An explicit company id must still pass the guard — otherwise the
+            # one path a human types by hand is the one with no protection.
+            targets = [str(assert_seedable(db, sys.argv[1]).id)]
         else:
-            targets = [str(c.id) for c in db.query(Company).all()]
+            targets = [str(c.id) for c in seed_targets(db)]
         if not targets:
-            print("No companies found — run seed_demo.py first.")
+            print("No seedable company — run seed_demo.py first.")
         for cid in targets:
             seed(db, cid)
         print("Curriculum seed complete.")
