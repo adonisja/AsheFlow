@@ -61,6 +61,12 @@ class CompanyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     has_admin: bool = False
+    # ADR-280 D5: super admin is the ONE surface that spans tenants, so it is
+    # the one place this has to be visible. Every other analytics endpoint is
+    # already scoped to caller.company_id — a user inside a seed tenant seeing
+    # seeded numbers is correct, not contamination, and filtering those queries
+    # on data_class would return nothing at all for those users.
+    data_class: str = "live"
 
     model_config = {"from_attributes": True}
 

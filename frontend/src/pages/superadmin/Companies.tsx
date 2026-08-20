@@ -26,6 +26,9 @@ interface Company {
   is_active: boolean;
   created_at: string;
   has_admin: boolean;
+  /** ADR-280 — is this tenant's data real? Super admin is the one
+   *  cross-tenant surface, so it is the one place this has to show. */
+  data_class: 'live' | 'seed' | 'demo';
 }
 
 interface BootstrapResult {
@@ -310,6 +313,14 @@ function CompanyRow({
               {!company.has_admin && (
                 <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-warning/10 text-warning font-medium">
                   <UserX className="w-3 h-3" /> No admin
+                </span>
+              )}
+              {/* Only non-live tenants are marked. Badging every live company
+                  would make the common case noisy and the exception invisible
+                  — the opposite of what this is for. */}
+              {company.data_class !== 'live' && (
+                <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-info/10 text-info font-medium uppercase tracking-wide">
+                  {company.data_class}
                 </span>
               )}
             </div>
