@@ -42,6 +42,40 @@ class BuildingProfile(Base):
     normalised_address  = Column(String(200), nullable=False)   # e.g. "433 W 32 ST"
     block_key           = Column(String(60),  nullable=False)   # denormalised for grouping + difficulty flag resolution
 
+    # ADR-277 D1: address resolution. What a human types is not what the
+    # manifest carries — '433 West 32nd Street', '433 W 32 St' and '433 w 32 st'
+    # all derive block_key W_32_St_400 but are three distinct rows under the
+    # (company_id, normalised_address) unique constraint, and routing (which
+    # looks up BY normalised address) matches none of them.
+    #
+    # So the submitter's text lands here verbatim, a Celery task resolves it,
+    # and on success normalised_address is REWRITTEN to GeoClient's canonical
+    # form. The typed string is not kept alongside it: the canonical form IS
+    # the address, and keeping both would reintroduce the ambiguity this
+    # removes. raw_note already covers anything the submitter wants to say in
+    # their own words.
+    #
+    #   pending  — accepted, GeoClient not yet consulted
+    #   resolved — canonicalised
+    #   rejected — no match; geo_grc says why, and the submitter can edit+retry
+    #
+    # A `rejected` row is EXCLUDED from every routing lookup. Without that it
+    # sits in the table looking like intelligence while matching no stop —
+    # indistinguishable from a building nobody has visited.
+    address_status      = Column(String(20), nullable=False, server_default="pending", index=True)
+    geo_grc             = Column(String(10), nullable=True)     # Geosupport return code on rejection
+    geo_message         = Column(String(200), nullable=True)    # human-readable reason, shown on the retry form
+
+    # ADR-277 D2 / ADR-279: GeoClient output worth keeping.
+    # lat/lng give the truck page proximity sorting and initial_anchor a sane
+    # default. segment_id is the structural one: paired with
+    # DeliveryStop.segment_id it survives the ADR-219 48h address nulling, so a
+    # stop can still find its building past the window. Public street topology,
+    # not PII — no house number, no TBA (see StreetSegment).
+    lat                 = Column(Float, nullable=True)
+    lng                 = Column(Float, nullable=True)
+    segment_id          = Column(String(32), nullable=True, index=True)
+
     # Delivery character — UI tag for the walker at the door
     building_type       = Column(String(30),  nullable=False)   # receptionist | walkup | elevator |
                                                                  # biz_freight | biz_security |
