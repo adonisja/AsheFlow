@@ -122,6 +122,12 @@ class TestDetectorIsSound:
                 f"{[(n, id(sys.modules[n])) for n in sorted(sys.modules) if n.startswith('app.routers.')][:4]}\n"
                 f"  employees id here:   {id(_employees)}\n"
                 f"  employees in main:   {id(_m.employees)}\n"
+                f"  v1 route TYPES:      "
+                f"{sorted({type(r).__name__ for r in _m.api_v1_router.routes})}\n"
+                f"  v1 first 3 raw:      "
+                f"{[(type(r).__name__, getattr(r,'path','<no path>')) for r in _m.api_v1_router.routes[:3]]}\n"
+                f"  app.router is v1?:   {app.router is _m.api_v1_router}\n"
+                f"  employees router len:{len(_employees.router.routes)}\n"
                 "The prefixes present name WHICH routers made it in; the ones "
                 "missing are the ones whose include contributed nothing."
             )
