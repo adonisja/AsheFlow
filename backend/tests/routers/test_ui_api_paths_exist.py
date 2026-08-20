@@ -116,9 +116,14 @@ class TestDetectorIsSound:
                 f"{len(_employees.router.routes)} routes\n"
                 f"  duplicate main loads: "
                 f"{[k for k in sys.modules if k.endswith('main') and 'app' in k]}\n"
-                "If v1 router routes is 0 but employees has routes, the mount "
-                "ran before the includes. If employees is also 0, the router "
-                "modules were re-imported under a second module identity."
+                f"  v1 PREFIXES PRESENT: "
+                f"{sorted({getattr(r,'path','').split('/')[1] for r in _m.api_v1_router.routes if getattr(r,'path','')})}\n"
+                f"  router module ids:   "
+                f"{[(n, id(sys.modules[n])) for n in sorted(sys.modules) if n.startswith('app.routers.')][:4]}\n"
+                f"  employees id here:   {id(_employees)}\n"
+                f"  employees in main:   {id(_m.employees)}\n"
+                "The prefixes present name WHICH routers made it in; the ones "
+                "missing are the ones whose include contributed nothing."
             )
         assert len(_ui_paths()) > 40, "UI call extraction is broken"
 
