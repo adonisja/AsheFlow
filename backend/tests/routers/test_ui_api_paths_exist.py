@@ -24,14 +24,11 @@ false positive here costs more than a missed path — a guard people distrust is
 one they switch off.
 """
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
 from app.main import app
-import app.main as _m
-from app.routers import employees as _employees
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -60,10 +57,29 @@ _KNOWN_UNBUILT = {
 
 
 def _registered() -> set[str]:
-    """Server routes, stripped of the /api/v1 prefix and param-normalised."""
+    """Server routes, stripped of the /api/v1 prefix and param-normalised.
+
+    Read from the OpenAPI schema, NOT `app.routes`.
+
+    FastAPI >= 0.141 makes `include_router` lazy: it appends `_IncludedRouter`
+    placeholders and only expands them into real `APIRoute`s when the app
+    builds. So at import time `app.routes` holds 6 entries (the defaults plus
+    `/health`) while `api_v1_router.routes` holds 50 un-expanded placeholders
+    with no `.path` at all — which made this guard silently compare every UI
+    path against an EMPTY set and report ~200 healthy endpoints as missing.
+
+    It passed locally only because the local venv had FastAPI 0.128, where
+    `include_router` copied routes eagerly; requirements.txt pins 0.141.1, so
+    CI and local were running different FastAPIs.
+
+    `app.openapi()` forces full resolution through a public API and returns the
+    paths the server will actually serve — which is the question this test asks.
+    Deliberately not `app.router.routes` or any `_IncludedRouter` handling:
+    reaching into private structures is what tied the previous version to one
+    FastAPI release.
+    """
     out = set()
-    for r in app.routes:
-        p = getattr(r, "path", "")
+    for p in app.openapi().get("paths", {}):
         if not p.startswith("/api/v1/"):
             continue
         p = p[len("/api/v1"):]
@@ -94,42 +110,21 @@ class TestDetectorIsSound:
     """Guards the guard — a parser that finds nothing passes vacuously."""
 
     def test_it_finds_routes_and_calls(self):
-        # Self-diagnosing: when this fires in an environment you cannot attach a
-        # debugger to (CI), the message has to carry enough to identify WHICH
-        # assumption broke — the app object, the prefix, or the checkout.
         reg = _registered()
         if len(reg) <= 100:
-            paths = [getattr(r, "path", "") for r in app.routes]
-            prefixes = sorted({"/".join(p.split("/")[:3]) for p in paths})[:12]
+            # Self-diagnosing: this fired in CI for four commits while passing
+            # locally, because the two ran different FastAPI versions. The
+            # message has to name the environment, not just the symptom.
+            import fastapi
             raise AssertionError(
                 "route extraction is broken.\n"
-                f"  app object:      {app!r}\n"
-                f"  app module:      {type(app).__module__}\n"
-                f"  total routes:    {len(paths)}\n"
+                f"  fastapi version: {fastapi.__version__} "
+                f"(requirements.txt pins 0.141.1)\n"
                 f"  /api/v1 matches: {len(reg)}\n"
-                f"  prefixes seen:   {prefixes}\n"
-                f"  sample paths:    {sorted(paths)[:6]}\n"
-                f"  main module:     {_m.__file__}\n"
-                f"  main.app is app: {_m.app is app}\n"
-                f"  v1 router routes:{len(_m.api_v1_router.routes)}\n"
-                f"  sample sub-router (employees): "
-                f"{len(_employees.router.routes)} routes\n"
-                f"  duplicate main loads: "
-                f"{[k for k in sys.modules if k.endswith('main') and 'app' in k]}\n"
-                f"  v1 PREFIXES PRESENT: "
-                f"{sorted({getattr(r,'path','').split('/')[1] for r in _m.api_v1_router.routes if getattr(r,'path','')})}\n"
-                f"  router module ids:   "
-                f"{[(n, id(sys.modules[n])) for n in sorted(sys.modules) if n.startswith('app.routers.')][:4]}\n"
-                f"  employees id here:   {id(_employees)}\n"
-                f"  employees in main:   {id(_m.employees)}\n"
-                f"  v1 route TYPES:      "
-                f"{sorted({type(r).__name__ for r in _m.api_v1_router.routes})}\n"
-                f"  v1 first 3 raw:      "
-                f"{[(type(r).__name__, getattr(r,'path','<no path>')) for r in _m.api_v1_router.routes[:3]]}\n"
-                f"  app.router is v1?:   {app.router is _m.api_v1_router}\n"
-                f"  employees router len:{len(_employees.router.routes)}\n"
-                "The prefixes present name WHICH routers made it in; the ones "
-                "missing are the ones whose include contributed nothing."
+                f"  openapi paths:   {len(app.openapi().get('paths', {}))}\n"
+                f"  app.routes:      {len(app.routes)}\n"
+                "If openapi paths is large but matches is 0 the mount prefix "
+                "changed. If openapi paths is ~2 the app failed to build."
             )
         assert len(_ui_paths()) > 40, "UI call extraction is broken"
 
