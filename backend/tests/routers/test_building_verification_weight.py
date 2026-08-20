@@ -282,3 +282,54 @@ class TestD6UiFields:
         # client falls back to a plain count.
         src = (BACKEND / "app" / "schemas" / "location_profile.py").read_text(encoding="utf-8")
         assert "remaining_weight:   Optional[int] = None" in src
+
+
+class TestReviewQueueIsReachable:
+    """A `review` state nobody can see is a state that does not exist.
+
+    ADR-276 D1 made two walkers agreeing produce `review` and asked a captain
+    to sign it off — but `GET /building-profiles/` was gated `_allow_dispatch`,
+    so a captain could not list profiles at all. They could sign off only a
+    record whose id someone handed them. The queue lived in the data and
+    nowhere in the product.
+    """
+
+    def _list_src(self) -> str:
+        text = (BACKEND / "app" / "routers" / "building_profiles.py").read_text(encoding="utf-8")
+        i = text.index("def list_building_profiles(")
+        return text[i:text.index("\n@router.", i)]
+
+    def test_the_list_is_readable_by_anyone_who_may_verify(self):
+        src = self._list_src()
+        assert "Depends(_allow_verify)" in src, (
+            "the profile list is not readable by the people asked to sign "
+            "records off — a captain cannot find their own queue"
+        )
+
+    def test_status_filter_exists(self):
+        src = self._list_src()
+        assert 'alias="status"' in src, "no way to ask for just the review queue"
+        assert 'BuildingProfile.building_type_status == status_filter' in src
+
+    def test_unknown_status_is_rejected(self):
+        # A typo'd filter silently returning everything would look like an
+        # empty queue is a full one.
+        src = self._list_src()
+        assert '"pending", "review", "verified", "locked"' in src
+        assert "HTTP_422_UNPROCESSABLE_CONTENT" in src
+
+    def test_web_surfaces_the_queue(self):
+        page = (BACKEND.parent / "frontend" / "src" / "pages"
+                / "BuildingProfiles.tsx").read_text(encoding="utf-8")
+        assert "reviewCount" in page, "no count of records awaiting sign-off"
+        assert "Needs sign-off" in page, "the queue has no visible tile"
+
+    def test_a_captain_lands_on_the_queue(self):
+        # That queue IS their job on this page; making them find it is friction
+        # with no upside.
+        page = (BACKEND.parent / "frontend" / "src" / "pages"
+                / "BuildingProfiles.tsx").read_text(encoding="utf-8")
+        assert "isCaptain ? 'review' : 'all'" in page, (
+            "a captain opens the page on 'all' and must hunt for the records "
+            "waiting on them"
+        )

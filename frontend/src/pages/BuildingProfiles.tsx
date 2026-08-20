@@ -593,7 +593,13 @@ export default function BuildingProfilesPage() {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [search, setSearch]       = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'verified' | 'locked'>('all');
+  /* ADR-276: `review` is the sign-off queue — the field has agreed and a
+     captain or dispatch has not signed it off yet. A captain lands on it,
+     because that queue IS their job on this page; everyone else sees all. */
+  const { groups } = useAuth();
+  const isCaptain = groups.includes('captain');
+  const [statusFilter, setStatusFilter] =
+    useState<'all' | 'pending' | 'review' | 'verified' | 'locked'>(isCaptain ? 'review' : 'all');
   const [lockBusy, setLockBusy]   = useState<string | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
 
@@ -653,6 +659,7 @@ export default function BuildingProfilesPage() {
   });
 
   const pendingCount  = profiles.filter(p => p.building_type_status === 'pending').length;
+  const reviewCount   = profiles.filter(p => p.building_type_status === 'review').length;
   const verifiedCount = profiles.filter(p => p.building_type_status === 'verified').length;
   const lockedCount   = profiles.filter(p => p.building_type_status === 'locked').length;
 
@@ -675,9 +682,10 @@ export default function BuildingProfilesPage() {
       />
 
       {/* Summary counts */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         {[
           { label: 'Pending',  count: pendingCount,  color: 'text-warning',  filter: 'pending'  },
+          { label: 'Needs sign-off', count: reviewCount, color: 'text-primary', filter: 'review' },
           { label: 'Verified', count: verifiedCount, color: 'text-info',     filter: 'verified' },
           { label: 'Locked',   count: lockedCount,   color: 'text-success',  filter: 'locked'   },
         ].map(({ label, count, color, filter }) => (
