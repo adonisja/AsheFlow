@@ -14,12 +14,16 @@ import {
  * tab and its route can never disagree again. Previously desktop nav, mobile
  * nav, and route gates were three hand-maintained lists that silently drifted.
  *
- * Roles: admin | management | dispatch | trainer | trainee | driver | walker.
+ * Roles: admin | management | dispatch | trainer | trainee | driver | walker | captain.
  * (super_admin is a separate app shell and not modeled here.)
  */
 
 export type Role =
-  | 'admin' | 'management' | 'dispatch' | 'trainer' | 'trainee' | 'driver' | 'walker';
+  | 'admin' | 'management' | 'dispatch' | 'trainer' | 'trainee' | 'driver' | 'walker'
+  // ADR-274 D20: captain is a truck's route lead (ADR-256). It was absent from
+  // this union entirely, so a captain had no nav tabs and homeRouteForGroups
+  // dropped them to '/' with no dashboard.
+  | 'captain';
 
 export interface NavItem {
   path: string;
@@ -35,7 +39,9 @@ export interface NavContext {
   hasActiveQuiz: boolean;
 }
 
-const ALL_FIELD: Role[] = ['driver', 'walker', 'trainer', 'trainee'];
+// A captain crews a truck like the rest of field staff; what makes them a
+// captain is route-lead AUTHORITY (ADR-256 D5), not a different shift.
+const ALL_FIELD: Role[] = ['driver', 'walker', 'trainer', 'trainee', 'captain'];
 
 /**
  * Canonical nav items. Each `roles` array is the authoritative access set for
@@ -47,12 +53,12 @@ const ALL_FIELD: Role[] = ['driver', 'walker', 'trainer', 'trainee'];
  */
 export const NAV_ITEMS: NavItem[] = [
   { path: '/dispatch',              label: 'Assignments',       icon: ClipboardCheck, roles: ['admin', 'dispatch'] },
-  { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver'] },
+  { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver', 'captain'] },
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
-  { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
+  { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'] },
   // /dispatch-home has NO tab: it is dispatch's Dashboard landing
   // (homeRouteForGroups), and every role has its own scoped home dashboard —
   // admin lands on /admin and doesn't need dispatch's. Route access is gated
@@ -70,13 +76,13 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/preferences',           label: 'Preferences',       icon: Settings,       roles: ['driver', 'walker', 'trainer', 'trainee'] },
   { path: '/scorecards',            label: 'Scorecards',        icon: Star,           roles: ['admin', 'dispatch', 'management'] },
   { path: '/schedule',              label: 'Schedule',          icon: Calendar,       roles: ['admin', 'management', ...ALL_FIELD] },
-  { path: '/schedule-changes',      label: 'Schedule Changes',  icon: RefreshCw,      roles: ['admin', 'dispatch', 'driver', 'trainer', 'trainee', 'walker'] },
+  { path: '/schedule-changes',      label: 'Schedule Changes',  icon: RefreshCw,      roles: ['admin', 'dispatch', 'driver', 'trainer', 'trainee', 'walker', 'captain'] },
   { path: '/settings',              label: 'Settings',          icon: Settings,       roles: ['admin'] },
   { path: '/sort',                  label: 'Station Sort',      icon: Route,          roles: ['admin', 'dispatch', 'driver'] },
   // ADR-273: cross-run algorithm telemetry used to justify a tenant-wide tuning
   // change. Management+admin only — dispatch is not management (ADR-242).
   { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'] },
-  { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer'] },
+  { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'] },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
   // /trainer-dashboard has NO nav tab. It is a trainer's Dashboard landing
   // (homeRouteForGroups), so trainers reach it without one; the admin tab was
@@ -112,6 +118,9 @@ export function navItemsForGroups(groups: string[], ctx: NavContext): NavItem[] 
 /** Role-specific landing route for the Dashboard link. */
 export function homeRouteForGroups(groups: string[]): string {
   if (groups.includes('admin'))      return '/admin';
+  // Before this, a captain fell through to '/' and got WorkerView — a
+  // driver/walker page with none of their route-lead signals.
+  if (groups.includes('captain'))    return '/captain-dashboard';
   if (groups.includes('dispatch'))   return '/dispatch-home';
   if (groups.includes('management')) return '/management';
   if (groups.includes('trainer'))    return '/trainer-dashboard';

@@ -28,6 +28,7 @@ import OperationsAnalytics from './pages/OperationsAnalytics';
 import DriverSurveys from './pages/DriverSurveys';
 import AnchorPoints from './pages/AnchorPoints';
 import CrewStatus from './pages/CrewStatus';
+import CaptainDashboard from './pages/CaptainDashboard';
 import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
@@ -110,6 +111,7 @@ function RoleRedirect() {
   if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
+  if (groups.includes('captain'))     return <Navigate to="/captain-dashboard" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
   if (groups.includes('trainee'))     return <Navigate to="/my-training" replace />;
   return <Dashboard />;
@@ -253,20 +255,20 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin']}><Schedule /></ProtectedRoute>} />
+            <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin', 'captain']}><Schedule /></ProtectedRoute>} />
             {/* field-ops: drivers submit; trainers/trainees see AP card; walkers see self-performance; oversight roles see summary */}
-            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><FieldOps /></ProtectedRoute>} />
+            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}><FieldOps /></ProtectedRoute>} />
             {/* schedule-changes: dispatch excluded — not their job */}
             <Route
               path="/schedule-changes"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'admin', 'captain']}>
                   <ScheduleChanges />
                 </ProtectedRoute>
               }
             />
             {/* incidents: all authenticated roles can file or view incidents */}
-            <Route path="/incidents" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><Incidents /></ProtectedRoute>} />
+            <Route path="/incidents" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}><Incidents /></ProtectedRoute>} />
             <Route
               path="/preferences"
               element={
@@ -430,15 +432,16 @@ function App() {
             <Route
               path="/anchor-points"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin', 'captain']}>
                   <AnchorPoints />
                 </ProtectedRoute>
               }
             />
+            <Route path="/captain-dashboard" element={<ProtectedRoute allowedRoles={['captain', 'admin']}><CaptainDashboard /></ProtectedRoute>} />
             <Route
               path="/crew-status"
               element={
-                <ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'driver', 'trainer']}>
+                <ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain']}>
                   <CrewStatus />
                 </ProtectedRoute>
               }
@@ -499,7 +502,7 @@ function App() {
             <Route
               path="/building-profiles"
               element={
-                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'driver', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'driver', 'dispatch', 'management', 'admin', 'captain']}>
                   <BuildingProfilesPage />
                 </ProtectedRoute>
               }
@@ -541,7 +544,7 @@ function App() {
             <Route
               path="/walker-sort"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
                   <WalkerSortMonitor />
                 </ProtectedRoute>
               }
@@ -557,7 +560,7 @@ function App() {
             <Route
               path="/gear"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}>
                   <GearRequest />
                 </ProtectedRoute>
               }
