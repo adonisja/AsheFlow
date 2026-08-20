@@ -44,7 +44,17 @@ export const WALKER_ROLES             = ['walker'] as const;
 export const ROUTE_SORT_ROLES         = ['driver', 'trainer', 'captain'] as const;
 // Trainers carry routes too (solo wave assignment or the paired trainee's) —
 // walkers/trainees reach My Route inside their own dashboards instead.
-export const MY_ROUTE_TAB_ROLES       = ['trainer'] as const;
+//
+// CAPTAIN added (ADR-276 follow-up): a captain occasionally carries a route of
+// their own, and routinely carries the reattempts walkers could not complete.
+// Without this tab they had no mobile route screen at all — and therefore no
+// way to submit building intelligence from the stop they were standing at,
+// which is the one thing the operator called them "the walking banks" for.
+//
+// /me/routes returns the whole TRUCK for a captain (they are truck-scoped), but
+// the screen filters to routes where the caller is executor or supervisor —
+// verified on staging: a 2-route truck showed the captain only their own.
+export const MY_ROUTE_TAB_ROLES       = ['trainer', 'captain'] as const;
 export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
 export const GEAR_ROLES               = ['driver', 'walker', 'trainer', 'trainee', 'captain'] as const;
 export const REATTEMPT_ROLES          = ['driver', 'trainer', 'captain'] as const;

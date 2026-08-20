@@ -52,6 +52,11 @@ class TestCaptainHasATabSurface:
         ("SCHEDULE_ROLES",      "every field role needs their own schedule"),
         ("GEAR_ROLES",          "every field role requests gear"),
         ("PREFERENCES_ROLES",   "every field role sets preferences"),
+        # A captain occasionally carries a route, and routinely carries the
+        # reattempts walkers could not complete. Without this tab they have no
+        # mobile route screen — and no way to submit building intelligence from
+        # the stop they are standing at (ADR-276: they are the walking banks).
+        ("MY_ROUTE_TAB_ROLES",  "a captain carries routes and reattempts"),
     ])
     def test_captain_is_in_tuple(self, tuple_name: str, why: str):
         t = _tuples()
@@ -142,4 +147,40 @@ class TestBackendAlreadySupportsThem:
         assert "def _is_elevated_for_route(" in src, (
             "the truck-scoped elevation helper is gone — captain elevation may "
             "have reverted to a blanket role list (ADR-256 D11)"
+        )
+
+
+class TestCaptainCanSubmitBuildingIntelligence:
+    """The submit path ADR-276 depends on, on the device they carry.
+
+    ADR-276 makes a captain's building observation worth two walkers'. That is
+    worth nothing if they cannot record one: the only mobile submit surface is
+    inside MyRouteScreen, reached from a completed stop.
+    """
+
+    def test_mobile_submit_lives_in_my_route(self):
+        screen = (BACKEND.parent / "mobile" / "src" / "screens" / "Trainee"
+                  / "MyRouteScreen.tsx").read_text(encoding="utf-8")
+        assert "post('/building-profiles/'" in screen, (
+            "the mobile building-profile submit has moved — the captain's "
+            "access to it is gated on MY_ROUTE_TAB_ROLES, which assumes it "
+            "lives on this screen"
+        )
+
+    def test_captain_reaches_that_screen(self):
+        assert "captain" in _tuples()["MY_ROUTE_TAB_ROLES"], (
+            "a captain has no mobile route screen, so no way to submit a "
+            "building profile from the stop they are at"
+        )
+
+    def test_captain_reaches_reattempts(self):
+        # The other half of why they carry a route at all.
+        assert "captain" in _tuples()["REATTEMPT_ROLES"]
+
+    def test_web_submit_is_also_reachable(self):
+        nav = (BACKEND.parent / "frontend" / "src" / "config"
+               / "navConfig.ts").read_text(encoding="utf-8")
+        line = next(l for l in nav.splitlines() if "'/building-profiles'" in l)
+        assert "ALL_FIELD" in line or "captain" in line, (
+            "captains cannot reach the web Buildings page"
         )
