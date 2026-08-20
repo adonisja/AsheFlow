@@ -1082,14 +1082,18 @@ export interface BuildingProfileResponse {
   operational_note: string | null;
   note_verified: boolean;
   protocol_reminder: string | null;
-  building_type_status: 'pending' | 'verified' | 'locked';
+  /** ADR-276 D1 — two stages. 'review' means the field agreed (two walkers, or
+   *  one captain) and it is queued for a captain or dispatch to sign off;
+   *  'verified' means a route lead has. Only 'locked' is read downstream. */
+  building_type_status: 'pending' | 'review' | 'verified' | 'locked';
   building_type_agreement_count: number;
   /** ADR-276 D6 — computed server-side per caller so neither client re-derives
    *  the weighting rule. Null on read paths that do not resolve caller state,
    *  where the UI falls back to showing the raw count. */
   remaining_weight?: number | null;
   can_verify?: boolean | null;
-  verify_blocked_reason?: 'own_submission' | 'already_verified' | 'not_a_route_lead' | null;
+  verify_blocked_reason?: 'own_submission' | 'already_verified'
+    | 'not_a_field_verifier' | 'awaiting_signoff' | null;
   nomination_status: string | null;
   submitted_by: string | null;
   submitted_by_name: string;

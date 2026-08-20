@@ -28,9 +28,8 @@ from pathlib import Path
 import pytest
 
 from app.routers.building_profiles import (
-    _VERIFY_THRESHOLD, _HEAVY_VERIFIERS, _verify_weight,
+    _REVIEW_THRESHOLD, _FIELD_VERIFIERS, _SIGNOFF_ROLES, _verify_weight,
 )
-from app.services.constants import ROUTE_LEAD_ROLES
 
 
 BACKEND = Path(__file__).resolve().parents[2]
@@ -60,39 +59,118 @@ class TestStrippingWorks:
         )
 
 
-class TestD1Weighting:
-    def test_captain_confirmation_settles_it_alone(self):
-        assert _verify_weight("captain") >= _VERIFY_THRESHOLD, (
-            "a captain's confirmation no longer reaches the threshold on its "
-            "own — the whole point of D1"
+class TestD1TwoStages:
+    """Field agreement and route-lead sign-off are different facts.
+
+    The first implementation of this ADR got the roles backwards: it reused
+    ROUTE_LEAD_ROLES as the verify gate, so DRIVERS could confirm and WALKERS
+    could not. `_allow_delivery` in walker_routes already recorded why a driver
+    must not — "logistics role, does not walk blocks or assess difficulty" — and
+    the operator's framing was that walkers are the walking banks for this data.
+    """
+
+    def test_walkers_can_contribute_field_agreement(self):
+        assert "walker" in _FIELD_VERIFIERS, (
+            "walkers cannot confirm — they walk the blocks and are the largest "
+            "source of this data; excluding them was the original bug"
         )
 
-    def test_two_drivers_settle_it(self):
-        assert _verify_weight("driver") * 2 >= _VERIFY_THRESHOLD
+    @pytest.mark.parametrize("role", ["walker", "trainer", "trainee"])
+    def test_delivery_staff_weigh_one(self, role):
+        assert _verify_weight(role) == 1
 
-    def test_one_driver_does_not(self):
-        assert _verify_weight("driver") < _VERIFY_THRESHOLD, (
-            "a single driver confirmation verifies the profile — no second "
-            "pair of eyes"
+    def test_two_walkers_reach_the_review_threshold(self):
+        assert _verify_weight("walker") * 2 >= _REVIEW_THRESHOLD
+
+    def test_one_walker_does_not(self):
+        assert _verify_weight("walker") < _REVIEW_THRESHOLD, (
+            "a single walker surfaces the record for review with no second "
+            "observation"
         )
 
-    @pytest.mark.parametrize("role", ["captain", "dispatch", "field_supervisor",
-                                      "management", "admin"])
-    def test_route_lead_and_oversight_are_heavy(self, role):
-        assert _verify_weight(role) == 2
-
-    def test_walkers_cannot_verify_at_all(self):
-        # Settled by the operator 2026-08-19. A walker SUBMITS; having them also
-        # judge the submission would collapse the two sides of the check.
-        assert "walker" not in ROUTE_LEAD_ROLES, (
-            "walkers can now verify — ADR-276 D1 states they cannot, and its "
-            "weight table has no row for them"
+    def test_a_captain_carries_the_two_walkers(self):
+        assert _verify_weight("captain") >= _REVIEW_THRESHOLD, (
+            "a captain's observation no longer replaces the two walkers it is "
+            "meant to be worth"
         )
+
+    def test_drivers_are_in_neither_stage(self):
+        # The correction that prompted this rewrite.
+        assert "driver" not in _FIELD_VERIFIERS, (
+            "a driver can contribute field agreement — but they do not walk "
+            "the block, which is the whole basis for assessing a building "
+            "(_allow_delivery says so)"
+        )
+        assert "driver" not in _SIGNOFF_ROLES, (
+            "a driver can sign off a building type"
+        )
+
+    def test_signoff_is_route_lead_or_oversight(self):
+        assert _SIGNOFF_ROLES == {
+            "captain", "dispatch", "field_supervisor", "management", "admin",
+        }
+
+    def test_walkers_cannot_sign_off(self):
+        # They supply evidence; they do not rule on it.
+        assert "walker" not in _SIGNOFF_ROLES
 
     def test_weight_defaults_safe_for_an_unknown_role(self):
-        # A new role must not silently inherit captain-level authority.
+        # A new role must not silently inherit captain-level weight.
         assert _verify_weight("some_new_role") == 1
         assert _verify_weight(None) == 1
+
+
+class TestStateMachine:
+    """pending → review → verified, and what each transition means."""
+
+    def test_field_agreement_reaches_review_not_verified(self):
+        src = _verify_src()
+        assert 'profile.building_type_status = "review"' in src, (
+            "two walkers agreeing verifies the record outright — it should "
+            "SURFACE it for a captain or dispatch to sign off"
+        )
+
+    def test_only_a_signoff_reaches_verified(self):
+        src = _verify_src()
+        i = src.index("if is_signoff:")
+        assert 'profile.building_type_status = "verified"' in src[i:i + 200], (
+            "`verified` is set outside the sign-off branch, so field agreement "
+            "alone can produce it"
+        )
+
+    def test_signoff_does_not_inflate_the_field_count(self):
+        # Sign-off is a different STAGE, not more agreement. Letting it add
+        # leaves walker+walker+captain at 4, which reads as "four people
+        # agreed" — a number a later reader would reasonably trust.
+        src = _verify_src()
+        i = src.index("if is_signoff:")
+        assert "profile.building_type_agreement_count = _REVIEW_THRESHOLD" in src[i:i+400], (
+            "the sign-off adds its weight to the field count, so the total "
+            "drifts past the threshold and stops meaning anything"
+        )
+
+    def test_signoff_requires_the_review_state(self):
+        src = _verify_src()
+        assert 'profile.building_type_status == "review"' in src, (
+            "a route lead can sign off a record the field has not agreed on"
+        )
+
+    def test_a_captain_submission_lands_in_review(self):
+        src = (BACKEND / "app" / "routers" / "building_profiles.py").read_text(encoding="utf-8")
+        i = src.index("def submit_building_profile(")
+        body = src[i:src.index("\n@router.", i)]
+        assert '"review" if _verify_weight(caller.role) >= _REVIEW_THRESHOLD' in body, (
+            "a captain's own submission does not reach review, so their "
+            "observation is worth less on submit than on confirm"
+        )
+
+    def test_submission_records_its_own_verification_row(self):
+        # Or the counter and the rows disagree: count=1 with no row explaining
+        # where it came from, and D3 cannot see the submitter.
+        src = (BACKEND / "app" / "routers" / "building_profiles.py").read_text(encoding="utf-8")
+        i = src.index("def submit_building_profile(")
+        body = src[i:src.index("\n@router.", i)]
+        assert "BuildingProfileVerification(" in body
 
 
 class TestD2NoSelfVerification:
@@ -192,7 +270,8 @@ class TestD6UiFields:
 
     def test_blocked_reasons_cover_every_disabled_state(self):
         src = (BACKEND / "app" / "schemas" / "location_profile.py").read_text(encoding="utf-8")
-        for reason in ("own_submission", "already_verified", "not_a_route_lead"):
+        for reason in ("own_submission", "already_verified",
+                       "not_a_field_verifier", "awaiting_signoff"):
             assert f'"{reason}"' in src, (
                 f"{reason} is not distinguishable, so the UI shows a live "
                 "button that 403s instead of explaining itself"

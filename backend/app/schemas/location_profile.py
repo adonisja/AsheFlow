@@ -125,7 +125,8 @@ class BuildingProfileResponse(BaseModel):
     # resolve per-caller state), which the UI renders as a plain count.
     remaining_weight:   Optional[int] = None   # weight still needed to verify
     can_verify:         Optional[bool] = None  # may THIS caller confirm it?
-    verify_blocked_reason: Optional[str] = None  # own_submission | already_verified | not_a_route_lead
+    verify_blocked_reason: Optional[str] = None  # own_submission | already_verified
+                                                 # | not_a_field_verifier | awaiting_signoff
 
     @classmethod
     def from_orm_with_protocol(cls, obj, caller=None, already_verified=False) -> "BuildingProfileResponse":
@@ -140,18 +141,34 @@ class BuildingProfileResponse(BaseModel):
 
         if caller is not None:
             from app.routers.building_profiles import (
-                _VERIFY_THRESHOLD, _verify_weight,
+                _REVIEW_THRESHOLD, _FIELD_VERIFIERS, _SIGNOFF_ROLES, _verify_weight,
             )
-            from app.services.constants import ROUTE_LEAD_ROLES
 
-            count = obj.building_type_agreement_count or 0
-            remaining = max(0, _VERIFY_THRESHOLD - count)
+            count  = obj.building_type_agreement_count or 0
+            status = obj.building_type_status
+            role   = caller.role
+
+            # Two stages, so "what is left to do" depends on which one we are in.
+            in_review  = status == "review"
+            is_signer  = role in _SIGNOFF_ROLES
+            is_fielder = role in _FIELD_VERIFIERS
+
+            if status in ("verified", "locked"):
+                remaining = 0
+            elif in_review:
+                remaining = 1          # one sign-off away
+            else:
+                remaining = max(0, _REVIEW_THRESHOLD - count)
 
             reason = None
             if remaining == 0:
-                reason = None                      # nothing left to do
-            elif caller.role not in ROUTE_LEAD_ROLES:
-                reason = "not_a_route_lead"        # walkers submit, never confirm
+                reason = None
+            elif in_review and not is_signer:
+                # A walker looking at a record already queued for sign-off has
+                # nothing left to add — saying so beats a button that 409s.
+                reason = "awaiting_signoff"
+            elif not in_review and not is_fielder:
+                reason = "not_a_field_verifier"
             elif obj.submitted_by is not None and obj.submitted_by == caller.id:
                 reason = "own_submission"          # D2
             elif already_verified:

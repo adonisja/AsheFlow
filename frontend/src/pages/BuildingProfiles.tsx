@@ -32,6 +32,10 @@ const BUILDING_TYPES = Object.keys(BUILDING_TYPE_LABELS) as BuildingType[];
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
     pending:  'bg-warning/10 text-warning',
+    // ADR-276 D1: the field agreed and it is queued for sign-off — an action
+    // someone owns, so it reads as actionable rather than falling through to
+    // the inert grey default.
+    review:   'bg-primary/10 text-primary',
     verified: 'bg-info/10 text-info',
     locked:   'bg-success/10 text-success',
   };
@@ -147,16 +151,18 @@ function verifyHint(p: BuildingProfileResponse): string {
   if (p.building_type_status === 'locked')   return 'Locked';
   if (p.remaining_weight == null)            return `${p.building_type_agreement_count}✓`;
   if (p.remaining_weight <= 0)               return 'Verified';
-  if (p.remaining_weight >= 2)               return 'Needs 1 captain, or 2 drivers';
-  return 'Needs 1 more — a captain, or 1 more driver';
+  if (p.building_type_status === 'review')    return 'Awaiting sign-off';
+  if (p.remaining_weight >= 2)               return 'Needs 2 walkers, or 1 captain';
+  return 'Needs 1 more walker, or 1 captain';
 }
 
 /** Why this caller cannot confirm. Absent reason = they can. */
 function verifyBlockedText(p: BuildingProfileResponse): string | null {
   switch (p.verify_blocked_reason) {
-    case 'own_submission':   return 'You submitted this — someone else must confirm it';
-    case 'already_verified': return 'You already confirmed this';
-    case 'not_a_route_lead': return 'Only a captain, driver or dispatch can confirm';
+    case 'own_submission':       return 'You submitted this — someone else must confirm it';
+    case 'already_verified':     return 'You already confirmed this';
+    case 'awaiting_signoff':     return 'The field agrees — a captain or dispatch signs this off';
+    case 'not_a_field_verifier': return 'Only people who walk the blocks can confirm a building';
     default:                 return null;
   }
 }
