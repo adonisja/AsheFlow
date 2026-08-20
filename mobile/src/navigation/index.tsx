@@ -27,7 +27,6 @@ import AnchorPointTab           from '@screens/AnchorPoints/AnchorPointTab';
 import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
 import ScheduleChangesScreen    from '@screens/ScheduleChanges/ScheduleChangesScreen';
 import WalkerDashboard          from '@screens/Walker/WalkerDashboard';
-import LocationProfilesScreen   from '@screens/LocationProfiles/LocationProfilesScreen';
 import DriverSurveyScreen       from '@screens/DriverSurvey/DriverSurveyScreen';
 import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
 import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
@@ -43,7 +42,7 @@ export * from './roles';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
-  WALKER_ROLES, LOCATION_PROFILE_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
+  WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
   GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES,
 } from './roles';
 import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
@@ -105,7 +104,6 @@ const ALL_TABS: TabDef[] = [
   { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
   { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
   { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
-  { key: 'Locations',       label: 'Locations',        icon: '📍', roles: LOCATION_PROFILE_ROLES,  component: LocationProfilesScreen },
   { key: 'Gear',            label: 'Gear',             icon: '🎒', roles: GEAR_ROLES,              component: GearRequestsScreen },
   { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', roles: PREFERENCES_ROLES,       component: PreferencesScreen },
   { key: 'Notifications',   label: 'Notifications',    icon: '🔔', roles: [],                      component: NotificationsScreen },

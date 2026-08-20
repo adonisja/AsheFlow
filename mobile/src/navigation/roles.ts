@@ -31,7 +31,12 @@ export const INCIDENT_ROLES           = ['driver', 'walker', 'trainer', 'trainee
 export const TRAINER_ROLES            = ['trainer'] as const;
 export const TRAINEE_ROLES            = ['trainee'] as const;
 export const WALKER_ROLES             = ['walker'] as const;
-export const LOCATION_PROFILE_ROLES   = ['driver', 'walker', 'trainer', 'trainee', 'captain'] as const;
+/* LOCATION_PROFILE_ROLES removed with the Locations tab (ADR-274 D21).
+ * That screen called /location-profiles/, a router DELETED by ADR-135 when the
+ * model went address-first — both its calls 404'd, so it had been dead since
+ * that rename. Building intelligence is submitted from MyRouteScreen instead,
+ * in context at the stop the walker just completed, which is both the working
+ * path and the better one. */
 // Drivers AND trainers run AP Sort at the anchor point (mobile-first page).
 // D5: route assignment is the captain's. Driver stays (the captain organises
 // routes WITH the driver); trainer stays for now — see the trainer->captain
