@@ -112,6 +112,10 @@ class StopOut(BaseModel):
     """
     block_key: str
     address: str
+    # ADR-279: the LION segment this building sits on, modal across the stop's
+    # packages. None when GeoClient returned no segment topology for the
+    # address. Persisted onto DeliveryStop as the purge-durable join key.
+    segment_id: Optional[str] = None
     tba_numbers: list[str]
     # ADR-230: TBAs grouped by bag (with color). tba_numbers stays as the flat
     # union for back-compat; clients render from bags.

@@ -623,6 +623,9 @@ export interface MisroutedPackageFlagResponse {
 export interface RouteStop {
   block_key: string;
   address: string;
+  /** ADR-279: LION segment for this building, modal across the stop's packages.
+   *  null when GeoClient returned no segment topology for the address. */
+  segment_id: string | null;
   tba_numbers: string[];
 }
 
@@ -909,6 +912,10 @@ export interface DeliveryStopResponse {
   walker_name: string | null;
   normalised_address: string;
   block_key: string;
+  /** ADR-279: purge-durable join key. Survives the ADR-219 48h address nulling
+   *  (public street topology, like block_key), so it stays set after
+   *  normalised_address is gone. null on ad-hoc stops (RTS, found packages). */
+  segment_id: string | null;
   tba_numbers: string[];
   // Lifecycle (ADR-197): planned rows carry nulls until completed
   status: 'planned' | 'in_progress' | 'completed';

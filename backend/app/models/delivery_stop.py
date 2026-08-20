@@ -47,6 +47,15 @@ class DeliveryStop(Base):
 
     normalised_address   = Column(String(200), nullable=True)   # ADR-219: nulled 48h post-route (block_key kept)
     block_key            = Column(String(100), nullable=False)
+    # ADR-279: the LION segment this building sits on — the purge-durable join
+    # key. NOT nulled by ADR-219: a segment id is public street topology (see
+    # StreetSegment: "no house numbers, no normalised_address, no package/TBA
+    # data"), the same class of fact as block_key, just more precise. It cannot
+    # reconstruct a house number, which is what makes retaining it safe.
+    # Null is a real answer, never "no match": GeoClient may return a street
+    # with no segment topology (grc 42), and the three ad-hoc creation paths
+    # (rts.py x2, package_intake.py) have no enriched package to read it from.
+    segment_id           = Column(String(32), nullable=True, index=True)
     tba_numbers          = Column(ARRAY(String(50)), nullable=False, default=list)
 
     # Lifecycle (ADR-197)

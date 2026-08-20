@@ -273,10 +273,19 @@ from app.routers.walker_routes import (
 from app.schemas.walker_routes import StopOut
 
 
-def _stop(bk: str, addr: str, tbas: list[str]) -> dict:
+def _stop(bk: str, addr: str, tbas: list[str], segment_id: str | None = None) -> dict:
     # ADR-230: StopOut now carries a bag-grouped view; default [] when built
     # without bags (these fixtures pass only tba_numbers).
-    return {"block_key": bk, "address": addr, "tba_numbers": tbas, "bags": []}
+    # ADR-279: ...and a per-stop segment_id, None when the fixture's packages
+    # carried no LION topology (which is every fixture here — they pass
+    # addresses, not enriched packages).
+    return {
+        "block_key": bk,
+        "address": addr,
+        "segment_id": segment_id,
+        "tba_numbers": tbas,
+        "bags": [],
+    }
 
 
 class TestPersistRoutesStops:
