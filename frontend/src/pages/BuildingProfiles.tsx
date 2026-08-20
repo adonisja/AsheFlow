@@ -136,6 +136,31 @@ function SubmitModal({ onClose, onCreated }: SubmitModalProps) {
 }
 
 // ---------------------------------------------------------------------------
+/** What is still needed to verify, in the reader's own terms (ADR-276 D6).
+ *
+ *  A bare "1✓" tells a captain nothing about whether THEIR tap finishes it.
+ *  The server sends `remaining_weight` and `can_verify`, so this never
+ *  re-derives the rule — a client computing `2 - count` would be wrong the
+ *  moment a weight changes, and wrong as a button that silently does nothing.
+ */
+function verifyHint(p: BuildingProfileResponse): string {
+  if (p.building_type_status === 'locked')   return 'Locked';
+  if (p.remaining_weight == null)            return `${p.building_type_agreement_count}✓`;
+  if (p.remaining_weight <= 0)               return 'Verified';
+  if (p.remaining_weight >= 2)               return 'Needs 1 captain, or 2 drivers';
+  return 'Needs 1 more — a captain, or 1 more driver';
+}
+
+/** Why this caller cannot confirm. Absent reason = they can. */
+function verifyBlockedText(p: BuildingProfileResponse): string | null {
+  switch (p.verify_blocked_reason) {
+    case 'own_submission':   return 'You submitted this — someone else must confirm it';
+    case 'already_verified': return 'You already confirmed this';
+    case 'not_a_route_lead': return 'Only a captain, driver or dispatch can confirm';
+    default:                 return null;
+  }
+}
+
 // Verify modal
 // ---------------------------------------------------------------------------
 
@@ -453,7 +478,7 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <StatusPill status={profile.building_type_status} />
-          <span className="text-xs text-muted-foreground">{profile.building_type_agreement_count}✓</span>
+          <span className="text-xs text-muted-foreground">{verifyHint(profile)}</span>
           {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
         </div>
       </button>
@@ -515,7 +540,9 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
             {profile.building_type_status !== 'locked' && (
               <button
                 onClick={() => onVerify(profile)}
-                className="text-xs btn-secondary flex items-center gap-1"
+                disabled={profile.can_verify === false}
+                title={verifyBlockedText(profile) ?? 'Confirm this building type'}
+                className="text-xs btn-secondary flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" /> Verify
               </button>

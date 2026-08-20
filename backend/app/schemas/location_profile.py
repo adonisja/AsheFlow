@@ -115,11 +115,55 @@ class BuildingProfileResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    # ── ADR-276 D6: the UI shows REMAINING WEIGHT, not a raw count ───────────
+    # "1 of 2 agreements" tells a captain nothing about whether THEIR tap
+    # finishes it. These are computed server-side because a client doing
+    # `2 - count` would be wrong the moment a weight changes — and wrong as a
+    # button that silently does nothing.
+    #
+    # None means "not computed for this caller" (list endpoints that do not
+    # resolve per-caller state), which the UI renders as a plain count.
+    remaining_weight:   Optional[int] = None   # weight still needed to verify
+    can_verify:         Optional[bool] = None  # may THIS caller confirm it?
+    verify_blocked_reason: Optional[str] = None  # own_submission | already_verified | not_a_route_lead
+
     @classmethod
-    def from_orm_with_protocol(cls, obj) -> "BuildingProfileResponse":
+    def from_orm_with_protocol(cls, obj, caller=None, already_verified=False) -> "BuildingProfileResponse":
+        """Build the response, optionally answering "can this caller verify?".
+
+        `caller` is optional so the many read paths that do not care keep
+        working unchanged; when omitted the three D6 fields stay None and the
+        client falls back to showing the count.
+        """
         r = cls.model_validate(obj)
-        r = r.model_copy(update={"protocol_reminder": BUILDING_TYPE_PROTOCOL.get(obj.building_type, "")})
-        return r
+        update = {"protocol_reminder": BUILDING_TYPE_PROTOCOL.get(obj.building_type, "")}
+
+        if caller is not None:
+            from app.routers.building_profiles import (
+                _VERIFY_THRESHOLD, _verify_weight,
+            )
+            from app.services.constants import ROUTE_LEAD_ROLES
+
+            count = obj.building_type_agreement_count or 0
+            remaining = max(0, _VERIFY_THRESHOLD - count)
+
+            reason = None
+            if remaining == 0:
+                reason = None                      # nothing left to do
+            elif caller.role not in ROUTE_LEAD_ROLES:
+                reason = "not_a_route_lead"        # walkers submit, never confirm
+            elif obj.submitted_by is not None and obj.submitted_by == caller.id:
+                reason = "own_submission"          # D2
+            elif already_verified:
+                reason = "already_verified"        # D3
+
+            update.update({
+                "remaining_weight": remaining,
+                "can_verify": remaining > 0 and reason is None,
+                "verify_blocked_reason": reason,
+            })
+
+        return r.model_copy(update=update)
 
 
 # ── BuildingProfileLibrary schemas ────────────────────────────────────────────

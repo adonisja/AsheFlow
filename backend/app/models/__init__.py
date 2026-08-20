@@ -35,6 +35,7 @@ from app.models.truck_zone import TruckZone
 from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
 from app.models.building_profile import BuildingProfile
 from app.models.building_profile_library import BuildingProfileLibrary
+from app.models.building_profile_verification import BuildingProfileVerification
 from app.models.street_segment import StreetSegment   # ADR-236: LION topology map
 from app.models.gear_request import GearOrder, GearOrderItem
 from app.models.trainee_credentials import TraineeCredentials

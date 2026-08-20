@@ -1084,6 +1084,12 @@ export interface BuildingProfileResponse {
   protocol_reminder: string | null;
   building_type_status: 'pending' | 'verified' | 'locked';
   building_type_agreement_count: number;
+  /** ADR-276 D6 — computed server-side per caller so neither client re-derives
+   *  the weighting rule. Null on read paths that do not resolve caller state,
+   *  where the UI falls back to showing the raw count. */
+  remaining_weight?: number | null;
+  can_verify?: boolean | null;
+  verify_blocked_reason?: 'own_submission' | 'already_verified' | 'not_a_route_lead' | null;
   nomination_status: string | null;
   submitted_by: string | null;
   submitted_by_name: string;
