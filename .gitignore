@@ -184,7 +184,6 @@ backend/app/services/derive_block_key.py
 backend/app/services/seed_manifest.py
 backend/app/services/wave_distribution.py
 backend/app/services/stop_cutoff.py
-backend/app/services/tier1_verify.py
 backend/tests/routers/test_arrival_confirm.py
 backend/tests/routers/test_back_at_truck.py
 backend/tests/routers/test_reassign_trainee.py
