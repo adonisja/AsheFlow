@@ -345,3 +345,61 @@ def prune_notifications() -> dict:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.cleanup.purge_expired_ore_certificates")
+def purge_expired_ore_certificates() -> dict:
+    """Delete ORE certificates past their retention window (ADR-281 D3).
+
+    An S3 lifecycle rule expires these at 1 day as a backstop, but lifecycle is
+    eventually consistent and 48h here is a privacy commitment, not an
+    optimisation — so the sweep deletes precisely and nulls the key.
+
+    The ATTESTATION survives: ore_completed_at and ore_certificate_uploaded_by
+    are untouched. A NULL key with a non-null ore_completed_at is what the API
+    reads as "certificate expired", which is a different answer to a manager
+    than "never uploaded".
+
+    Idempotent — safe to re-run, and safe when S3 already removed the object.
+    """
+    from app.models.training import TrainingRecord
+    from app.services import ore_certificates
+
+    if not ore_certificates.is_enabled():
+        logger.info("purge_expired_ore_certificates: storage not configured, skipping.")
+        return {"deleted": 0, "failed": 0, "skipped": True}
+
+    db = SessionLocal()
+    deleted = failed = 0
+    try:
+        now = datetime.now(timezone.utc)
+        expired = (
+            db.query(TrainingRecord)
+            .filter(
+                TrainingRecord.ore_certificate_key.isnot(None),
+                TrainingRecord.ore_certificate_expires_at < now,
+            )
+            .all()
+        )
+        for record in expired:
+            if ore_certificates.delete(record.ore_certificate_key):
+                # Null the key ONLY on a confirmed delete. Nulling after a
+                # failure would orphan the object: nothing would point at it,
+                # so nothing would ever try again, and it would sit past its
+                # retention window until the lifecycle rule happened to catch it.
+                record.ore_certificate_key = None
+                record.ore_certificate_expires_at = None
+                deleted += 1
+            else:
+                failed += 1
+        db.commit()
+        logger.info(
+            "purge_expired_ore_certificates: done",
+            extra={"deleted": deleted, "failed": failed},
+        )
+        return {"deleted": deleted, "failed": failed, "skipped": False}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

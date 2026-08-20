@@ -193,8 +193,19 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
         ).order_by(TrainingRecord.record_date.desc()).all()
 
         if not prev_records:
-            # First ever dispatch day for this trainee
-            current_phase = 1
+            # ADR-281: phase 0 is the ORE day — Amazon's self-serve e-learning,
+            # on a day a trainer walks the new hire through app install, website
+            # access and the procedures on the page. It closes on coverage tasks
+            # like any other phase, so the `phase_closed` branch below advances
+            # 0 -> 1 exactly as it advances 1 -> 2. No other change is needed.
+            # ...but only if phase-0 curriculum EXISTS. Without it the record
+            # would carry no mandatory tasks, auto-close as complete, and give
+            # the trainee an ORE day that trained nothing — the silent-empty-
+            # phase failure this module already warns about below. A company
+            # that has not seeded phase 0 keeps the old behaviour and starts at
+            # phase 1, so adopting ADR-281 is seeding the curriculum, not
+            # deploying this code.
+            current_phase = 0 if curriculum_by_phase.get(0) else 1
         else:
             last_record = prev_records[0]
 

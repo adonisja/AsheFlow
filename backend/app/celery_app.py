@@ -106,6 +106,12 @@ celery_app.conf.beat_schedule = {
     },
     # 04:00 AM Eastern — null delivery-row customer addresses older than
     # delivery_address_retention_hours (default 48h, ADR-219). Keeps block_key + counts.
+    # ADR-281: ORE certificates carry trainee PII and expire at 48h. Runs just
+    # after the address nulling, which is the same retention discipline.
+    "purge-expired-ore-certificates-nightly": {
+        "task": "app.tasks.cleanup.purge_expired_ore_certificates",
+        "schedule": crontab(hour=4, minute=15),
+    },
     "null-expired-delivery-addresses-nightly": {
         "task": "app.tasks.cleanup.null_expired_delivery_addresses",
         "schedule": crontab(hour=4, minute=0),

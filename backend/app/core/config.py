@@ -88,6 +88,23 @@ class Settings(BaseSettings):
     # troublesome signal is distilled to BuildingProfile (ADR-218). 0 disables.
     delivery_address_retention_hours: int = 48
 
+    # ── ADR-281: ORE completion certificates ────────────────────────────────
+    # A phase-0 certificate carries the trainee's name and an Amazon training
+    # id, so the FILE is short-lived. The attestation on the training record is
+    # what persists; this is only the evidence window.
+    #
+    # Empty bucket name disables the feature: uploads 503 with a clear message
+    # rather than throwing a boto3 error at a trainee. That is deliberate — a
+    # deploy without the infrastructure should degrade, not crash.
+    ore_certificate_bucket: str = ""
+    ore_certificate_kms_key_id: str = ""
+    ore_certificate_retention_hours: int = 48
+    # 5 minutes: long enough to open a PDF, short enough that a URL copied out
+    # of a browser's history or a screenshot is useless by the time it lands
+    # anywhere else.
+    ore_presign_ttl_seconds: int = 300
+    ore_max_upload_bytes: int = 10 * 1024 * 1024
+
     # ADR-221: redact a departed employee's denormalized name copies this many days
     # after deactivation (covers post-departure disputes/references). 0 disables.
     employee_name_retention_days: int = 180

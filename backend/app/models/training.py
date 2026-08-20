@@ -93,7 +93,14 @@ class TrainingRecord(Base):
     trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
 
     record_date        = Column(Date, nullable=False, index=True)
-    current_day_number = Column(Integer, nullable=False)  # phase: 1–4 normal, 5 = quiz day, 6+ = remediation
+    # phase: 0 = ORE day, 1–4 normal, 5 = quiz day, 6+ = remediation
+    #
+    # ADR-281: phase 0 is the ORE day. ORE itself is self-serve e-learning on
+    # Amazon's platform, but the DAY is supervised — a trainer walks the new
+    # hire through app install, website access and the procedures on the page.
+    # So phase 0 uses the same coverage-task model as 1–3 and closes the same
+    # way; nothing here is special-cased for it.
+    current_day_number = Column(Integer, nullable=False)
 
     trainer_comments  = Column(Text, nullable=True)
     manager_comments  = Column(Text, nullable=True)
@@ -111,6 +118,26 @@ class TrainingRecord(Base):
     submitted_at    = Column(DateTime(timezone=True), nullable=True)
     phase_closed    = Column(Boolean, nullable=False, default=False)
     phase_closed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # ── ADR-281: Phase 0 (ORE day) ──────────────────────────────────────────
+    # The ATTESTATION is permanent; the FILE is not. Retention for the
+    # certificate is 48h (it carries the trainee's name and an Amazon training
+    # id), so if the file were the completion signal, the signal would evaporate
+    # on day three. These two columns are the durable record that ORE was done.
+    ore_completed_at             = Column(DateTime(timezone=True), nullable=True)
+    ore_certificate_uploaded_by  = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    # S3 object key, nulled by the nightly sweep once the object is deleted.
+    # A NULL key with a non-null ore_completed_at means "certificate expired",
+    # which is a different answer to a manager than "never uploaded".
+    ore_certificate_key          = Column(String(300), nullable=True)
+    ore_certificate_expires_at   = Column(DateTime(timezone=True), nullable=True)
+
+    # Early departure after ORE — a PERMITTED choice (ADR-281 D5), recorded
+    # because it affects pay for that date. Deliberately NOT fed to the
+    # scorecard, and deliberately NOT counted across the programme: a tally is
+    # a judgement waiting for a threshold.
+    left_early     = Column(Boolean, nullable=False, server_default="false")
+    left_early_at  = Column(DateTime(timezone=True), nullable=True)
 
     # Phase 4 outcome
     passed            = Column(Boolean, nullable=True)   # null until Phase 4 submitted
