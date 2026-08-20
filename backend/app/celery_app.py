@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses"]
 )
 
 celery_app.conf.update(
@@ -30,6 +30,16 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    # Every 10 min — sweeps BuildingProfiles left `pending` by a submit whose
+    # .delay() dispatch was lost (broker restart, worker down). The submit path
+    # queues resolution immediately (ADR-277 D1); this is the safety net, not
+    # the mechanism, so the interval only bounds how long a dropped dispatch
+    # stays invisible. A `pending` profile is excluded from routing lookups, so
+    # the cost of the gap is a building the crew cannot see yet — not bad data.
+    "resolve-building-addresses": {
+        "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
+        "schedule": crontab(minute="*/10"),
+    },
     # 03:00 AM Eastern — quiet period, low API traffic
     "expire-pending-invites-daily": {
         "task": "app.tasks.cleanup.expire_pending_invites",

@@ -95,6 +95,18 @@ class BuildingProfileResponse(BaseModel):
     building_type_status:           str
     building_type_agreement_count:  int
     nomination_status:   Optional[str] = None
+    # ADR-277 D1: address resolution state. The UI needs all three — the tag
+    # ("Address not found"), the reason to show beside it, and enough for the
+    # captain to decide whether to edit and retry. Without them a rejected row
+    # is indistinguishable from a healthy one in the list.
+    address_status:      str = "pending"
+    geo_grc:             Optional[str] = None
+    geo_message:         Optional[str] = None
+    # ADR-277 D2 / ADR-279: the join key the truck page uses past the 48h
+    # address purge. lat/lng let the page sort by proximity.
+    segment_id:          Optional[str] = None
+    lat:                 Optional[float] = None
+    lng:                 Optional[float] = None
     submitted_by:        Optional[UUID] = None
     submitted_by_name:   str
     submitted_at:        Optional[datetime] = None

@@ -1094,6 +1094,21 @@ export interface BuildingProfileResponse {
    *  'verified' means a route lead has. Only 'locked' is read downstream. */
   building_type_status: 'pending' | 'review' | 'verified' | 'locked';
   building_type_agreement_count: number;
+  /** ADR-277 D1 — address resolution, independent of building_type_status.
+   *  A profile can have full field agreement and still be 'rejected' here:
+   *  the crew agrees about a building whose address GeoClient cannot match.
+   *  'rejected' rows show the retry affordance and can never be locked. */
+  address_status: 'pending' | 'resolved' | 'rejected';
+  /** Geosupport return code + message on rejection, e.g. "42" /
+   *  "ADDRESS NUMBER OUT OF RANGE". Shown beside the retry form so the
+   *  captain knows what to change. */
+  geo_grc?: string | null;
+  geo_message?: string | null;
+  /** ADR-277 D2 / ADR-279 — LION segment, the join key that survives the
+   *  ADR-219 48h address purge. lat/lng drive proximity sorting. */
+  segment_id?: string | null;
+  lat?: number | null;
+  lng?: number | null;
   /** ADR-276 D6 — computed server-side per caller so neither client re-derives
    *  the weighting rule. Null on read paths that do not resolve caller state,
    *  where the UI falls back to showing the raw count. */

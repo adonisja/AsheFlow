@@ -73,6 +73,13 @@ def record_rts_incident(
             building_type="walkup",           # neutral default; gets corrected on real profiling
             workload_class="standard",
             building_type_status="pending",
+            # ADR-277 D1: 'resolved', not the 'pending' default. This address
+            # did NOT come from a human typing — it is the enriched manifest's
+            # normalised_address, already canonicalised by GeoClient upstream.
+            # Leaving it 'pending' would queue a redundant geocode of a string
+            # GeoClient itself produced, and (worse) a transport failure could
+            # then flip a real building to 'rejected'.
+            address_status="resolved",
             submitted_by_name="system:rts",
             troublesome_score=0.0,
         )
