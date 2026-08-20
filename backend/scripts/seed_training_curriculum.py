@@ -43,6 +43,26 @@ from _seed_guard import assert_seedable, seed_targets
 # trainer cannot physically watch the trainee perform them.
 # ---------------------------------------------------------------------------
 CURRICULUM: list[tuple[int, str, str | None, str, bool, list[str]]] = [
+    # ── Phase 0 — the ORE day (ADR-281) ─────────────────────────────────────
+    # ORE itself is Amazon's course on AtoZ; AsheFlow neither hosts nor tracks
+    # its content, and the certificate upload is what evidences completion.
+    # These three are the only things a TRAINER does on this day, which is why
+    # the phase is short: everything else that day happens inside AtoZ.
+    #
+    # Both tracks: a driver_trainee's first day is the same ORE day.
+    (0, "AsheFlow app: install and first login",
+     "Install the AsheFlow app and confirm the new hire can log in with their "
+     "own credentials. Covers password reset if the invite has expired.",
+     "app_setup", True, ["walker", "driver"]),
+    (0, "Website access",
+     "Show where the web app lives and confirm the new hire can reach it and "
+     "sign in. Covers which surfaces are web-only versus in the app.",
+     "app_setup", True, ["walker", "driver"]),
+    (0, "Procedure walkthrough",
+     "Walk through the procedures on the page with the new hire — what they "
+     "will be asked to do each day and where each action lives.",
+     "policy", True, ["walker", "driver"]),
+
 
     # -----------------------------------------------------------------------
     # PHASE 1 — Orientation & Setup

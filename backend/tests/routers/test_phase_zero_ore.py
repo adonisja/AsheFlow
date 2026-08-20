@@ -229,3 +229,47 @@ class TestInjector:
 
         src = inspect.getsource(training_injection)
         assert "day_number in (1, 2, 3)" in src
+
+
+class TestPhaseZeroCurriculum:
+    """The three topics a TRAINER covers on the ORE day.
+
+    Deliberately short: ORE itself is Amazon's course on AtoZ, which AsheFlow
+    neither hosts nor tracks. The certificate upload evidences the course; these
+    rows cover the only things the trainer does alongside it.
+    """
+
+    def _rows(self):
+        import re
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[2] / "scripts"
+               / "seed_training_curriculum.py").read_text()
+        return re.findall(r'^\s{4}\(0, "([^"]+)"', src, re.M)
+
+    def test_the_three_topics_are_seeded(self):
+        titles = self._rows()
+        assert len(titles) == 3, f"expected 3 phase-0 topics, found {titles}"
+        assert any("login" in t.lower() for t in titles)
+        assert any("website" in t.lower() for t in titles)
+        assert any("procedure" in t.lower() for t in titles)
+
+    def test_they_reach_both_tracks(self):
+        """A driver_trainee's first day is the same ORE day."""
+        import re
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[2] / "scripts"
+               / "seed_training_curriculum.py").read_text()
+        i = src.index('(0, "AsheFlow app')
+        block = src[i : src.index("# ── Phase 1", i)] if "# ── Phase 1" in src[i:] else src[i : i + 1200]
+        assert block.count('["walker", "driver"]') >= 3
+
+    def test_curriculum_must_exist_before_phase_zero_activates(self):
+        """Without seeded rows the record would carry no mandatory tasks and
+        auto-close as complete — an ORE day that trained nothing. Adopting
+        ADR-281 is therefore seeding the curriculum, not deploying the code."""
+        from app.services import training_injection
+
+        src = _code_only(training_injection)
+        assert "current_phase = 0 if curriculum_by_phase.get(0) else 1" in src
