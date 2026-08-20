@@ -24,11 +24,14 @@ false positive here costs more than a missed path — a guard people distrust is
 one they switch off.
 """
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 from app.main import app
+import app.main as _m
+from app.routers import employees as _employees
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -106,9 +109,16 @@ class TestDetectorIsSound:
                 f"  /api/v1 matches: {len(reg)}\n"
                 f"  prefixes seen:   {prefixes}\n"
                 f"  sample paths:    {sorted(paths)[:6]}\n"
-                "If total routes is large but /api/v1 matches is 0, the mount "
-                "prefix changed. If total routes is ~4, an import failed and "
-                "only the default routes exist."
+                f"  main module:     {_m.__file__}\n"
+                f"  main.app is app: {_m.app is app}\n"
+                f"  v1 router routes:{len(_m.api_v1_router.routes)}\n"
+                f"  sample sub-router (employees): "
+                f"{len(_employees.router.routes)} routes\n"
+                f"  duplicate main loads: "
+                f"{[k for k in sys.modules if k.endswith('main') and 'app' in k]}\n"
+                "If v1 router routes is 0 but employees has routes, the mount "
+                "ran before the includes. If employees is also 0, the router "
+                "modules were re-imported under a second module identity."
             )
         assert len(_ui_paths()) > 40, "UI call extraction is broken"
 
