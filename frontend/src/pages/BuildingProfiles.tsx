@@ -1,7 +1,7 @@
 import { errorText } from '../utils/errorText';
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw,
+  Building2, CheckCircle2, Lock, AlertTriangle, RefreshCw, Upload,
   ChevronDown, ChevronUp, Loader2, FileEdit, Search, Plus, Info, MapPin,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
@@ -10,6 +10,7 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import type { BuildingProfileResponse, BuildingProfileCreate, BuildingProfileAnchorPatch, BuildingType } from '../api/types';
 import { useAuth } from '../contexts/AuthContext';
 import { useCan } from '../hooks/useCan';
+import BulkImportModal from '../components/buildings/BulkImportModal';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -598,6 +599,11 @@ export default function BuildingProfilesPage() {
      because that queue IS their job on this page; everyone else sees all. */
   const { groups } = useAuth();
   const isCaptain = groups.includes('captain');
+  const [bulkOpen, setBulkOpen] = useState(false);
+  // ADR-277 D4: the sign-off roles, matching the endpoint gate. Drivers are
+  // excluded — they do not assess buildings.
+  const canBulkSeed = ['captain', 'dispatch', 'field_supervisor', 'management', 'admin']
+    .some(r => groups.includes(r));
   const [statusFilter, setStatusFilter] =
     useState<'all' | 'pending' | 'review' | 'verified' | 'locked'>(isCaptain ? 'review' : 'all');
   const [lockBusy, setLockBusy]   = useState<string | null>(null);
@@ -674,6 +680,11 @@ export default function BuildingProfilesPage() {
             <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center gap-1.5 text-sm">
               <Plus className="w-4 h-4" /> Submit profile
             </button>
+            {canBulkSeed && (
+              <button onClick={() => setBulkOpen(true)} className="btn-ghost flex items-center gap-1.5 text-sm">
+                <Upload className="w-4 h-4" /> Import CSV
+              </button>
+            )}
             <button onClick={load} className="btn-ghost flex items-center gap-1.5 text-sm">
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
@@ -761,6 +772,13 @@ export default function BuildingProfilesPage() {
       )}
 
       {/* Modals */}
+      {bulkOpen && (
+        <BulkImportModal
+          onClose={() => setBulkOpen(false)}
+          onImported={load}
+        />
+      )}
+
       {submitOpen && (
         <SubmitModal
           onClose={() => setSubmitOpen(false)}

@@ -1149,6 +1149,39 @@ export interface TruckBuildingStop {
 /** ADR-277 D3 — three groups, in the order a captain works them. Sent as three
  *  lists rather than one flat list with a status, so the client cannot re-derive
  *  the grouping differently from the server. */
+/** ADR-277 D4 — one parsed CSV row, carrying whatever is wrong with it.
+ *  Invalid rows are KEPT, not filtered: the preview has to show which of the
+ *  operator's rows will not import and why. */
+export interface BulkProfileRow {
+  /** 1-based and matching the file, so a header is line 1 and the first data
+   *  row is line 2 — the operator fixes their CSV by line number. */
+  line: number;
+  address: string;
+  building_type: string;
+  raw_note?: string | null;
+  ok: boolean;
+  error?: string | null;
+  /** An existing profile's address when this row collides with one. */
+  duplicate_of?: string | null;
+}
+
+export interface BulkProfilePreview {
+  rows: BulkProfileRow[];
+  valid_count: number;
+  error_count: number;
+  duplicate_count: number;
+}
+
+export interface BulkProfileConfirm {
+  rows: BulkProfileRow[];
+}
+
+export interface BulkProfileResult {
+  created: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface TruckBuildingsResponse {
   route_date: string;
   truck_assignment_id: string | null;

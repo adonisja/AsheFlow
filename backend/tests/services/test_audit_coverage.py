@@ -53,6 +53,11 @@ _NO_AUDIT = {
     "anchor_points.py::depart_anchor_point",
     "assignment_change_requests.py::submit_change_request",
     "assignment_members.py::create_assignment_member",
+    # ADR-277 D4: a preview. It parses an upload and reports what WOULD
+    # import — no INSERT, no UPDATE, nothing persisted. It only trips the
+    # heuristic because it is a POST (it has to be: the file is the body).
+    # The write it precedes, confirm_bulk_profiles, IS audited.
+    "building_profiles.py::preview_bulk_profiles",
     "building_profiles.py::lock_building_profile",
     "building_profiles.py::set_operational_note",
     "building_profiles.py::submit_building_profile",

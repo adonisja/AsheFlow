@@ -284,3 +284,54 @@ class TruckBuildingsResponse(BaseModel):
     # can say "no truck assigned" instead of rendering three empty lists as
     # though the day were fully profiled.
     no_truck_assigned:   bool = False
+
+
+# ── ADR-277 D4: bulk seeding ─────────────────────────────────────────────────
+
+class BulkProfileRow(BaseModel):
+    """One parsed CSV row, with whatever is wrong with it.
+
+    Carries `ok` and `error` rather than being filtered out: the preview has to
+    show the operator WHICH of their forty rows will not import and why. A
+    silently shortened list is how thirty rejected rows get discovered after
+    the fact, which is the outcome D4 exists to prevent.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    line:          int                  # 1-based, matches the file for eyeballing
+    address:       str = Field("", max_length=200)
+    building_type: str = Field("", max_length=30)
+    raw_note:      Optional[str] = Field(None, max_length=2000)
+    ok:            bool = True
+    error:         Optional[str] = None
+    duplicate_of:  Optional[str] = None  # an existing profile's address
+
+
+class BulkProfilePreview(BaseModel):
+    """What the operator confirms against."""
+    rows:        list[BulkProfileRow] = []
+    valid_count: int = 0
+    error_count: int = 0
+    duplicate_count: int = 0
+
+
+class BulkProfileConfirm(BaseModel):
+    """Commit the rows the preview accepted.
+
+    The client sends the rows back rather than the server holding parsed state
+    between two requests: a server-side staging table would need its own
+    lifecycle, expiry and tenant scoping to solve a problem that does not exist
+    — the operator is looking at the list they are confirming.
+
+    Rows are re-validated on this path regardless. The preview is a courtesy to
+    the human; it is not a trust boundary (ADR-115 dim 9).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    rows: list[BulkProfileRow] = Field(default_factory=list, max_length=500)
+
+
+class BulkProfileResult(BaseModel):
+    created:   int = 0
+    skipped:   int = 0
+    errors:    list[str] = []
