@@ -1133,6 +1133,34 @@ export interface BuildingProfileResponse {
   updated_at: string;
 }
 
+/** ADR-277 D3 — one address this truck visited, with whatever we know about it.
+ *  `profile` is null for the "no profile yet" group: that is the collection
+ *  prompt, not a missing field. */
+export interface TruckBuildingStop {
+  normalised_address: string | null;
+  block_key: string;
+  segment_id: string | null;
+  /** Times this truck hit the address in range — most-visited sorts first,
+   *  because that building is worth profiling before a one-off. */
+  stop_count: number;
+  profile: BuildingProfileResponse | null;
+}
+
+/** ADR-277 D3 — three groups, in the order a captain works them. Sent as three
+ *  lists rather than one flat list with a status, so the client cannot re-derive
+ *  the grouping differently from the server. */
+export interface TruckBuildingsResponse {
+  route_date: string;
+  truck_assignment_id: string | null;
+  truck_name: string | null;
+  needs_signoff: TruckBuildingStop[];
+  known: TruckBuildingStop[];
+  no_profile: TruckBuildingStop[];
+  /** True when the caller is not crewed on a truck that day — the UI says so
+   *  instead of rendering three empty lists as a fully-profiled day. */
+  no_truck_assigned: boolean;
+}
+
 export interface ManifestStatusResponse {
   sort_date: string;
   status: 'ready' | 'enriching' | 'failed' | 'not_found';

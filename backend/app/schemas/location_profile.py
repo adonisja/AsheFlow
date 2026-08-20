@@ -242,3 +242,45 @@ class NoteScrubReview(BaseModel):
     review_required: bool = True
     scrubbed_note: Optional[str] = None
     flags: list[str] = []
+
+
+# ── ADR-277 D3: the truck-scoped building page ───────────────────────────────
+
+class TruckBuildingStop(BaseModel):
+    """One address this truck visited, with whatever intelligence exists for it.
+
+    `profile` is None for group 3 ("no profile yet") — that is the point of the
+    page, not a defect. A stop with no profile is the collection prompt that
+    makes captains "the walking banks for this data" rather than reviewers of
+    other people's observations.
+    """
+    normalised_address: Optional[str] = None
+    block_key:          str
+    segment_id:         Optional[str] = None
+    stop_count:         int = 1          # times this truck hit the address in range
+    profile:            Optional[BuildingProfileResponse] = None
+
+
+class TruckBuildingsResponse(BaseModel):
+    """Three groups, in the order a captain works them (ADR-277 D3).
+
+    Deliberately three lists rather than one flat list with a status field: the
+    page's whole job is to separate "you owe someone a decision" from "here is
+    what we know" from "nobody has told us yet", and a client that has to
+    re-derive that grouping will eventually derive it differently from the
+    server.
+    """
+    route_date:          str
+    truck_assignment_id: Optional[UUID] = None
+    truck_name:          Optional[str] = None
+    # Group 1 — `review` records on this truck's addresses. ADR-276's queue,
+    # in context. Empty for a caller who cannot sign off.
+    needs_signoff:       list[TruckBuildingStop] = []
+    # Group 2 — verified/locked. What the crew can rely on today.
+    known:               list[TruckBuildingStop] = []
+    # Group 3 — visited addresses with no record at all.
+    no_profile:          list[TruckBuildingStop] = []
+    # True when the caller is not crewed on any truck for this date, so the UI
+    # can say "no truck assigned" instead of rendering three empty lists as
+    # though the day were fully profiled.
+    no_truck_assigned:   bool = False
