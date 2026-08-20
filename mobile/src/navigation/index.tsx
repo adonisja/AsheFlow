@@ -43,10 +43,11 @@ import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
   WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
-  GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES,
+  GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES, TRUCK_BUILDINGS_ROLES,
 } from './roles';
 import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
 import MyRouteTabScreen from '@screens/Trainee/MyRouteScreen';
+import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -98,6 +99,7 @@ const ALL_TABS: TabDef[] = [
   { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator },
   { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen },
   { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen },
+  { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
   { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
   { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', roles: DRIVER_SURVEY_ROLES,     component: DriverSurveyScreen },

@@ -44,6 +44,7 @@ import WalkerSortMonitor from './pages/WalkerSort';
 import NotificationsHistory from './pages/NotificationsHistory';
 import MyRoute from './pages/MyRoute';
 import BuildingProfilesPage from './pages/BuildingProfiles';
+import TruckBuildingsPage from './pages/TruckBuildings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
@@ -504,6 +505,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'driver', 'dispatch', 'management', 'admin', 'captain']}>
                   <BuildingProfilesPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/my-truck-buildings"
+              element={
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
+                  <TruckBuildingsPage />
                 </ProtectedRoute>
               }
             />

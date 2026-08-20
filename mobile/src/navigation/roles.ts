@@ -58,3 +58,8 @@ export const MY_ROUTE_TAB_ROLES       = ['trainer', 'captain'] as const;
 export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
 export const GEAR_ROLES               = ['driver', 'walker', 'trainer', 'trainee', 'captain'] as const;
 export const REATTEMPT_ROLES          = ['driver', 'trainer', 'captain'] as const;
+// ADR-277 D3: the truck-scoped building page. Field roles collect, sign-off
+// roles confirm — the same union that gates the endpoint. Drivers are absent
+// for the reason _allow_delivery already records: they do not walk blocks or
+// assess buildings.
+export const TRUCK_BUILDINGS_ROLES    = ['walker', 'trainer', 'trainee', 'captain', 'dispatch'] as const;

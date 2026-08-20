@@ -57,6 +57,14 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },
   { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
+  // ADR-277 D3: truck-scoped, alongside the company-wide list above. Field
+  // roles + sign-off roles — the same union that gates the endpoint.
+  // Explicit list, NOT ...ALL_FIELD: that spread includes `driver`, and a
+  // driver has no business here for the reason _allow_delivery already
+  // records — "logistics role, does not walk blocks or assess difficulty".
+  // Spreading it also silently drifted the nav gate away from the route
+  // gate, which is what test_nav_and_route_gates_agree caught.
+  { path: '/my-truck-buildings',    label: 'My truck buildings', icon: Building2,     roles: ['admin', 'dispatch', 'management', 'captain', 'walker', 'trainer', 'trainee'] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
   { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'] },
   // /dispatch-home has NO tab: it is dispatch's Dashboard landing
