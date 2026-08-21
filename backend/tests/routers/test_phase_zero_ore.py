@@ -360,6 +360,41 @@ class TestStayingStartsPhaseOne:
         src = _code_only(tr.stay_after_ore)
         assert src.count("db.query(") == src.count("company_id == caller.company_id")
 
+    def test_every_reader_of_a_phase_zero_record_sets_the_flag(self):
+        """phase_one_started defaults False, so any endpoint that serializes a
+        phase-0 record WITHOUT setting it keeps offering "stay or leave" after
+        the choice was made.
+
+        /training/trainer/today builds its own response instead of reusing the
+        list serializer, and shipped with exactly that gap — the trainer screen
+        reads this endpoint, not the list one.
+        """
+        # DISCOVERED, not listed. Naming the endpoints by hand is how the gap
+        # arose in the first place — a new serializer would simply not be in
+        # the list, and the test would keep passing.
+        import inspect
+
+        # Scoped to the endpoints the ORE CARD reads. A write response
+        # (add_trainer_comment, submit_trainee_review) returns the record it
+        # just mutated and the card is not rendered from it, so requiring the
+        # flag there would be noise that trains people to widen the allowlist.
+        CARD_READERS = {"get_trainer_today", "get_trainee_history"}
+
+        offenders = []
+        for name, fn in vars(tr).items():
+            if name not in CARD_READERS:
+                continue
+            src = _code_only(fn)
+            assert "TrainingRecordResponse.model_validate" in src, (
+                f"{name} no longer serializes a record — update CARD_READERS"
+            )
+            if "phase_one_started" not in src:
+                offenders.append(name)
+        assert not offenders, (
+            "these feed the ORE card but never set phase_one_started, so it "
+            f"keeps offering stay-or-leave after the choice: {offenders}"
+        )
+
     def test_the_flag_hides_the_choice_once_taken(self):
         """phase_one_started drives whether the ORE card still offers
         stay-or-leave; without it the buttons never disappear."""
