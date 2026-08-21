@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_caller_employee, RoleChecker, require_configured
@@ -40,9 +40,25 @@ class QuizIssueRequest(BaseModel):
     training_record_id: UUID | None = None  # optionally link to the Phase 5 TrainingRecord
 
 
+class QuizResponseEntry(BaseModel):
+    """One answered question.
+
+    Was `list[dict]` with the shape only in a comment (Dimension 9). Two real
+    consequences, not just typing: the consumer did `entry["question_id"]`, so
+    a body missing that key raised KeyError and 500'd instead of returning 422;
+    and `answer_text` was unbounded free text written straight to the DB.
+    """
+    question_id: UUID
+    answer_text: str = Field("", max_length=5000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class QuizSubmitRequest(BaseModel):
     quiz_id: UUID
-    responses: list[dict]   # [{"question_id": uuid, "answer_text": str}]
+    # Bounded: a quiz has a fixed number of questions, and an unbounded list is
+    # an unbounded write.
+    responses: list[QuizResponseEntry] = Field(default_factory=list, max_length=200)
 
 
 class QuizOverride(BaseModel):
@@ -250,10 +266,10 @@ def submit_quiz(
     }
 
     for entry in body.responses:
-        resp = response_map.get(str(entry["question_id"]))
+        resp = response_map.get(str(entry.question_id))
         if resp is None:
             continue
-        resp.answer_text = entry.get("answer_text", "")
+        resp.answer_text = entry.answer_text
 
     db.flush()
 

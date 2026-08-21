@@ -1,19 +1,25 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  TouchableOpacity, ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@contexts/AuthContext';
 import { useTabSwitch } from '@navigation/index';
+// NOT from @navigation/index — that would be a require cycle (index imports
+// this screen), which evaluates the constant as undefined and broke the
+// role filter silently. See @navigation/roles.
+import { FIELD_OPS_ROLES } from '@navigation/roles';
 import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import {
   spacing, radius, fontSize, fontWeight,
   getRoleColor, getRoleLight, ROLE_LABELS, type ThemeColors,
 } from '@theme/index';
-import { Avatar, Badge, Skeleton } from '@components/ui/primitives';
+import { Avatar, Skeleton } from '@components/ui/primitives';
+import { partitionNotifications } from '@components/notifications/classify';
+import CompanyStandingCard from '@components/CompanyStandingCard';
 
 function greet() {
   const h = new Date().getHours();
@@ -45,9 +51,12 @@ const roleBadgeTone: Record<string, 'slate' | 'teal' | 'gold' | 'info' | 'neutra
   driver: 'slate', walker: 'teal', trainer: 'gold', trainee: 'info',
 };
 
-// Quick-action definitions — key matches tab key in navigation
-const QUICK_ACTIONS = [
-  { key: 'FieldOps',      label: 'Field Ops',    icon: '🔧' },
+// Quick-action definitions — key matches tab key in navigation.
+// `roles` must mirror the tab's role gate (navigation/index.tsx): a tile for
+// a tab the role doesn't have silently no-ops on tap (Field Ops showed for
+// trainers/trainees/walkers but only drivers have the tab).
+const QUICK_ACTIONS: { key: string; label: string; icon: string; roles?: readonly string[] }[] = [
+  { key: 'FieldOps',      label: 'Field Ops',    icon: '🔧', roles: FIELD_OPS_ROLES },
   { key: 'Schedule',      label: 'Schedule',     icon: '📅' },
   { key: 'Notifications', label: 'Inbox',        icon: '🔔' },
   { key: 'Account',       label: 'Account',      icon: '👤' },
@@ -69,6 +78,11 @@ export default function HomeScreen() {
   const [unreadCount,   setUnreadCount]   = useState(0);
   const [latestMessage, setLatestMessage] = useState<string | null>(null);
   const [notifLoad,     setNotifLoad]     = useState(true);
+  /* ADR-275 D4 — is a dispatch response still outstanding? The card already
+     navigates to confirm/decline; what it never said was that anyone was
+     waiting. Same classifier as the web banner, driving a badge rather than a
+     layout. */
+  const [needsResponse, setNeedsResponse] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -92,9 +106,12 @@ export default function HomeScreen() {
   }, []);
 
   const fetchAssignment = useCallback(async () => {
-    const eid = await resolveEmployeeId();
-    if (!eid) return;
     try {
+      // The eid resolve must live INSIDE try/finally — an early `return`
+      // before it left the loading flag true forever (skeletons hung
+      // indefinitely after navigating away and back).
+      const eid = await resolveEmployeeId();
+      if (!eid) { setTruckName(null); return; }
       const res   = await apiClient.get(`/schedule/${eid}?start_date=${today}&end_date=${today}`);
       const entry = (res.data ?? [])[0];
       if (!entry || entry.status !== 'Assigned' || !entry.truck_name) {
@@ -114,13 +131,42 @@ export default function HomeScreen() {
   }, [today, resolveEmployeeId]);
 
   const fetchNotifications = useCallback(async () => {
-    const eid = await resolveEmployeeId();
-    if (!eid) return;
     try {
-      const res  = await apiClient.get(`/notifications/${eid}?limit=10`);
+      const eid = await resolveEmployeeId();
+      if (!eid) { setUnreadCount(0); return; }
+      // limit must cover the whole unread set — counting within a 10-item
+      // page showed "10 unread" while 14 existed.
+      const res  = await apiClient.get(`/notifications/${eid}?limit=50`);
       const list: any[] = res.data ?? [];
       setUnreadCount(list.filter(n => !n.is_read).length);
       setLatestMessage(list[0]?.message ?? null);
+
+      // Confirmation status decides whether the window is still open; without
+      // it an already-answered assignment would keep nagging.
+      //
+      // PER NOTIFICATION DATE, not just today. Fetching only `today` left every
+      // OTHER date unknown, and isActionRequired reads unknown as open — so two
+      // already-confirmed assignments for the 14th and 15th lit the badge on a
+      // day with no assignment at all ("NEEDS YOUR RESPONSE" above "No
+      // assignment today").
+      const unread = list.filter(n => !n.is_read);
+      const dates = [...new Set(
+        unread.filter(n => n.type === 'dispatch_assignment' && n.dispatch_date)
+              .map(n => n.dispatch_date as string),
+      )];
+      const confirmationStatus: Record<string, any> = {};
+      await Promise.all(dates.map(async d => {
+        try {
+          const conf = await apiClient.get(`/dispatch/${d}/my-confirmation`);
+          confirmationStatus[d] = conf.data?.status ?? null;
+        } catch {
+          // Leave unset -> treated as open. Safe direction: better a badge that
+          // should not be there than a missed confirmation.
+        }
+      }));
+
+      const { action } = partitionNotifications(unread, { confirmationStatus });
+      setNeedsResponse(action.length > 0);
     } catch {
       setUnreadCount(0);
     } finally {
@@ -128,10 +174,12 @@ export default function HomeScreen() {
     }
   }, [resolveEmployeeId]);
 
-  useEffect(() => {
+  // Refetch on every focus, not just mount — returning from the Notifications
+  // screen (where items get read) must not leave a stale unread badge here.
+  useFocusEffect(useCallback(() => {
     fetchAssignment();
     fetchNotifications();
-  }, [fetchAssignment, fetchNotifications]);
+  }, [fetchAssignment, fetchNotifications]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -160,7 +208,7 @@ export default function HomeScreen() {
         <View style={[s.hero, { backgroundColor: c.card, borderColor: c.border }]}>
           <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.8} style={s.heroAvatarWrap}>
             <View style={[s.heroAvatarRing, { borderColor: roleColor }]}>
-              <Avatar initials={initials} role={primaryRole as any ?? 'driver'} size={80} />
+              <Avatar initials={initials} name={displayName} role={primaryRole as any ?? 'driver'} size={80} />
             </View>
           </TouchableOpacity>
           <Text style={[s.heroDate, { color: c.mutedForeground }]}>{formatTodayLong()}</Text>
@@ -176,9 +224,16 @@ export default function HomeScreen() {
           )}
         </View>
 
+        {/* ── Company standing (Tier 1: every role, no PII) ──
+            Renders nothing when no scorecard exists yet, so it cannot leave an
+            empty shell on a new company's home screen. */}
+        <CompanyStandingCard />
+
         {/* ── Quick actions ── */}
         <View style={s.quickRow}>
-          {QUICK_ACTIONS.map(action => (
+          {QUICK_ACTIONS.filter(a =>
+            !a.roles || a.roles.some(r => user?.groups?.includes(r)),
+          ).map(action => (
             <TouchableOpacity
               key={action.key}
               style={[s.quickBtn, { backgroundColor: c.card, borderColor: c.border }]}
@@ -194,12 +249,26 @@ export default function HomeScreen() {
         {/* ── Today's assignment ── */}
         <Text style={s.sectionLabel}>TODAY'S ASSIGNMENT</Text>
         <TouchableOpacity
-          style={[s.assignCard, { backgroundColor: c.card, borderColor: truckName ? roleColor : c.border }]}
+          style={[s.assignCard, {
+            backgroundColor: c.card,
+            // An outstanding response outranks the role colour: the card's job
+            // in that moment is to say "someone is waiting on you".
+            // Gated on truckName: a warning border over "No assignment today"
+            // told the walker to respond to something that does not exist.
+            borderColor: needsResponse && truckName ? c.warning : truckName ? roleColor : c.border,
+            borderWidth: needsResponse && truckName ? 2 : 1,
+          }]}
           onPress={() => navigation.navigate('TodayAssignment')}
           activeOpacity={0.75}
+          accessibilityLabel={needsResponse && truckName
+            ? 'Today\'s assignment — needs your response'
+            : "Today's assignment"}
         >
           {/* Color accent stripe */}
-          <View style={[s.assignStripe, { backgroundColor: truckName ? roleColor : c.surfaceMuted }]} />
+          <View style={[s.assignStripe, {
+            backgroundColor: needsResponse && truckName ? c.warning
+              : truckName ? roleColor : c.surfaceMuted,
+          }]} />
 
           <View style={s.assignBody}>
             {/* Icon + truck info */}
@@ -217,13 +286,25 @@ export default function HomeScreen() {
                   <>
                     <Text style={[s.assignEyebrow, { color: c.mutedForeground }]}>ASSIGNED TRUCK</Text>
                     <Text style={[s.assignTruck, { color: c.foreground }]}>{truckName}</Text>
-                    {myRole && (
-                      <View style={[s.rolePill, { backgroundColor: roleLight }]}>
-                        <Text style={[s.rolePillText, { color: roleColor }]}>
-                          {ROLE_LABELS[myRole] ?? myRole}
-                        </Text>
-                      </View>
-                    )}
+                    {/* ADR-275 D4 — inline with the truck it refers to, and in
+                        the SAME row as the role pill. Floating above the body it
+                        sat in dead space with nothing to attach to. */}
+                    <View style={s.assignPillRow}>
+                      {myRole && (
+                        <View style={[s.rolePill, { backgroundColor: roleLight }]}>
+                          <Text style={[s.rolePillText, { color: roleColor }]}>
+                            {ROLE_LABELS[myRole] ?? myRole}
+                          </Text>
+                        </View>
+                      )}
+                      {needsResponse && (
+                        <View style={[s.rolePill, { backgroundColor: c.warning }]}>
+                          <Text style={[s.rolePillText, { color: c.primaryForeground }]}>
+                            NEEDS YOUR RESPONSE
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                   </>
                 ) : (
                   <>
@@ -438,6 +519,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     marginBottom: spacing.xs,
     overflow: 'hidden',
   },
+  assignPillRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   notifStripe:   { height: 3 },
   notifInner:    { flexDirection: 'row', alignItems: 'center', padding: spacing.md, gap: spacing.sm },
   notifIconWell: { width: 48, height: 48, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
@@ -446,7 +528,10 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   notifPreview:  { fontSize: fontSize.xs },
 
   unreadBadge: { paddingHorizontal: spacing.sm, height: 20, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center' },
-  unreadText:  { color: '#fff', fontSize: 10, fontWeight: fontWeight.bold },
+  // `primaryForeground`, not '#fff': this sits on `c.danger`, which is a LIGHT
+  // red in dark theme — white measures 3.12:1 there. The token is 6.01:1 and
+  // tracks the theme. Same class as the Commit Sort button (ADR-255).
+  unreadText:  { color: c.primaryForeground, fontSize: 10, fontWeight: fontWeight.bold },
 
   chevron: { fontSize: 22, paddingLeft: spacing.xs },
 });

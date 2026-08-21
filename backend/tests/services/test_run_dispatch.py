@@ -259,3 +259,50 @@ class TestPersistence:
 
         roles = {m.role for m in members}
         assert "driver" in roles, "Driver should appear in AssignmentMember rows"
+
+
+# ---------------------------------------------------------------------------
+# ADR-202 — dispatch seeds the SELECTED trucks (truck_ids), not first-N-by-name
+# ---------------------------------------------------------------------------
+
+class TestTruckSelection:
+    def test_truck_ids_seeds_exactly_those_trucks(self, db):
+        # 3 trucks exist; dispatch selects only B and C → seed exactly those.
+        make_truck(db, "Truck A")
+        truck_b = make_truck(db, "Truck B")
+        truck_c = make_truck(db, "Truck C")
+        make_employee(db, role="driver", name="Driver 1")
+        make_employee(db, role="driver", name="Driver 2")
+
+        crews, _ = run_dispatch(
+            db, target_date=date.today(), company_id=SEED_COMPANY_ID,
+            truck_ids=[truck_b.id, truck_c.id],
+        )
+
+        seeded = set(crews.keys())
+        assert seeded == {str(truck_b.id), str(truck_c.id)}, "Only the selected trucks are seeded"
+        assert len(seeded) == 2, "Count derives from the selection, not a first-N slice"
+
+    def test_truck_ids_overrides_total_trucks(self, db):
+        # total_trucks=1 would take Truck A (first by name); truck_ids wins → Truck C only.
+        make_truck(db, "Truck A")
+        make_truck(db, "Truck B")
+        truck_c = make_truck(db, "Truck C")
+        make_employee(db, role="driver", name="Driver 1")
+
+        crews, _ = run_dispatch(
+            db, target_date=date.today(), company_id=SEED_COMPANY_ID,
+            total_trucks=1, truck_ids=[truck_c.id],
+        )
+        assert set(crews.keys()) == {str(truck_c.id)}, "truck_ids takes precedence over total_trucks"
+
+    def test_no_truck_ids_falls_back_to_total_trucks(self, db):
+        # Backward compat: only total_trucks given → first-N-by-name (Truck A).
+        make_truck(db, "Truck A")
+        make_truck(db, "Truck B")
+        make_employee(db, role="driver", name="Driver 1")
+
+        crews, _ = run_dispatch(
+            db, target_date=date.today(), company_id=SEED_COMPANY_ID, total_trucks=1,
+        )
+        assert len(crews) == 1, "total_trucks fallback still slices to N trucks"

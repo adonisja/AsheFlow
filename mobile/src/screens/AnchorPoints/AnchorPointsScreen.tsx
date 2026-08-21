@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, Modal, RefreshControl,
@@ -9,6 +10,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { Button } from '@components/ui/primitives';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AP = {
@@ -18,6 +20,8 @@ type AP = {
   is_initial: boolean;
   status: 'preliminary' | 'arrived' | 'relocated';
   location: string;
+  lat: number | null;
+  lng: number | null;
   eta: string | null;
   notes: string | null;
   submitted_at: string;
@@ -140,7 +144,8 @@ export default function AnchorPointsScreen() {
 
   // ── Submit new AP ────────────────────────────────────────────────────────────
   const submitAP = useCallback(async () => {
-    if (!apLocation.trim()) { Alert.alert('Required', 'Enter a location.'); return; }
+    if (!apLocation.trim()) { Alert.alert('Required', 'Enter a cross street or address.'); return; }
+    if (!apEta.trim())      { Alert.alert('Required', 'Enter your ETA — crew and dispatch need your arrival time.'); return; }
     if (!crew?.truck_id)    { Alert.alert('No Assignment', 'You are not assigned to a truck today.'); return; }
     setSubmitting(true);
     try {
@@ -148,15 +153,15 @@ export default function AnchorPointsScreen() {
         truck_id: crew.truck_id,
         date: todayISO(),
         location: apLocation.trim(),
-        eta: apEta.trim() || undefined,
+        eta: apEta.trim(),
         notes: apNotes.trim() || undefined,
       });
-      Alert.alert(hasActive ? 'AP Relocated' : 'AP Submitted', 'Crew and dispatch have been notified.');
+      Alert.alert('AP Relocated', 'Crew and dispatch have been notified.');
       setSubmitModal(false);
       setApLocation(''); setApEta(''); setApNotes('');
       fetchAPs();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
     }
@@ -181,8 +186,8 @@ export default function AnchorPointsScreen() {
       Alert.alert('Arrived', 'Arrival confirmed. Crew and dispatch notified.');
       setArriveModal(false);
       fetchAPs();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not confirm. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not confirm. Try again.'));
     } finally {
       setArriving(false);
     }
@@ -200,7 +205,7 @@ export default function AnchorPointsScreen() {
           <Text style={[s.backChevron, { color: c.primary }]}>‹</Text>
         </TouchableOpacity>
         <View style={s.headerCenter}>
-          <Text style={s.pageTitle}>Anchor Points</Text>
+          <Text style={s.pageTitle}>Anchor Point</Text>
           {crew?.truck_name ? (
             <Text style={s.subtitle}>{crew.truck_name} · {todayISO()}</Text>
           ) : (
@@ -221,8 +226,19 @@ export default function AnchorPointsScreen() {
             <Text style={[s.lockedBody, { color: c.mutedForeground }]}>
               {!crewPublished
                 ? 'Dispatch has not published today\'s crew list yet. Check back after dispatch runs.'
-                : 'Confirm your attendance in Field Ops first. Anchor Points unlock once your assignment is confirmed.'}
+                : 'Confirm your attendance in Field Ops first. This page unlocks once your assignment is confirmed.'}
             </Text>
+            {/* An empty state that names where to go should take you there. The
+                crew-list case has nowhere to send you — waiting on dispatch is
+                the only action — so the button appears only when there is one.
+                Matches the `Go to Crew Roster` idiom in FieldOpsScreen. */}
+            {crewPublished && (
+              <View style={s.lockedAction}>
+                <Button variant="outline" size="sm" onPress={() => switchTab('FieldOps')}>
+                  Go to Field Ops
+                </Button>
+              </View>
+            )}
           </View>
         </View>
       ) : (
@@ -237,27 +253,26 @@ export default function AnchorPointsScreen() {
           <ActivityIndicator color={c.primary} style={{ marginTop: spacing.xl }} />
         ) : (
           <>
-            {/* Action buttons */}
-            <View style={s.actionRow}>
-              <TouchableOpacity
-                style={[s.actionBtn, { backgroundColor: c.primary, flex: 1 }]}
-                onPress={() => setSubmitModal(true)}
-                disabled={!crew?.truck_id}
-              >
-                <Text style={s.actionBtnText}>
-                  {hasActive ? '🔀 Relocate AP' : '📍 Set Anchor Point'}
-                </Text>
-              </TouchableOpacity>
-
-              {activeAP?.status === 'preliminary' && (
-                <TouchableOpacity
-                  style={[s.actionBtn, { backgroundColor: c.success, flex: 1 }]}
-                  onPress={() => openArrive(activeAP)}
-                >
-                  <Text style={s.actionBtnText}>✅ Confirm Arrival</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            {/* Action buttons — the INITIAL anchor point is set in Field Ops (gated
+                behind check-in → departure, ADR-206). This page only relocates an
+                existing AP and confirms arrival. */}
+            {hasActive && (
+              <View style={s.actionRow}>
+                <View style={{ flex: 1 }}>
+                  <Button variant="primary" fullWidth disabled={!crew?.truck_id}
+                    onPress={() => setSubmitModal(true)}>
+                    🔀 Relocate AP
+                  </Button>
+                </View>
+                {activeAP?.status === 'preliminary' && (
+                  <View style={{ flex: 1 }}>
+                    <Button variant="success" fullWidth onPress={() => openArrive(activeAP)}>
+                      ✅ Confirm Arrival
+                    </Button>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Active AP card */}
             {activeAP && (
@@ -292,9 +307,11 @@ export default function AnchorPointsScreen() {
             {!hasActive && !loading && (
               <View style={s.emptyCard}>
                 <Text style={s.emptyIcon}>📍</Text>
-                <Text style={s.emptyTitle}>No anchor point set</Text>
+                <Text style={s.emptyTitle}>No anchor point yet</Text>
                 <Text style={s.emptyBody}>
-                  Set your preliminary AP before leaving the station so your crew and dispatch know where you're headed.
+                  Set your preliminary anchor point from the Field Ops checklist — it unlocks
+                  after you check in, complete the pre-trip and odometer, arrive at the station
+                  and load. Once it's set, come back here to relocate it or confirm arrival.
                 </Text>
               </View>
             )}
@@ -319,7 +336,7 @@ export default function AnchorPointsScreen() {
           <ScrollView style={{ width: '100%' }} contentContainerStyle={{ alignItems: 'center', paddingVertical: spacing.xl }}>
             <View style={[s.modalCard, { backgroundColor: c.card }]}>
               <Text style={[s.modalTitle, { color: c.foreground }]}>
-                {hasActive ? 'Relocate Anchor Point' : 'Set Anchor Point'}
+                Relocate Anchor Point
               </Text>
               {hasActive && (
                 <View style={[s.warningBox, { backgroundColor: c.warning + '18', borderColor: c.warning + '40' }]}>
@@ -329,7 +346,7 @@ export default function AnchorPointsScreen() {
                 </View>
               )}
 
-              <Text style={s.fieldLabel}>Location *</Text>
+              <Text style={s.fieldLabel}>Cross street or address *</Text>
               <TextInput
                 style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
                 value={apLocation}
@@ -356,7 +373,7 @@ export default function AnchorPointsScreen() {
                 </>
               )}
 
-              <Text style={s.fieldLabel}>ETA (optional)</Text>
+              <Text style={s.fieldLabel}>ETA *</Text>
               <TextInput
                 style={[s.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
                 value={apEta}
@@ -378,21 +395,12 @@ export default function AnchorPointsScreen() {
               />
 
               <View style={s.modalBtns}>
-                <TouchableOpacity style={[s.modalBtn, { borderColor: c.border }]} onPress={() => setSubmitModal(false)}>
-                  <Text style={[s.modalBtnText, { color: c.foreground }]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[s.modalBtn, { backgroundColor: c.primary, borderColor: c.primary, opacity: submitting ? 0.6 : 1 }]}
-                  onPress={submitAP}
-                  disabled={submitting}
-                >
-                  {submitting
-                    ? <ActivityIndicator color="#fff" />
-                    : <Text style={[s.modalBtnText, { color: '#fff' }]}>
-                        {hasActive ? 'Relocate' : 'Submit'}
-                      </Text>
-                  }
-                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <Button variant="secondary" fullWidth onPress={() => setSubmitModal(false)}>Cancel</Button>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button variant="primary" fullWidth loading={submitting} onPress={submitAP}>Relocate</Button>
+                </View>
               </View>
             </View>
           </ScrollView>
@@ -430,19 +438,12 @@ export default function AnchorPointsScreen() {
             />
 
             <View style={s.modalBtns}>
-              <TouchableOpacity style={[s.modalBtn, { borderColor: c.border }]} onPress={() => setArriveModal(false)}>
-                <Text style={[s.modalBtnText, { color: c.foreground }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.modalBtn, { backgroundColor: c.success, borderColor: c.success, opacity: arriving ? 0.6 : 1 }]}
-                onPress={confirmArrival}
-                disabled={arriving}
-              >
-                {arriving
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={[s.modalBtnText, { color: '#fff' }]}>✅ I'm Here</Text>
-                }
-              </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Button variant="secondary" fullWidth onPress={() => setArriveModal(false)}>Cancel</Button>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button variant="success" fullWidth loading={arriving} onPress={confirmArrival}>✅ I'm Here</Button>
+              </View>
             </View>
           </View>
         </View>
@@ -522,9 +523,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   lockedIcon:      { fontSize: 40 },
   lockedTitle:     { fontSize: fontSize.lg, fontWeight: fontWeight.bold, textAlign: 'center' },
   lockedBody:      { fontSize: fontSize.sm, textAlign: 'center', lineHeight: 22 },
+  lockedAction:    { marginTop: spacing.md, alignSelf: 'stretch' },
   actionRow:       { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
-  actionBtn:       { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', paddingHorizontal: spacing.md },
-  actionBtnText:   { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   activeCard:      { borderWidth: 2, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.lg, backgroundColor: c.card },
   activeCardHeader:{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.xs },
   statusDot:       { width: 8, height: 8, borderRadius: 4 },
@@ -552,6 +552,4 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   suggestionChip:  { borderWidth: 1, borderRadius: radius.full, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, marginRight: spacing.xs, maxWidth: 180 },
   suggestionText:  { fontSize: fontSize.xs },
   modalBtns:       { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  modalBtn:        { flex: 1, borderWidth: 1, borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' },
-  modalBtnText:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });

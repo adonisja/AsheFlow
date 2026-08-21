@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, RefreshControl,
@@ -8,6 +9,7 @@ import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 type Incident = {
   id: string;
@@ -85,28 +87,34 @@ export default function IncidentsScreen() {
     if (!description.trim()) { Alert.alert('Required', 'Please enter a description.'); return; }
     setSubmitting(true);
     try {
+      // Field names must match IncidentCreate exactly — the old payload
+      // omitted the required `date` and used unknown keys (body_part,
+      // tba_count, location), so every submit 422'd.
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const payload: Record<string, any> = {
+        date: todayStr,
         category,
         severity: AUTO_SEVERITY[category] ?? 'info',
         description,
       };
       if (category === 'injury') {
-        payload.body_part = bodyPart;
-        payload.medical_attention = medAttn;
+        payload.body_part_affected = bodyPart || undefined;
+        payload.medical_attention_required = medAttn;
       }
       if (category === 'stolen_packages') {
-        payload.tba_count = tbaCount ? Number(tbaCount) : undefined;
-        payload.location = location;
-        payload.witness_name = witness;
-        payload.incident_time = stolenTime;
+        payload.packages_tba = tbaCount ? Number(tbaCount) : undefined;
+        payload.incident_location = location || undefined;
+        payload.witness_name = witness || undefined;
+        payload.incident_time = stolenTime || undefined;
       }
       await apiClient.post('/incidents/', payload);
       Alert.alert('Submitted', 'Incident report filed. Management has been notified.');
       setDescription(''); setBodyPart(''); setMedAttn(null);
       setTbaCount(''); setLocation(''); setWitness(''); setStolenTime('');
       setCategory('vehicle');
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setSubmitting(false);
     }
@@ -119,6 +127,7 @@ export default function IncidentsScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      <PageHeader title="Incidents" subtitle="Report and track incidents" />
       {/* Tab bar */}
       <View style={s.tabBar}>
         {(['report', 'history'] as const).map(t => (
@@ -154,7 +163,7 @@ export default function IncidentsScreen() {
                   style={[s.chip, category === cat && { backgroundColor: c.primary, borderColor: c.primary }]}
                   onPress={() => setCategory(cat)}
                 >
-                  <Text style={[s.chipText, category === cat && { color: '#fff' }]}>{CATEGORY_LABELS[cat]}</Text>
+                  <Text style={[s.chipText, category === cat && { color: c.primaryForeground }]}>{CATEGORY_LABELS[cat]}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -185,7 +194,7 @@ export default function IncidentsScreen() {
                       style={[s.boolBtn, medAttn === val && { backgroundColor: c.primary, borderColor: c.primary }]}
                       onPress={() => setMedAttn(val)}
                     >
-                      <Text style={[s.boolText, medAttn === val && { color: '#fff' }]}>{val ? 'Yes' : 'No'}</Text>
+                      <Text style={[s.boolText, medAttn === val && { color: c.primaryForeground }]}>{val ? 'Yes' : 'No'}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -224,7 +233,7 @@ export default function IncidentsScreen() {
               onPress={submitIncident}
               disabled={submitting}
             >
-              {submitting ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Submit Report</Text>}
+              {submitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Submit Report</Text>}
             </TouchableOpacity>
           </>
         ) : (
@@ -285,7 +294,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   boolText:      { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground },
   textArea:      { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.sm, minHeight: 110, marginBottom: spacing.md },
   btn:           { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.lg },
-  btnText:       { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:       { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   incCard:       { backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm },
   incHeader:     { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   sevDot:        { width: 8, height: 8, borderRadius: 4 },

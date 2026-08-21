@@ -17,36 +17,37 @@ import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import LoginScreen              from '@screens/Auth/LoginScreen';
 import HomeScreen               from '@screens/Home/HomeScreen';
 import TodayAssignmentScreen    from '@screens/Home/TodayAssignmentScreen';
-import ProfileScreen            from '@screens/Profile/ProfileScreen';
 import FieldOpsScreen           from '@screens/FieldOps/FieldOpsScreen';
 import ScheduleScreen           from '@screens/Schedule/ScheduleScreen';
 import NotificationsScreen      from '@screens/Notifications/NotificationsScreen';
 import IncidentsScreen          from '@screens/Incidents/IncidentsScreen';
 import TrainerDashboard         from '@screens/Trainer/TrainerDashboard';
 import TraineeDashboard         from '@screens/Trainee/TraineeDashboard';
-import AnchorPointsScreen       from '@screens/AnchorPoints/AnchorPointsScreen';
+import AnchorPointTab           from '@screens/AnchorPoints/AnchorPointTab';
 import PreferencesScreen        from '@screens/Preferences/PreferencesScreen';
 import ScheduleChangesScreen    from '@screens/ScheduleChanges/ScheduleChangesScreen';
 import WalkerDashboard          from '@screens/Walker/WalkerDashboard';
-import LocationProfilesScreen   from '@screens/LocationProfiles/LocationProfilesScreen';
 import DriverSurveyScreen       from '@screens/DriverSurvey/DriverSurveyScreen';
 import MyAccountScreen          from '@screens/Profile/MyAccountScreen';
 import RouteSortScreen          from '@screens/Trainer/RouteSortScreen';
+import CrewMemberDetailScreen   from '@screens/Trainer/CrewMemberDetailScreen';
+import ReattemptScreen          from '@screens/Trainer/ReattemptScreen';
 
 // ── Role constants ────────────────────────────────────────────────────────────
-export const FIELD_ROLES              = ['driver', 'trainer', 'trainee', 'walker'] as const;
-export const FIELD_OPS_ROLES          = ['driver'] as const;
-export const ANCHOR_POINT_ROLES       = ['driver'] as const;
-export const PREFERENCES_ROLES        = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const SCHEDULE_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const SCHEDULE_CHANGE_ROLES    = ['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin'] as const;
-export const INCIDENT_ROLES           = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const TRAINER_ROLES            = ['trainer'] as const;
-export const TRAINEE_ROLES            = ['trainee'] as const;
-export const WALKER_ROLES             = ['walker'] as const;
-export const LOCATION_PROFILE_ROLES   = ['driver', 'walker', 'trainer', 'trainee'] as const;
-export const ROUTE_SORT_ROLES         = ['driver'] as const;
-export const DRIVER_SURVEY_ROLES      = ['trainer', 'walker'] as const;
+// Moved to ./roles (cycle-free module) — screens must import from
+// '@navigation/roles', never from this file (it imports every screen, so a
+// screen importing back from here evaluates the constant as undefined).
+// Re-exported for existing imports within this file's consumers.
+export * from './roles';
+import {
+  FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
+  SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
+  WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
+  GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES, TRUCK_BUILDINGS_ROLES,
+} from './roles';
+import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
+import MyRouteTabScreen from '@screens/Trainee/MyRouteScreen';
+import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -69,10 +70,17 @@ export type TraineeStackParamList = {
   TraineeDashboard: undefined;
 };
 
-const RootStack    = createNativeStackNavigator<RootStackParamList>();
-const HomeStack    = createNativeStackNavigator<HomeStackParamList>();
-const TrainerStack = createNativeStackNavigator<TrainerStackParamList>();
-const TraineeStack = createNativeStackNavigator<TraineeStackParamList>();
+// ADR-216 phase 2: AP Sort list + per-employee route detail (crew drill-down).
+export type RouteSortStackParamList = {
+  RouteSortMain: undefined;
+  CrewMemberDetail: { routeId: string; memberName: string };
+};
+
+const RootStack      = createNativeStackNavigator<RootStackParamList>();
+const HomeStack      = createNativeStackNavigator<HomeStackParamList>();
+const TrainerStack   = createNativeStackNavigator<TrainerStackParamList>();
+const TraineeStack   = createNativeStackNavigator<TraineeStackParamList>();
+const RouteSortStack = createNativeStackNavigator<RouteSortStackParamList>();
 
 // ── Tab definition ────────────────────────────────────────────────────────────
 type TabDef = {
@@ -86,16 +94,19 @@ type TabDef = {
 const ALL_TABS: TabDef[] = [
   { key: 'Home',            label: 'Home',            icon: '🏠', roles: [],                     component: HomeNavigator },
   { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
-  { key: 'AnchorPoints',    label: 'Anchor Points',    icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointsScreen },
+  { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointTab },
   { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
-  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortScreen },
+  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator },
+  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen },
+  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen },
+  { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
   { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
   { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', roles: DRIVER_SURVEY_ROLES,     component: DriverSurveyScreen },
   { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
-  { key: 'SchChanges',      label: 'Sch. Changes',     icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
+  { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
   { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
-  { key: 'Locations',       label: 'Locations',        icon: '📍', roles: LOCATION_PROFILE_ROLES,  component: LocationProfilesScreen },
+  { key: 'Gear',            label: 'Gear',             icon: '🎒', roles: GEAR_ROLES,              component: GearRequestsScreen },
   { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', roles: PREFERENCES_ROLES,       component: PreferencesScreen },
   { key: 'Notifications',   label: 'Notifications',    icon: '🔔', roles: [],                      component: NotificationsScreen },
   { key: 'Account',         label: 'Account',          icon: '👤', roles: [],                      component: MyAccountScreen },
@@ -115,7 +126,11 @@ function HomeNavigator() {
     >
       <HomeStack.Screen name="HomeMain"         component={HomeScreen}            options={{ headerShown: false }} />
       <HomeStack.Screen name="TodayAssignment"  component={TodayAssignmentScreen} options={{ headerShown: false }} />
-      <HomeStack.Screen name="Profile"          component={ProfileScreen}         options={{ headerShown: false }} />
+      {/* The avatar tap on Home routes here. ProfileScreen was deleted: it duplicated
+          MyAccountScreen's email-change flow (same two endpoints) while lacking password
+          change, both performance cards, and the standard PageHeader. Keeping the route
+          name preserves the tap target and the back gesture. */}
+      <HomeStack.Screen name="Profile"          component={MyAccountScreen}       options={{ headerShown: false }} />
     </HomeStack.Navigator>
   );
 }
@@ -135,6 +150,18 @@ function TraineeNavigator() {
     <TraineeStack.Navigator screenOptions={{ headerShown: false }}>
       <TraineeStack.Screen name="TraineeDashboard" component={TraineeDashboard} />
     </TraineeStack.Navigator>
+  );
+}
+
+// ── Route Sort nested navigator (ADR-216 phase 2) ─────────────────────────────
+// The AP Sort tab is a stack so a crew card can push the per-employee route
+// detail (current → remaining → completed stops).
+function RouteSortNavigator() {
+  return (
+    <RouteSortStack.Navigator screenOptions={{ headerShown: false }}>
+      <RouteSortStack.Screen name="RouteSortMain"    component={RouteSortScreen} />
+      <RouteSortStack.Screen name="CrewMemberDetail" component={CrewMemberDetailScreen} />
+    </RouteSortStack.Navigator>
   );
 }
 
@@ -190,7 +217,11 @@ const tabBarStyles = (c: ThemeColors) => StyleSheet.create({
   tabActive:   {},
   icon:        { fontSize: 20, marginBottom: 2 },
   iconActive:  {},
-  label:       { fontSize: 10, color: '#9CA3AF', fontWeight: '500' },
+  // `mutedForeground`, not a fixed grey. #9CA3AF measured 2.54:1 on the LIGHT
+  // tab bar — every inactive label in the app's primary navigation, below the
+  // 4.5 floor. A fixed grey cannot serve both themes: it was picked against the
+  // dark bar (6.75:1) and never rechecked against white. 5.27 / 8.04 now.
+  label:       { fontSize: 10, color: c.mutedForeground, fontWeight: '500' },
   labelActive: { color: c.primary, fontWeight: '600' },
   indicator:   {
     position: 'absolute', top: 0,

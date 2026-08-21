@@ -5,7 +5,10 @@ import {
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
+import OreDayCard from '@components/training/OreDayCard';
+import { errorText } from '@api/errorText';
 import { useAuth } from '@contexts/AuthContext';
+import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
@@ -29,11 +32,58 @@ type Session = {
   manager_comments: string | null;
   handoff_notes: string | null;
   is_locked: boolean;
+  submitted_at: string | null;
+  // ADR-281 phase 0
+  ore_completed_at: string | null;
+  has_certificate: boolean;
+  left_early: boolean;
+  phase_one_started: boolean;
+};
+
+type ContinuationRequest = {
+  id: string;
+  trainee_id: string;
+  trainee_name?: string | null;
 };
 
 export default function TrainerTodayScreen() {
   const c = useColors();
   const { user } = useAuth();
+  const { fetchId } = useEmployeeId();
+
+  const [continuations, setContinuations] = useState<ContinuationRequest[]>([]);
+  const [continuationBusy, setContinuationBusy] = useState<string | null>(null);
+
+  const loadContinuations = useCallback(async () => {
+    try {
+      const eid = await fetchId();
+      if (!eid) return;
+      const res = await apiClient.get(`/continuation-requests/trainer/${eid}`);
+      const pending: ContinuationRequest[] = (res.data ?? []).filter((r: any) => r.status === 'pending');
+      // Response carries ids only — resolve trainee names for display.
+      const named = await Promise.all(pending.map(async r => {
+        try {
+          const emp = await apiClient.get(`/employees/${r.trainee_id}`);
+          return { ...r, trainee_name: emp.data?.name ?? null };
+        } catch { return r; }
+      }));
+      setContinuations(named);
+    } catch { /* card is best-effort */ }
+  }, [fetchId]);
+
+  useEffect(() => { loadContinuations(); }, [loadContinuations]);
+
+  const respondContinuation = async (req: ContinuationRequest, action: 'accept' | 'reject') => {
+    setContinuationBusy(req.id);
+    try {
+      await apiClient.patch(`/continuation-requests/${req.id}/${action}`);
+      setContinuations(prev => prev.filter(r => r.id !== req.id));
+    } catch (e) {
+      Alert.alert('Error', errorText(e, `Could not ${action} the request.`));
+    } finally {
+      setContinuationBusy(null);
+    }
+  };
 
   const [session,      setSession]      = useState<Session | null>(null);
   const [loading,      setLoading]      = useState(true);
@@ -64,8 +114,16 @@ export default function TrainerTodayScreen() {
         manager_comments: record.manager_comments ?? null,
         handoff_notes:   record.trainer_comments ?? null,
         is_locked:       record.is_locked ?? false,
+        submitted_at:    record.submitted_at ?? null,
+        ore_completed_at: record.ore_completed_at ?? null,
+        has_certificate:  record.has_certificate ?? false,
+        left_early:       record.left_early ?? false,
+        phase_one_started: record.phase_one_started ?? false,
       });
-      setHandoff(record.trainer_comments ?? '');
+      // Input starts EMPTY: the existing note renders in the "Already on file"
+      // block, and the backend APPENDS comments — pre-filling the input with
+      // the saved note would duplicate it on the next save/submit.
+      setHandoff('');
       setCompletedIds(new Set(tasks.filter((t: Task) => t.is_completed).map((t: Task) => t.id)));
     } catch {
       setSession(null);
@@ -95,24 +153,73 @@ export default function TrainerTodayScreen() {
     }
   }, [session, completedIds]);
 
+  const [noteSaved,    setNoteSaved]    = useState(false);
+  const [submitting,   setSubmitting]   = useState(false);
+  const [phase4Result, setPhase4Result] = useState<{ score: number; passed: boolean } | null>(null);
+
   const saveHandoff = useCallback(async () => {
-    if (!session) return;
+    if (!session || !handoff.trim()) return;
     setSavingNote(true);
     try {
       await apiClient.post(`/training/trainee/${session.trainee_id}/trainer-comments`, { comments: handoff });
-      Alert.alert('Saved', 'Handoff note saved.');
-    } catch {
-      Alert.alert('Error', 'Could not save note. Try again.');
+      setNoteSaved(true);
+      setHandoff('');
+      setTimeout(() => setNoteSaved(false), 2500);
+      load();   // pull the merged note back (server appends "[Added later]")
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not save note. Try again.'));
     } finally {
       setSavingNote(false);
     }
+  }, [session, handoff, load]);
+
+  const doSubmit = useCallback(async () => {
+    if (!session) return;
+    setSubmitting(true);
+    try {
+      // Persist the note first so the handoff and submission land together.
+      const noteChanged = handoff.trim() && handoff.trim() !== (session.handoff_notes ?? '').trim();
+      if (noteChanged) {
+        await apiClient.post(`/training/trainee/${session.trainee_id}/trainer-comments`, { comments: handoff });
+      }
+      const res = await apiClient.post(`/training/record/${session.record_id}/submit`);
+      setSession(prev => prev ? {
+        ...prev,
+        submitted_at: res.data.submitted_at,
+        handoff_notes: noteChanged ? handoff : prev.handoff_notes,
+      } : prev);
+      if (res.data.phase === 4 && typeof res.data.score === 'number') {
+        setPhase4Result({ score: res.data.score, passed: !!res.data.passed });
+      }
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not submit the day. Try again.'));
+    } finally {
+      setSubmitting(false);
+    }
   }, [session, handoff]);
+
+  const submitDay = useCallback(() => {
+    if (!session) return;
+    const remaining = session.tasks.length - session.tasks.filter(t => completedIds.has(t.id)).length;
+    if (remaining > 0) {
+      Alert.alert(
+        'Incomplete tasks',
+        `${remaining} task${remaining === 1 ? ' is' : 's are'} still unchecked — they will carry over to ${session.trainee_name.split(' ')[0]}'s next session as training debt.`,
+        [
+          { text: 'Keep working', style: 'cancel' },
+          { text: 'Submit anyway', style: 'destructive', onPress: doSubmit },
+        ],
+      );
+    } else {
+      doSubmit();
+    }
+  }, [session, completedIds, doSubmit]);
 
   const s = styles(c);
 
   if (!loading && !session) {
     return (
-      <ScreenShell edges={[]} noHeader title="Today's Session" subtitle="No active session for today.">
+      <ScreenShell noHeader>
         <EmptyState c={c} />
       </ScreenShell>
     );
@@ -126,10 +233,7 @@ export default function TrainerTodayScreen() {
 
   return (
     <ScreenShell
-      edges={[]}
       noHeader
-      title="Today's Session"
-      subtitle={session ? `Day ${session.day_number} · Phase ${session.phase}` : undefined}
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}
@@ -151,6 +255,11 @@ export default function TrainerTodayScreen() {
                     <Text style={[s.lockedText, { color: c.warning }]}>🔒 Locked</Text>
                   </View>
                 )}
+                {session.submitted_at && (
+                  <View style={[s.lockedBadge, { backgroundColor: c.success + '22' }]}>
+                    <Text style={[s.lockedText, { color: c.success }]}>✓ Submitted</Text>
+                  </View>
+                )}
               </View>
               <Text style={s.heroName}>{session.trainee_name}</Text>
             </View>
@@ -163,6 +272,55 @@ export default function TrainerTodayScreen() {
             <View style={[s.progressBarFill, { width: `${Math.round(progress * 100)}%` as any, backgroundColor: progress === 1 ? c.success : c.primary }]} />
           </View>
           <Text style={s.progressCaption}>{Math.round(progress * 100)}% complete</Text>
+        </View>
+      )}
+
+      {/* ADR-281: the ORE day. The trainer can upload on the trainee's behalf
+          — a new hire on their first day may not have the app working yet,
+          which is one of the three things this phase exists to fix — and
+          records the departure, since a trainee does not mark their own
+          pay-affecting attendance. */}
+      {session && session.phase === 0 && (
+        <OreDayCard
+          c={c}
+          state={{
+            recordId:       session.record_id,
+            oreCompletedAt: session.ore_completed_at,
+            hasCertificate: session.has_certificate,
+            leftEarly:      session.left_early,
+            phaseOneStarted: session.phase_one_started,
+          }}
+          canMarkLeftEarly
+          onChanged={load}
+        />
+      )}
+
+      {/* Continuation requests — trainees asking to keep this trainer (ADR-012).
+          Accept boosts the pairing; Decline silently releases it. */}
+      {continuations.length > 0 && (
+        <View style={[s.bannerCard, { borderLeftColor: c.success, backgroundColor: c.success + '10' }]}>
+          <Text style={[s.bannerLabel, { color: c.success }]}>Continuation Requests</Text>
+          {continuations.map(req => (
+            <View key={req.id} style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs }}>
+              <Text style={[s.bannerText, { color: c.foreground, flex: 1 }]}>
+                🤝 {req.trainee_name ?? 'A trainee'} wants to keep training with you
+              </Text>
+              <TouchableOpacity
+                style={{ backgroundColor: c.success, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 1 }}
+                onPress={() => respondContinuation(req, 'accept')}
+                disabled={continuationBusy === req.id}
+              >
+                <Text style={{ color: c.primaryForeground, fontSize: fontSize.xs, fontWeight: fontWeight.bold }}>Accept</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 1 }}
+                onPress={() => respondContinuation(req, 'reject')}
+                disabled={continuationBusy === req.id}
+              >
+                <Text style={{ color: c.mutedForeground, fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>Decline</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
         </View>
       )}
 
@@ -211,42 +369,125 @@ export default function TrainerTodayScreen() {
         />
       )}
 
-      {/* Handoff note — hidden when locked */}
-      {!session?.is_locked && (
-        <View style={s.section}>
-          <Text style={s.sectionLabel}>Handoff Note</Text>
-          <Text style={s.sectionHint}>Visible to the next trainer and management</Text>
-          {session?.handoff_notes && (
+      {/* ── Complete & hand off — the day's terminal action ──────────────────
+          States: in-progress (readiness chip + note + submit) → submitted
+          (success card below). Submitting also persists the note, so one tap
+          finishes the day. */}
+      {session && !session.is_locked && !session.submitted_at && (
+        <View style={[s.handoffCard, { borderColor: progress === 1 ? c.success + '66' : c.border, backgroundColor: c.card }]}>
+          <View style={s.handoffHeader}>
+            <Text style={s.handoffTitle}>Complete Day {session.day_number}</Text>
+            <View style={[s.readyChip, { backgroundColor: progress === 1 ? c.success + '1E' : c.warning + '1E' }]}>
+              <Text style={[s.readyChipText, { color: progress === 1 ? c.success : c.warning }]}>
+                {progress === 1 ? '✓ All tasks done' : `${totalCount - doneCount} task${totalCount - doneCount === 1 ? '' : 's'} remaining`}
+              </Text>
+            </View>
+          </View>
+          <Text style={s.sectionHint}>
+            Your handoff note is visible to the next trainer and management.
+          </Text>
+
+          {session.handoff_notes && (
             <View style={[s.existingNote, { backgroundColor: c.primaryLight }]}>
               <Text style={[s.existingNoteLabel, { color: c.primary }]}>Already on file</Text>
               <Text style={[s.existingNoteText, { color: c.foreground }]}>{session.handoff_notes}</Text>
             </View>
           )}
+
           <TextInput
-            style={[s.textArea, { color: c.foreground, borderColor: c.border, backgroundColor: c.card }]}
+            style={[s.textArea, { color: c.foreground, borderColor: c.border, backgroundColor: c.background }]}
             value={handoff}
             onChangeText={setHandoff}
-            placeholder={session?.handoff_notes ? 'Append additional notes…' : 'Notes for the next trainer…'}
+            placeholder={session.handoff_notes ? 'Append additional notes…' : `How did ${session.trainee_name.split(' ')[0]} do today?`}
             placeholderTextColor={c.mutedForeground}
             multiline
             numberOfLines={4}
             textAlignVertical="top"
           />
+
           <TouchableOpacity
-            style={[s.btn, { backgroundColor: c.primary, opacity: savingNote ? 0.6 : 1 }]}
+            style={[s.btn, {
+              backgroundColor: progress === 1 ? c.success : c.primary,
+              opacity: submitting ? 0.6 : 1,
+              marginBottom: spacing.sm,
+            }]}
+            onPress={submitDay}
+            disabled={submitting || savingNote}
+          >
+            {submitting
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={s.btnText}>Submit Day {session.day_number} & Hand Off</Text>
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.ghostBtn}
             onPress={saveHandoff}
-            disabled={savingNote}
+            disabled={savingNote || submitting || !handoff.trim()}
           >
             {savingNote
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={s.btnText}>Save Note</Text>
+              ? <ActivityIndicator size="small" color={c.mutedForeground} />
+              : <Text style={[s.ghostBtnText, { color: noteSaved ? c.success : c.mutedForeground }]}>
+                  {noteSaved ? '✓ Note saved' : 'Save note only — keep working'}
+                </Text>
             }
           </TouchableOpacity>
         </View>
       )}
 
+      {/* ── Submitted — success state replaces the form ── */}
+      {session && session.submitted_at && (
+        <View style={[s.doneCard, { backgroundColor: c.success + '11', borderColor: c.success + '55' }]}>
+          <Text style={s.doneCheck}>✓</Text>
+          <Text style={[s.doneTitle, { color: c.foreground }]}>Day {session.day_number} submitted</Text>
+          <Text style={[s.doneSub, { color: c.mutedForeground }]}>
+            {new Date(session.submitted_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            {' · '}the next trainer and management can now see your handoff.
+          </Text>
+          {phase4Result && (
+            <View style={[s.p4Banner, { backgroundColor: (phase4Result.passed ? c.success : c.danger) + '1E' }]}>
+              <Text style={[s.p4Text, { color: phase4Result.passed ? c.success : c.danger }]}>
+                Phase 4 {phase4Result.passed ? 'PASSED' : 'NOT PASSED'} · score {Math.round(phase4Result.score * 100)}%
+                {!phase4Result.passed ? ' — a remediation session was generated' : ''}
+              </Text>
+            </View>
+          )}
+          {(session.handoff_notes || handoff.trim()) && (
+            <View style={[s.existingNote, { backgroundColor: c.card, alignSelf: 'stretch', marginTop: spacing.sm, marginBottom: 0 }]}>
+              <Text style={[s.existingNoteLabel, { color: c.primary }]}>Your Handoff Note</Text>
+              <Text style={[s.existingNoteText, { color: c.foreground }]}>{session.handoff_notes || handoff}</Text>
+            </View>
+          )}
+
+          {/* Same-day append only (ADR-046 §5): the record soft-locks at
+              midnight; management reopens if needed. Appends are tagged
+              "[Added later]" server-side. */}
+          {!session.is_locked && (
+            <View style={{ alignSelf: 'stretch', marginTop: spacing.sm }}>
+              <TextInput
+                style={[s.textArea, { color: c.foreground, borderColor: c.border, backgroundColor: c.background, minHeight: 56, marginBottom: spacing.xs }]}
+                value={handoff}
+                onChangeText={setHandoff}
+                placeholder="Forgot something? Append a note (until midnight)…"
+                placeholderTextColor={c.mutedForeground}
+                multiline
+              />
+              {handoff.trim() !== '' && (
+                <TouchableOpacity style={s.ghostBtn} onPress={saveHandoff} disabled={savingNote}>
+                  {savingNote
+                    ? <ActivityIndicator size="small" color={c.mutedForeground} />
+                    : <Text style={[s.ghostBtnText, { color: noteSaved ? c.success : c.primary }]}>
+                        {noteSaved ? '✓ Note appended' : 'Append note'}
+                      </Text>}
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Read-only handoff note display when locked */}
-      {session?.is_locked && session.handoff_notes && (
+      {session?.is_locked && !session.submitted_at && session.handoff_notes && (
         <View style={[s.bannerCard, { borderLeftColor: c.primary, backgroundColor: c.primaryLight }]}>
           <Text style={[s.bannerLabel, { color: c.primary }]}>Your Handoff Note</Text>
           <Text style={[s.bannerText, { color: c.foreground }]}>{session.handoff_notes}</Text>
@@ -317,8 +558,8 @@ function TaskRow({ task, done, completing, onToggle, c, debt, last, readOnly }: 
         disabled={readOnly}
       >
         {completing
-          ? <ActivityIndicator size="small" color={done ? '#fff' : c.mutedForeground} />
-          : done ? <Text style={gs.checkMark}>✓</Text> : null
+          ? <ActivityIndicator size="small" color={done ? c.primaryForeground : c.mutedForeground} />
+          : done ? <Text style={[gs.checkMark, { color: c.primaryForeground }]}>✓</Text> : null
         }
       </TouchableOpacity>
       <View style={{ flex: 1 }}>
@@ -413,5 +654,20 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   existingNoteText:  { fontSize: fontSize.sm, lineHeight: 20 },
   textArea:      { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.sm, minHeight: 96, marginBottom: spacing.sm },
   btn:           { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.lg },
-  btnText:       { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:       { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+
+  handoffCard:   { borderRadius: radius.lg, borderWidth: 1.5, padding: spacing.md, marginTop: spacing.sm, marginBottom: spacing.lg },
+  handoffHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
+  handoffTitle:  { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: c.foreground },
+  readyChip:     { paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.full },
+  readyChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  ghostBtn:      { alignItems: 'center', paddingVertical: spacing.xs },
+  ghostBtnText:  { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
+
+  doneCard:      { borderRadius: radius.lg, borderWidth: 1.5, padding: spacing.lg, marginTop: spacing.sm, marginBottom: spacing.lg, alignItems: 'center' },
+  doneCheck:     { fontSize: 40, color: c.success, fontWeight: '700', marginBottom: spacing.xs },
+  doneTitle:     { fontSize: fontSize.md, fontWeight: fontWeight.bold },
+  doneSub:       { fontSize: fontSize.xs, textAlign: 'center', marginTop: 2 },
+  p4Banner:      { borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, marginTop: spacing.sm },
+  p4Text:        { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 });

@@ -5,8 +5,17 @@
  * Key differences from web:
  *  - No CSS classes — StyleSheet.create() only
  *  - Animated.Value for press feedback (spring, not CSS transition)
- *  - All touch targets ≥ 44pt (WCAG 2.5.5)
+ *  - All touch targets ≥ 44pt (WCAG 2.5.5), enforced by MIN_TARGET below —
+ *    this was previously claimed here but not true: Button size="sm" was 36pt
+ *    and IconButton defaulted to 40pt.
  *  - Vibrant/saturated palette for outdoor legibility
+ *
+ * ACCESSIBILITY IS PART OF THE API, not an optional prop (plan §4 rule 4).
+ * Interactive primitives REQUIRE an accessibilityLabel when their content is
+ * not plain text, and set accessibilityRole/State themselves so a screen
+ * reader gets them without the caller remembering. Measured before this
+ * change: 0 of 16 primitives had any a11y prop, which is where the app's 5%
+ * coverage comes from.
  *
  * Import pattern:
  *   import { Button, Badge, Card, Avatar, StatCard } from '@components/ui/primitives';
@@ -15,34 +24,98 @@
 import React, { useRef } from 'react';
 import {
   View, Text, TouchableOpacity, Animated,
-  StyleSheet, ActivityIndicator,
+  StyleSheet, ActivityIndicator, AccessibilityInfo, Platform, Vibration,
   type ViewStyle, type TextStyle, type StyleProp,
 } from 'react-native';
-import { useColors } from '@contexts/ThemeContext';
+import { useColors, useTheme } from '@contexts/ThemeContext';
 import {
-  spacing, radius, fontSize, fontWeight, shadow, hitSlop,
+  spacing, radius, fontSize, fontWeight, shadow, hitSlop, elevate, duration, spring,
+  type ElevationLevel,
   type ThemeColors, type FieldRole,
   getRoleColor, getRoleLight, ROLE_LABELS,
 } from '@theme/index';
+
+/** WCAG 2.5.5. Nothing interactive may be smaller than this. */
+export const MIN_TARGET = 44;
+
+/**
+ * Does the OS want motion suppressed?
+ *
+ * Read once here rather than per-component so no primitive has to remember —
+ * an animation that ignores this setting is a bug, not a flourish (plan §4
+ * rule 5).
+ */
+function useReduceMotion() {
+  // A REF, not state. Nothing needs to re-render when this resolves — it is
+  // only read at animation time — and as state it recreates every callback
+  // that depends on it. In CompanyStandingCard that chain (animateChevron ->
+  // load -> the effect calling it) shifted the hook order mid-mount and
+  // crashed with "Rendered more hooks than during the previous render".
+  const reduce = useRef(false);
+  React.useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled().then(v => { if (alive) reduce.current = v; });
+    const sub = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged', v => { reduce.current = v; });
+    return () => { alive = false; sub?.remove?.(); };
+  }, []);
+  return reduce;
+}
+
+/**
+ * A short tick on commit. Android only: iOS needs Haptics from a native module
+ * we do not depend on, and Vibration there is a blunt buzz that users dislike.
+ * Silence is the correct degradation — this is confirmation, never the signal
+ * itself.
+ *
+ * The try/catch is not defensive padding. `Vibration.vibrate()` throws a
+ * SecurityException when VIBRATE is missing from the manifest, and that
+ * crashed the app on "Mark As Present" (2026-08-04). The permission is now
+ * declared, but a haptic is decoration on top of a real action — an OEM that
+ * restricts it, or a manifest that loses the line in a merge, must not be able
+ * to take down a commit. Feedback that can break the thing it confirms is
+ * worse than no feedback.
+ */
+export function tick() {
+  if (Platform.OS !== 'android') return;
+  try {
+    Vibration.vibrate(10);
+  } catch {
+    // Silence is the documented degradation.
+  }
+}
 
 // ─── Press animation hook ─────────────────────────────────────────────────────
 // Spring-backed scale on press — mirrors web --ease-spring on transform
 
 function usePressScale(toScale = 0.96) {
   const scale = useRef(new Animated.Value(1)).current;
+  const reduceMotion = useReduceMotion();
 
-  const onPressIn = () =>
-    Animated.spring(scale, { toValue: toScale, useNativeDriver: true, speed: 40, bounciness: 4 }).start();
+  const onPressIn = () => {
+    if (reduceMotion.current) return;
+    Animated.spring(scale, { toValue: toScale, useNativeDriver: true, ...spring.pressIn }).start();
+  };
 
-  const onPressOut = () =>
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 6 }).start();
+  const onPressOut = () => {
+    if (reduceMotion.current) return;
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, ...spring.pressOut }).start();
+  };
 
   return { scale, onPressIn, onPressOut };
 }
 
 // ─── Button ───────────────────────────────────────────────────────────────────
 
-type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'success' | 'ghost' | 'outline';
+/**
+ * `primary` is the BRAND violet — the interactive colour (plan §4.0).
+ * `structural` is the navy, for the rare button that is page furniture rather
+ * than an action. Navy at 13:1 is a text/heading colour; using it for every
+ * button made the UI read as uniformly heavy.
+ */
+type ButtonVariant =
+  | 'primary' | 'structural' | 'secondary'
+  | 'danger' | 'success' | 'ghost' | 'outline';
 type ButtonSize    = 'sm' | 'md' | 'lg';
 
 interface ButtonProps {
@@ -54,45 +127,63 @@ interface ButtonProps {
   disabled?: boolean;
   fullWidth?: boolean;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Required when `children` is not plain text — an icon-only or composed
+   * button is unlabelled to a screen reader otherwise.
+   */
+  accessibilityLabel?: string;
+  /** What happens on activation, when that is not obvious from the label. */
+  accessibilityHint?: string;
 }
 
 export function Button({
   onPress, children, variant = 'primary', size = 'md',
   loading = false, disabled = false, fullWidth = false, style,
+  accessibilityLabel, accessibilityHint,
 }: ButtonProps) {
   const c = useColors();
   const { scale, onPressIn, onPressOut } = usePressScale();
 
   const bgColor: Record<ButtonVariant, string> = {
-    primary:   c.primary,
-    secondary: c.surfaceMuted,
-    danger:    c.danger,
-    success:   c.success,
-    ghost:     'transparent',
-    outline:   'transparent',
+    primary:    c.brand,
+    structural: c.primary,
+    secondary:  c.surfaceMuted,
+    danger:     c.danger,
+    success:    c.success,
+    ghost:      'transparent',
+    outline:    'transparent',
   };
 
+  // Foregrounds come from the token layer. `danger`/`success` were hardcoded
+  // '#fff', which is a token bypass and would not follow a palette change.
   const textColor: Record<ButtonVariant, string> = {
-    primary:   c.primaryForeground,
-    secondary: c.foreground,
-    danger:    '#fff',
-    success:   '#fff',
-    ghost:     c.primary,
-    outline:   c.primary,
+    primary:    c.brandForeground,
+    structural: c.primaryForeground,
+    secondary:  c.foreground,
+    danger:     c.primaryForeground,
+    success:    c.primaryForeground,
+    // `brandText`, not `brand`: these render violet ON a surface. Dark-theme
+    // `brand` is 4.10:1 on a card and 3.58:1 on surfaceMuted, and button
+    // labels are 13-17px semibold — under WCAG's large-text threshold, so
+    // they need the full 4.5:1. `brand` stays the fill colour.
+    ghost:      c.brandText,
+    outline:    c.brandText,
   };
 
   const borderColor: Record<ButtonVariant, string | undefined> = {
-    primary:   undefined,
-    secondary: c.border,
-    danger:    undefined,
-    success:   undefined,
-    ghost:     undefined,
-    outline:   c.primary,
+    primary:    undefined,
+    structural: undefined,
+    secondary:  c.border,
+    danger:     undefined,
+    success:    undefined,
+    ghost:      undefined,
+    outline:    c.brandText,
   };
 
   const sizePad: Record<ButtonSize, { paddingVertical: number; paddingHorizontal: number; minHeight: number }> = {
-    sm: { paddingVertical: 8,  paddingHorizontal: 14, minHeight: 36 },
-    md: { paddingVertical: 12, paddingHorizontal: 20, minHeight: 44 },
+    // 44 is the floor, not a target — WCAG 2.5.5. `sm` was 36pt.
+    sm: { paddingVertical: 8,  paddingHorizontal: 14, minHeight: MIN_TARGET },
+    md: { paddingVertical: 12, paddingHorizontal: 20, minHeight: MIN_TARGET },
     lg: { paddingVertical: 16, paddingHorizontal: 28, minHeight: 52 },
   };
 
@@ -102,14 +193,22 @@ export function Button({
     lg: fontSize.md,
   };
 
-  const glowShadow = (variant === 'primary' || variant === 'danger' || variant === 'success')
+  const glowShadow = (variant === 'primary' || variant === 'structural'
+                      || variant === 'danger' || variant === 'success')
     ? { ...shadow.glow, shadowColor: bgColor[variant] }
     : {};
 
   return (
     <Animated.View style={[{ transform: [{ scale }] }, fullWidth && { width: '100%' }]}>
       <TouchableOpacity
-        onPress={onPress}
+        onPress={() => { tick(); onPress(); }}
+        // Set by the component, not left to the caller — this is what makes
+        // the button announce itself at all.
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel
+          ?? (typeof children === 'string' ? children : undefined)}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={{ disabled: disabled || loading, busy: loading }}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
         disabled={disabled || loading}
@@ -131,8 +230,7 @@ export function Button({
         {loading ? (
           <ActivityIndicator
             size="small"
-            color={variant === 'secondary' || variant === 'ghost' || variant === 'outline'
-              ? c.primary : '#fff'}
+            color={textColor[variant]}
           />
         ) : (
           <Text style={[styles.btnText, { color: textColor[variant], fontSize: textSize[size] }]}>
@@ -154,10 +252,17 @@ interface IconButtonProps {
   size?: number;
   color?: string;
   style?: StyleProp<ViewStyle>;
+  /**
+   * REQUIRED — an icon has no text for a screen reader to fall back on, so
+   * without this the control is announced as an unlabelled button.
+   */
+  accessibilityLabel: string;
+  accessibilityHint?: string;
 }
 
 export function IconButton({
-  onPress, children, badge, variant = 'default', size = 40, color, style,
+  onPress, children, badge, variant = 'default', size = MIN_TARGET, color, style,
+  accessibilityLabel, accessibilityHint,
 }: IconButtonProps) {
   const c = useColors();
   const { scale, onPressIn, onPressOut } = usePressScale(0.92);
@@ -171,7 +276,12 @@ export function IconButton({
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        onPress={onPress}
+        onPress={() => { tick(); onPress(); }}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={accessibilityHint}
+        // A badge is a visible count that a screen reader would otherwise miss.
+        accessibilityValue={badge ? { text: `${badge}` } : undefined}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
         hitSlop={hitSlop}
@@ -190,7 +300,9 @@ export function IconButton({
         {children}
         {badge != null && badge > 0 && (
           <View style={[styles.iconBadge, { backgroundColor: c.danger }]}>
-            <Text style={styles.iconBadgeText}>{badge > 9 ? '9+' : badge}</Text>
+            <Text style={[styles.iconBadgeText, { color: c.dangerLight }]}>
+              {badge > 9 ? '9+' : badge}
+            </Text>
           </View>
         )}
       </TouchableOpacity>
@@ -282,16 +394,28 @@ interface AvatarProps {
   size?: number;
   /** Override color directly (skip role lookup) */
   color?: string;
+  /**
+   * The person's name. A screen reader spells initials letter-by-letter
+   * ("D-T"), which tells the user nothing — pass the name and it announces
+   * "Driver Test, driver" instead.
+   */
+  name?: string;
 }
 
-export function Avatar({ initials, role = 'driver', size = 36, color }: AvatarProps) {
+export function Avatar({ initials, role = 'driver', size = 36, color, name }: AvatarProps) {
   const c = useColors();
   const fg  = color ?? getRoleColor(role, c);
   const bg  = color ? color + '20' : getRoleLight(role, c);
   const textFontSize = size <= 28 ? 9 : size <= 36 ? 11 : size <= 44 ? 13 : 15;
 
   return (
-    <View style={[
+    <View
+      accessibilityRole="image"
+      accessibilityLabel={name ? `${name}, ${ROLE_LABELS[role] ?? role}` : undefined}
+      // No name given: hide it entirely rather than spelling out initials.
+      accessibilityElementsHidden={!name}
+      importantForAccessibility={name ? 'yes' : 'no-hide-descendants'}
+      style={[
       styles.avatar,
       {
         width: size, height: size, borderRadius: size / 2,
@@ -317,15 +441,28 @@ interface CardProps {
   style?: StyleProp<ViewStyle>;
   /** Accent bar on left edge (pass a hex color) */
   accent?: string;
+  /** 0 flush · 1 card · 2 raised · 3 modal. See elevate() in the theme. */
+  elevation?: ElevationLevel;
+  /** Required when `pressable` — a tappable card is a button to a screen reader. */
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }
 
-export function Card({ children, padding = 16, pressable = false, onPress, style, accent }: CardProps) {
+export function Card({
+  children, padding = 16, pressable = false, onPress, style, accent,
+  elevation = 1, accessibilityLabel, accessibilityHint,
+}: CardProps) {
   const c = useColors();
+  const { isDark } = useTheme();
   const { scale, onPressIn, onPressOut } = usePressScale(0.985);
 
   const cardStyle = [
     styles.card,
     { backgroundColor: c.card, borderColor: c.border, padding },
+    // elevate() picks the mechanism for the active theme: a cast shadow on
+    // light surfaces, a lighter surface + border on dark, where a black shadow
+    // is the background and reads as nothing (plan 0.6).
+    elevate(elevation, c, isDark),
     accent && { borderLeftWidth: 3, borderLeftColor: accent },
     style,
   ];
@@ -334,7 +471,12 @@ export function Card({ children, padding = 16, pressable = false, onPress, style
     return (
       <Animated.View style={{ transform: [{ scale }] }}>
         <TouchableOpacity
-          onPress={onPress}
+          onPress={() => { tick(); onPress(); }}
+          // A pressable card IS a button to a screen reader. Without this it
+          // is announced as inert text and the interaction is invisible.
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel}
+          accessibilityHint={accessibilityHint}
           onPressIn={onPressIn}
           onPressOut={onPressOut}
           activeOpacity={1}
@@ -408,7 +550,12 @@ export function StatCard({ label, value, icon, tone = 'primary', hint, onPress }
     return (
       <Animated.View style={{ transform: [{ scale }] }}>
         <TouchableOpacity
-          onPress={onPress}
+          onPress={() => { tick(); onPress(); }}
+          // Derived from props rather than required as a new one: a screen
+          // reader hears "Active employees, 206" instead of two loose strings.
+          accessibilityRole="button"
+          accessibilityLabel={`${label}, ${value}`}
+          accessibilityHint={hint || undefined}
           onPressIn={onPressIn}
           onPressOut={onPressOut}
           activeOpacity={1}
@@ -440,7 +587,7 @@ export function SectionHeader({ eyebrow, title, description, actions, style }: S
         {eyebrow && (
           <Text style={[styles.eyebrow, { color: c.mutedForeground }]}>{eyebrow.toUpperCase()}</Text>
         )}
-        <Text style={[styles.sectionTitle, { color: c.foreground }]}>{title}</Text>
+        <Text accessibilityRole="header" style={[styles.sectionTitle, { color: c.foreground }]}>{title}</Text>
         {description && (
           <Text style={[styles.sectionDesc, { color: c.mutedForeground }]}>{description}</Text>
         )}
@@ -475,7 +622,8 @@ export function Divider({ label, style, inset = 0 }: DividerProps) {
   const c = useColors();
   if (label) {
     return (
-      <View style={[styles.dividerRow, style]}>
+      // The LABEL is content; the rules either side are decoration.
+      <View accessibilityRole="header" style={[styles.dividerRow, style]}>
         <View style={[styles.dividerLine, { backgroundColor: c.border, marginLeft: inset }]} />
         <Text style={[styles.dividerLabel, { color: c.mutedForeground }]}>{label}</Text>
         <View style={[styles.dividerLine, { backgroundColor: c.border, marginRight: inset }]} />
@@ -504,13 +652,17 @@ interface SkeletonProps {
 
 export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: SkeletonProps) {
   const c = useColors();
+  const reduceMotion = useReduceMotion();
   const shimmer = useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
+    // A perpetual pulse is exactly what reduce-motion is for. Hold it at rest
+    // rather than looping (plan §4 rule 5).
+    if (reduceMotion.current) { shimmer.setValue(0); return; }
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: true }),
-        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 1, duration: duration.ambient, useNativeDriver: true }),
+        Animated.timing(shimmer, { toValue: 0, duration: duration.ambient, useNativeDriver: true }),
       ])
     );
     loop.start();
@@ -521,6 +673,11 @@ export function Skeleton({ width = '100%', height = 16, radius: r = 8, style }: 
 
   return (
     <Animated.View
+      // Announce that content is COMING. Without this the screen reads as an
+      // empty region and the user assumes there is nothing there.
+      accessibilityRole="progressbar"
+      accessibilityLabel="Loading"
+      accessibilityState={{ busy: true }}
       style={[
         { width, height, borderRadius: r, backgroundColor: c.skeleton, opacity },
         style,
@@ -568,7 +725,7 @@ export function EmptyState({ icon, title, message, action }: EmptyStateProps) {
   return (
     <View style={styles.emptyState}>
       {icon && <View style={styles.emptyIcon}>{icon}</View>}
-      <Text style={[styles.emptyTitle, { color: c.foreground }]}>{title}</Text>
+      <Text accessibilityRole="header" style={[styles.emptyTitle, { color: c.foreground }]}>{title}</Text>
       {message && (
         <Text style={[styles.emptyMessage, { color: c.mutedForeground }]}>{message}</Text>
       )}
@@ -593,7 +750,13 @@ export function Chip({ label, selected = false, onPress }: ChipProps) {
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        onPress={onPress}
+        onPress={() => { tick(); onPress?.(); }}
+        // A filter chip is a toggle, not a button: without accessibilityState
+        // a screen reader cannot tell an active filter from an inactive one,
+        // which is the ONLY thing the colour communicates.
+        accessibilityRole="checkbox"
+        accessibilityLabel={label}
+        accessibilityState={{ checked: selected }}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
         hitSlop={hitSlop}
@@ -655,7 +818,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   iconBadgeText: {
-    color: '#fff',
+    // Colour comes from the theme at the usage site — StyleSheet.create is
+    // static and cannot reach useColors().
     fontSize: 9,
     fontWeight: fontWeight.bold,
   },

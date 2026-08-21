@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, AlertTriangle, Send, ClipboardList } from 'lucide-react';
+import { CheckCircle2, Send, ClipboardList } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import MotionCard from '../components/ui/MotionCard';

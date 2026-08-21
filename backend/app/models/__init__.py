@@ -2,6 +2,7 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
+from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.employee_relationship import EmployeeRelationship
 from app.models.time_off_request import TimeOffRequest
@@ -23,21 +24,31 @@ from app.models.dock_assignment import DockAssignment
 from app.models.station_arrival import StationArrival
 from app.models.package_manifest import PackageManifest
 from app.models.crew_compliance import CrewCompliance
+from app.models.check_in_deadline import CheckInDeadline
 from app.models.driver_check_in import DriverCheckIn
 from app.models.rts_clearance import RTSReport, StationHandoff
 from app.models.company import Company, CompanyConfig, CompanyZone
 from app.models.invite_token import InviteToken
 from app.models.shift_session import ShiftSession
-from app.models.walker_route import Route, WalkerRoute, RouteClusterCentroid, LocationDifficultyFlag, MisroutedPackageFlag
+from app.models.walker_route import Route, RouteParticipant, RouteClusterCentroid, LocationDifficultyFlag, MisroutedPackageFlag
 from app.models.truck_zone import TruckZone
-from app.models.location_profile import LocationProfile
-from app.models.location_profile_library import LocationProfileLibrary
+from app.models.tote_ops import ToteTransfer, ToteLoadCheck, PackageRemoval
+from app.models.building_profile import BuildingProfile
+from app.models.building_profile_library import BuildingProfileLibrary
+from app.models.building_profile_verification import BuildingProfileVerification
+from app.models.street_segment import StreetSegment   # ADR-236: LION topology map
 from app.models.gear_request import GearOrder, GearOrderItem
 from app.models.trainee_credentials import TraineeCredentials
 from app.models.truck_transfer import TruckTransfer
 from app.models.adp_integration import ADPIntegration
 from app.models.adp_pay_period import ADPPayPeriod
-from app.models.adp_timecard import ADPTimeCard, ADPTimeCardSegment
+from app.models.adp_timecard import ADPTimeCard, ADPTimeCardBreak
 from app.models.flex_timesheets import FlexTimesheet
 from app.models.timecard_adjustments import TimeCardAdjustment
 from app.models.driver_survey import DriverSurvey, DriverSurveyResponse
+from app.models.delivery_stop import DeliveryStop
+from app.models.rts import RTSPackage, MissingPackage, RouteHandoff, ReattemptAssignment, DamagedPackage
+from app.models.shift_roll_call import ShiftRollCall
+from app.models.scorecard import Scorecard, ScorecardMetric
+from app.models.scorecard_appeal import ScorecardAppeal, ScorecardAppealItem
+from app.models.route_sort_run import RouteSortRun, RouteSortDaily   # ADR-273: sort telemetry

@@ -52,6 +52,29 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: '"09:00" — employees must confirm or reject before 9 AM. Unresponded assignments are flagged.',
     note: 'Leave blank to disable the cutoff — assignments will remain "pending" indefinitely.',
   },
+  late_window_minutes: {
+    title: 'Late Window',
+    summary: 'Grace minutes past shift start before a crew arrival is marked “late.”',
+    detail:
+      'Attendance is measured against max(shift start, when the AP was established) — so a station-caused late start (a late AP) shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
+    example: '"20" — arrivals up to 20 min past the reference are on-time; later is late.',
+  },
+  ncns_cutoff_minutes: {
+    title: 'NCNS Cutoff',
+    summary: 'Minutes past shift start before an unaccounted crew member is a no-call-no-show.',
+    detail:
+      'Measured from the same reference as the late window — max(shift start, AP established) — so it AUTO-EXTENDS on a late station AP (the rare Amazon/station-fault allowance; a captain can roll-call at the AP even before the driver "arrived"). Dispatch/admin can still override an individual with a manual roll-call. IMPORTANT: the NCNS cutoff must be set BEFORE any check-in deadline is accepted, and Check-In #1 can never be earlier than it — you can\'t require a check-in before crew attendance is even decided.',
+    example: '"60" — unaccounted crew are NCNS 60 min after shift start (later if the AP was late).',
+    note: 'Set this first. The Check-in Deadlines editor is disabled until it exists.',
+  },
+  check_in_deadlines: {
+    title: 'Check-in Deadlines',
+    summary: 'Ordered mid-shift check-ins, each with its own deadline.',
+    detail:
+      'Add check-ins one at a time; each is the next in sequence and its deadline must be LATER than the previous. Deadlines are minutes past shift start (shown as a clock time), anchored the same way as the NCNS cutoff — so Check-In #1 auto-extends on a late station AP too. Check-In #1 also carries the completed Crew Roster + uniform/cart-cover compliance to Dispatch, so its deadline must be at or after the NCNS cutoff (crew must be decided first). Remove from the end so the earlier deadlines keep their order.',
+    example: 'NCNS 60 → Check-In #1 at 75 min, #2 at 180 min, #3 at 300 min.',
+    note: 'Requires the NCNS cutoff to be set and saved first.',
+  },
   rating_window_hours: {
     title: 'Walker Rating Window',
     summary: 'How long after a driver departs can walker ratings still be submitted.',
@@ -158,62 +181,19 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: '"4" — driver is expected to submit 4 check-in photos across the shift.',
     note: 'Set to 0 to disable mid-shift check-ins entirely.',
   },
-  tier1_dbscan_eps: {
-    title: 'Tier 1 DBSCAN Epsilon',
-    summary: 'Geographic radius (in degrees) used to cluster delivery packages into tote groups.',
+  effort_time_factor: {
+    title: 'Effort Time Factor',
+    summary: 'Weight applied to time-based components when computing route effort scores.',
     detail:
-      'The Tier 1 Manifest Verify system uses DBSCAN (a density-based clustering algorithm) to group packages by geographic proximity. Epsilon is the maximum distance between two packages for them to be considered part of the same cluster. 0.015 degrees ≈ ~1 mile at typical latitudes.',
-    example: '"0.015" — packages within ~1 mile of each other can form a cluster.',
-    note: 'Smaller values produce tighter, more precise clusters. Larger values merge neighborhoods together. Change with caution — affects tote classification results directly.',
+      'Controls how much the time spent on a route (total hours, stop duration) contributes to the final effort score. A value of 1.0 means time is the sole driver; 0.0 means time is ignored entirely. Combine with Effort Physical Factor — the two do not need to sum to 1.',
+    example: '"0.5" — time and physical effort contribute equally.',
   },
-  tier1_dbscan_min_samples: {
-    title: 'Tier 1 DBSCAN Min Samples',
-    summary: 'Minimum number of packages needed to form a core cluster point.',
+  effort_physical_factor: {
+    title: 'Effort Physical Factor',
+    summary: 'Weight applied to physical-exertion components when computing route effort scores.',
     detail:
-      'In DBSCAN, a point is a "core" point if at least this many other points fall within epsilon distance. Core points seed the cluster; non-core points are either border points or outliers ("strays"). Higher values require denser areas to form clusters.',
-    example: '"30" — at least 30 packages must be within 1 mile for that area to form a cluster core.',
-  },
-  tier1_small_tote_cutoff: {
-    title: 'Small Tote Package Cutoff',
-    summary: 'Maximum packages in a cluster for it to be classified as a "small tote."',
-    detail:
-      'After clustering, totes are classified by size. A cluster with fewer packages than this threshold is a small tote. Small totes receive different stray/uncertain tolerance rules because they are inherently lower-density.',
-    example: '"10" — clusters of 10 or fewer packages are small totes.',
-  },
-  tier1_small_stray_max: {
-    title: 'Small Tote Max Strays',
-    summary: 'Maximum stray packages allowed in a small tote before it is flagged.',
-    detail:
-      'Stray packages are outlier points that DBSCAN could not assign to any cluster. In a small tote, even 1–2 strays can be a meaningful percentage of the load. This threshold controls how many are acceptable before raising a verification flag.',
-    example: '"1" — more than 1 stray package in a small tote triggers a flag.',
-  },
-  tier1_small_uncertain_max: {
-    title: 'Small Tote Max Uncertain',
-    summary: 'Maximum uncertain packages allowed in a small tote.',
-    detail:
-      'Uncertain packages are border points — they fall within range of a cluster but do not have enough nearby neighbors to be core points. In small totes, too many uncertain packages suggest poor geographic coherence.',
-    example: '"3"',
-  },
-  tier1_stray_pct: {
-    title: 'Stray Package % Threshold',
-    summary: 'Maximum stray packages as a fraction of tote size for large totes.',
-    detail:
-      'For totes larger than the small tote cutoff, the stray threshold is expressed as a percentage of the total package count. This scales naturally with tote size — a large route can tolerate more strays in absolute terms.',
-    example: '"0.10" — at most 10% of packages in a large tote can be strays.',
-  },
-  tier1_uncertain_pct: {
-    title: 'Uncertain Package % Threshold',
-    summary: 'Maximum uncertain packages as a fraction of tote size for large totes.',
-    detail:
-      'Same concept as the stray percentage, but for uncertain (border-point) packages. Higher values allow more geographic looseness in cluster assignment.',
-    example: '"0.40" — up to 40% of packages can be uncertain in a large tote.',
-  },
-  location_profile_lock_threshold: {
-    title: 'Location Profile Lock Threshold',
-    summary: 'Number of matching agreements before a location profile is automatically locked.',
-    detail:
-      'Location profiles are validated by multiple employees visiting the same location and reporting consistent data. Once this many employees agree on the profile data, the profile is "locked" — it can no longer be edited by field employees without admin override. This prevents drift in well-established location data.',
-    example: '"3" — after 3 employees confirm the same profile data, it locks.',
+      'Controls how much the physical demands of a route (stairs, elevator waits, package weight class) contribute to the final effort score. A value of 1.0 means physical effort is the sole driver; 0.0 means it is ignored.',
+    example: '"0.5" — time and physical effort contribute equally.',
   },
   ingestion_mode: {
     title: 'Manifest Ingestion Mode',
@@ -242,6 +222,12 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     summary: 'The Discord channel where trainer assignments and training updates are posted.',
     detail:
       'Trainer-role notifications (trainee assignments, phase completions, graduation quiz results) are posted here.',
+  },
+  discord_captains_channel_id: {
+    title: 'Captains Channel ID',
+    summary: "The Discord channel where the day's captain roster is posted.",
+    detail:
+      'At finalize, each truck and its captain is posted here. If this is unset, no captain roster is posted — nothing else breaks.',
   },
   discord_general_channel_id: {
     title: 'General Channel ID',
@@ -287,10 +273,17 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     summary: 'Discord role ID for driver employees.',
     detail: 'Used for @mentioning drivers when dispatch assignments and route notifications are sent.',
   },
+  discord_role_trainer: {
+    title: 'Trainer Role ID',
+    summary: 'Discord role ID for trainers.',
+    detail:
+      'Granted and revoked automatically when someone is promoted to or moved off the trainer role. This is the role Discord previously called "Captain" — it was renamed when captains became a separate role, and the ID did not change.',
+  },
   discord_role_captain: {
     title: 'Captain Role ID',
-    summary: 'Discord role ID for captain/lead employees.',
-    detail: 'Used for notifications targeted at crew leads or captain-tier employees.',
+    summary: 'Discord role ID for captains — the truck route leads.',
+    detail:
+      'Granted and revoked automatically on promotion to or from captain. Distinct from the Trainer role: a captain leads a truck, a trainer supervises a trainee. If unset, captain promotions log a warning and grant no Discord role.',
   },
   discord_role_walker: {
     title: 'Walker Role ID',
@@ -346,10 +339,15 @@ export default function SettingsHelpDrawer({ fieldKey, onClose }: SettingsHelpDr
                   </h2>
                 </div>
                 <button
+                  type="button"
                   onClick={onClose}
-                  className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+                  // Icon-only: without a label a screen reader announces just
+                  // "button". w-11/h-11 is 44px — the WCAG 2.5.5 minimum,
+                  // which w-8 (32px) missed.
+                  aria-label="Close help"
+                  className="flex items-center justify-center w-11 h-11 rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
 

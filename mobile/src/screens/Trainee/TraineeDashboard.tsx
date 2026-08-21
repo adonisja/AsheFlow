@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 import TraineeTodayScreen    from './TraineeTodayScreen';
 import TraineeHistoryScreen  from './TraineeHistoryScreen';
@@ -27,11 +28,19 @@ export default function TraineeDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('today');
   const s = styles(c);
 
+  // Header title transitions with the active tab (ADR-207); child screens render
+  // headerless so there's no duplicate title.
+  const HEADER_TITLE: Record<Tab, string> = {
+    today:       "Today's Training",
+    history:     'Training History',
+    myroute:     'My Route',
+    quiz:        'Graduation Quiz',
+    credentials: 'My Credentials',
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>My Training</Text>
-      </View>
+      <PageHeader title={HEADER_TITLE[activeTab] ?? 'My Training'} />
 
       <View style={s.tabBarWrap}>
         <ScrollView
@@ -86,6 +95,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tab:          { alignItems: 'center', flexDirection: 'row', gap: 5, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, position: 'relative' },
   tabActive:    {},
   tabIcon:      { fontSize: 14 },
-  tabLabel:     { fontSize: fontSize.sm, color: '#9CA3AF', fontWeight: fontWeight.medium },
+  tabLabel:     { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
   tabIndicator: { position: 'absolute', bottom: 0, left: spacing.md, right: spacing.md, height: 2, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
 });

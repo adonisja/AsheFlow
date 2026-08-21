@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses"]
 )
 
 celery_app.conf.update(
@@ -30,6 +30,16 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    # Every 10 min — sweeps BuildingProfiles left `pending` by a submit whose
+    # .delay() dispatch was lost (broker restart, worker down). The submit path
+    # queues resolution immediately (ADR-277 D1); this is the safety net, not
+    # the mechanism, so the interval only bounds how long a dropped dispatch
+    # stays invisible. A `pending` profile is excluded from routing lookups, so
+    # the cost of the gap is a building the crew cannot see yet — not bad data.
+    "resolve-building-addresses": {
+        "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
+        "schedule": crontab(minute="*/10"),
+    },
     # 03:00 AM Eastern — quiet period, low API traffic
     "expire-pending-invites-daily": {
         "task": "app.tasks.cleanup.expire_pending_invites",
@@ -55,6 +65,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.eod_reminders.remind_fuel_log_missing",
         "schedule": crontab(hour=18, minute=30),
     },
+    # 01:00 AM Eastern Sunday — refresh the ADP pay period schedule. Runs ahead of
+    # the employee/timecard syncs because mismatch detection resolves a pay period
+    # per timecard and skips the timecard when none covers its work_date (ADR-233).
+    "sync-adp-pay-periods-weekly": {
+        "task": "app.tasks.adp_pay_period_sync.sync_adp_pay_periods",
+        "schedule": crontab(hour=1, minute=0, day_of_week=0),
+    },
     # 02:00 AM Eastern — sync ADP employee roster for all enabled integrations
     "sync-adp-employees-nightly": {
         "task": "app.tasks.adp_sync.sync_adp_employees",
@@ -65,6 +82,45 @@ celery_app.conf.beat_schedule = {
     "purge-expired-operational-records-monthly": {
         "task": "app.tasks.cleanup.purge_expired_operational_records",
         "schedule": crontab(hour=3, minute=30, day_of_month=1),
+    },
+    # 02:30 AM Eastern — decay BuildingProfile troublesome scores (~30d half-life, ADR-218).
+    "decay-troublesome-scores-nightly": {
+        "task": "app.tasks.cleanup.decay_troublesome_scores",
+        "schedule": crontab(hour=2, minute=30),
+    },
+    # 03:15 AM Eastern — delete notifications older than notification_retention_days
+    # (default 3, read or unread) + any expired (ADR-227). Bounds the table + SSE poll.
+    "prune-notifications-nightly": {
+        "task": "app.tasks.cleanup.prune_notifications",
+        "schedule": crontab(hour=3, minute=15),
+    },
+    # 03:45 AM Eastern — roll yesterday's sort decisions into route_sort_daily
+    # (ADR-273). Each company rolls up ITS OWN yesterday, so completed-day-only
+    # holds across timezones. Runs BEFORE the 04:00 address nulling: the rollup
+    # reads DeliveryStop counts (never addresses), so the order is not a
+    # dependency — but keeping it earlier means a same-night manual backfill
+    # sees the day intact.
+    "roll-up-sort-metrics-nightly": {
+        "task": "app.tasks.sort_rollup.roll_up_sort_metrics",
+        "schedule": crontab(hour=3, minute=45),
+    },
+    # 04:00 AM Eastern — null delivery-row customer addresses older than
+    # delivery_address_retention_hours (default 48h, ADR-219). Keeps block_key + counts.
+    # ADR-281: ORE certificates carry trainee PII and expire at 48h. Runs just
+    # after the address nulling, which is the same retention discipline.
+    "purge-expired-ore-certificates-nightly": {
+        "task": "app.tasks.cleanup.purge_expired_ore_certificates",
+        "schedule": crontab(hour=4, minute=15),
+    },
+    "null-expired-delivery-addresses-nightly": {
+        "task": "app.tasks.cleanup.null_expired_delivery_addresses",
+        "schedule": crontab(hour=4, minute=0),
+    },
+    # 04:30 AM Eastern — redact departed employees' denormalized name copies
+    # past employee_name_retention_days (default 180, ADR-221).
+    "redact-departed-employee-names-nightly": {
+        "task": "app.tasks.cleanup.redact_departed_employee_names",
+        "schedule": crontab(hour=4, minute=30),
     },
     # 06:00 AM Eastern — fetch previous day's ADP timecards for all verified employees
     "fetch-adp-timecards-daily": {

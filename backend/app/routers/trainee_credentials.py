@@ -24,6 +24,7 @@ from app.database import get_db
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.models.trainee_credentials import TraineeCredentials
+from app.services.audit import write_audit
 
 router = APIRouter(
     prefix="/trainee-credentials",
@@ -152,6 +153,12 @@ def send_credentials(
         ),
     )
     db.add(notification)
+    db.flush()
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="credentials.sent", target_table="trainee_credentials",
+        target_id=str(row.id), after={"trainee_id": str(trainee_id)},
+    )
     db.commit()
     db.refresh(row)
 

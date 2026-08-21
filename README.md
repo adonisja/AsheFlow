@@ -4,17 +4,17 @@
 
 <p align="center">
   <strong>Crew Management & Intelligent Dispatch for Amazon DSP Operations</strong><br/>
-  <sub>Multi-tenant · Role-scoped · Discord-integrated · Mobile-first · Production on AWS</sub>
+  <sub>Multi-tenant · Role-scoped · Discord-integrated · Mobile-first · Deployed on AWS</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-brightgreen?style=flat-square" alt="Build" />
-  <img src="https://img.shields.io/badge/tests-236%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-582%20passing-brightgreen?style=flat-square" alt="Tests" />
   <img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square&logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React" />
-  <img src="https://img.shields.io/badge/react_native-0.76-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React Native" />
+  <img src="https://img.shields.io/badge/react_native-0.85-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React Native" />
   <img src="https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/status-production-success?style=flat-square" alt="Status" />
+  <img src="https://img.shields.io/badge/status-deployed%20(staging)-success?style=flat-square" alt="Status" />
 </p>
 
 <p align="center">
@@ -36,20 +36,25 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination for Ama
 
 **Core capabilities:**
 
-- **Intelligent Dispatch** — weighted algorithm resolving driver preferences (favorites/bans), recurring off-days, PTO, trainer-trainee pairing, and crew balance to generate daily truck assignments
-- **Two-Phase Discord Flow** — crew DM confirmations after dispatch; a second "Post Final Crews" action publishes finalized assignments to Discord channels with authoritative pairings
-- **Dispatch Confirmation System** — tracks each crew member's response (confirmed/declined/pending) with timestamps; trainer declines trigger automatic trainee reassignment
-- **Field Operations** — full driver shift lifecycle: check-in, pre-trip inspection, departure, walker attendance + rating, fuel/mileage log, end-of-day return
-- **Training Pipeline** — phase-based trainee onboarding with curriculum injection, training debt escalation, trainer continuation requests, trainer marks, Phase 4 observation forms, and a graduation quiz gate
-- **Two-Tier Package Routing** — Tier 1 route sort at the station (polygon-based zone checks, per-trainer sort interface); Tier 2 walker sub-route generation at the anchor point (geographic clustering into per-walker route cards, fairness-weighted assignment)
+- **Intelligent Dispatch** — weighted algorithm resolving driver preferences (favorites/bans), recurring off-days, PTO, trainer-trainee pairing, consecutive-assignment penalties, and crew balance to generate daily truck assignments; per-truck selection and re-run
+- **Two-Phase Discord Flow** — crew DM confirmations after dispatch; a second "Post Final Crews" action publishes finalized assignments to per-truck Discord channels, gated on a per-truck confirmation-rate check (blocks a near-empty crew from being posted)
+- **Dispatch Confirmation System** — tracks each crew member's response (confirmed/declined/pending) with timestamps; trainer declines trigger automatic trainee reassignment; SSE + stop-conditioned polling keep the dispatch board live without hammering the API
+- **Full Driver Day** — an end-to-end field-ops wizard covering the whole shift: confirm assignment → check-in → pre-trip → starting odometer → station arrival → gate/dock assignment → load truck (tote check-off + load confirmation) → depart → **anchor point + geocoded ETA** → on-route check-ins → RTS/return-to-station report → station handoff → end-of-day odometer + inspection → sign-out
+- **Anchor Points** — the driver posts a preliminary staging point (cross-street/address geocoded via NYC GeoClient) with a mandatory ETA; crew see the meet-up point, arrival status, relocations, and running-late alerts (timezone-correct); a crew-facing "Today's Assignment" view mirrors it for trainers/walkers/trainees
+- **Shared Roll-Call** — one presence source per crew member per day, read and written by trainers, the driver's check-in, and dispatch alike (field-staff latest-wins; a dispatch override locks the record)
+- **Two-Tier Package Routing** — Tier 1 route sort at the station (tote-level anchor assignment, equity by tote count, commit-to-routes); Tier 2 walker sub-route generation at the anchor point (banded-urgency wave distribution, fairness-weighted per-walker route cards, misroute detection + one-tap resolve, mid-day freight best-fit)
+- **Training Pipeline** — phase-based trainee onboarding with curriculum injection, training debt escalation, trainer continuation requests, trainer marks, Phase 4 observation forms, late-trainee join handling, and a graduation quiz gate
+- **ADP Payroll Integration** — employee import from ADP RUN, daily timecard reconciliation against shift records, and a mismatch-resolution workflow
+- **Amazon Scorecards** — upload the weekly DSP scorecard (individual + company), auto-extract metrics via AWS Textract, and cross-check contestable figures (packages delivered, completion DPMO) against our own delivery/RTS data
 - **Location Profiles** — two-tier location knowledge base: company-managed profiles with a global library for promotion; cold-start bulk creation; block-key-based routing integration
-- **Driver Surveys** — end-of-shift feedback from trainers and walkers; management activates per-day, 4 yes/no questions + notes, visual results with per-question % bars and individual drill-down
+- **Driver Surveys** — end-of-shift feedback from trainers and walkers; management activates per-day, yes/no questions + notes, visual results with per-question % bars and individual drill-down
 - **Incident Reporting** — structured mid-shift reports with severity tags, auto-notification to management, and resolution tracking
 - **Schedule Management** — PTO calendar requests, recurring off-day management, and a 3-mode schedule change request system
 - **Gear Requests** — field staff request equipment; management review and fulfilment tracking
 - **Workforce Analytics** — dispatch fill rate, trainer load, ban override frequency, confirmation response times, walker performance leaderboard, driver bias detection, vehicle compliance trending, availability heatmaps
 - **Role-Scoped Dashboards** — each of 8 roles lands on a purpose-built home page with self-view analytics panels
-- **Notification Inbox** — in-app notifications with expiry; 20+ typed notifications across all workflows; Discord DM mirroring for time-sensitive alerts
+- **Notification Inbox** — in-app notifications with expiry; typed notifications across every workflow; Discord DM mirroring for time-sensitive alerts
+- **Design System + Theming** — a shared token/primitive library across web and mobile, full light/dark support with an in-app toggle, and accessibility baked in (WCAG tap targets, contrast)
 - **Audit Log** — system-wide action trail for management and admin review
 - **Multi-Tenant Architecture** — each DSP company is a fully isolated tenant; one deployment serves multiple companies with zero data bleed
 - **Super Admin Panel** — platform-level UI for provisioning tenants, bootstrapping admins, and configuring per-company Discord integration
@@ -73,14 +78,16 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination for Ama
 
 | Layer | Technology |
 |---|---|
-| Backend API | FastAPI · SQLAlchemy 2.0 · Pydantic v2 · Uvicorn |
-| Database | PostgreSQL 15 · Alembic (88 migrations) · Redis 7 |
+| Backend API | FastAPI · SQLAlchemy 2.0 · Pydantic v2 · Uvicorn · SSE (StreamingResponse) |
+| Database | PostgreSQL 15 · Alembic (136 migrations) · Redis 7 |
+| Async / jobs | Celery worker + beat (periodic alerts, reconciliation) |
 | Auth | AWS Cognito (JWKS, short-TTL JWTs, revocation) |
 | Web Frontend | React 19 · TypeScript · Vite · Tailwind CSS 3 · Axios |
-| Mobile App | React Native 0.76 · Expo · TypeScript · React Navigation |
-| Bot | discord.py · Cognito service account |
+| Mobile App | React Native 0.85 (bare, iOS + Android) · TypeScript · React Navigation |
+| Bot | discord.py · Cognito service account · per-guild routing |
+| Integrations | NYC GeoClient (geocoding) · AWS Textract (scorecard OCR) · ADP RUN (payroll) |
 | Infrastructure | Docker Compose · AWS EC2 · AWS SSM deploy · GitHub Actions CI/CD |
-| Tests | pytest · 236 tests · SQLite in-memory fixtures |
+| Tests | pytest · 582 tests · SQLite in-memory + mock-DB fixtures |
 
 ---
 
@@ -89,7 +96,7 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination for Ama
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │                        CLIENT LAYER                            │
-│  Browser (React 19 + Tailwind)  │  Mobile (React Native 0.76) │
+│  Browser (React 19 + Tailwind)  │  Mobile (React Native 0.85) │
 │                                 │  Discord Server              │
 └──────────────┬──────────────────────────┬──────────────────────┘
                │ HTTPS / JWT              │ Bot DMs / Posts
@@ -101,7 +108,7 @@ AsheFlow replaces manual scheduling spreadsheets and verbal coordination for Ama
 ┌──────────────▼──────────┐  ┌────────────▼────────────┐
 │    FastAPI Backend       │  │    discord.py Bot        │
 │    (Uvicorn, 4 workers)  │  │    (per-guild routing)   │
-│    /api/v1/ · 36 routers │  │    X-Internal-Secret     │
+│    /api/v1/ · 41 routers │  │    X-Internal-Secret     │
 └──────────────┬───────────┘  └─────────────────────────┘
                │
     ┌──────────┼──────────┐
@@ -141,7 +148,7 @@ All endpoints scoped to caller.company_id — zero cross-tenant data access.
 - Node.js 20+ (for the mobile app and frontend)
 - AWS Cognito User Pool with a configured App Client (USER_PASSWORD_AUTH flow enabled)
 - A Discord application with bot token (for the bot service)
-- Expo CLI (for the mobile app)
+- React Native toolchain for the mobile app: Xcode + CocoaPods (iOS) and/or Android Studio + an AVD (Android) — this is a **bare React Native** app, not Expo
 
 </details>
 
@@ -175,9 +182,11 @@ docker exec -it asheflow_backend alembic upgrade head
 docker exec -it asheflow_backend python seed.py
 ```
 
-**5. Start the mobile app**
+**5. Start the mobile app** (bare React Native)
 ```bash
-cd mobile && npm install && npx expo start
+cd mobile && npm install
+cd ios && pod install && cd ..   # iOS only
+npm run ios       # or: npm run android
 ```
 
 **6. Run tests**
@@ -188,7 +197,7 @@ docker exec -it asheflow_backend python -m pytest tests/ -v
 **Available at:**
 - Frontend: `http://localhost:5173`
 - API docs: `http://localhost:8000/docs`
-- Mobile: Expo dev server (scan QR with Expo Go or run on simulator)
+- Mobile: iOS Simulator / Android emulator via the Metro bundler
 
 </details>
 
@@ -200,7 +209,7 @@ docker exec -it asheflow_backend python -m pytest tests/ -v
 | `.env` (root) | `POSTGRES_PASSWORD`, `SECRET_KEY` |
 | `backend/.env` | `DATABASE_URL`, `REDIS_URL`, `AWS_COGNITO_USER_POOL_ID`, `AWS_COGNITO_APP_CLIENT_ID`, `INTERNAL_SECRET` |
 | `frontend/.env` | `VITE_COGNITO_USER_POOL_ID`, `VITE_COGNITO_APP_CLIENT_ID`, `VITE_API_BASE_URL` |
-| `mobile/.env` | `EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_COGNITO_USER_POOL_ID`, `EXPO_PUBLIC_COGNITO_APP_CLIENT_ID` |
+| `mobile/.env` | `ASHEFLOW_API_URL` (override; falls back to `ASHEFLOW_LAN_IP` for local), Cognito pool/client IDs — inlined at build time via `react-native-dotenv` |
 | `bot/.env` | `DISCORD_BOT_TOKEN`, `COGNITO_USERNAME`, `COGNITO_PASSWORD`, `INTERNAL_SECRET` |
 
 See `.env.example` at the project root for a complete template.
@@ -226,7 +235,7 @@ New companies are onboarded through the super admin panel (`/superadmin/companie
 All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cognito JWT Bearer token. Every list and write endpoint is scoped to `caller.company_id`.
 
 <details>
-<summary><strong>View all 36 routers</strong></summary>
+<summary><strong>View all 41 routers</strong></summary>
 
 | Router | Endpoints | Access |
 |---|---|---|
@@ -243,9 +252,16 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 | `/schedule-change-requests` | Submit, approve, reject, cancel | field staff, dispatch (submit); management, admin (review) |
 | `/assignment-change-requests` | Submit, approve, reject, cancel | walker, trainer (submit); dispatch (review) |
 | `/employee-relationships` | Fav/ban CRUD | driver, walker, trainer (own only); dispatch, management, admin (read) |
-| `/field-ops` | Check-in, departure, return, inspection, rating, fuel log, walker profile | driver (submit); walker (own profile); management, admin (read) |
+| `/field-ops` | Check-in, departure, return, inspection, rating, fuel log, walker profile, performance | driver (submit); walker (own profile); management, admin (read) |
 | `/shift-sessions` | Active session state, heartbeat | driver, management, admin |
-| `/shift-ops` | Manifest acknowledgement, manifest state | driver, management, admin |
+| `/shift-ops` | Mid-shift check-ins, crew compliance, RTS report review, station handoff | driver (submit); dispatch, management, admin |
+| `/roll-call` | Shared crew presence — submit/upsert, my-truck, summary, confirm | driver, trainer (own truck); dispatch, management, admin |
+| `/crew-status` | Derived per-truck crew availability (presence + route progress) | driver, trainer, dispatch, management, admin |
+| `/rts` | Return-to-station packages, missing/damaged, route handoff | driver, trainer (submit); management, admin |
+| `/anchor-points` | Preliminary AP + geocoded ETA, arrive/relocate/depart lifecycle, late flags | driver (own truck); all field roles (read); dispatch, management, admin |
+| `/walker-routes` | Tier-2 wave distribution, AP arrival, route stops, rebalance | driver, trainer; dispatch, management, admin |
+| `/scorecards` | Weekly Amazon scorecard upload, Textract parse, cross-check | management, admin |
+| `/adp` | ADP RUN employee import, timecard reconciliation, mismatch resolution | management, admin |
 | `/incidents` | Submit, resolve, summary | all field staff (submit); management, admin (manage) |
 | `/training` | Curriculum, records, tasks, pipeline summary | trainer, trainee, management, admin |
 | `/continuation-requests` | Submit and review trainer continuation requests | trainer (submit); management, admin (review) |
@@ -257,7 +273,6 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 | `/sort` | Route sort sessions, commit sort, per-trainer sort state | trainer, dispatch, admin |
 | `/location-profiles` | Company location profiles CRUD, block-key tags | management, admin (write); all field roles (read) |
 | `/location-profile-library` | Global library profiles, promote to company | management, admin |
-| `/anchor-points` | Staging anchor CRUD, arrive/depart lifecycle | management, admin |
 | `/gear-requests` | Submit, review, fulfil gear requests | field staff (submit); management, admin (review) |
 | `/notifications` | Read, mark read, clear, prune expired | authenticated (own only) |
 | `/feedback` | Submit, list, update status | authenticated (submit); admin (list, update) |
@@ -274,7 +289,7 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 ## Web Pages
 
 <details>
-<summary><strong>View all 34 routes</strong></summary>
+<summary><strong>View all 36 routes</strong></summary>
 
 | Route | Roles | Purpose |
 |---|---|---|
@@ -302,6 +317,9 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 | `/walker-performance` | management, admin | Walker leaderboard, letter grades, driver bias detection |
 | `/trainer-marks` | management, admin | Trainer performance marks and history |
 | `/driver-surveys` | management, admin | Activate surveys, view response rates, per-question stats, individual drill-down |
+| `/scorecard-entry` | management, admin | Upload the weekly Amazon scorecard, auto-extract via Textract, cross-check contestable metrics |
+| `/crew-status` | driver, trainer, dispatch, management, admin | Live per-truck crew presence + route-progress availability |
+| `/notifications-history` | authenticated | Full notification history with type filtering |
 | `/sort` | trainer, dispatch, admin | Route sort interface — per-trainer sort sessions, commit sort |
 | `/walker-sort` | driver, dispatch, admin | Walker sub-route sort and assignment at the anchor point |
 | `/location-profiles` | all roles | Location knowledge base — view, add, tag block keys |
@@ -320,7 +338,7 @@ All endpoints live under `/api/v1/`. Auth required on every endpoint via AWS Cog
 
 ## Mobile App
 
-The mobile app targets field staff — drivers, walkers, trainers, and trainees. Built with React Native 0.76 + Expo, it uses a horizontal scrollable tab bar that renders only the tabs relevant to the authenticated user's role.
+The mobile app targets field staff — drivers, walkers, trainers, and trainees. Built with bare React Native 0.85 (iOS + Android), it uses a horizontal scrollable tab bar that renders only the tabs relevant to the authenticated user's role, with a shared design-system + light/dark theming matching the web.
 
 <details>
 <summary><strong>View all mobile screens</strong></summary>
@@ -329,15 +347,16 @@ The mobile app targets field staff — drivers, walkers, trainers, and trainees.
 |---|---|---|
 | Home | all | Today's assignment summary, quick-nav to key tools |
 | Today's Assignment | all | Full assignment detail for the current day |
-| Field Ops | driver, walker, trainer, trainee | Driver shift tools — check-in, inspection, departure, return, fuel log |
+| Field Ops | driver, walker, trainer, trainee | Full driver-day wizard (paged, section-themed, progress bar) — check-in, inspection, odometer, load, anchor point, on-route check-ins, RTS report, handoff, EOD; walker performance view |
 | Walker Dashboard | walker | Own performance metrics, rating history |
-| Training | trainer | Trainee checklists, today's assignments, Phase 4 form, route sort |
-| Route Sort | driver | Per-driver route sort interface at the station |
-| My Training | trainee | Training phase progress and task history |
-| Anchor Points | driver | Staging area — arrive/depart lifecycle |
+| Training | trainer, trainee | Trainee checklists, today's session, Phase 4 form, marks, performance (tab title tracks the active section) |
+| Route Sort | driver, trainer | Tier-1/Tier-2 sort at the station/AP; crew roster with roll-call marking |
+| My Route | trainer, trainee | Assigned route stops and progress |
+| Anchor Point | driver, trainer, trainee, walker | Role-branched: driver posts/relocates the AP + confirms arrival; crew see the meet-up point, ETA and arrival status |
+| Reattempts | driver, trainer | Failed-delivery reattempt assignment and outcome tracking |
 | Driver Survey | trainer, walker | End-of-shift survey form; read-only submitted view |
-| Schedule | all field staff | Personal shift calendar |
-| Schedule Changes | all | Submit schedule change requests; view status |
+| Schedule | all field staff | Personal shift calendar + PTO; "Schedule Changes" sub-tab for change requests |
+| Change Requests | dispatch, management, admin | Reviewer queue for schedule-change requests |
 | Incidents | all field staff | Submit and track incident reports |
 | Location Profiles | all | View and reference delivery location knowledge base |
 | Preferences | driver, walker, trainer, trainee | Fav/ban management, assignment change requests |
@@ -358,17 +377,17 @@ AsheFlow/
 ├── .env.example                 # Required variables template
 ├── LICENSE                      # Business Source License 1.1
 ├── backend/
-│   ├── alembic/versions/        # 88 database migrations
+│   ├── alembic/versions/        # 136 database migrations
 │   ├── app/
 │   │   ├── api/deps.py          # RoleChecker, get_caller_employee, require_configured
-│   │   ├── models/              # 39 SQLAlchemy models
-│   │   ├── routers/             # 36 API routers under /api/v1/
+│   │   ├── models/              # 49 SQLAlchemy models
+│   │   ├── routers/             # 41 API routers under /api/v1/
 │   │   │   └── internal.py      # Bot-facing endpoints (/internal/*), X-Internal-Secret auth
 │   │   ├── schemas/             # Pydantic request/response schemas
 │   │   ├── services/            # Business logic (proprietary algorithm files gitignored)
 │   │   │   └── constants.py     # Role constants — single source of truth
 │   │   └── tasks/               # Celery periodic tasks
-│   ├── tests/                   # 236 pytest tests
+│   ├── tests/                   # 582 pytest tests
 │   │   ├── conftest.py          # SQLite in-memory fixture
 │   │   └── services/            # test_run_dispatch, test_available_pool,
 │   │                            #   test_graduate_trainees, test_analytics
@@ -392,14 +411,15 @@ AsheFlow/
 │       │   └── ui/              # MotionCard, StatCard, ConfirmDialog, ErrorBanner
 │       ├── contexts/            # AuthContext, ThemeContext
 │       ├── hooks/               # useConfirm, useDebounce, etc.
-│       └── pages/               # 34 route pages
+│       └── pages/               # 36 route pages
 ├── mobile/
 │   └── src/
 │       ├── api/                 # apiClient (JWT interceptor, token refresh)
 │       ├── contexts/            # AuthContext, ThemeContext
+│       ├── components/ui/       # Shared primitives (Button, Badge, Card, PageHeader, ThemeToggle)
 │       ├── navigation/          # RootNavigator, role-filtered horizontal tab bar
-│       ├── screens/             # 16 screen directories (28 screen files)
-│       └── theme/               # Shared design tokens (spacing, colors, typography)
+│       ├── screens/             # 16 screen directories (31 screen files)
+│       └── theme/               # Shared design tokens (spacing, color, type, light/dark)
 ├── docs/
 │   ├── LEARNING_GUIDE.md        # Accumulated design lessons
 │   └── ARCHITECTURE.md          # Full system architecture
@@ -423,14 +443,17 @@ AsheFlow/
 - [x] **Phase 9** — Multi-tenant architecture: per-company DB isolation, Cognito pool v2, invite-token registration, role protection guards, session security, registration UX
 - [x] **Phase 10** — Super admin panel (tenant provisioning, company config, Discord integration card), Discord multi-guild, discord_id snowflake enforcement, tenant isolation hardening
 - [x] **Phase 11** — Two-tier package routing: Tier 1 route sort (per-trainer sort sessions, sort commit, route sort screen), Tier 2 walker sub-route generation (anchor-point sort, location profiles, block-key tagging), graduation quiz gate, driver surveys
-- [x] **Phase 12** — React Native mobile app: 16 screens across all field roles, role-filtered tab navigation, full feature parity with the web for field staff, notification inbox, gear requests, trainer role Discord sync
-- [ ] **Phase 13** — Demo tenant + recorded walkthrough, E2E tests, staging environment, avatar image upload (S3), push notifications (Expo), offline-first optimistic updates
+- [x] **Phase 12** — React Native mobile app (bare): 16 screen areas across all field roles, role-filtered tab navigation, feature parity with the web for field staff, notification inbox, gear requests, trainer role Discord sync
+- [x] **Phase 13** — Full driver day: mid-shift check-ins, RTS/return-to-station report, station handoff, dock/gate assignment + tote check-off + load confirmation, end-of-day flow; staging environment on EC2 + SSM/CI deploy
+- [x] **Phase 14** — Anchor-point rework (geocoded ETA, relocation, running-late), shared bidirectional roll-call + crew status, timing/wave-distribution rebalance, arrival-model consolidation
+- [x] **Phase 15** — Integrations + polish: ADP payroll import & timecard reconciliation, Amazon scorecard OCR + cross-check, SSE real-time, and a full web+mobile design-system re-adoption (theming, accessibility, header/UX unification)
+- [ ] **Phase 16** — Demo tenant + recorded walkthrough, E2E tests (browser + mobile), push notifications, avatar upload (S3), offline-first optimistic updates
 
 ---
 
 ## Key Design Decisions
 
-Architectural decisions are documented internally (130 ADRs). Key areas covered:
+Architectural decisions are documented internally (210 ADRs). Key areas covered:
 
 - Weighted dispatch algorithm design and fill-order logic
 - Discord bot architecture and two-phase dispatch flow
@@ -438,10 +461,14 @@ Architectural decisions are documented internally (130 ADRs). Key areas covered:
 - Super admin panel and tenant provisioning flow
 - Per-company Discord config with one bot serving multiple guilds
 - `RoleChecker` vs `get_caller_employee` and the tenant isolation audit rule
-- Two-tier package routing architecture and geographic clustering design
+- Two-tier package routing — tote-level station sort + banded-urgency walker wave distribution
 - Notification expiry model — time-scoped CTAs tied to dispatch date and survey day
 - Graduation quiz gate — quiz-based promotion with paired trainer notification
 - Driver survey lifecycle — activation guard, midnight close enforcement, response drill-down
+- Shared roll-call model — one presence row per crew member per day; field-staff latest-wins, dispatch lock
+- Anchor-point geocoding — cross-street/address → GeoClient point; mandatory, timezone-correct ETA + late detection
+- Real-time without polling storms — SSE for terminal dispatch state, stop-conditioned/visibility-gated polls elsewhere
+- Design-system re-adoption — shared token/primitive layer, light/dark restored across web + mobile, no hardcoded colors
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system architecture.
 
@@ -450,10 +477,10 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full system architect
 ## What's Left
 
 - **Demo access** — demo tenant with seeded data and a recorded walkthrough for client presentations
-- **E2E tests** — pytest covers backend services; no browser-level tests for the React frontend or mobile
-- **Staging environment** — CI pipeline has a commented-out staging deploy job; no staging EC2 provisioned yet
-- **Push notifications** — mobile notification inbox is in-app; Expo push token registration and background delivery not yet wired
+- **E2E tests** — pytest covers backend routers/services (582 tests); no browser-level tests for the React frontend or mobile yet
+- **Push notifications** — the mobile notification inbox is in-app; native push token registration and background delivery are not yet wired
 - **Avatar upload** — S3 bucket for profile images is planned but not implemented
+- **Offline-first** — optimistic updates / offline queueing for the mobile field flow
 
 ---
 

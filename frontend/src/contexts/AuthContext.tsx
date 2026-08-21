@@ -48,9 +48,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const checkAuth = async () => {
     setIsLoading(true);
     try {
-      // 1. Get the current user
-      const currentUser = await getCurrentUser();
-      
+      // 1. Get the current user and warm the token cache in parallel.
+      // fetchAuthSession must complete before isLoading clears — the axios interceptor
+      // calls it on every request, and if it hasn't resolved yet the request goes out
+      // with no Authorization header, causing a 422 from OAuth2PasswordBearer.
+      const [currentUser] = await Promise.all([
+        getCurrentUser(),
+        fetchAuthSession(),
+      ]);
+
       // New pool: currentUser.username is the Cognito username (e.g. "danny.rivera")
       // Use it as the display name fallback; /employees/me first name takes priority.
       const displayName = currentUser.username ?? undefined;
@@ -84,7 +90,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setIsConfigured(true);
       }
 
-    } catch (error) {
+    } catch {
       // If this throws, the user is simply not logged in.
       setUser(null);
       setGroups([]);

@@ -1,6 +1,8 @@
 import uuid
-from sqlalchemy import Column, Integer, Date, DateTime, String, Boolean, Float, ForeignKey, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy import Column, Integer, Date, DateTime, String, Boolean, Float, ForeignKey, Text, UniqueConstraint, Index, text
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
+from sqlalchemy.ext.mutable import MutableDict, MutableList
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.models.base import Base
 
@@ -21,13 +23,35 @@ class Route(Base):
     route_date            = Column(Date(), nullable=False, index=True)
     route_number          = Column(Integer(), nullable=False)
 
+    # These five are wrapped in MutableList/MutableDict so in-place mutation
+    # (.append/.pop/[i]=x) is tracked and persisted. Without it SQLAlchemy
+    # compares by identity, sees the same object, and emits no UPDATE — the
+    # write is silently discarded. That cost us a real bug: the pair-split path
+    # did `route.tote_ids.pop()`, which left the bag on the trainee's route
+    # while also adding it to the trainer's, duplicating a tote and corrupting
+    # both routes' counts. See ADR-247 and tests/services/test_array_persistence.py.
+    #
     # Geographic identity — persisted so zone maps work after Redis TTL expires
-    block_keys            = Column(ARRAY(Text()), nullable=False, default=list)
+    block_keys            = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    # LION segment ids the route's packages sit on (ADR-260). The sort already
+    # resolves these to build its adjacency graph; persisting them gives intake
+    # a route-side anchor for proximity ranking and closes ADR-238's gap.
+    #
+    # Unlike normalised_addresses (nulled 48h post-route, ADR-219) this needs no
+    # retention clock: a LION segment id is public street topology — no house
+    # number, no address, no TBA. Empty on routes built before the column.
+    segment_ids           = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
 
     # Tote and package lists
-    tote_ids              = Column(ARRAY(Text()), nullable=False, default=list)
-    tba_numbers           = Column(ARRAY(Text()), nullable=False, default=list)
-    tag_numbers           = Column(ARRAY(Text()), nullable=False, default=list)
+    tote_ids              = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    tba_numbers           = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    normalised_addresses  = Column(MutableList.as_mutable(ARRAY(Text())), nullable=False, default=list)
+    # Delivered-set drill-down: [{block_key, address, tba_numbers}] (ADR-194).
+    # NULL on rows that predate the column — clients fall back to the flat lists.
+    # MutableList tracks append/pop and replacement of whole elements; mutating a
+    # dict *inside* a stop (stops[0]["x"] = y) is NOT tracked — reassign the
+    # element or the whole list for those.
+    stops                 = Column(MutableList.as_mutable(JSONB()), nullable=True)
     package_count         = Column(Integer(), nullable=False, default=0)
 
     # Capacity in half-slots (scale ×2: standard=12, heavy=8, paired=18/12)
@@ -35,55 +59,142 @@ class Route(Base):
     capacity_limit        = Column(Integer(), nullable=False)
     capacity_limit_paired = Column(Integer(), nullable=True)   # set at arrival confirmation
 
-    # Effort classification resolved at sort time
+    # Effort classification resolved at sort time from weighted package-aware score
+    effort_score          = Column(Float(), nullable=True)                           # weighted normalized score snapshot
     effort_class          = Column(String(20), nullable=False, default="standard")   # easy|standard|heavy
     workload_source       = Column(String(20), nullable=False, default="default")    # profile|flag|default
+    coverage_pct          = Column(Float(), nullable=True)                           # profiled_packages / total_packages
 
-    # Person assignment — nullable until wave distribution
-    assigned_to           = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
-    assigned_to_name      = Column(String(100), nullable=True)
+    # Person membership is modelled by RouteParticipant (ADR-212): exactly one
+    # 'executor' (assignee-of-record) + zero-or-more 'supervisor' (trainer).
+    # The old single-owner columns (assigned_to / assigned_to_name /
+    # paired_trainee_id) were removed — resolve the executor/supervisors via the
+    # `participants` relationship, and names by joining Employee (no denormalised
+    # name; assigned_to_name drifted precisely because it was denormalised).
 
-    # Trainer+trainee pairing
-    paired_trainee_id     = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    # Training state of the executor (not membership — stays on Route)
     trainee_phase         = Column(Integer(), nullable=True)           # 1–5
     phase4_solo_opted_in  = Column(Boolean(), nullable=False, default=False)
+
+    # Wave tracking — 1 = initial sort assignment; 2+ = post-return reassignment (ADR-139)
+    wave_number           = Column(Integer(), nullable=False, default=1)
+
+    # ── Sort-decision telemetry (ADR-273) ────────────────────────────────────
+    # WHY the route looks the way it does, not just what it contains. All
+    # nullable: rows predating the columns, and any path that builds a Route
+    # outside the sort (wave reassignment, emergency split), leave them null.
+    #
+    # closed_reason is the highest-value field here: ADR-272's whole diagnosis
+    # is that routes close for the WRONG reason (capacity consumed by a
+    # neighbour while the seed block still had totes), and without this column
+    # that is invisible in production.
+    seed_block_key        = Column(String(100), nullable=True)
+    # Blocks the traversal WALKED (ADR-235 walked_blocks) — always >= the count
+    # of blocks it collected from, so drift across skipped blocks is observable.
+    blocks_walked         = Column(Integer(), nullable=True)
+    # Sort-time closures (ADR-272 diagnosis; these are what closed_reason_hist
+    # counts, because telemetry is written at sort time):
+    #   capacity | no_adjacent_fit | group_complete | no_fit_streak |
+    #   walk_budget | span_cap | forced_single
+    # Runtime closure (ADR-229) — NOT a sort outcome. Only reachable on an
+    # in_progress route with a help request, so it cannot appear in a sort
+    # telemetry histogram; listed here so a future pass over existing routes
+    # does not meet an undocumented value:
+    #   covered
+    closed_reason         = Column(String(30), nullable=True)
+    # The decision record this route came from. No FK: RouteSortRun outlives the
+    # Route (re-sort deletes routes, never runs), so a FK would either block the
+    # delete or cascade away the telemetry we are keeping.
+    sort_run_id           = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # Status lifecycle
     status                = Column(String(20), nullable=False, default="unassigned")  # unassigned|assigned|in_progress|completed
     departed_at           = Column(DateTime(timezone=True), nullable=True)
+    # returned_at is set ONLY by POST /back-at-truck, not by status=completed (ADR-139)
     returned_at           = Column(DateTime(timezone=True), nullable=True)
+    # ADR-229: stamped by POST /request-help — the distress signal that gates the
+    # captain's "cover remaining stops" emergency split. Idempotent re-stamp.
+    help_requested_at     = Column(DateTime(timezone=True), nullable=True)
     created_at            = Column(DateTime(timezone=True), server_default=func.now())
+
+    misrouted_packages = relationship(
+        "MisroutedPackageFlag", back_populates="route", lazy="joined", cascade="all, delete-orphan"
+    )
+    participants = relationship(
+        "RouteParticipant", back_populates="route", lazy="joined", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint("truck_assignment_id", "route_number", name="uq_routes_assignment_number"),
     )
 
+    # ── Membership helpers (ADR-212) ──────────────────────────────────────────
+    @property
+    def executor_id(self):
+        """The single executor (assignee-of-record) employee_id, or None."""
+        p = next((p for p in self.participants if p.role == "executor"), None)
+        return p.employee_id if p else None
 
-class WalkerRoute(Base):
-    """Daily summary of all routes assigned to one employee on one truck.
+    @property
+    def supervisor_ids(self) -> list:
+        """Employee ids of all supervisor participants (trainers). [] if solo."""
+        return [p.employee_id for p in self.participants if p.role == "supervisor"]
 
-    Repurposed from ADR-111 route-container model. No longer holds tote/package
-    data — that lives on Route rows. This is a pre-computed aggregate for
-    display (total packages, total slot cost) and the walker zone map summary.
+    @property
+    def is_paired(self) -> bool:
+        """True when a supervisor participant is attached (training/retraining)."""
+        return any(p.role == "supervisor" for p in self.participants)
+
+
+ROUTE_PARTICIPANT_EXECUTOR = "executor"
+ROUTE_PARTICIPANT_SUPERVISOR = "supervisor"
+
+
+class RouteParticipant(Base):
+    """A person's membership in a route with a role (ADR-212).
+
+    Single source of truth for route ownership. Exactly one ``executor`` per
+    route (the assignee-of-record who physically runs it — a walker, or the
+    trainee in a training pair); zero-or-more ``supervisor`` (a trainer
+    overseeing it). Replaces Route.assigned_to / assigned_to_name /
+    paired_trainee_id. Names are resolved by joining Employee, never stored here.
+
+    The same shape serves the future retraining case (ADR-212 §context): a
+    trainer supervising an underperforming walker is just a ``supervisor`` row
+    on that walker's existing route.
     """
-    __tablename__ = "walker_routes"
+    __tablename__ = "route_participants"
 
-    id                   = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id           = Column(UUID(as_uuid=True), nullable=False, index=True)
-    truck_assignment_id  = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="CASCADE"), nullable=False, index=True)
-    route_date           = Column(Date(), nullable=False, index=True)
-    employee_id          = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
-    total_routes         = Column(Integer(), nullable=False, default=0)
-    total_packages       = Column(Integer(), nullable=False, default=0)
-    total_bags           = Column(Integer(), nullable=False, default=0)
-    total_slot_cost      = Column(Integer(), nullable=False, default=0)   # half-slots
-    created_at           = Column(DateTime(timezone=True), server_default=func.now())
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
+    route_id    = Column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), nullable=False, index=True)
+    employee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
+    role        = Column(String(20), nullable=False)   # 'executor' | 'supervisor'
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+    route = relationship("Route", back_populates="participants")
+
+    __table_args__ = (
+        # A person appears at most once per route.
+        UniqueConstraint("route_id", "employee_id", name="uq_route_participant_route_employee"),
+        # Exactly one executor per route — partial unique index. Supported by both
+        # Postgres (prod) and SQLite (test create_all); sqlite_where/postgresql_where
+        # both point at the same predicate so the constraint is enforced in tests too.
+        Index(
+            "uq_route_participant_one_executor",
+            "route_id",
+            unique=True,
+            postgresql_where=text("role = 'executor'"),
+            sqlite_where=text("role = 'executor'"),
+        ),
+    )
+
 
 
 class RouteClusterCentroid(Base):
     """Cluster centroids computed at sort time for the dispatch density map.
 
-    DBSCAN produces centroids during truck-zone sort. Previously discarded —
+    The truck-zone sort produces per-zone centroids. Previously discarded —
     persisted here so the Deck.gl heatmap layer works without hitting Redis.
     No addresses stored — only lat/lng and package count.
     """
@@ -102,13 +213,12 @@ class RouteClusterCentroid(Base):
 class LocationDifficultyFlag(Base):
     """In-field difficulty flag raised by a walker during a route.
 
-    Ephemeral operational feedback — distinct from LocationProfile which is the
-    verified persistent building intelligence database. Flags raised during
-    delivery cannot affect the same-day sort (sort runs pre-arrival at the
-    anchor point). They override LocationProfile.workload_class for subsequent
-    sorts via the effort class resolution chain.
+    Ephemeral operational feedback. Flags raised during delivery cannot affect
+    the same-day sort (sort runs pre-arrival at the anchor point). They override
+    BuildingProfile.workload_class for subsequent sorts via the effort class
+    resolution chain — highest priority input for a given block_key.
 
-    block_key format: "W_38_St_400s_odd"
+    block_key format: "W_38_St_400"  (direction_streetnum_type_hundredfloor)
     difficulty_tier: standard | moderate | heavy
     """
     __tablename__ = "location_difficulty_flags"
@@ -122,28 +232,6 @@ class LocationDifficultyFlag(Base):
     flagged_at      = Column(DateTime(timezone=True), server_default=func.now())
     notes           = Column(Text(), nullable=True)
 
-
-class WalkerTrip(Base):
-    """One physical delivery trip made by a walker from the anchor point.
-
-    A WalkerRoute has one or more trips. Status lifecycle:
-      pending → in_progress (departed) → completed (returned)
-    """
-    __tablename__ = "walker_trips"
-
-    id                       = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    company_id               = Column(UUID(as_uuid=True), nullable=False, index=True)
-    walker_route_id          = Column(UUID(as_uuid=True), ForeignKey("walker_routes.id", ondelete="CASCADE"), nullable=False, index=True)
-    trip_number              = Column(Integer(), nullable=False)
-    status                   = Column(String(20), nullable=False, default="pending")  # pending|in_progress|completed
-    departed_at              = Column(DateTime(timezone=True), nullable=True)
-    returned_at              = Column(DateTime(timezone=True), nullable=True)
-    suggested_walker_route_id = Column(UUID(as_uuid=True), ForeignKey("walker_routes.id", ondelete="SET NULL"), nullable=True)
-    created_at               = Column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("walker_route_id", "trip_number", name="uq_walker_trips_route_trip"),
-    )
 
 
 class MisroutedPackageFlag(Base):
@@ -160,11 +248,13 @@ class MisroutedPackageFlag(Base):
     company_id                = Column(UUID(as_uuid=True), nullable=False, index=True)
     route_id                  = Column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), nullable=False, index=True)
     tba_number                = Column(String(50), nullable=False)
-    tag_number                = Column(String(50), nullable=True)
     current_bag_id            = Column(String(50), nullable=False)
     destination_block_key     = Column(String(100), nullable=True)    # block_key the package actually belongs to
+    normalised_address        = Column(String(255), nullable=True)    # where it belongs — captain locates it; resolve moves it (ADR-194)
     suggested_route_id        = Column(UUID(as_uuid=True), nullable=True)   # null = needs captain review
     resolved                  = Column(Boolean(), nullable=False, default=False)
     resolved_by               = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     resolved_by_name          = Column(String(100), nullable=True)
     resolved_at               = Column(DateTime(timezone=True), nullable=True)
+
+    route = relationship("Route", back_populates="misrouted_packages")

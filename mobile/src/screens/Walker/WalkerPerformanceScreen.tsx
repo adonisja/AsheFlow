@@ -8,6 +8,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { Badge } from '@components/ui/primitives';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,17 +34,20 @@ type Profile = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function gradeColor(grade: string | null): string {
-  if (!grade) return '#9CA3AF';
-  if (grade === 'A') return '#10B981';
-  if (grade === 'B') return '#3B82F6';
-  if (grade === 'C') return '#F59E0B';
-  if (grade === 'D') return '#F97316';
-  return '#EF4444';
+// Letter grade → semantic token (ADR-207). A=success, B=info, C=gold, D=warning,
+// F=danger, none=muted. Themed so it tracks light/dark.
+function gradeColor(grade: string | null, c: ThemeColors): string {
+  if (!grade) return c.mutedForeground;
+  if (grade === 'A') return c.success;
+  if (grade === 'B') return c.info;
+  if (grade === 'C') return c.gold;
+  if (grade === 'D') return c.warning;
+  return c.danger;
 }
 
 function Stars({ count }: { count: number | null }) {
-  if (count === null) return <Text style={{ color: '#9CA3AF', fontSize: fontSize.sm }}>—</Text>;
+  const c = useColors();
+  if (count === null) return <Text style={{ color: c.mutedForeground, fontSize: fontSize.sm }}>—</Text>;
   return (
     <Text style={{ fontSize: fontSize.sm }}>
       {'★'.repeat(count)}{'☆'.repeat(5 - count)}
@@ -90,7 +94,7 @@ export default function WalkerPerformanceScreen() {
 
   if (!profile || profile.total_shifts === 0) {
     return (
-      <ScreenShell edges={[]} noHeader title="Performance" subtitle="">
+      <ScreenShell title="Performance" subtitle="">
         <View style={s.center}>
           <Text style={{ fontSize: 40 }}>📊</Text>
           <Text style={s.emptyTitle}>No shift history yet</Text>
@@ -100,7 +104,7 @@ export default function WalkerPerformanceScreen() {
     );
   }
 
-  const gradeCol = gradeColor(profile.grade);
+  const gradeCol = gradeColor(profile.grade, c);
 
   return (
     <ScrollView
@@ -137,17 +141,12 @@ export default function WalkerPerformanceScreen() {
       {/* Recent ratings */}
       <Text style={[s.sectionTitle, { color: c.foreground }]}>Recent Shifts</Text>
       {profile.ratings.slice(0, 30).map(r => (
-        <View key={r.id} style={[s.ratingCard, { backgroundColor: c.surface, borderColor: c.border, borderLeftColor: r.present ? c.primary : '#EF4444' }]}>
+        <View key={r.id} style={[s.ratingCard, { backgroundColor: c.surface, borderColor: c.border, borderLeftColor: r.present ? c.primary : c.danger }]}>
           <View style={s.ratingHeader}>
             <Text style={[s.ratingDate, { color: c.foreground }]}>{r.date}</Text>
-            <View style={[s.presentBadge, {
-              backgroundColor: r.present ? '#10B98122' : '#EF444422',
-              borderColor:     r.present ? '#10B981'   : '#EF4444',
-            }]}>
-              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: r.present ? '#10B981' : '#EF4444' }}>
-                {r.present ? 'Present' : 'No-show'}
-              </Text>
-            </View>
+            <Badge tone={r.present ? 'success' : 'danger'} size="sm">
+              {r.present ? 'Present' : 'No-show'}
+            </Badge>
           </View>
           <Text style={[s.driverName, { color: c.mutedForeground }]}>Driver: {r.driver_name}</Text>
           {r.present && <Stars count={r.stars} />}
@@ -191,7 +190,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   ratingCard:    { borderWidth: 1, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.xs, borderLeftWidth: 4, gap: spacing.xs },
   ratingHeader:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   ratingDate:    { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  presentBadge:  { borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 2 },
   driverName:    { fontSize: fontSize.xs },
   comment:       { fontSize: fontSize.xs, fontStyle: 'italic', marginTop: 2 },
 });

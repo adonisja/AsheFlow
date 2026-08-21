@@ -8,7 +8,7 @@ from typing import List
 from uuid import UUID
 from botocore.exceptions import ClientError
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 import requests as http_requests
 
@@ -17,11 +17,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, Pagination, get_caller_employee
 from app.core.config import settings
+from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
-from app.schemas.employee import EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult
+from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
 from app.services.audit import write_audit
 from app.services.email import send_invite_email
 
@@ -69,14 +70,21 @@ def _fire_role_sync(discord_id: str, company_id: str, action: str) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 # Cognito group name per role — must match your User Pool group names exactly
+# ADR-256/264 added captain, field_supervisor and driver_trainee. A role missing
+# here resolves to None via .get() and the Cognito group silently never syncs —
+# the user keeps their OLD group and its permissions after a role change.
+# Mirrored in routers/registration.py; the two copies must stay in sync.
 ROLE_TO_COGNITO_GROUP: dict[str, str] = {
-    "driver":     "driver",
-    "walker":     "walker",
-    "trainer":    "trainer",
-    "trainee":    "trainee",
-    "dispatch":   "dispatch",
-    "management": "management",
-    "admin":      "admin",
+    "driver":           "driver",
+    "walker":           "walker",
+    "trainer":          "trainer",
+    "trainee":          "trainee",
+    "dispatch":         "dispatch",
+    "management":       "management",
+    "admin":            "admin",
+    "captain":          "captain",
+    "field_supervisor": "field_supervisor",
+    "driver_trainee":   "driver_trainee",
 }
 
 
@@ -247,7 +255,7 @@ def bulk_import_employees(
             db.flush()
         except Exception as e:
             db.rollback()
-            logger.error("bulk import flush failed for row %d (%s): %s", i, row.name, e)
+            logger.error("bulk import flush failed for row %d: %s", i, e)   # ADR-221: no name in logs
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
                 reason="Database error saving employee.",
@@ -267,7 +275,7 @@ def bulk_import_employees(
             db.commit()
         except Exception as e:
             db.rollback()
-            logger.error("bulk import commit failed for row %d (%s): %s", i, row.name, e)
+            logger.error("bulk import commit failed for row %d: %s", i, e)   # ADR-221: no name in logs
             results.append(BulkImportResult(
                 row=i, status="failed", name=row.name, email=row.email,
                 reason="Database error saving employee.",
@@ -543,7 +551,12 @@ def deactivate_employee(
     caller_groups = set(current_user.get("cognito_groups", []))
     _assert_not_protected(caller_groups, db_employee.role)
 
+    from datetime import datetime, timezone
     db_employee.is_active = False
+    # ADR-221: stamp departure so the 6-month name-redaction clock has a
+    # reference. The row survives as a tombstone (name still resolvable during
+    # the grace window); the nightly job redacts once deactivated_at + 6mo passes.
+    db_employee.deactivated_at = datetime.now(timezone.utc)
     write_audit(
         db,
         actor_id=str(caller.id),
@@ -664,6 +677,14 @@ def delete_employee(
         "Employee %s (%s) deleted by admin %s",
         db_employee.name, employee_id, current_user.get("username") or current_user.get("id"),
     )
+    # ADR-221: hard delete = on-demand erasure. Redact all denormalized _by_name
+    # copies NOW, while the paired FK still resolves (SET NULL fires on delete,
+    # after which the copies can't be matched back). The audit `before` records
+    # role/status only — not the raw name/email (which would re-persist the PII
+    # we're erasing).
+    from app.services.employee_redaction import redact_employee_names
+    redact_employee_names(db, employee_id)
+
     write_audit(
         db,
         actor_id=str(caller.id),
@@ -672,10 +693,7 @@ def delete_employee(
         target_table="employees",
         target_id=str(employee_id),
         before={
-            "name":           db_employee.name,
-            "email":          db_employee.email,
             "role":           db_employee.role,
-            "username":       db_employee.username,
             "account_status": db_employee.account_status,
             "is_active":      db_employee.is_active,
             "company_id":     str(db_employee.company_id),
@@ -683,6 +701,216 @@ def delete_employee(
     )
     db.delete(db_employee)
     db.commit()
+
+
+# ── Field-role transitions (ADR-256) ─────────────────────────────────────────
+#
+# Who may become what. An ALLOW-list, not a deny-list: a role absent from a value
+# tuple cannot be reached, and a role absent from the keys cannot transition at all.
+# Deny-lists silently admit every role added later (ADR-256 audit, `rebalance_crews`).
+#
+# dispatch / management / admin / field_supervisor are deliberately absent — those
+# are hiring decisions, not field promotions, and are set at creation or by an admin
+# editing the employee directly.
+ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "walker":  ("trainer", "captain"),
+    "trainer": ("captain", "walker"),
+    "captain": ("trainer", "walker"),
+}
+
+# Which direction the change is, for the audit trail and the wording of the notice.
+# Captain outranks trainer outranks walker (ADR-256 hierarchy).
+_ROLE_RANK: dict[str, int] = {"walker": 0, "trainer": 1, "captain": 2}
+
+
+def _clear_captain_pins(db: Session, employee_id: UUID, company_id: UUID) -> int:
+    """Clear a departing captain's truck pins. Returns how many were cleared.
+
+    Familiarity ROWS are kept — `days_held` is real history and survives a
+    round-trip out of and back into the captain role. Only `pinned` is cleared: a
+    pin left behind would steer `assign_captains` toward someone who is no longer a
+    captain, and the partial unique index would hold a truck's pin slot hostage.
+    """
+    from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
+
+    rows = db.query(CaptainTruckFamiliarity).filter(
+        CaptainTruckFamiliarity.company_id == company_id,
+        CaptainTruckFamiliarity.employee_id == employee_id,
+        CaptainTruckFamiliarity.pinned == True,  # noqa: E712
+    ).all()
+    for row in rows:
+        row.pinned = False
+    return len(rows)
+
+
+def _apply_role_transition(
+    db: Session,
+    db_employee: Employee,
+    new_role: str,
+    caller: Employee,
+) -> Employee:
+    """Move an employee between field roles, with every side effect that implies.
+
+    Cognito group, in-app notification, audit row, Discord DM and Discord role sync.
+    Shared by /promote, /demote and /transition so the three cannot drift apart —
+    the original pair duplicated all of it and only covered walker<->trainer.
+    """
+    old_role = db_employee.role
+
+    allowed = ROLE_TRANSITIONS.get(old_role)
+    if allowed is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A {old_role} cannot be promoted or demoted from this page.",
+        )
+    if new_role not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cannot change a {old_role} to {new_role}. "
+                f"Allowed: {', '.join(allowed)}."
+            ),
+        )
+
+    is_promotion = _ROLE_RANK.get(new_role, 0) > _ROLE_RANK.get(old_role, 0)
+
+    # Leaving the captain role must release the pins, or assign_captains keeps
+    # steering toward someone who is no longer a captain.
+    pins_cleared = 0
+    if old_role == "captain":
+        pins_cleared = _clear_captain_pins(db, db_employee.id, db_employee.company_id)
+
+    db_employee.role = new_role
+    db.flush()
+
+    if db_employee.cognito_sub and db_employee.account_status == "active":
+        old_group = ROLE_TO_COGNITO_GROUP.get(old_role)
+        new_group = ROLE_TO_COGNITO_GROUP.get(new_role)
+        if new_group is None:
+            # Never silently leave someone in their old group with old permissions.
+            logger.error(
+                "No Cognito group mapped for role %s — group NOT synced for employee %s",
+                new_role, db_employee.id,
+            )
+        else:
+            cognito = _cognito_client()
+            cognito_username = db_employee.email or db_employee.cognito_sub
+            # ADD BEFORE REMOVE. Nothing in this codebase creates Cognito groups —
+            # they are assumed to already exist in the User Pool — so a role whose
+            # group has not been created yet raises ResourceNotFoundException here.
+            # Removing first would leave the user in NO group: worse than the old
+            # one, and it locks them out rather than over-permitting them.
+            # Briefly holding both is the safe direction to fail.
+            try:
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=cognito_username,
+                    GroupName=new_group,
+                )
+            except ClientError as e:
+                # Loud: the DB role has changed and the token claims have not, so
+                # this person's permissions no longer match their role.
+                logger.error(
+                    "Cognito ADD to group %s FAILED for employee %s (%s) — role is now "
+                    "%s in the database but their Cognito group is unchanged. If the "
+                    "group does not exist, create it in the User Pool.",
+                    new_group, db_employee.id, e, new_role,
+                )
+            else:
+                if old_group and old_group != new_group:
+                    try:
+                        cognito.admin_remove_user_from_group(
+                            UserPoolId=settings.aws_cognito_user_pool_id,
+                            Username=cognito_username,
+                            GroupName=old_group,
+                        )
+                    except ClientError as e:
+                        # They hold both groups now. Over-permitted, not locked out,
+                        # and recoverable by hand — but it must not pass silently.
+                        logger.error(
+                            "Cognito REMOVE from group %s failed for employee %s (%s) — "
+                            "they now hold both %s and %s.",
+                            old_group, db_employee.id, e, old_group, new_group,
+                        )
+
+    verb = "promoted" if is_promotion else "changed"
+    db.add(Notification(
+        company_id=db_employee.company_id,
+        employee_id=db_employee.id,
+        type="role_change",
+        message=(
+            f"Congratulations! You have been promoted from {old_role} to {new_role} by {caller.name}."
+            if is_promotion
+            else f"Your role has been updated from {old_role} to {new_role} by {caller.name}."
+        ),
+    ))
+    write_audit(
+        db,
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        action_type=f"employee.role_{verb}",
+        target_table="employees",
+        target_id=str(db_employee.id),
+        before={"role": old_role},
+        after={"role": new_role, "captain_pins_cleared": pins_cleared},
+    )
+    db.commit()
+    db.refresh(db_employee)
+
+    if db_employee.discord_id:
+        if is_promotion:
+            _fire_discord_dm(
+                str(db_employee.discord_id),
+                f"Congratulations! You've been promoted to {new_role.title()}.",
+            )
+        _sync_discord_role_for_transition(db_employee, old_role, new_role)
+
+    return db_employee
+
+
+def _sync_discord_role_for_transition(db_employee: Employee, old_role: str, new_role: str) -> None:
+    """Grant/revoke the Discord role that matches the new field role.
+
+    Trainer and captain are DIFFERENT Discord roles (ADR-256): the guild's old
+    "Captain" role is being renamed Trainer with a new Captain role created
+    alongside it, so `grant_trainer` and `grant_captain` are distinct actions.
+    Sending the wrong one would give a trainer route-lead channel access.
+    """
+    discord_id = str(db_employee.discord_id)
+    company_id = str(db_employee.company_id)
+
+    if old_role in ("trainer", "captain"):
+        _fire_role_sync(discord_id, company_id, f"revoke_{old_role}")
+    if new_role in ("trainer", "captain"):
+        _fire_role_sync(discord_id, company_id, f"grant_{new_role}")
+
+
+@router.post("/{employee_id}/transition", response_model=EmployeeResponse)
+def transition_employee_role(
+    employee_id: UUID,
+    payload: RoleTransitionRequest,
+    caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Move an employee between field roles (ADR-256).
+
+    walker  -> trainer | captain
+    trainer -> captain | walker
+    captain -> trainer | walker
+
+    A new captain needs no further setup: `assign_captains` treats any captain with
+    no completed familiarity rows as familiarising, so the rotation starts on their
+    next dispatch automatically.
+    """
+    db_employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not db_employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
+
+    return _apply_role_transition(db, db_employee, payload.new_role, caller)
 
 
 @router.post("/{employee_id}/promote", response_model=EmployeeResponse)
@@ -694,7 +922,10 @@ def promote_employee(
 ):
     """Promote a walker to trainer.
 
-    Syncs the Cognito group and fires an in-app notification to the employee.
+    Kept for the existing Assets UI call. Delegates to _apply_role_transition so the
+    Cognito / notification / audit / Discord side effects cannot drift from the
+    general /transition path — promote and demote each carried their own copy before
+    ADR-256, which is how a new role gets added to one and missed in the other.
     """
     db_employee = db.query(Employee).filter(
         Employee.id == employee_id,
@@ -707,57 +938,7 @@ def promote_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Can only promote walkers to trainer (current role: {db_employee.role}).",
         )
-
-    old_role = db_employee.role
-    db_employee.role = "trainer"
-    db.flush()
-
-    # Sync Cognito group
-    if db_employee.cognito_sub and db_employee.account_status == "active":
-        cognito = _cognito_client()
-        cognito_username = db_employee.email or db_employee.cognito_sub
-        try:
-            cognito.admin_remove_user_from_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["walker"],
-            )
-            cognito.admin_add_user_to_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["trainer"],
-            )
-        except ClientError as e:
-            logger.error("Cognito group sync failed for promote %s: %s", employee_id, e)
-
-    # In-app notification
-    db.add(Notification(
-        company_id=db_employee.company_id,
-        employee_id=db_employee.id,
-        type="role_change",
-        message=f"Congratulations! You have been promoted from {old_role} to trainer by {caller.name}.",
-    ))
-    write_audit(
-        db,
-        actor_id=str(caller.id),
-        company_id=str(caller.company_id),
-        action_type="employee.promoted",
-        target_table="employees",
-        target_id=str(employee_id),
-        before={"role": old_role},
-        after={"role": "trainer"},
-    )
-    db.commit()
-    db.refresh(db_employee)
-
-    if db_employee.discord_id:
-        _fire_discord_dm(
-            str(db_employee.discord_id),
-            "Congratulations! You've been promoted to Trainer. Welcome to the training team. Access has been granted to #trainers-chat.",
-        )
-        _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "grant_trainer")
-
-    return db_employee
+    return _apply_role_transition(db, db_employee, "trainer", caller)
 
 
 @router.post("/{employee_id}/demote", response_model=EmployeeResponse)
@@ -767,10 +948,7 @@ def demote_employee(
     current_user: dict = Depends(RoleChecker(["management", "admin"])),
     db: Session = Depends(get_db),
 ):
-    """Demote a trainer back to walker.
-
-    Syncs the Cognito group and fires an in-app notification to the employee.
-    """
+    """Demote a trainer back to walker. See promote_employee on delegation."""
     db_employee = db.query(Employee).filter(
         Employee.id == employee_id,
         Employee.company_id == caller.company_id,
@@ -782,53 +960,49 @@ def demote_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Can only demote trainers to walker (current role: {db_employee.role}).",
         )
+    return _apply_role_transition(db, db_employee, "walker", caller)
 
-    old_role = db_employee.role
-    db_employee.role = "walker"
-    db.flush()
 
-    # Sync Cognito group
-    if db_employee.cognito_sub and db_employee.account_status == "active":
-        cognito = _cognito_client()
-        cognito_username = db_employee.email or db_employee.cognito_sub
-        try:
-            cognito.admin_remove_user_from_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["trainer"],
-            )
-            cognito.admin_add_user_to_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=cognito_username,
-                GroupName=ROLE_TO_COGNITO_GROUP["walker"],
-            )
-        except ClientError as e:
-            logger.error("Cognito group sync failed for demote %s: %s", employee_id, e)
+# ── Injury / modified-duty status ─────────────────────────────────────────────
 
-    # In-app notification
-    db.add(Notification(
-        company_id=db_employee.company_id,
-        employee_id=db_employee.id,
-        type="role_change",
-        message=f"Your role has been updated from {old_role} to walker by {caller.name}.",
-    ))
+@router.patch("/{employee_id}/injury-status", response_model=EmployeeResponse)
+def set_injury_status(
+    employee_id: UUID,
+    body: InjuryStatusPatch,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Set or clear an employee's injury / modified-duty status.
+
+    injury_status=null clears the flag and restores full routing eligibility.
+    injury_status="injured"|"disabled" hard-blocks the employee from heavy route
+    assignments until the flag is explicitly cleared (ADR-139).
+    """
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
+
+    old_status = employee.injury_status
+    employee.injury_status = body.injury_status
+    employee.injury_status_since = datetime.now(timezone.utc) if body.injury_status else None
+
     write_audit(
         db,
         actor_id=str(caller.id),
         company_id=str(caller.company_id),
-        action_type="employee.demoted",
+        action_type="employee.injury_status_updated",
         target_table="employees",
         target_id=str(employee_id),
-        before={"role": old_role},
-        after={"role": "walker"},
+        before={"injury_status": old_status},
+        after={"injury_status": body.injury_status},
     )
     db.commit()
-    db.refresh(db_employee)
-
-    if db_employee.discord_id:
-        _fire_role_sync(str(db_employee.discord_id), str(db_employee.company_id), "revoke_trainer")
-
-    return db_employee
+    db.refresh(employee)
+    return employee
 
 
 class _EmailChangeRequest(BaseModel):
@@ -917,3 +1091,169 @@ def confirm_email_change(
     db.commit()
 
     return {"detail": "Email updated successfully.", "email": new_email}
+
+
+# ── Discord account linking (ADR-270) ────────────────────────────────────────
+#
+# WHY THIS IS VERIFIED RATHER THAN A PLAIN FIELD EDIT
+# `employees.discord_id` is not decoration. It is the bot's DM address AND the
+# third step of the auth lookup chain (cognito_sub -> username -> discord_id,
+# see api/deps.py). A user who could set it freely could point their record at
+# a colleague's Discord account and redirect that person's dispatch DMs.
+#
+# So it mirrors the email-change flow directly above: request a code, prove
+# receipt, then write. The difference is where the code lives — Cognito holds
+# the email code for us; for Discord we hold it in Redis with a short TTL.
+#
+# ADR-083 governs the value itself: numeric snowflake, 17-20 digits,
+# VARCHAR(20). `_validate_discord_id` is reused rather than re-implemented so
+# this endpoint cannot drift from EmployeeCreate/EmployeeUpdate.
+
+_DISCORD_CODE_TTL_SECONDS = 600          # 10 minutes, matching typical email codes
+_DISCORD_ATTEMPT_TTL_SECONDS = 3600      # rate-limit window
+_DISCORD_MAX_ATTEMPTS = 5                # requests per window, per caller
+
+
+def _discord_code_key(employee_id: UUID) -> str:
+    return f"discord_link_code:{employee_id}"
+
+
+def _discord_attempt_key(employee_id: UUID) -> str:
+    return f"discord_link_attempts:{employee_id}"
+
+
+class _DiscordLinkRequest(BaseModel):
+    discord_id: str = Field(..., max_length=20)
+
+    @field_validator("discord_id", mode="before")
+    @classmethod
+    def _check(cls, v):
+        # Reuses the ADR-083 validator: a non-snowflake is a 422 here, not a
+        # row we would have to defend against everywhere downstream.
+        validated = _validate_discord_id(v)
+        if validated is None:
+            raise ValueError("discord_id is required")
+        return validated
+
+
+class _DiscordConfirmRequest(_DiscordLinkRequest):
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+@router.post("/me/discord/request-link", status_code=status.HTTP_200_OK)
+def request_discord_link(
+    payload: _DiscordLinkRequest,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+    _: dict = Depends(RoleChecker(
+        ["driver", "walker", "trainer", "trainee", "captain",
+         "dispatch", "management", "admin"]
+    )),
+):
+    """Step 1: send a 6-digit code by Discord DM to the claimed account.
+
+    Any authenticated employee may link their OWN account — the write target is
+    `caller`, never an id from the request, so there is nothing to widen.
+
+    The DM is the proof of ownership: only the person holding that Discord
+    account can read the code. A typo therefore DMs a stranger, which is why
+    the message says why it arrived and that it can be ignored.
+    """
+    discord_id = payload.discord_id
+
+    # UNIQUE(company_id, discord_id) — surface the conflict as a 409 rather
+    # than letting the commit fail later with an opaque IntegrityError.
+    taken = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.discord_id == discord_id,
+        Employee.id != caller.id,
+    ).first()
+    if taken:
+        raise HTTPException(
+            status_code=409,
+            detail="That Discord account is already linked to another employee.",
+        )
+
+    r = _get_redis()
+
+    # Rate limit: a code request DMs a third party, so an unbounded endpoint is
+    # a spam vector against arbitrary Discord users.
+    attempts = r.incr(_discord_attempt_key(caller.id))
+    if attempts == 1:
+        r.expire(_discord_attempt_key(caller.id), _DISCORD_ATTEMPT_TTL_SECONDS)
+    if attempts > _DISCORD_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many link attempts. Try again later.",
+        )
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    # Store the code WITH the id it was issued for: confirming must not accept
+    # a code minted for a different account.
+    r.setex(_discord_code_key(caller.id), _DISCORD_CODE_TTL_SECONDS,
+            f"{discord_id}:{code}")
+
+    _fire_discord_dm(
+        discord_id,
+        f"Your AsheFlow verification code is **{code}**.\n"
+        "Someone entered this Discord ID on AsheFlow. If that was not you, "
+        "ignore this message — nothing has been linked.",
+    )
+
+    return {"detail": "Verification code sent by Discord DM."}
+
+
+@router.post("/me/discord/confirm-link", status_code=status.HTTP_200_OK)
+def confirm_discord_link(
+    payload: _DiscordConfirmRequest,
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """Step 2: confirm the code and write `discord_id` onto the caller."""
+    r = _get_redis()
+    stored = r.get(_discord_code_key(caller.id))
+    if not stored:
+        raise HTTPException(
+            status_code=400,
+            detail="No pending verification, or it expired. Request a new code.",
+        )
+
+    stored_id, _, stored_code = stored.partition(":")
+    # BOTH must match. Checking only the code would let a caller request a code
+    # for an id they control, then confirm it against someone else's id.
+    if stored_id != payload.discord_id or not secrets.compare_digest(
+        stored_code, payload.code
+    ):
+        raise HTTPException(status_code=400, detail="Incorrect verification code.")
+
+    # Re-check uniqueness at write time: another employee may have linked this
+    # id during the 10-minute window.
+    taken = db.query(Employee).filter(
+        Employee.company_id == caller.company_id,
+        Employee.discord_id == payload.discord_id,
+        Employee.id != caller.id,
+    ).first()
+    if taken:
+        raise HTTPException(
+            status_code=409,
+            detail="That Discord account is already linked to another employee.",
+        )
+
+    previous = caller.discord_id
+    caller.discord_id = payload.discord_id
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.discord_linked",
+        target_table="employees",
+        target_id=str(caller.id),
+        # No PII: the snowflake is an account identifier, and "who changed
+        # their DM target" is exactly what an audit trail is for.
+        detail={"previous": previous, "new": payload.discord_id},
+    )
+    db.commit()
+
+    r.delete(_discord_code_key(caller.id))
+    return {"detail": "Discord account linked.", "discord_id": payload.discord_id}

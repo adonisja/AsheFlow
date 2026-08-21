@@ -51,16 +51,72 @@ class DepartureResponse(DepartureCreate):
 
 
 class WalkerRatingCreate(BaseModel):
-    driver_id: UUID
-    walker_id: UUID
+    """Peer rating (ADR-201). rater is the authenticated caller — never trusted
+    from the body. Attendance is roll call's job now, so a rating is stars+comment."""
+    ratee_id: UUID
     date: date
-    present: bool = True
-    stars: Optional[int] = None   # null for no-shows
+    stars: int = Field(..., ge=1, le=5)
     comment: Optional[str] = Field(None, max_length=500)
 
 
-class WalkerRatingResponse(WalkerRatingCreate):
+class DailyDeliveryCount(BaseModel):
+    day: date
+    delivered: int
+    rts: int
+
+
+class WeeklyDeliveredCount(BaseModel):
+    week_start: date
+    delivered: int
+    # Returns for the same week, so the trend chart can switch metric without a
+    # second request. Defaulted for wire-compat: a client built against the
+    # older response still parses (ADR-269 addendum — a newly added field is
+    # absent from some running server until that server is updated).
+    rts: int = 0
+
+
+class RtsReasonCount(BaseModel):
+    rts_type: str
+    count: int
+
+
+class TroublesomeAddress(BaseModel):
+    # ADR-218: company-wide troublesome BUILDING (read off BuildingProfile's
+    # decaying score), not a per-walker RTS count. score replaces count.
+    normalised_address: str
+    score: float
+
+
+class MyPerformanceResponse(BaseModel):
+    """Self-scoped field-performance card (ADR-203). Role-adaptive on the client."""
+    role: str
+    # Lifetime headline
+    lifetime_delivered: int
+    lifetime_rts: int
+    lifetime_missing: int
+    success_pct: Optional[float] = None          # delivered / (delivered+rts+missing), null if no data
+    # Rating (reused from walker-profile aggregation)
+    avg_stars: Optional[float] = None
+    grade: Optional[str] = None
+    # Trips (ADR-199)
+    trips_today: int = 0
+    trips_this_week: int = 0
+    # Last-7-days delivered vs RTS, per day
+    daily_last_week: List[DailyDeliveryCount] = []
+    # 4-week delivered trend
+    weekly_trend: List[WeeklyDeliveredCount] = []
+    # 30-day diagnostics
+    rts_reasons_30d: List[RtsReasonCount] = []
+    troublesome_addresses_30d: List[TroublesomeAddress] = []
+
+
+class WalkerRatingResponse(BaseModel):
     id: UUID
+    rater_id: UUID
+    ratee_id: UUID
+    date: date
+    stars: int
+    comment: Optional[str] = None
     rated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,6 +189,7 @@ class VehicleInspectionSummaryItem(BaseModel):
     has_failures: bool
     submitted_at: datetime
     failed_items: List[str]
+    notes: Optional[str] = None
 
 
 class StationArrivalCreate(BaseModel):

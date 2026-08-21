@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useCallback } from 'react';
 import { MapPin, CheckCircle2, Clock, Truck, RefreshCw, Send, History, Navigation, Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -5,7 +6,7 @@ import axiosClient from '../api/axiosClient';
 import { getLocalYMD } from '../utils/date';
 import SectionHeader from '../components/ui/SectionHeader';
 import ErrorBanner from '../components/ui/ErrorBanner';
-import type { AnchorPoint } from '../api/types';
+import type { AnchorPoint, LocationHint } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,14 +89,14 @@ function EtaSlider({ value, onChange }: { value: string; onChange: (v: string) =
 // ---------------------------------------------------------------------------
 
 interface APFormProps {
-  history: AnchorPoint[];
+  hints: LocationHint[];
   onSubmit: (location: string, eta: string | null, notes: string | null) => Promise<void>;
   submitLabel: string;
   submitting: boolean;
   error: string | null;
 }
 
-function APForm({ history, onSubmit, submitLabel, submitting, error }: APFormProps) {
+function APForm({ hints, onSubmit, submitLabel, submitting, error }: APFormProps) {
   const [location, setLocation]     = useState('');
   const [eta, setEta]               = useState(() => ETA_SLOTS[defaultEtaIndex()]);
   const [notes, setNotes]           = useState('');
@@ -109,24 +110,40 @@ function APForm({ history, onSubmit, submitLabel, submitting, error }: APFormPro
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Recent locations quick-fill */}
-      {history.length > 0 && (
+      {/* Suggested locations — history or building profile anchors */}
+      {hints.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-            <History className="w-3.5 h-3.5" /> Suggested Locations
+            <History className="w-3.5 h-3.5" />
+            {hints[0].source === 'building_profile' ? 'Station Anchors' : 'Suggested Locations'}
           </p>
           <div className="flex flex-col gap-1.5">
-            {history.map(h => (
+            {hints.map((h, i) => (
               <button
-                key={h.id} type="button" onClick={() => setLocation(h.location)}
+                key={i} type="button" onClick={() => setLocation(h.label)}
                 className={`text-left px-3 py-2 rounded-lg border text-sm transition-colors ${
-                  location === h.location
+                  location === h.label
                     ? 'border-primary bg-primary/8 text-primary font-medium'
                     : 'border-border bg-surface text-foreground hover:border-primary/50 hover:bg-accent/40'
                 }`}
               >
-                <span className="block truncate">{h.location}</span>
-                <span className="text-xs text-muted-foreground">{h.date}</span>
+                <span className="flex items-center justify-between gap-2">
+                  <span className="truncate">{h.label}</span>
+                  {/* Both scores surfaced so the driver weighs proximity vs. a proven spot */}
+                  <span className="flex items-center gap-1 shrink-0">
+                    {h.distance_m != null && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-info/10 text-info tabular-nums">
+                        ~{h.distance_m < 1000 ? `${h.distance_m} m` : `${(h.distance_m / 1000).toFixed(1)} km`}
+                      </span>
+                    )}
+                    {h.use_count != null && h.use_count > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground tabular-nums">
+                        {h.use_count}×
+                      </span>
+                    )}
+                  </span>
+                </span>
+                <span className="text-xs text-muted-foreground">{h.reason ?? h.sublabel}</span>
               </button>
             ))}
           </div>
@@ -198,7 +215,7 @@ function DriverView() {
   const [truckId, setTruckId]     = useState<string | null>(null);
   const [truckName, setTruckName] = useState<string | null>(null);
   const [aps, setAps]             = useState<AnchorPoint[]>([]);
-  const [history, setHistory]     = useState<AnchorPoint[]>([]);
+  const [hints, setHints]         = useState<LocationHint[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
 
@@ -225,15 +242,12 @@ function DriverView() {
         setTruckName(tname);
         return Promise.allSettled([
           axiosClient.get<AnchorPoint[]>('/anchor-points/driver/today'),
-          tid ? axiosClient.get<AnchorPoint[]>(`/anchor-points/truck/${tid}`, { params: { limit: 5 } }) : Promise.resolve({ data: [] }),
+          tid ? axiosClient.get<LocationHint[]>(`/anchor-points/truck/${tid}/location-hints`) : Promise.resolve({ data: [] }),
         ]);
       })
-      .then(([todayRes, histRes]) => {
+      .then(([todayRes, hintsRes]) => {
         if (todayRes.status === 'fulfilled') setAps(todayRes.value.data ?? []);
-        if (histRes.status === 'fulfilled') {
-          const past = (histRes.value.data as AnchorPoint[]).filter(r => r.date !== today);
-          setHistory(past.slice(0, 5));
-        }
+        if (hintsRes.status === 'fulfilled') setHints(hintsRes.value.data as LocationHint[]);
       })
       .catch(() => setError('Could not load your truck assignment. Make sure you have been dispatched.'))
       .finally(() => setLoading(false));
@@ -253,8 +267,8 @@ function DriverView() {
       await axiosClient.post('/anchor-points/', { truck_id: truckId, date: today, location, eta, notes });
       setShowRelocate(false);
       loadData();
-    } catch (e: any) {
-      setSubmitError(e.response?.data?.detail || 'Failed to submit anchor point.');
+    } catch (e: unknown) {
+      setSubmitError(errorText(e, 'Failed to submit anchor point.'));
     } finally {
       setSubmitting(false);
     }
@@ -270,8 +284,8 @@ function DriverView() {
         notes: arriveNotes.trim() || undefined,
       });
       loadData();
-    } catch (e: any) {
-      setSubmitError(e.response?.data?.detail || 'Failed to confirm arrival.');
+    } catch (e: unknown) {
+      setSubmitError(errorText(e, 'Failed to confirm arrival.'));
     } finally {
       setArriving(false);
     }
@@ -408,7 +422,7 @@ function DriverView() {
             Moving to a new area? Set your updated AP — crew and dispatch will be notified. AP #{activeAP!.sequence} will be marked as relocated.
           </p>
           <APForm
-            history={history}
+            hints={hints}
             onSubmit={handleSubmitAP}
             submitLabel={`Set AP #${activeAP!.sequence + 1}`}
             submitting={submitting}
@@ -425,7 +439,7 @@ function DriverView() {
             Set your planned parking location and ETA before leaving the station. Your crew and dispatch will be notified.
           </p>
           <APForm
-            history={history}
+            hints={hints}
             onSubmit={handleSubmitAP}
             submitLabel="Submit Anchor Point"
             submitting={submitting}

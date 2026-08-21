@@ -1,3 +1,5 @@
+from datetime import date as _date
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
+from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.schemas.truck_assignment import TruckAssignmentCreate, TruckAssignmentUpdate, TruckAssignmentResponse
 
@@ -34,9 +37,32 @@ def create_assignment(assignment: TruckAssignmentCreate, db: Session = Depends(g
 
 
 @router.get("/", response_model=list[TruckAssignmentResponse])
-def get_assignments(db: Session = Depends(get_db), _: dict = Depends(allow_any_auth), caller: Employee = Depends(get_caller_employee)):
-    """Return all truck assignments for the caller's company."""
-    return db.query(TruckAssignment).filter(TruckAssignment.company_id == caller.company_id).all()
+def get_assignments(
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_any_auth),
+    caller: Employee = Depends(get_caller_employee),
+    date: Optional[_date] = None,
+):
+    """Return truck assignments for the caller's company. Pass ?date=YYYY-MM-DD to filter to a single day."""
+    q = (
+        db.query(TruckAssignment, Truck.name.label("truck_name"))
+        .join(Truck, (Truck.id == TruckAssignment.truck_id) & (Truck.company_id == caller.company_id))
+        .filter(TruckAssignment.company_id == caller.company_id)
+    )
+    if date is not None:
+        q = q.filter(TruckAssignment.date == date)
+    rows = q.all()
+    return [
+        TruckAssignmentResponse(
+            id         = ta.id,
+            truck_id   = ta.truck_id,
+            truck_name = name or "",
+            date       = ta.date,
+            status     = ta.status,
+            paired_arrival_confirmed = ta.paired_arrival_confirmed,
+        )
+        for ta, name in rows
+    ]
 
 
 @router.get("/{assignment_id}", response_model=TruckAssignmentResponse)

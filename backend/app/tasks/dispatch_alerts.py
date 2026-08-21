@@ -9,12 +9,11 @@ always triggered manually by dispatch via POST /dispatch/{date}/finalize.
 """
 
 import os
-from datetime import date
-
 import requests
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.services.local_date import task_today, fetch_company_timezones
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.models.truck_assignment import TruckAssignment
@@ -30,29 +29,28 @@ def alert_finalization_deadline() -> dict:
 
     Returns a summary dict.
     """
-    today = date.today()
     db = SessionLocal()
     try:
-        # Find all distinct company_ids that have a dispatch today
-        company_ids = [
-            row[0] for row in
-            db.query(TruckAssignment.company_id)
-            .filter(TruckAssignment.date == today)
-            .distinct()
-            .all()
-        ]
-
-        if not company_ids:
-            return {"status": "skipped", "reason": "no dispatch for today", "date": str(today)}
-
+        tz_map = fetch_company_timezones(db)
         total_recipients = 0
-        message = (
-            f"⏰ Dispatch finalization deadline is at 09:10 AM. "
-            f"Please confirm all assignments and click 'Finalize' to publish crew assignments to Discord. "
-            f"Date: {today}"
-        )
+        alerted_companies = []
 
-        for company_id in company_ids:
+        for company_id, tz in tz_map.items():
+            today = task_today(tz)
+
+            has_dispatch = db.query(TruckAssignment).filter(
+                TruckAssignment.company_id == company_id,
+                TruckAssignment.date == today,
+            ).first()
+            if not has_dispatch:
+                continue
+
+            message = (
+                f"⏰ Dispatch finalization deadline is at 09:10 AM. "
+                f"Please confirm all assignments and click 'Finalize' to publish crew assignments to Discord. "
+                f"Date: {today}"
+            )
+
             recipients = db.query(Employee).filter(
                 Employee.company_id == company_id,
                 Employee.role.in_(["dispatch", "admin"]),
@@ -68,18 +66,20 @@ def alert_finalization_deadline() -> dict:
                 ))
 
             total_recipients += len(recipients)
+            alerted_companies.append((company_id, today, message))
 
         db.commit()
 
-        # Forward per-company alert to the bot
-        for company_id in company_ids:
+        for company_id, today, message in alerted_companies:
             _post_bot_alert(str(today), message, str(company_id))
+
+        if not alerted_companies:
+            return {"status": "skipped", "reason": "no dispatch for today across any company"}
 
         return {
             "status": "alerted",
-            "date": str(today),
             "recipients": total_recipients,
-            "companies": len(company_ids),
+            "companies": len(alerted_companies),
         }
     finally:
         db.close()

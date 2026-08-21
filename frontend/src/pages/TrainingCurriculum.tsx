@@ -14,7 +14,17 @@ interface CurriculumItem {
   category: string | null;
   is_mandatory: boolean;
   record_type: string;
+  /** Training track(s) this item belongs to (ADR-263). A shared item carries both. */
+  roles: string[];
 }
+
+type TrackFilter = 'all' | 'walker' | 'driver';
+
+const TRACK_LABEL: Record<TrackFilter, string> = {
+  all: 'All tracks',
+  walker: 'Walker',
+  driver: 'Driver',
+};
 
 const PHASE_LABELS: Record<number, string> = {
   1: 'Phase 1 — Orientation & Setup',
@@ -28,8 +38,15 @@ const CATEGORY_BADGE: Record<string, string> = {
   policy: 'badge-warning',
   delivery_standards: 'badge-success',
   delivery_types: 'badge-success',
-  scorecard: 'badge-error',
-  observation: 'bg-purple-500/20 text-purple-400',
+  // `badge-danger`, not `badge-error` — the latter is not defined in index.css and
+  // rendered unstyled.
+  scorecard: 'badge-danger',
+  // Token-backed badges rather than raw Tailwind palette utilities. `bg-amber-500`
+  // bypasses the token layer exactly as a hex literal does: it does not follow a
+  // palette change and the contrast gate cannot see it.
+  vehicle_safety: 'badge-gold',
+  crew_ops: 'badge-teal',
+  observation: 'badge-slate',
 };
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -38,6 +55,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   delivery_standards: 'Delivery Standards',
   delivery_types: 'Delivery Types',
   scorecard: 'Scorecard',
+  vehicle_safety: 'Vehicle & Safety',
+  crew_ops: 'Load & Crew Ops',
   observation: 'Observation',
 };
 
@@ -46,6 +65,7 @@ export default function TrainingCurriculum() {
   const [loading, setLoading] = useState(true);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [track, setTrack] = useState<TrackFilter>('all');
 
   const load = () => {
     setLoading(true);
@@ -58,13 +78,20 @@ export default function TrainingCurriculum() {
 
   useEffect(() => { load(); }, []);
 
+  // Track filter (ADR-263). Applied before every downstream derivation — the
+  // Phase 4 preview especially, since an unfiltered preview shows a mixed
+  // walker+driver checklist that matches no real trainee's Phase 4.
+  const visible = track === 'all'
+    ? items
+    : items.filter(i => i.roles?.includes(track));
+
   const byPhase = [1, 2, 3].reduce<Record<number, CurriculumItem[]>>((acc, phase) => {
-    acc[phase] = items.filter(i => i.day_number === phase);
+    acc[phase] = visible.filter(i => i.day_number === phase);
     return acc;
   }, {});
 
-  // Phase 4 preview — mandatory items from phases 1–3
-  const phase4Preview = items.filter(i => i.is_mandatory && i.day_number <= 3);
+  // Phase 4 preview — mandatory items from phases 1–3, for the selected track.
+  const phase4Preview = visible.filter(i => i.is_mandatory && i.day_number <= 3);
 
   if (loading) {
     return (
@@ -82,11 +109,29 @@ export default function TrainingCurriculum() {
       <SectionHeader
         eyebrow="Admin"
         title="Training Curriculum"
-        description="4-phase walker training curriculum. Phase 4 observation checklist is auto-generated from all mandatory Phase 1–3 topics at dispatch time."
+        description="4-phase training curriculum for the walker and driver tracks. Phase 4 observation checklist is auto-generated from all mandatory Phase 1–3 topics at dispatch time."
         actions={
-          <button onClick={load} className="btn-ghost flex items-center gap-2 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg overflow-hidden border border-white/10" role="group" aria-label="Filter by training track">
+              {(['all', 'walker', 'driver'] as TrackFilter[]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setTrack(t)}
+                  aria-pressed={track === t}
+                  className={`px-3 py-1.5 text-sm transition-colors ${
+                    track === t
+                      ? 'bg-white/15 text-white'
+                      : 'text-muted-foreground hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  {TRACK_LABEL[t]}
+                </button>
+              ))}
+            </div>
+            <button onClick={load} className="btn-ghost flex items-center gap-2 text-sm">
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         }
       />
 

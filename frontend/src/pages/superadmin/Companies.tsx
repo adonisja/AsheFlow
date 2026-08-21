@@ -1,3 +1,4 @@
+import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -25,6 +26,9 @@ interface Company {
   is_active: boolean;
   created_at: string;
   has_admin: boolean;
+  /** ADR-280 — is this tenant's data real? Super admin is the one
+   *  cross-tenant surface, so it is the one place this has to show. */
+  data_class: 'live' | 'seed' | 'demo';
 }
 
 interface BootstrapResult {
@@ -72,8 +76,8 @@ function CreateCompanyForm({
       });
       onCreated(res.data);
       onClose();
-    } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Failed to create company.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Failed to create company.'));
     } finally {
       setSaving(false);
     }
@@ -183,8 +187,8 @@ function BootstrapForm({ companyId, onDone }: { companyId: string; onDone: (r: B
       onDone(res.data);
       setOpen(false);
       setName(''); setEmail('');
-    } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Bootstrap failed.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Bootstrap failed.'));
     } finally {
       setSaving(false);
     }
@@ -309,6 +313,14 @@ function CompanyRow({
               {!company.has_admin && (
                 <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-warning/10 text-warning font-medium">
                   <UserX className="w-3 h-3" /> No admin
+                </span>
+              )}
+              {/* Only non-live tenants are marked. Badging every live company
+                  would make the common case noisy and the exception invisible
+                  — the opposite of what this is for. */}
+              {company.data_class !== 'live' && (
+                <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-info/10 text-info font-medium uppercase tracking-wide">
+                  {company.data_class}
                 </span>
               )}
             </div>
