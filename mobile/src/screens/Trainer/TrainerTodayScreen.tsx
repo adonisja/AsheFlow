@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import ScreenShell from '@components/ui/ScreenShell';
 import apiClient from '@api/client';
+import OreDayCard from '@components/training/OreDayCard';
 import { errorText } from '@api/errorText';
 import { useAuth } from '@contexts/AuthContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
@@ -32,6 +33,10 @@ type Session = {
   handoff_notes: string | null;
   is_locked: boolean;
   submitted_at: string | null;
+  // ADR-281 phase 0
+  ore_completed_at: string | null;
+  has_certificate: boolean;
+  left_early: boolean;
 };
 
 type ContinuationRequest = {
@@ -109,6 +114,9 @@ export default function TrainerTodayScreen() {
         handoff_notes:   record.trainer_comments ?? null,
         is_locked:       record.is_locked ?? false,
         submitted_at:    record.submitted_at ?? null,
+        ore_completed_at: record.ore_completed_at ?? null,
+        has_certificate:  record.has_certificate ?? false,
+        left_early:       record.left_early ?? false,
       });
       // Input starts EMPTY: the existing note renders in the "Already on file"
       // block, and the backend APPENDS comments — pre-filling the input with
@@ -263,6 +271,25 @@ export default function TrainerTodayScreen() {
           </View>
           <Text style={s.progressCaption}>{Math.round(progress * 100)}% complete</Text>
         </View>
+      )}
+
+      {/* ADR-281: the ORE day. The trainer can upload on the trainee's behalf
+          — a new hire on their first day may not have the app working yet,
+          which is one of the three things this phase exists to fix — and
+          records the departure, since a trainee does not mark their own
+          pay-affecting attendance. */}
+      {session && session.phase === 0 && (
+        <OreDayCard
+          c={c}
+          state={{
+            recordId:       session.record_id,
+            oreCompletedAt: session.ore_completed_at,
+            hasCertificate: session.has_certificate,
+            leftEarly:      session.left_early,
+          }}
+          canMarkLeftEarly
+          onChanged={load}
+        />
       )}
 
       {/* Continuation requests — trainees asking to keep this trainer (ADR-012).

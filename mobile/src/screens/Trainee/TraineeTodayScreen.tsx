@@ -8,6 +8,7 @@ import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
+import OreDayCard from '@components/training/OreDayCard';
 
 type Task = { id: string; topic_title: string; description?: string; is_completed: boolean; is_training_debt?: boolean };
 type TodayData = {
@@ -18,6 +19,10 @@ type TodayData = {
   trainer_name: string | null;
   trainer_rating: number | null;
   tasks: Task[];
+  // ADR-281 phase 0
+  ore_completed_at: string | null;
+  has_certificate: boolean;
+  left_early: boolean;
 };
 
 export default function TraineeTodayScreen() {
@@ -95,6 +100,9 @@ export default function TraineeTodayScreen() {
         trainer_name,
         trainer_rating: today.trainer_rating ?? null,
         tasks: today.tasks ?? [],
+        ore_completed_at: today.ore_completed_at ?? null,
+        has_certificate:  today.has_certificate ?? false,
+        left_early:       today.left_early ?? false,
       });
 
       // Restore "request sent" across refreshes — an active (pending/accepted)
@@ -221,6 +229,24 @@ export default function TraineeTodayScreen() {
       )}
 
       {/* Carry-over tasks */}
+      {/* ADR-281: the ORE day. Renders above the task list because the course
+          is the day's headline — the three curriculum items are what the
+          TRAINER covers alongside it. */}
+      {data?.phase === 0 && (
+        <OreDayCard
+          c={c}
+          state={{
+            recordId:       data.record_id,
+            oreCompletedAt: data.ore_completed_at,
+            hasCertificate: data.has_certificate,
+            leftEarly:      data.left_early,
+          }}
+          // A trainee does not mark their own pay-affecting attendance.
+          canMarkLeftEarly={false}
+          onChanged={fetch}
+        />
+      )}
+
       {debtTasks.length > 0 && (
         <ReadOnlyGroup
           label="Carry-over Tasks"

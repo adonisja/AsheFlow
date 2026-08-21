@@ -1,6 +1,7 @@
 import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
+import OreRecordRow from '../../components/training/OreRecordRow';
 import {
   Users, Loader2, AlertTriangle, RefreshCw, ChevronRight,
   X, Calendar, Star, ClipboardList, UserCheck, KeyRound, Eye, EyeOff,
@@ -476,6 +477,14 @@ function HistoryView({
                           Locked
                         </span>
                       </div>
+
+                      {/* ADR-281: the ORE day. Only phase 0 has a certificate,
+                          and only management can open it — many people submit
+                          evidence, few should read someone else's training
+                          document. */}
+                      {record.current_day_number === 0 && (
+                        <OreRecordRow record={record} />
+                      )}
 
                       {/* Tasks */}
                       <div className="text-sm space-y-2 px-1">

@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from uuid import UUID
 from datetime import date, datetime
 
@@ -51,7 +51,30 @@ class TrainingRecordResponse(TrainingRecordBase):
     
     tasks: List[TrainingTaskResponse] = []
 
+    # ── ADR-281: phase 0 (the ORE day) ──────────────────────────────────────
+    # ore_completed_at is the DURABLE attestation; ore_certificate_key is not
+    # serialized at all — an S3 key is an internal locator, and a client that
+    # has one has a thing to guess at. The UI asks "is there a certificate?"
+    # (has_certificate) and fetches a short-lived URL when a manager wants it.
+    ore_completed_at: Optional[datetime] = None
+    ore_certificate_expires_at: Optional[datetime] = None
+    has_certificate: bool = False
+    left_early: bool = False
+    left_early_at: Optional[datetime] = None
+
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def _derive_has_certificate(self):
+        """True only while the FILE is still retrievable.
+
+        Derived rather than stored so the three states stay distinguishable:
+          never uploaded  -> ore_completed_at None,     has_certificate False
+          expired         -> ore_completed_at set,      has_certificate False
+          available       -> ore_completed_at set,      has_certificate True
+        """
+        self.has_certificate = bool(self.ore_certificate_expires_at)
+        return self
 
 class TrainerCommentCreate(BaseModel):
     comments: str = Field(..., max_length=2000)
