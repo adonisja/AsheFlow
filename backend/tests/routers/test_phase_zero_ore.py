@@ -28,7 +28,12 @@ def _code_only(obj) -> str:
     """
     src = inspect.getsource(obj)
     lines = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
-    return "\n".join(ln.split("#")[0] for ln in lines)
+    code = "\n".join(ln.split("#")[0] for ln in lines)
+    # Docstrings too. A function that explains WHY it avoids something names
+    # that thing in prose, and an absence assertion reads the explanation as
+    # the offence — the same trap, one layer up from `#` comments.
+    parts = code.split('"""')
+    return "".join(parts[::2]) if len(parts) > 2 else code
 
 
 class TestRoutes:
@@ -141,11 +146,11 @@ class TestLeftEarlyIsNotAMark:
 
     def test_it_never_touches_the_scorecard(self):
         """ADR-281 D5: a permitted choice must not become a performance signal."""
-        # Code only — the docstring explains D5 by NAMING the scorecard.
+        # _code_only already strips the docstring, which explains D5 by NAMING
+        # the scorecard — no second pass needed.
         src = _code_only(tr.mark_left_early)
-        body = src[src.index('"""', src.index('"""') + 3) + 3:]  # past the docstring
         for forbidden in ("Scorecard", "scorecard", "appeal", "penalty", "infraction"):
-            assert forbidden not in body
+            assert forbidden not in src
 
     def test_no_programme_wide_counter_exists(self):
         """A tally is a judgement waiting for a threshold. Each phase-0 day
@@ -273,3 +278,64 @@ class TestPhaseZeroCurriculum:
 
         src = _code_only(training_injection)
         assert "current_phase = 0 if curriculum_by_phase.get(0) else 1" in src
+
+
+class TestStayingStartsPhaseOne:
+    """ORE is not a full day's work (operator, 2026-08-21).
+
+    A trainee who stays goes on to phase 1 THAT AFTERNOON rather than waiting
+    for the next dispatch day — so two records share the date on purpose.
+    """
+
+    def test_endpoint_registered(self):
+        assert "/api/v1/training/record/{record_id}/ore-stayed" in app.openapi()["paths"]
+
+    def test_it_does_not_route_through_the_injector(self):
+        """training_injection DELETES any existing record for the date and
+        rebuilds it. Here that would destroy the phase-0 record and the ORE
+        attestation on it."""
+        src = _code_only(tr.stay_after_ore)
+        assert "inject" not in src.lower()
+        assert "db.delete(" not in src
+
+    def test_it_requires_the_certificate_first(self):
+        """Phase 1 starting without ORE recorded would mean the day advanced
+        on nothing."""
+        src = _code_only(tr.stay_after_ore)
+        assert "ore_completed_at is None" in src
+
+    def test_it_refuses_when_they_already_left(self):
+        src = _code_only(tr.stay_after_ore)
+        assert "record.left_early" in src
+
+    def test_it_is_idempotent(self):
+        """A second tap must not create a second phase-1 record for the day."""
+        src = _code_only(tr.stay_after_ore)
+        assert "TrainingRecord.current_day_number == 1" in src
+        assert '"created": False' in src
+
+    def test_the_new_record_gets_phase_one_tasks(self):
+        """Without tasks the record carries no mandatory work and closes
+        trivially — the silent-empty-phase failure training_injection warns
+        about."""
+        src = _code_only(tr.stay_after_ore)
+        assert "TrainingCurriculum" in src
+        assert "day_number == 1" in src
+        assert "TrainingTask(" in src
+
+    def test_it_respects_the_trainees_track(self):
+        """A driver_trainee gets driver items, not walker ones (ADR-263)."""
+        src = _code_only(tr.stay_after_ore)
+        assert "driver_trainee" in src
+        assert "item.roles" in src
+
+    def test_every_query_is_company_scoped(self):
+        src = _code_only(tr.stay_after_ore)
+        assert src.count("db.query(") == src.count("company_id == caller.company_id")
+
+    def test_the_flag_hides_the_choice_once_taken(self):
+        """phase_one_started drives whether the ORE card still offers
+        stay-or-leave; without it the buttons never disappear."""
+        from app.schemas.training import TrainingRecordResponse
+
+        assert "phase_one_started" in TrainingRecordResponse.model_fields

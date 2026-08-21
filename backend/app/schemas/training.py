@@ -61,6 +61,10 @@ class TrainingRecordResponse(TrainingRecordBase):
     has_certificate: bool = False
     left_early: bool = False
     left_early_at: Optional[datetime] = None
+    # True once a phase-1 record exists for the SAME date — the trainee stayed
+    # after ORE. Set by the reader that knows about sibling records; the model
+    # itself cannot see them.
+    phase_one_started: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

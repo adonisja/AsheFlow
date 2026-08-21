@@ -37,6 +37,7 @@ type Session = {
   ore_completed_at: string | null;
   has_certificate: boolean;
   left_early: boolean;
+  phase_one_started: boolean;
 };
 
 type ContinuationRequest = {
@@ -117,6 +118,7 @@ export default function TrainerTodayScreen() {
         ore_completed_at: record.ore_completed_at ?? null,
         has_certificate:  record.has_certificate ?? false,
         left_early:       record.left_early ?? false,
+        phase_one_started: record.phase_one_started ?? false,
       });
       // Input starts EMPTY: the existing note renders in the "Already on file"
       // block, and the backend APPENDS comments — pre-filling the input with
@@ -286,6 +288,7 @@ export default function TrainerTodayScreen() {
             oreCompletedAt: session.ore_completed_at,
             hasCertificate: session.has_certificate,
             leftEarly:      session.left_early,
+            phaseOneStarted: session.phase_one_started,
           }}
           canMarkLeftEarly
           onChanged={load}

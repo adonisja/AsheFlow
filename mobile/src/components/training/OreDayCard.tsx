@@ -30,6 +30,8 @@ export type OreState = {
   oreCompletedAt: string | null;
   hasCertificate: boolean;
   leftEarly: boolean;
+  /** A phase-1 record already exists for the same date. */
+  phaseOneStarted: boolean;
 };
 
 export default function OreDayCard({
@@ -146,6 +148,22 @@ export default function OreDayCard({
     );
   };
 
+  const markStayed = async () => {
+    setBusy(true);
+    try {
+      await apiClient.post(`/training/record/${state.recordId}/ore-stayed`);
+      Alert.alert(
+        'Phase 1 started',
+        'ORE is done and phase 1 has begun for the rest of today.',
+      );
+      onChanged();
+    } catch (e) {
+      Alert.alert('Failed', errorText(e, 'Could not start phase 1.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const done = !!state.oreCompletedAt;
 
   return (
@@ -198,17 +216,35 @@ export default function OreDayCard({
             </Text>
           </TouchableOpacity>
 
-          {/* Only offered once ORE is done — "leaving early" is a choice that
-              exists AFTER the course, not instead of it. */}
-          {canMarkLeftEarly && done && !state.leftEarly && (
-            <TouchableOpacity
-              onPress={markLeftEarly}
-              style={[s.btnGhost, { borderColor: c.border }]}
-            >
-              <Text style={[s.btnGhostText, { color: c.foreground }]}>
-                Record leaving for the day
-              </Text>
-            </TouchableOpacity>
+          {/* Both outcomes, offered only once ORE is done — either choice
+              exists AFTER the course, not instead of it. ORE is not a full
+              day's work: a trainee who stays starts phase 1 the same
+              afternoon rather than waiting for the next dispatch day. */}
+          {canMarkLeftEarly && done && !state.leftEarly && !state.phaseOneStarted && (
+            <>
+              <TouchableOpacity
+                onPress={markStayed}
+                style={[s.btn, { backgroundColor: c.success }]}
+              >
+                <Text style={[s.btnText, { color: c.primaryForeground }]}>
+                  Staying — start phase 1
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={markLeftEarly}
+                style={[s.btnGhost, { borderColor: c.border }]}
+              >
+                <Text style={[s.btnGhostText, { color: c.foreground }]}>
+                  Leaving for the day
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {state.phaseOneStarted && (
+            <Text style={[s.note, { color: c.success }]}>
+              Phase 1 started for the rest of today.
+            </Text>
           )}
 
           {state.leftEarly && (

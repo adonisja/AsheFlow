@@ -23,6 +23,7 @@ type TodayData = {
   ore_completed_at: string | null;
   has_certificate: boolean;
   left_early: boolean;
+  phase_one_started: boolean;
 };
 
 export default function TraineeTodayScreen() {
@@ -103,6 +104,7 @@ export default function TraineeTodayScreen() {
         ore_completed_at: today.ore_completed_at ?? null,
         has_certificate:  today.has_certificate ?? false,
         left_early:       today.left_early ?? false,
+        phase_one_started: today.phase_one_started ?? false,
       });
 
       // Restore "request sent" across refreshes — an active (pending/accepted)
@@ -240,6 +242,7 @@ export default function TraineeTodayScreen() {
             oreCompletedAt: data.ore_completed_at,
             hasCertificate: data.has_certificate,
             leftEarly:      data.left_early,
+            phaseOneStarted: data.phase_one_started,
           }}
           // A trainee does not mark their own pay-affecting attendance.
           canMarkLeftEarly={false}
