@@ -27,13 +27,26 @@ import GraduationQuizReview from './pages/GraduationQuizReview';
 import OperationsAnalytics from './pages/OperationsAnalytics';
 import DriverSurveys from './pages/DriverSurveys';
 import AnchorPoints from './pages/AnchorPoints';
+import CrewStatus from './pages/CrewStatus';
+import CaptainDashboard from './pages/CaptainDashboard';
+import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
+// TEMPORARY design-review route for the ADR-271 drill-down mock. Remove with
+// the mock once the wired version lands.
 import AuditLog from './pages/AuditLog';
-import LocationProfiles from './pages/LocationProfiles';
 import SortPage from './pages/Sort';
+import SortMetricsPage from './pages/SortMetrics';
+import { routeRoles } from './config/navConfig';
+import PrintLoadSheets from './pages/PrintLoadSheets';
+import ReturnsManifestPrint from './pages/ReturnsManifestPrint';
 import WalkerSortMonitor from './pages/WalkerSort';
+import NotificationsHistory from './pages/NotificationsHistory';
+import MyRoute from './pages/MyRoute';
+import BuildingProfilesPage from './pages/BuildingProfiles';
+import TruckBuildingsPage from './pages/TruckBuildings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { NotificationProvider } from './contexts/NotificationContext';
 import SuperAdminLayout from './components/layout/SuperAdminLayout';
 import Companies from './pages/superadmin/Companies';
 import CompanyDetail from './pages/superadmin/CompanyDetail';
@@ -46,6 +59,11 @@ import DispatchView from './components/dashboard/DispatchView';
 import ManagementView from './components/dashboard/ManagementView';
 import WorkerView from './components/dashboard/WorkerView';
 import { Users, Calendar } from 'lucide-react';
+import CompanyStandingCard from './components/CompanyStandingCard';
+import ScorecardAppeals from './pages/ScorecardAppeals';
+import ScorecardRoster from './pages/ScorecardRoster';
+import Scorecards from './pages/Scorecards';
+import FieldPackages from './pages/FieldPackages';
 
 
 const ProtectedRoute = ({ children, allowedRoles = [] }: { children: React.ReactNode, allowedRoles?: string[] }) => {
@@ -94,6 +112,7 @@ function RoleRedirect() {
   if (groups.includes('admin'))       return <Navigate to={isConfigured ? '/admin' : '/setup'} replace />;
   if (groups.includes('dispatch'))    return <Navigate to="/dispatch-home" replace />;
   if (groups.includes('management'))  return <Navigate to="/management" replace />;
+  if (groups.includes('captain'))     return <Navigate to="/captain-dashboard" replace />;
   if (groups.includes('trainer'))     return <Navigate to="/trainer-dashboard" replace />;
   if (groups.includes('trainee'))     return <Navigate to="/my-training" replace />;
   return <Dashboard />;
@@ -127,6 +146,9 @@ function Dashboard() {
 
   return (
     <div className="space-y-8 animate-slide-up">
+      {/* Tier 1 — company standing, visible to every role */}
+      <CompanyStandingCard />
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -185,6 +207,7 @@ function Dashboard() {
 function App() {
   return (
     <AuthProvider>
+      <NotificationProvider>
       <Router>
         <Routes>
           <Route path="/login"    element={<Login />} />
@@ -233,20 +256,20 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin']}><Schedule /></ProtectedRoute>} />
+            <Route path="/schedule" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'management', 'admin', 'captain']}><Schedule /></ProtectedRoute>} />
             {/* field-ops: drivers submit; trainers/trainees see AP card; walkers see self-performance; oversight roles see summary */}
-            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><FieldOps /></ProtectedRoute>} />
+            <Route path="/field-ops" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}><FieldOps /></ProtectedRoute>} />
             {/* schedule-changes: dispatch excluded — not their job */}
             <Route
               path="/schedule-changes"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'admin', 'captain']}>
                   <ScheduleChanges />
                 </ProtectedRoute>
               }
             />
             {/* incidents: all authenticated roles can file or view incidents */}
-            <Route path="/incidents" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}><Incidents /></ProtectedRoute>} />
+            <Route path="/incidents" element={<ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}><Incidents /></ProtectedRoute>} />
             <Route
               path="/preferences"
               element={
@@ -260,6 +283,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Account />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/notifications"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                  <NotificationsHistory />
                 </ProtectedRoute>
               }
             />
@@ -402,39 +433,143 @@ function App() {
             <Route
               path="/anchor-points"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin', 'captain']}>
                   <AnchorPoints />
                 </ProtectedRoute>
               }
             />
+            <Route path="/captain-dashboard" element={<ProtectedRoute allowedRoles={['captain', 'admin']}><CaptainDashboard /></ProtectedRoute>} />
             <Route
-              path="/location-profiles"
+              path="/crew-status"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
-                  <LocationProfiles />
+                <ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain']}>
+                  <CrewStatus />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-245 lookup now lives as a TAB of Field Packages — the three
+                package operations are one job for one person. Redirect rather than
+                delete: this path has been in the nav, so bookmarks and older links
+                exist and should land somewhere useful instead of a 404. */}
+            <Route path="/package-lookup" element={<Navigate to="/field-packages" replace />} />
+            {/* ADR-246 — field-added package oversight + manual assignment.
+                Dispatch-readable BY DESIGN: GET /audit is management+admin, so
+                pointing dispatch at the audit log would not actually work. */}
+            <Route
+              path="/field-packages"
+              element={
+                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
+                  <FieldPackages />
+                </ProtectedRoute>
+              }
+            />
+            {/* Consolidated Scorecards tab. The four sub-views keep their own
+                routes below so existing links and the "Open in Appeals" deep
+                link stay valid; only the NAV collapsed to one entry. */}
+            <Route
+              path="/scorecards"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin', 'dispatch']}>
+                  <Scorecards />
+                </ProtectedRoute>
+              }
+            />
+            {/* Tier 3 — individual scorecards; dispatch excluded (ADR-242) */}
+            <Route
+              path="/scorecard-roster"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <ScorecardRoster />
+                </ProtectedRoute>
+              }
+            />
+            {/* Tier 4 — appeals reach individual scorecard data, so management+admin only */}
+            <Route
+              path="/scorecard-appeals"
+              element={
+                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                  <ScorecardAppeals />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/scorecard-entry"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'management']}>
+                  <ScorecardEntry />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/building-profiles"
+              element={
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'driver', 'dispatch', 'management', 'admin', 'captain']}>
+                  <BuildingProfilesPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/my-truck-buildings"
+              element={
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
+                  <TruckBuildingsPage />
                 </ProtectedRoute>
               }
             />
             <Route
               path="/sort"
               element={
-                <ProtectedRoute allowedRoles={['trainer', 'dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
                   <SortPage />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-273. Roles come from navConfig so the tab and the gate cannot
+                drift — the failure the 2026-07-03 access audit fixed. */}
+            <Route
+              path="/sort-metrics"
+              element={
+                <ProtectedRoute allowedRoles={routeRoles('/sort-metrics')}>
+                  <SortMetricsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sort/print"
+              element={
+                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin']}>
+                  <PrintLoadSheets />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/sort/returns-print"
+              element={
+                <ProtectedRoute allowedRoles={['dispatch', 'management', 'admin']}>
+                  <ReturnsManifestPrint />
                 </ProtectedRoute>
               }
             />
             <Route
               path="/walker-sort"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'dispatch', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
                   <WalkerSortMonitor />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/my-route"
+              element={
+                <ProtectedRoute allowedRoles={['walker', 'trainee']}>
+                  <MyRoute />
                 </ProtectedRoute>
               }
             />
             <Route
               path="/gear"
               element={
-                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin']}>
+                <ProtectedRoute allowedRoles={['driver', 'walker', 'trainer', 'trainee', 'dispatch', 'management', 'admin', 'captain']}>
                   <GearRequest />
                 </ProtectedRoute>
               }
@@ -457,6 +592,7 @@ function App() {
 
         </Routes>
       </Router>
+      </NotificationProvider>
     </AuthProvider>
   );
 }

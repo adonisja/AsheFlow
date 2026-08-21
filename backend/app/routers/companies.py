@@ -14,6 +14,7 @@ from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
 from app.services.company_config import _REQUIRED_FIELDS
 from app.core.config import settings
 from app.database import get_db
+from app.services.audit import write_audit, super_admin_identity
 from app.models.company import Company, CompanyConfig
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
@@ -60,6 +61,12 @@ class CompanyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     has_admin: bool = False
+    # ADR-280 D5: super admin is the ONE surface that spans tenants, so it is
+    # the one place this has to be visible. Every other analytics endpoint is
+    # already scoped to caller.company_id — a user inside a seed tenant seeing
+    # seeded numbers is correct, not contamination, and filtering those queries
+    # on data_class would return nothing at all for those users.
+    data_class: str = "live"
 
     model_config = {"from_attributes": True}
 
@@ -130,15 +137,34 @@ class CompanyConfigResponse(BaseModel):
     dispatch_weight_cap:              Optional[float]
     flag_threshold:                   Optional[float]
     driver_checkin_count:             Optional[int]
-    tier1_dbscan_eps:                 Optional[float]
-    tier1_dbscan_min_samples:         Optional[int]
-    tier1_small_tote_cutoff:          Optional[int]
-    tier1_small_stray_max:            Optional[int]
-    tier1_small_uncertain_max:        Optional[int]
-    tier1_stray_pct:                  Optional[float]
-    tier1_uncertain_pct:              Optional[float]
-    location_profile_lock_threshold:  Optional[int]
+    late_window_minutes:              Optional[int]
+    ncns_cutoff_minutes:              Optional[int]
+    effort_time_factor:               Optional[float]
+    effort_physical_factor:           Optional[float]
     ingestion_mode:                   Optional[str]
+    # Scorecard tier targets (ADR-262). None = not configured.
+    scorecard_dcr_target:             Optional[float] = None
+    scorecard_dnr_dpmo_target:        Optional[int]   = None
+    scorecard_pod_target:             Optional[float] = None
+    scorecard_cc_target:              Optional[float] = None
+    scorecard_cdf_target:             Optional[float] = None
+    scorecard_dsb_dpmo_target:        Optional[int]   = None
+    scorecard_fico_target:            Optional[int]   = None
+    scorecard_speeding_rate_target:   Optional[float] = None
+    scorecard_signsignal_rate_target: Optional[float] = None
+    scorecard_dvic_target:            Optional[float] = None
+    # Route-sort tuning (ADR-273). None = using the code default.
+    sort_w_dense:                     Optional[float] = None
+    sort_w_time:                      Optional[float] = None
+    sort_w_diff:                      Optional[float] = None
+    sort_w_doorman:                   Optional[float] = None
+    sort_walk_budget_m:               Optional[float] = None
+    sort_span_cap_m:                  Optional[float] = None
+    sort_max_consecutive_no_fit:      Optional[int]   = None
+    sort_f5_load_floor_hs:            Optional[int]   = None
+    sort_f5_max_hops:                 Optional[int]   = None
+    sort_f5_walk_radius_km:           Optional[float] = None
+    route_assembly_mode:              Optional[str]   = None
 
     model_config = {"from_attributes": True}
 
@@ -173,15 +199,32 @@ class CompanyConfigResponse(BaseModel):
             dispatch_weight_cap=obj.dispatch_weight_cap,
             flag_threshold=obj.flag_threshold,
             driver_checkin_count=obj.driver_checkin_count,
-            tier1_dbscan_eps=obj.tier1_dbscan_eps,
-            tier1_dbscan_min_samples=obj.tier1_dbscan_min_samples,
-            tier1_small_tote_cutoff=obj.tier1_small_tote_cutoff,
-            tier1_small_stray_max=obj.tier1_small_stray_max,
-            tier1_small_uncertain_max=obj.tier1_small_uncertain_max,
-            tier1_stray_pct=obj.tier1_stray_pct,
-            tier1_uncertain_pct=obj.tier1_uncertain_pct,
-            location_profile_lock_threshold=obj.location_profile_lock_threshold,
+            late_window_minutes=obj.late_window_minutes,
+            ncns_cutoff_minutes=obj.ncns_cutoff_minutes,
+            effort_time_factor=obj.effort_time_factor,
+            effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
+            scorecard_dcr_target=obj.scorecard_dcr_target,
+            scorecard_dnr_dpmo_target=obj.scorecard_dnr_dpmo_target,
+            scorecard_pod_target=obj.scorecard_pod_target,
+            scorecard_cc_target=obj.scorecard_cc_target,
+            scorecard_cdf_target=obj.scorecard_cdf_target,
+            scorecard_dsb_dpmo_target=obj.scorecard_dsb_dpmo_target,
+            scorecard_fico_target=obj.scorecard_fico_target,
+            scorecard_speeding_rate_target=obj.scorecard_speeding_rate_target,
+            scorecard_signsignal_rate_target=obj.scorecard_signsignal_rate_target,
+            scorecard_dvic_target=obj.scorecard_dvic_target,
+            sort_w_dense=obj.sort_w_dense,
+            sort_w_time=obj.sort_w_time,
+            sort_w_diff=obj.sort_w_diff,
+            sort_w_doorman=obj.sort_w_doorman,
+            sort_walk_budget_m=obj.sort_walk_budget_m,
+            sort_span_cap_m=obj.sort_span_cap_m,
+            sort_max_consecutive_no_fit=obj.sort_max_consecutive_no_fit,
+            sort_f5_load_floor_hs=obj.sort_f5_load_floor_hs,
+            sort_f5_max_hops=obj.sort_f5_max_hops,
+            sort_f5_walk_radius_km=obj.sort_f5_walk_radius_km,
+            route_assembly_mode=obj.route_assembly_mode,
         )
 
 
@@ -192,6 +235,7 @@ class DiscordConfigUpdate(BaseModel):
     discord_guild_id:            Optional[int] = None
     discord_drivers_channel_id:  Optional[int] = None
     discord_trainers_channel_id: Optional[int] = None
+    discord_captains_channel_id: Optional[int] = None
     discord_general_channel_id:  Optional[int] = None
     discord_invite_channel_id:   Optional[int] = None
     discord_role_admin:          Optional[int] = None
@@ -200,26 +244,40 @@ class DiscordConfigUpdate(BaseModel):
     discord_role_bot:            Optional[int] = None
     discord_role_dispatch:       Optional[int] = None
     discord_role_driver:         Optional[int] = None
+    discord_role_trainer:        Optional[int] = None
     discord_role_captain:        Optional[int] = None
     discord_role_walker:         Optional[int] = None
 
 
 class DiscordConfigResponse(BaseModel):
-    discord_guild_id:            Optional[int]
-    discord_drivers_channel_id:  Optional[int]
-    discord_trainers_channel_id: Optional[int]
-    discord_general_channel_id:  Optional[int]
-    discord_invite_channel_id:   Optional[int]
-    discord_role_admin:          Optional[int]
-    discord_role_manager:        Optional[int]
-    discord_role_asheflow:       Optional[int]
-    discord_role_bot:            Optional[int]
-    discord_role_dispatch:       Optional[int]
-    discord_role_driver:         Optional[int]
-    discord_role_captain:        Optional[int]
-    discord_role_walker:         Optional[int]
+    discord_guild_id:            Optional[str] = None
+    discord_drivers_channel_id:  Optional[str] = None
+    discord_trainers_channel_id: Optional[str] = None
+    discord_captains_channel_id: Optional[str] = None
+    discord_general_channel_id:  Optional[str] = None
+    discord_invite_channel_id:   Optional[str] = None
+    discord_role_admin:          Optional[str] = None
+    discord_role_manager:        Optional[str] = None
+    discord_role_asheflow:       Optional[str] = None
+    discord_role_bot:            Optional[str] = None
+    discord_role_dispatch:       Optional[str] = None
+    discord_role_driver:         Optional[str] = None
+    discord_role_trainer:        Optional[str] = None
+    discord_role_captain:        Optional[str] = None
+    discord_role_walker:         Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_config(cls, config) -> "DiscordConfigResponse":
+        fields = [
+            "discord_guild_id", "discord_drivers_channel_id", "discord_trainers_channel_id",
+            "discord_captains_channel_id", "discord_general_channel_id", "discord_invite_channel_id",
+            "discord_role_admin", "discord_role_manager", "discord_role_asheflow",
+            "discord_role_bot", "discord_role_dispatch", "discord_role_driver",
+            "discord_role_trainer", "discord_role_captain", "discord_role_walker",
+        ]
+        return cls(**{f: str(getattr(config, f)) if getattr(config, f) is not None else None for f in fields})
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +315,15 @@ def create_company(
 
     db.add(CompanyConfig(company_id=company.id))
 
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.create",
+        target_table="companies",
+        target_id=str(company.id),
+        after={**super_admin_identity(_), "name": company.name, "slug": company.slug,
+               "amazon_dsp_code": company.amazon_dsp_code, "timezone": company.timezone},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -331,9 +398,19 @@ def update_company(
                 detail=f"A company with slug '{data['slug']}' already exists.",
             )
 
+    before = {k: getattr(company, k) for k in data}
     for field, value in data.items():
         setattr(company, field, value)
 
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.update",
+        target_table="companies",
+        target_id=str(company.id),
+        before=before,
+        after={**super_admin_identity(_), **data},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -392,6 +469,17 @@ def deactivate_company(
         raise HTTPException(status_code=400, detail="Company is already inactive.")
 
     company.is_active = False
+    # The highest-impact action in this router: every employee of the tenant
+    # loses access. Recording who and when is the point of an audit trail.
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.deactivate",
+        target_table="companies",
+        target_id=str(company.id),
+        before={"is_active": True},
+        after={**super_admin_identity(_), "is_active": False, "name": company.name},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -411,6 +499,15 @@ def reactivate_company(
         raise HTTPException(status_code=400, detail="Company is already active.")
 
     company.is_active = True
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.reactivate",
+        target_table="companies",
+        target_id=str(company.id),
+        before={"is_active": False},
+        after={**super_admin_identity(_), "is_active": True, "name": company.name},
+    )
     db.commit()
     db.refresh(company)
     return company
@@ -503,6 +600,18 @@ def bootstrap_company_admin(
     ))
 
     employee.invited_at = datetime.now(timezone.utc)
+    # Account provisioning: this creates the tenant's FIRST admin and the invite
+    # that grants them access. The token itself is never recorded — an audit row
+    # is readable by other admins, and a live invite token is a credential.
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company.bootstrap_admin",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={**super_admin_identity(_), "employee_id": str(employee.id), "role": employee.role,
+               "invite_expires_at": expires_at.isoformat()},
+    )
     db.commit()
     db.refresh(employee)
 
@@ -533,7 +642,18 @@ def bootstrap_company_admin(
 # ---------------------------------------------------------------------------
 
 # Fields only super_admin may touch
-_SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"})
+# ADR-273: route-sort tuning is super-admin only. These change how routes are
+# built for the entire tenant, and the telemetry that says which one to move is
+# only readable at that level — a company admin can see their routes, not the
+# cross-run series that justifies a weight change.
+_SORT_TUNING_FIELDS = frozenset({
+    "sort_w_dense", "sort_w_time", "sort_w_diff", "sort_w_doorman",
+    "sort_walk_budget_m", "sort_span_cap_m", "sort_max_consecutive_no_fit",
+    "sort_f5_load_floor_hs", "sort_f5_max_hops", "sort_f5_walk_radius_km",
+    "route_assembly_mode",
+})
+
+_SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"}) | _SORT_TUNING_FIELDS
 
 # All editable config fields with their types (used for validation messaging)
 _TIME_FIELDS = frozenset({"shift_start", "shift_end", "checkin_open", "checkin_close", "dispatch_confirmation_cutoff"})
@@ -588,20 +708,69 @@ class CompanyConfigUpdate(BaseModel):
     # Driver check-ins
     driver_checkin_count:            Optional[int]   = Field(None, ge=0, le=10)
 
-    # Tier 1 manifest verify (DBSCAN tote classification)
-    tier1_dbscan_eps:                Optional[float] = Field(None, ge=0.001, le=1.0)
-    tier1_dbscan_min_samples:        Optional[int]   = Field(None, ge=1, le=200)
-    tier1_small_tote_cutoff:         Optional[int]   = Field(None, ge=1, le=100)
-    tier1_small_stray_max:           Optional[int]   = Field(None, ge=0, le=20)
-    tier1_small_uncertain_max:       Optional[int]   = Field(None, ge=0, le=20)
-    tier1_stray_pct:                 Optional[float] = Field(None, ge=0.0, le=1.0)
-    tier1_uncertain_pct:             Optional[float] = Field(None, ge=0.0, le=1.0)
+    # Attendance (ADR-198/228)
+    late_window_minutes:             Optional[int]   = Field(None, ge=0, le=240)
+    ncns_cutoff_minutes:             Optional[int]   = Field(None, ge=1, le=480)
 
-    # Location profiles
-    location_profile_lock_threshold: Optional[int]  = Field(None, ge=1, le=50)
+    # Effort scoring
+    effort_time_factor:              Optional[float] = Field(None, ge=0.0, le=1.0)
+    effort_physical_factor:          Optional[float] = Field(None, ge=0.0, le=1.0)
 
     # Manifest ingestion
     ingestion_mode:                  Optional[str]   = None
+
+    # Route-sort tuning (ADR-273). Super-admin only — these change how routes
+    # are built for the whole tenant, and the telemetry that tells you which one
+    # to move is only readable at that level. Bounded per Dimension 9: every one
+    # is attacker-controlled input that feeds a hot algorithm loop.
+    #
+    # Weights: 0–5 is generous. The invariant that matters (W_TIME/W_DIFF above
+    # W_DENSE, so a KNOWN urgent block outranks the densest unknown-easy one) is
+    # not expressible as a per-field bound — it is validated below.
+    sort_w_dense:                    Optional[float] = Field(None, ge=0.0, le=5.0)
+    sort_w_time:                     Optional[float] = Field(None, ge=0.0, le=5.0)
+    sort_w_diff:                     Optional[float] = Field(None, ge=0.0, le=5.0)
+    sort_w_doorman:                  Optional[float] = Field(None, ge=0.0, le=5.0)
+    # Traversal guards. Floors are non-zero: a 0 m budget would close every
+    # route after its seed block.
+    sort_walk_budget_m:              Optional[float] = Field(None, ge=100.0, le=10000.0)
+    sort_span_cap_m:                 Optional[float] = Field(None, ge=100.0, le=10000.0)
+    sort_max_consecutive_no_fit:     Optional[int]   = Field(None, ge=1, le=20)
+    # F5 thin-block consolidation. load_floor is in HALF-slots (6 ≈ 3 totes).
+    sort_f5_load_floor_hs:           Optional[int]   = Field(None, ge=0, le=40)
+    sort_f5_max_hops:                Optional[int]   = Field(None, ge=1, le=6)
+    sort_f5_walk_radius_km:          Optional[float] = Field(None, ge=0.1, le=5.0)
+    # Route assembly mode (ADR-272): "block_completion" | "group_first".
+    # max_length in addition to the enum validator below: bounding the field is
+    # what stops an oversized string reaching the validator at all (Dimension 9).
+    route_assembly_mode:             Optional[str]   = Field(None, max_length=20)
+
+    @field_validator("route_assembly_mode")
+    @classmethod
+    def _valid_assembly_mode(cls, v):
+        if v is None:
+            return v
+        from app.services.sort_tuning import VALID_ASSEMBLY_MODES
+        if v not in VALID_ASSEMBLY_MODES:
+            raise ValueError(
+                f"route_assembly_mode must be one of {sorted(VALID_ASSEMBLY_MODES)}"
+            )
+        return v
+
+    # Amazon scorecard tier targets (ADR-262). Bounded per Dimension 9 — these
+    # are attacker-controlled input. Percentages 0–100; DPMO 0–1,000,000 (a
+    # defect rate cannot exceed one million per million); FICO on its real
+    # 100–850 scale; event rates per 100 trips capped generously at 1000.
+    scorecard_dcr_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_pod_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_cc_target:              Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_cdf_target:             Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_dvic_target:            Optional[float] = Field(None, ge=0.0, le=100.0)
+    scorecard_dnr_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
+    scorecard_dsb_dpmo_target:        Optional[int]   = Field(None, ge=0, le=1_000_000)
+    scorecard_fico_target:            Optional[int]   = Field(None, ge=100, le=850)
+    scorecard_speeding_rate_target:   Optional[float] = Field(None, ge=0.0, le=1000.0)
+    scorecard_signsignal_rate_target: Optional[float] = Field(None, ge=0.0, le=1000.0)
 
 
 def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, allow_super_admin_fields: bool = False) -> None:
@@ -622,6 +791,31 @@ def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, al
         if field in _TIME_FIELDS and value is not None:
             value = _parse_time(value, field)
         setattr(config, field, value)
+
+    # ADR-273: the seed-priority invariant is a RELATIONSHIP between weights, so
+    # it cannot be expressed as a per-field bound and has to be checked on the
+    # merged state (a PATCH may set only one of them).
+    #
+    # ADR-186 D3: W_TIME and W_DIFF sit ABOVE W_DENSE so a KNOWN urgent or hard
+    # block outranks the densest unknown-easy one. Invert that and a block with a
+    # cutoff 20 minutes away loses to whichever block happens to hold the most
+    # totes — the failure ADR-189 called out as needing structure, not weights.
+    from app.services.sort_tuning import (
+        DEFAULT_W_DENSE, DEFAULT_W_TIME, DEFAULT_W_DIFF,
+    )
+    if any(f in data for f in ("sort_w_dense", "sort_w_time", "sort_w_diff")):
+        w_dense = config.sort_w_dense if config.sort_w_dense is not None else DEFAULT_W_DENSE
+        w_time  = config.sort_w_time  if config.sort_w_time  is not None else DEFAULT_W_TIME
+        w_diff  = config.sort_w_diff  if config.sort_w_diff  is not None else DEFAULT_W_DIFF
+        if w_time < w_dense or w_diff < w_dense:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "sort_w_time and sort_w_diff must each be >= sort_w_dense, so a "
+                    "known-urgent or known-hard block still outranks the densest "
+                    "unknown-easy one (ADR-186 D3)."
+                ),
+            )
 
     if not config.is_configured:
         all_set = all(getattr(config, f) is not None for f in _REQUIRED_FIELDS)
@@ -645,7 +839,18 @@ def update_company_config_super_admin(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
     _apply_config_update(config, payload, allow_super_admin_fields=True)
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after={**super_admin_identity(_), **changed},
+    )
     db.commit()
     db.refresh(config)
     return CompanyConfigResponse.from_orm_obj(config)
@@ -704,10 +909,198 @@ def update_my_company_config(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
+    # ADR-228 reverse guard: raising the NCNS cutoff above an already-configured
+    # Check-In #1 would break "Check-In #1 >= NCNS". Catch it here (the add-deadline
+    # path enforces the forward direction).
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("ncns_cutoff_minutes") is not None:
+        first = (
+            db.query(CheckInDeadline)
+            .filter(CheckInDeadline.company_id == caller.company_id, CheckInDeadline.sequence == 1)
+            .first()
+        )
+        if first is not None and data["ncns_cutoff_minutes"] > first.offset_minutes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"NCNS cutoff ({data['ncns_cutoff_minutes']} min) can't be later than "
+                    f"Check-In #1 ({first.offset_minutes} min). Lower it, or move Check-In #1 later first."
+                ),
+            )
+
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
     _apply_config_update(config, payload, allow_super_admin_fields=False)
+    # Config drives dispatch weighting, attendance cutoffs and scorecard targets —
+    # a silent change here reshapes operational outcomes company-wide.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="company_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after=changed,
+    )
     db.commit()
     db.refresh(config)
     return CompanyConfigResponse.from_orm_obj(config)
+
+
+# ── Check-in deadlines (ADR-228) ──────────────────────────────────────────────
+# Ordered per-check-in deadlines, each expressed as minutes past the attendance
+# reference max(shift_start, AP-established) — same anchor as ncns_cutoff_minutes,
+# so Check-In #1 inherits the same late-AP allowance and the ordering guard is a
+# direct offset comparison. Replaces the flat CompanyConfig.driver_checkin_count.
+
+from app.models.check_in_deadline import CheckInDeadline
+
+
+class CheckInDeadlineOut(BaseModel):
+    id: UUID
+    sequence: int
+    offset_minutes: int
+    model_config = {"from_attributes": True}
+
+
+class CheckInDeadlineCreate(BaseModel):
+    # Only the deadline is supplied; sequence is assigned server-side (append).
+    offset_minutes: int = Field(..., ge=1, le=1440)
+
+
+def _company_ncns_cutoff(db: Session, company_id: UUID) -> Optional[int]:
+    cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
+    return cfg.ncns_cutoff_minutes if cfg else None
+
+
+def _list_deadlines(db: Session, company_id: UUID) -> list[CheckInDeadline]:
+    return (
+        db.query(CheckInDeadline)
+        .filter(CheckInDeadline.company_id == company_id)
+        .order_by(CheckInDeadline.sequence.asc())
+        .all()
+    )
+
+
+@company_admin_router.get("/my-config/check-in-deadlines", response_model=list[CheckInDeadlineOut])
+def list_check_in_deadlines(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Ordered check-in deadlines for the caller's company (ADR-228)."""
+    return _list_deadlines(db, caller.company_id)
+
+
+@company_admin_router.post(
+    "/my-config/check-in-deadlines", response_model=CheckInDeadlineOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_check_in_deadline(
+    payload: CheckInDeadlineCreate,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Append the next check-in with its deadline (ADR-228).
+
+    Ordering guards, surfaced to the admin:
+      - NCNS cutoff must be set FIRST — you can't schedule a check-in before crew
+        are even NCNS-decided.
+      - Check-In #1's offset must be >= the NCNS cutoff.
+      - each subsequent offset must be strictly greater than the previous.
+    """
+    ncns = _company_ncns_cutoff(db, caller.company_id)
+    if ncns is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Set the NCNS cutoff before adding check-in deadlines — a check-in "
+                "can't be scheduled before crew attendance is decided."
+            ),
+        )
+
+    existing = _list_deadlines(db, caller.company_id)
+    next_seq = (existing[-1].sequence + 1) if existing else 1
+
+    if next_seq == 1:
+        if payload.offset_minutes < ncns:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Check-In #1 must be at or after the NCNS cutoff ({ncns} min) — "
+                    f"got {payload.offset_minutes} min. Crew NCNS must be decided first."
+                ),
+            )
+    else:
+        prev = existing[-1].offset_minutes
+        if payload.offset_minutes <= prev:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Check-In #{next_seq} ({payload.offset_minutes} min) must be later than "
+                    f"Check-In #{next_seq - 1} ({prev} min)."
+                ),
+            )
+
+    row = CheckInDeadline(
+        company_id=caller.company_id, sequence=next_seq, offset_minutes=payload.offset_minutes,
+    )
+    db.add(row)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="check_in_deadline.create",
+        target_table="check_in_deadlines",
+        target_id=str(row.id),
+        after={"sequence": next_seq, "offset_minutes": payload.offset_minutes},
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@company_admin_router.delete("/my-config/check-in-deadlines/{sequence}", status_code=status.HTTP_200_OK)
+def delete_check_in_deadline(
+    sequence: int,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Remove a check-in and renumber the rest so sequences stay contiguous (ADR-228).
+
+    Only the LAST check-in may be removed directly — removing a middle one would
+    reorder deadlines under the driver mid-schedule. Renumbering after deleting the
+    tail is a no-op; this keeps 'each later than previous' trivially intact.
+    """
+    existing = _list_deadlines(db, caller.company_id)
+    if not existing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No check-in deadlines configured.")
+    if sequence != existing[-1].sequence:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Only the last check-in (#{existing[-1].sequence}) can be removed — "
+                "remove from the end so the earlier deadlines keep their order."
+            ),
+        )
+    # Snapshot BEFORE the delete — after it, the row's fields are gone.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="check_in_deadline.delete",
+        target_table="check_in_deadlines",
+        target_id=str(existing[-1].id),
+        before={"sequence": existing[-1].sequence,
+                "offset_minutes": existing[-1].offset_minutes},
+    )
+    db.delete(existing[-1])
+    db.commit()
+    return {"deleted_sequence": sequence, "remaining": len(existing) - 1}
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +1117,7 @@ def get_my_discord_config(
     config = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
 
 
 @company_admin_router.patch("/my-discord-config", response_model=DiscordConfigResponse)
@@ -742,12 +1135,24 @@ def update_my_discord_config(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
+    for field, value in changed.items():
         setattr(config, field, value)
 
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="company_discord_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after=changed,
+    )
     db.commit()
     db.refresh(config)
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
 
 
 # ---------------------------------------------------------------------------
@@ -764,7 +1169,7 @@ def get_company_discord_config(
     config = db.query(CompanyConfig).filter(CompanyConfig.company_id == company_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)
 
 
 @router.patch("/{company_id}/discord-config", response_model=DiscordConfigResponse)
@@ -779,9 +1184,20 @@ def update_company_discord_config(
     if not config:
         raise HTTPException(status_code=404, detail="Company config not found.")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changed = payload.model_dump(exclude_unset=True)
+    before = {k: getattr(config, k, None) for k in changed}
+    for field, value in changed.items():
         setattr(config, field, value)
 
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company_discord_config.update",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before=before,
+        after={**super_admin_identity(_), **changed},
+    )
     db.commit()
     db.refresh(config)
-    return DiscordConfigResponse.model_validate(config)
+    return DiscordConfigResponse.from_config(config)

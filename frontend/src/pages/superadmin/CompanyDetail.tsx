@@ -1,3 +1,4 @@
+import { errorText } from '../../utils/errorText';
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -37,6 +38,18 @@ interface CompanyConfig {
   dispatch_weight_cap: number | null;
   flag_threshold: number | null;
   driver_checkin_count: number | null;
+  // Route-sort tuning (ADR-273). null = the algorithm's built-in default.
+  sort_w_dense: number | null;
+  sort_w_time: number | null;
+  sort_w_diff: number | null;
+  sort_w_doorman: number | null;
+  sort_walk_budget_m: number | null;
+  sort_span_cap_m: number | null;
+  sort_max_consecutive_no_fit: number | null;
+  sort_f5_load_floor_hs: number | null;
+  sort_f5_max_hops: number | null;
+  sort_f5_walk_radius_km: number | null;
+  route_assembly_mode: string | null;
 }
 
 interface CompanyDetail {
@@ -90,7 +103,7 @@ const PLATFORM_DEFAULTS: Record<string, string> = {
 // Config field metadata
 // ---------------------------------------------------------------------------
 
-type FieldType = 'time' | 'int' | 'float';
+type FieldType = 'time' | 'int' | 'float' | 'select';
 
 interface ConfigFieldMeta {
   key: keyof CompanyConfig;
@@ -100,6 +113,12 @@ interface ConfigFieldMeta {
   min?: number;
   max?: number;
   step?: number;
+  /** For type 'select'. */
+  options?: { value: string; label: string }[];
+  /** The algorithm default, shown when the field is null. */
+  placeholder?: string;
+  /** One-line explanation under the input while editing. */
+  hint?: string;
 }
 
 const CONFIG_SECTIONS: { heading: string; description?: string; fields: ConfigFieldMeta[] }[] = [
@@ -148,6 +167,41 @@ const CONFIG_SECTIONS: { heading: string; description?: string; fields: ConfigFi
     heading: 'Walker Rating',
     fields: [
       { key: 'flag_threshold', label: 'Flag Threshold', type: 'float', required: true, min: 0, max: 10, step: 0.1 },
+    ],
+  },
+  {
+    heading: 'Route Sort Tuning',
+    description:
+      'Advanced. Blank means the algorithm default — these are not required, and a company ' +
+      'that never touches them sorts exactly as before. Change one at a time and read Sort ' +
+      'Metrics before and after; the telemetry records which values produced which routes.',
+    fields: [
+      { key: 'route_assembly_mode', label: 'Assembly Mode', type: 'select', placeholder: 'block_completion',
+        hint: 'group_first pulls a block\'s totes whole before crawling (ADR-272).',
+        options: [
+          { value: 'block_completion', label: 'Block completion (default)' },
+          { value: 'group_first',      label: 'Group first (ADR-272)' },
+        ] },
+      { key: 'sort_w_dense',   label: 'Seed Weight — Density', type: 'float', min: 0, max: 5, step: 0.05, placeholder: '1.0',
+        hint: 'Baseline. The other two must stay at or above this.' },
+      { key: 'sort_w_time',    label: 'Seed Weight — Urgency',    type: 'float', min: 0, max: 5, step: 0.05, placeholder: '1.5',
+        hint: 'Must be >= density, so a known-urgent block outranks the densest unknown one.' },
+      { key: 'sort_w_diff',    label: 'Seed Weight — Difficulty', type: 'float', min: 0, max: 5, step: 0.05, placeholder: '1.3',
+        hint: 'Must be >= density.' },
+      { key: 'sort_w_doorman', label: 'Seed Weight — Doorman',    type: 'float', min: 0, max: 5, step: 0.05, placeholder: '0.5',
+        hint: 'Subtracted: defers easy doorman-heavy blocks to later routes.' },
+      { key: 'sort_walk_budget_m', label: 'Walk Budget (m)', type: 'float', min: 100, max: 10000, step: 50, placeholder: '900',
+        hint: 'Cumulative metres along a route\'s traversal. Inert when blocks have no coordinates.' },
+      { key: 'sort_span_cap_m',    label: 'Span Cap (m)',    type: 'float', min: 100, max: 10000, step: 50, placeholder: '700',
+        hint: 'Straight-line diameter of a route. Also inert without coordinates.' },
+      { key: 'sort_max_consecutive_no_fit', label: 'Max Steps Without Collecting', type: 'int', min: 1, max: 20, placeholder: '2',
+        hint: 'Closes a route that keeps stepping to blocks whose totes do not fit.' },
+      { key: 'sort_f5_load_floor_hs', label: 'F5 Load Floor (half-slots)', type: 'int', min: 0, max: 40, placeholder: '6',
+        hint: 'Thin-block consolidation fires below this load. 6 = about 3 totes.' },
+      { key: 'sort_f5_max_hops',      label: 'F5 Max Hops',      type: 'int',   min: 1, max: 6,  placeholder: '2',
+        hint: 'Street steps the consolidation may bridge.' },
+      { key: 'sort_f5_walk_radius_km', label: 'F5 Walk Radius (km)', type: 'float', min: 0.1, max: 5, step: 0.1, placeholder: '0.8',
+        hint: 'Sanity cap on a hop-reachable block. Adjacency is the primary gate.' },
     ],
   },
 ];
@@ -257,8 +311,8 @@ function IdentityCard({
       });
       onUpdated(res.data);
       setEditing(false);
-    } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Failed to save.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Failed to save.'));
     } finally {
       setSaving(false);
     }
@@ -554,7 +608,7 @@ function ConfigEditorCard({
           if (raw === '' || raw === undefined) continue;
           if (f.type === 'int') payload[String(f.key)] = parseInt(raw, 10);
           else if (f.type === 'float') payload[String(f.key)] = parseFloat(raw);
-          else payload[String(f.key)] = raw;
+          else payload[String(f.key)] = raw;   // time + select are sent as strings
         }
       }
       const res = await axiosClient.patch<CompanyConfig>(
@@ -563,8 +617,8 @@ function ConfigEditorCard({
       );
       onUpdated(res.data);
       setEditing(false);
-    } catch (err: any) {
-      setSaveError(err.response?.data?.detail ?? 'Failed to save config.');
+    } catch (err: unknown) {
+      setSaveError(errorText(err, 'Failed to save config.'));
     } finally {
       setSaving(false);
     }
@@ -608,20 +662,38 @@ function ConfigEditorCard({
                     {f.required && <span className="text-danger ml-0.5">*</span>}
                   </p>
                   {editing ? (
-                    <input
-                      type={f.type === 'time' ? 'time' : 'number'}
-                      step={f.step ?? (f.type === 'int' ? 1 : undefined)}
-                      min={f.min}
-                      max={f.max}
-                      className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-violet-500"
-                      value={draft[String(f.key)] ?? ''}
-                      onChange={e => setDraft(prev => ({ ...prev, [String(f.key)]: e.target.value }))}
-                      placeholder={f.required ? 'required' : 'optional'}
-                    />
+                    f.type === 'select' ? (
+                      <select
+                        className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand"
+                        value={draft[String(f.key)] ?? ''}
+                        onChange={e => setDraft(prev => ({ ...prev, [String(f.key)]: e.target.value }))}
+                      >
+                        <option value="">Default{f.placeholder ? ` (${f.placeholder})` : ''}</option>
+                        {(f.options ?? []).map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={f.type === 'time' ? 'time' : 'number'}
+                        step={f.step ?? (f.type === 'int' ? 1 : undefined)}
+                        min={f.min}
+                        max={f.max}
+                        className="w-full bg-background border border-border rounded-lg px-2.5 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-violet-500"
+                        value={draft[String(f.key)] ?? ''}
+                        onChange={e => setDraft(prev => ({ ...prev, [String(f.key)]: e.target.value }))}
+                        placeholder={f.required ? 'required' : f.placeholder ?? 'optional'}
+                      />
+                    )
                   ) : (
                     <p className={`text-sm font-mono font-semibold ${config[f.key] === null ? 'text-muted-foreground' : 'text-foreground'}`}>
-                      {displayValue(config[f.key] as string | number | null, f.type)}
+                      {config[f.key] === null && f.placeholder
+                        ? `${f.placeholder} (default)`
+                        : displayValue(config[f.key] as string | number | null, f.type)}
                     </p>
+                  )}
+                  {editing && f.hint && (
+                    <p className="text-[11px] leading-snug text-muted-foreground mt-1.5">{f.hint}</p>
                   )}
                 </div>
               ))}
@@ -662,6 +734,7 @@ interface DiscordConfig {
   discord_guild_id:            number | null;
   discord_drivers_channel_id:  number | null;
   discord_trainers_channel_id: number | null;
+  discord_captains_channel_id: number | null;
   discord_general_channel_id:  number | null;
   discord_invite_channel_id:   number | null;
   discord_role_admin:          number | null;
@@ -670,6 +743,7 @@ interface DiscordConfig {
   discord_role_bot:            number | null;
   discord_role_dispatch:       number | null;
   discord_role_driver:         number | null;
+  discord_role_trainer:        number | null;
   discord_role_captain:        number | null;
   discord_role_walker:         number | null;
 }
@@ -681,6 +755,7 @@ const DISCORD_FIELDS: { key: keyof DiscordConfig; label: string; hint: string }[
   { key: 'discord_general_channel_id',  label: 'General Channel',       hint: '#general channel ID' },
   { key: 'discord_drivers_channel_id',  label: 'Drivers Channel',       hint: '#drivers-chat ID' },
   { key: 'discord_trainers_channel_id', label: 'Trainers Channel',      hint: '#trainers-chat ID' },
+  { key: 'discord_captains_channel_id', label: 'Captains Channel',      hint: '#captains ID' },
   { key: 'discord_invite_channel_id',   label: 'Invite Channel',        hint: 'Channel used for onboarding invites' },
   { key: 'discord_role_admin',          label: 'Admin Role',            hint: 'Role ID' },
   { key: 'discord_role_manager',        label: 'Manager Role',          hint: 'Role ID' },
@@ -688,7 +763,8 @@ const DISCORD_FIELDS: { key: keyof DiscordConfig; label: string; hint: string }[
   { key: 'discord_role_bot',            label: 'Bot Role',              hint: 'Role ID' },
   { key: 'discord_role_dispatch',       label: 'Dispatch Role',         hint: 'Role ID' },
   { key: 'discord_role_driver',         label: 'Driver Role',           hint: 'Role ID' },
-  { key: 'discord_role_captain',        label: 'Captain Role',          hint: 'Trainers role ID' },
+  { key: 'discord_role_trainer',        label: 'Trainer Role',          hint: 'Trainer role ID (was "Captain")' },
+  { key: 'discord_role_captain',        label: 'Captain Role',          hint: 'Captain role ID (route leads)' },
   { key: 'discord_role_walker',         label: 'Walker/Trainee Role',   hint: 'Role ID' },
 ];
 
@@ -729,10 +805,10 @@ function DiscordConfigCard({ companyId }: { companyId: string }) {
     setSaveError(null);
     setSaving(true);
     try {
-      const payload: Record<string, number | null> = {};
+      const payload: Record<string, string> = {};
       for (const f of DISCORD_FIELDS) {
         const raw = draft[f.key];
-        payload[f.key] = raw ? parseInt(raw, 10) : null;
+        if (raw && /^\d+$/.test(raw)) payload[f.key] = raw;
       }
       const res = await axiosClient.patch<DiscordConfig>(
         `/admin/companies/${companyId}/discord-config`,
@@ -740,8 +816,8 @@ function DiscordConfigCard({ companyId }: { companyId: string }) {
       );
       setCfg(res.data);
       setEditing(false);
-    } catch (err: any) {
-      setSaveError(err.response?.data?.detail ?? 'Failed to save Discord config.');
+    } catch (err: unknown) {
+      setSaveError(errorText(err, 'Failed to save Discord config.'));
     } finally {
       setSaving(false);
     }
@@ -852,8 +928,8 @@ function DangerZoneCard({
       const action = detail.is_active ? 'deactivate' : 'reactivate';
       await axiosClient.patch(`/admin/companies/${detail.id}/${action}`);
       onToggled(!detail.is_active);
-    } catch (err: any) {
-      setError(err.response?.data?.detail ?? 'Action failed.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Action failed.'));
     } finally {
       setToggling(false);
     }

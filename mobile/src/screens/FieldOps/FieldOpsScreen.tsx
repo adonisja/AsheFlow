@@ -16,11 +16,10 @@
  *   8. Post initial anchor point + ETA
  *   9. Confirm arrival at AP
  *  10. Check-in 1 (~11:15am): crew compliance + NCNS
- *  11. Walker ratings — unlocked after check-in 1, present walkers only,
- *      drafts persisted in AsyncStorage, submitted with end odometer
- *  12. Check-in 2 (~2pm): routes remaining + help request
- *  13. Check-in 3 (~4pm): routes remaining update
- *  14. Departure request (RTS report) — dispatch must approve
+ *      (peer/team rating lives on Preferences → Rate Team, not the driver day)
+ *  11. Check-in 2 (~2pm): routes remaining + help request
+ *  12. Check-in 3 (~4pm): routes remaining update
+ *  13. Departure request (RTS report) — dispatch must approve
  *
  * STATION (return)
  *  15. Record station arrival (return)
@@ -35,19 +34,20 @@
  * expanded and highlighted. Locked future steps are hidden entirely.
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl,
-  TextInput, Alert, Switch, Modal, FlatList,
+  TextInput, Alert, Switch, Modal, FlatList, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, shadow, duration, type ThemeColors } from '@theme/index';
+import { Button, Badge } from '@components/ui/primitives';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function localToday(): string {
@@ -83,7 +83,6 @@ const RTS_REASONS = [
 
 // ── Full shift state (loaded once, refreshed on actions) ──────────────────────
 type CrewMember  = { id: string; name: string; role: string };
-type WalkerDraft = { stars: number; comment: string };
 
 type ShiftState = {
   // dispatch confirmation (gate before check-in)
@@ -99,7 +98,9 @@ type ShiftState = {
   stationLoadArrived: boolean; stationLoadAt: string | null;
   wasStaged: boolean | null; missingItems: string[];
   truckId: string | null;
+  taId: string | null;
   manifest: Manifest | null;
+  roster: TruckRoster | null; rosterAvailable: boolean;
   departed: boolean; departedAt: string | null;
   // route / AP
   activeAP: AP | null;
@@ -107,8 +108,10 @@ type ShiftState = {
   checkIn2: CheckInRecord | null;
   checkIn3: CheckInRecord | null;
   rtsReport: RTSReport | null;
+  rtsSummary: RTSSummary | null;
+  routesRemaining: number; // truck routes not yet completed — auto-fills check-ins
   crew: CrewMember[];
-  walkerRatingsSubmitted: Record<string, boolean>; // walkerId → true once posted
+  rollCall: Record<string, string>; // employeeId → trainer roll-call status (seeds CI1)
   // station return
   stationReturnArrived: boolean; stationReturnAt: string | null;
   stationHandoff: boolean;
@@ -121,8 +124,41 @@ type InspData  = { has_failures: boolean; items: Record<string, boolean>; notes?
 type FuelLog   = { id: string; odometer_start: number; odometer_end: number | null; fuel_added: number | null; notes: string | null };
 type Manifest  = { id: string; tote_count: number; ov_count: number; notes: string | null; acknowledged_at: string | null };
 type AP        = { id: string; location: string; eta: string | null; status: string; sequence: number };
+type LocationHint = {
+  label: string; sublabel: string;
+  source: 'history' | 'truck_anchor' | 'building_profile';
+  use_count?: number | null; distance_m?: number | null; reason?: string | null;
+};
 type CheckInRecord = { check_in_number: number; routes_remaining: number; help_requested: boolean; working_crew_count: number; ncns_count: number; submitted_at: string };
 type RTSReport = { id: string; status: string; crew_confirmed: number; total_rts: number; rts_packages: { reason: string; count: number }[]; dispatch_notes: string | null };
+// ADR-181 dock flow (tote check-off + driver load confirmation)
+type RosterTote  = {
+  bag_id: string; package_count: number; ov_count: number;
+  checked: boolean; checked_by_name: string | null;
+  dock_tags: string[]; pull_tbas: string[]; rider_count: number;
+};
+type TruckRoster = {
+  truck_id: string; zone_label: string; totes: RosterTote[];
+  tote_count: number; checked_count: number;
+  load_confirmed: boolean; confirmed_at: string | null; short_count: number;
+};
+// ADR-193 D4 — whole-truck RTS rollup (handoff confirms + report prefill)
+type RTSSummaryRoute = {
+  route_id: string; route_number: number; walker_name: string | null; route_status: string;
+  handoff_exists: boolean; driver_confirmed_at: string | null; discrepancy_flagged: boolean;
+  rts_count: number; missing_count: number;
+};
+type RTSSummary = {
+  routes: RTSSummaryRoute[]; reason_totals: Record<string, number>;
+  total_rts: number; total_missing: number; unconfirmed_handoffs: number;
+};
+
+const RTS_TYPE_LABELS: Record<string, string> = {
+  no_access: 'No Access', business_closed: 'Business Closed',
+  package_damaged: 'Damaged Package', inclement_weather: 'Inclement Weather',
+  customer_requested_future_delivery: 'Customer Request',
+  customer_cancelled_order: 'Customer Cancelled',
+};
 
 const EMPTY_SHIFT: ShiftState = {
   confirmationStatus: null, dispatchDate: null, dispatchMessage: null,
@@ -133,37 +169,101 @@ const EMPTY_SHIFT: ShiftState = {
   stationLoadArrived: false, stationLoadAt: null,
   wasStaged: null, missingItems: [],
   truckId: null,
+  taId: null,
   manifest: null,
+  roster: null, rosterAvailable: false,
   departed: false, departedAt: null,
   activeAP: null,
   checkIn1: null, checkIn2: null, checkIn3: null,
   rtsReport: null,
+  rtsSummary: null,
+  routesRemaining: 0,
   crew: [],
-  walkerRatingsSubmitted: {},
+  rollCall: {},
   stationReturnArrived: false, stationReturnAt: null,
   stationHandoff: false,
   eodDone: false, eodData: null,
   returned: false, returnedAt: null,
 };
 
+// Current step's section accent, provided at the step-render site so Card /
+// SectionHeader can tint themselves without threading section through every
+// step's props (ADR-207). Null → fall back to primary.
+const SectionAccent = React.createContext<string | null>(null);
+
+// Each wizard section gets an identity color (ADR-207) so the header, progress
+// bar and step cards share a visual "chapter" throughout the driver's day.
+function sectionColor(section: string, c: ThemeColors): string {
+  if (section.startsWith('Offsite — End')) return c.walker;   // teal — winding down
+  if (section.startsWith('Offsite'))       return c.primary;  // indigo — start of day
+  if (section.startsWith('Station — Ret'))  return c.gold;     // amber — return
+  if (section.startsWith('Station'))        return c.info;     // cyan — loading
+  if (section.startsWith('Route'))          return c.success;  // green — on the road
+  return c.primary;
+}
+
 // ── Shared UI primitives ──────────────────────────────────────────────────────
-function Btn({ label, onPress, disabled, loading: ld, variant = 'primary', c }: {
+// Thin wrapper over the design-system Button (ADR-207) — keeps this screen's
+// existing <Btn label=… c=…/> call sites unchanged while delegating rendering
+// (themed color, spring press, glow, >=44pt target) to the primitive. `c` is
+// accepted but unused (Button reads the theme itself).
+function Btn({ label, onPress, disabled, loading: ld, variant = 'primary' }: {
   label: string; onPress: () => void; disabled?: boolean;
   loading?: boolean; variant?: 'primary' | 'ghost'; c: ThemeColors;
 }) {
-  const bg = variant === 'ghost' ? 'transparent' : c.primary;
-  const border = variant === 'ghost' ? c.border : c.primary;
   return (
-    <TouchableOpacity
-      style={{ backgroundColor: bg, borderWidth: 1, borderColor: border, borderRadius: radius.md,
-        paddingVertical: spacing.sm + 2, alignItems: 'center', opacity: disabled || ld ? 0.4 : 1 }}
-      onPress={onPress} disabled={disabled || ld} activeOpacity={0.8}
-    >
-      {ld
-        ? <ActivityIndicator color={variant === 'ghost' ? c.primary : '#fff'} />
-        : <Text style={{ color: variant === 'ghost' ? c.primary : '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold }}>{label}</Text>
-      }
-    </TouchableOpacity>
+    <Button variant={variant === 'ghost' ? 'outline' : 'primary'} fullWidth
+      onPress={onPress} disabled={disabled} loading={ld}>
+      {label}
+    </Button>
+  );
+}
+
+// Shared segmented toggle (ADR-207) — replaces the ad-hoc pill rows scattered
+// through the steps (unit, Pass/Fail, staged Yes/No…). Selected fills with the
+// given tone (defaults to the section accent); pill-shaped, >=44pt row.
+function Segmented<T extends string | boolean>({ options, value, onChange, tone, c }: {
+  options: { value: T; label: string; tone?: string }[];
+  // value may be undefined → no option selected (e.g. an unmarked attendance row).
+  value: T | undefined; onChange: (v: T) => void; tone?: string; c: ThemeColors;
+}) {
+  const accent = React.useContext(SectionAccent) ?? c.primary;
+  return (
+    <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+      {options.map(o => {
+        const sel = value === o.value;
+        const fill = o.tone ?? tone ?? accent;
+        return (
+          <TouchableOpacity key={String(o.value)} onPress={() => onChange(o.value)} activeOpacity={0.8}
+            style={{ flex: 1, minHeight: 44, borderRadius: radius.md, borderWidth: 1.5, alignItems: 'center',
+              justifyContent: 'center', paddingVertical: spacing.sm,
+              backgroundColor: sel ? fill : 'transparent', borderColor: sel ? fill : c.border }}>
+            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold,
+              color: sel ? c.primaryForeground : c.mutedForeground }}>{o.label}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+// Shared labeled input (ADR-207) — consistent field styling across steps.
+function FieldInput({ label, c, style, ...props }: {
+  label?: string; c: ThemeColors;
+} & React.ComponentProps<typeof TextInput>) {
+  return (
+    <View style={{ marginBottom: spacing.md }}>
+      {label ? (
+        <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground,
+          textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>{label}</Text>
+      ) : null}
+      <TextInput
+        placeholderTextColor={c.mutedForeground}
+        style={[{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm + 2,
+          fontSize: fontSize.base, color: c.foreground, backgroundColor: c.background }, style]}
+        {...props}
+      />
+    </View>
   );
 }
 
@@ -181,20 +281,24 @@ function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
   num: string; title: string; subtitle?: string;
   done?: boolean; doneLabel?: string; c: ThemeColors;
 }) {
+  const accent = React.useContext(SectionAccent) ?? c.primary;
+  const tokenColor = done ? c.success : accent;
   return (
-    <View style={{ marginBottom: done ? spacing.xs : spacing.sm }}>
+    <View style={{ marginBottom: done ? spacing.xs : spacing.md }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-        <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: done ? c.success : c.primary,
-          alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{ color: '#fff', fontSize: 11, fontWeight: fontWeight.bold }}>{done ? '✓' : num}</Text>
+        <View style={{ width: 34, height: 34, borderRadius: radius.md, backgroundColor: tokenColor + '1F',
+          borderWidth: 1.5, borderColor: tokenColor, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: tokenColor, fontSize: fontSize.base, fontWeight: fontWeight.extrabold }}>
+            {done ? '✓' : num}
+          </Text>
         </View>
-        <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: c.foreground, flex: 1 }}>{title}</Text>
+        <Text style={{ fontSize: fontSize.md, fontWeight: fontWeight.bold, color: c.foreground, flex: 1 }}>{title}</Text>
       </View>
       {subtitle && !done && (
-        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 4, marginLeft: 32 }}>{subtitle}</Text>
+        <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, lineHeight: 20, marginTop: 6, marginLeft: 34 + spacing.sm }}>{subtitle}</Text>
       )}
       {done && doneLabel && (
-        <View style={{ marginLeft: 32, marginTop: 4 }}>
+        <View style={{ marginLeft: 34 + spacing.sm, marginTop: 4 }}>
           <DonePill label={doneLabel} c={c} />
         </View>
       )}
@@ -203,9 +307,11 @@ function SectionHeader({ num, title, subtitle, done, doneLabel, c }: {
 }
 
 function Card({ children, c }: { children: React.ReactNode; c: ThemeColors }) {
+  const accent = React.useContext(SectionAccent) ?? c.primary;
   return (
     <View style={{ backgroundColor: c.card, borderRadius: radius.lg, borderWidth: 1,
-      borderColor: c.border, padding: spacing.md, marginBottom: spacing.md }}>
+      borderColor: c.border, borderLeftWidth: 4, borderLeftColor: accent,
+      padding: spacing.md, marginBottom: spacing.md, ...shadow.sm }}>
       {children}
     </View>
   );
@@ -234,7 +340,7 @@ function CompletedRow({ num, title, summary, c }: {
       paddingVertical: spacing.xs, paddingHorizontal: spacing.sm, marginBottom: spacing.xs }}>
       <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: c.success,
         alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <Text style={{ color: '#fff', fontSize: 10, fontWeight: fontWeight.bold }}>✓</Text>
+        <Text style={{ color: c.primaryForeground, fontSize: 10, fontWeight: fontWeight.bold }}>✓</Text>
       </View>
       <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, flex: 1 }} numberOfLines={1}>
         <Text style={{ fontWeight: fontWeight.semibold, color: c.foreground }}>{title}</Text>
@@ -316,7 +422,7 @@ function TimePickerModal({ visible, initial, onConfirm, onCancel, c }: {
             </TouchableOpacity>
             <TouchableOpacity onPress={() => onConfirm(hour, minute)} style={{ flex: 1, padding: spacing.sm,
               borderRadius: radius.md, backgroundColor: c.primary, alignItems: 'center' }}>
-              <Text style={{ fontSize: fontSize.sm, color: '#fff', fontWeight: fontWeight.semibold }}>Set</Text>
+              <Text style={{ fontSize: fontSize.sm, color: c.primaryForeground, fontWeight: fontWeight.semibold }}>Set</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -360,7 +466,7 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
         notes: notes.trim() || null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit inspection. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not submit inspection. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -372,31 +478,31 @@ function InspectionForm({ employeeId, inspType, onDone, c }: {
         const val = results[item];
         return (
           <View key={item} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-            paddingVertical: spacing.xs + 1, borderBottomWidth: 1, borderBottomColor: c.border }}>
-            <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium, flex: 1 }}>
+            gap: spacing.sm, backgroundColor: c.surfaceMuted, borderRadius: radius.md,
+            paddingVertical: spacing.sm, paddingHorizontal: spacing.sm + 2, marginBottom: spacing.xs }}>
+            <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.semibold, flex: 1 }}>
               {ITEM_LABELS[item] ?? item}
             </Text>
             <View style={{ flexDirection: 'row', gap: spacing.xs }}>
               {([true, false] as const).map(pass => (
                 <TouchableOpacity key={String(pass)} onPress={() => toggle(item, pass)}
-                  style={{ paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.sm, borderWidth: 1,
+                  style={{ minWidth: 52, minHeight: 34, alignItems: 'center', justifyContent: 'center',
+                    paddingHorizontal: spacing.sm, borderRadius: radius.sm, borderWidth: 1.5,
                     backgroundColor: val === pass ? (pass ? c.success : c.danger) : 'transparent',
                     borderColor: val === pass ? (pass ? c.success : c.danger) : c.border }}>
-                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-                    color: val === pass ? '#fff' : c.mutedForeground }}>{pass ? 'Pass' : 'Fail'}</Text>
+                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold,
+                    color: val === pass ? c.primaryForeground : c.mutedForeground }}>{pass ? 'Pass' : 'Fail'}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
         );
       })}
-      <TextInput
-        style={{ marginTop: spacing.sm, borderWidth: 1, borderColor: c.border, borderRadius: radius.md,
-          padding: spacing.sm, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
-          minHeight: 60, textAlignVertical: 'top' }}
-        value={notes} onChangeText={setNotes}
-        placeholder="Notes (optional)…" placeholderTextColor={c.mutedForeground} multiline />
       <View style={{ marginTop: spacing.sm }}>
+        <FieldInput value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
+          multiline style={{ minHeight: 64, textAlignVertical: 'top' }} c={c} />
+      </View>
+      <View>
         <Btn label={`Submit ${inspType === 'pre_trip' ? 'Pre-Trip' : 'EOD'} Inspection`}
           onPress={submit} disabled={!allDone} loading={saving} c={c} />
       </View>
@@ -426,19 +532,6 @@ function InspDoneView({ data, c }: { data: InspData; c: ThemeColors }) {
   );
 }
 
-// ── Walker rating drafts, persisted in AsyncStorage ───────────────────────────
-const DRAFT_KEY = (empId: string) => `asheflow_walker_drafts_${empId}_${localToday()}`;
-
-async function loadDrafts(empId: string): Promise<Record<string, WalkerDraft>> {
-  try {
-    const raw = await AsyncStorage.getItem(DRAFT_KEY(empId));
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-async function saveDrafts(empId: string, drafts: Record<string, WalkerDraft>) {
-  try { await AsyncStorage.setItem(DRAFT_KEY(empId), JSON.stringify(drafts)); } catch {}
-}
-
 // ── Check-in timing context ───────────────────────────────────────────────────
 const CI_TIMES = ['~11:15 AM', '~2:00 PM', '~4:00 PM', '~5:30 PM'];
 
@@ -454,11 +547,6 @@ export default function FieldOpsScreen() {
   const [loadingId,  setLoadingId]  = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [shift,      setShift]      = useState<ShiftState>(EMPTY_SHIFT);
-
-  // Walker rating drafts — loaded from AsyncStorage
-  const [walkerDrafts, setWalkerDrafts] = useState<Record<string, WalkerDraft>>({});
-  const draftsRef = useRef(walkerDrafts);
-  draftsRef.current = walkerDrafts;
   const loadAbortRef = useRef<AbortController | null>(null);
 
   const loadShift = useCallback(async (empId: string) => {
@@ -469,7 +557,8 @@ export default function FieldOpsScreen() {
 
     const today = localToday();
     const [ciRes, dockRes, inspRes, fuelRes, crewRes, arrRes, depRes, apRes,
-           ci1Res, ci2Res, ci3Res, rtsRes, handoffRes, notifRes, confRes] = await Promise.allSettled([
+           ci1Res, ci2Res, ci3Res, rtsRes, handoffRes, notifRes, confRes,
+           rosterRes, dispRes, rollCallRes] = await Promise.allSettled([
       apiClient.get(`/field-ops/check-in/${empId}`, sig),
       apiClient.get(`/field-ops/dock-assignment/${empId}`, sig),
       apiClient.get(`/field-ops/inspection/${empId}`, sig),
@@ -487,6 +576,13 @@ export default function FieldOpsScreen() {
       apiClient.get(`/notifications/${empId}?limit=10`, sig),
       // Confirmation status for today
       apiClient.get(`/dispatch/${today}/my-confirmation`, sig),
+      // ADR-181 dock flow — server scopes drivers to their own truck's roster
+      apiClient.get(`/sort/${today}/rosters`, sig),
+      // TruckAssignment id (for the RTS summary + handoff confirms)
+      apiClient.get(`/dispatch/${today}`, sig),
+      // Trainer's roll call for this truck — seeds the CI1 attendance defaults so
+      // the driver's roster reflects who the trainer already marked NCNS/present.
+      apiClient.get(`/roll-call/my-truck/${today}`, sig),
     ]);
     if (ctrl.signal.aborted) return;
 
@@ -497,6 +593,13 @@ export default function FieldOpsScreen() {
     const eodInsp = inspAll.find((r: any) => r.date === today && r.inspection_type === 'eod') ?? null;
     const fuel    = fuelRes.status === 'fulfilled' ? fuelRes.value.data.find((r: any) => r.date === today) ?? null : null;
     const crew: CrewMember[] = crewRes.status === 'fulfilled' ? (crewRes.value.data.crew ?? []) : [];
+
+    // Trainer's roll-call status per employee (early|present|late|ncns|pending) —
+    // used to seed CI1 attendance so the driver sees who's already been marked.
+    const rollCall: Record<string, string> = {};
+    if (rollCallRes.status === 'fulfilled') {
+      for (const r of (rollCallRes.value.data ?? [])) rollCall[r.employee_id] = r.status;
+    }
 
     const arrivals: any[] = arrRes.status === 'fulfilled' ? arrRes.value.data : [];
     const loadArr  = arrivals.find((r: any) => r.arrival_type === 'loading') ?? null;
@@ -531,6 +634,18 @@ export default function FieldOpsScreen() {
     // Truck ID from crew endpoint
     const truckId: string | null = crewRes.status === 'fulfilled' ? (crewRes.value.data.truck_id ?? null) : null;
 
+    // Dock roster — driver-scoped server-side, so ours is the only entry.
+    const rosterData = rosterRes.status === 'fulfilled' ? rosterRes.value.data : null;
+    const roster: TruckRoster | null = rosterData?.rosters?.[0] ?? null;
+    const rosterAvailable: boolean = !!rosterData?.roster_available && !!roster;
+
+    // TruckAssignment id for today's truck (RTS summary + handoff confirms).
+    let taId: string | null = null;
+    if (truckId && dispRes.status === 'fulfilled') {
+      const tas: { truck_id: string; assignment_id?: string }[] = dispRes.value.data?.truck_assignments ?? [];
+      taId = tas.find(t => t.truck_id === truckId)?.assignment_id ?? null;
+    }
+
     // Manifest — needs truck_id
     let manifest: Manifest | null = null;
     if (truckId) {
@@ -538,14 +653,21 @@ export default function FieldOpsScreen() {
       manifest = mRes?.data ?? null;
     }
 
-    // Submitted walker ratings
-    let walkerRatingsSubmitted: Record<string, boolean> = {};
-    if (dep) {
-      const rRes = await apiClient.get(`/field-ops/rating/driver/${empId}`, { params: { target_date: today } }).catch(() => null);
-      if (rRes) {
-        for (const r of rRes.data) walkerRatingsSubmitted[r.walker_id] = true;
-      }
+    // Whole-truck RTS rollup (ADR-193 D4) — only meaningful once on the road.
+    let rtsSummary: RTSSummary | null = null;
+    if (taId) {
+      const sRes = await apiClient.get(`/rts/summary/${taId}`).catch(() => null);
+      rtsSummary = sRes?.data ?? null;
     }
+
+    // Routes still out (status != completed) — auto-fills the check-in routes-remaining.
+    let routesRemaining = 0;
+    if (taId) {
+      const rrRes = await apiClient.get(`/walker-routes/${taId}/routes`).catch(() => null);
+      const routeList: any[] = rrRes?.data ?? [];
+      routesRemaining = routeList.filter(r => r.status !== 'completed').length;
+    }
+
 
     setShift({
       confirmationStatus, dispatchDate, dispatchMessage,
@@ -557,13 +679,17 @@ export default function FieldOpsScreen() {
       stationLoadArrived: !!loadArr, stationLoadAt: loadArr?.arrived_at ?? null,
       wasStaged: loadArr?.was_staged ?? null, missingItems: loadArr?.missing_items ?? [],
       truckId,
+      taId,
       manifest,
+      roster, rosterAvailable,
       departed: !!dep, departedAt: dep?.departed_at ?? null,
       activeAP: activeAP ? { id: activeAP.id, location: activeAP.location, eta: activeAP.eta, status: activeAP.status, sequence: activeAP.sequence } : null,
       checkIn1: ci1, checkIn2: ci2, checkIn3: ci3,
       rtsReport: rts,
+      rtsSummary,
+      routesRemaining,
       crew,
-      walkerRatingsSubmitted,
+      rollCall,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
       stationHandoff: !!handoff,
       eodDone: !!eodInsp,
@@ -576,7 +702,7 @@ export default function FieldOpsScreen() {
     apiClient.get('/employees/me').then(async r => {
       const id = r.data.id;
       setEmployeeId(id);
-      await Promise.all([loadShift(id), loadDrafts(id).then(setWalkerDrafts)]);
+      await loadShift(id);
     }).catch(() => {}).finally(() => setLoadingId(false));
     return () => { loadAbortRef.current?.abort(); };
   }, [user, loadShift]);
@@ -589,17 +715,168 @@ export default function FieldOpsScreen() {
     setRefreshing(false);
   }, [reload]);
 
-  const updateDraft = useCallback((walkerId: string, patch: Partial<WalkerDraft>) => {
-    setWalkerDrafts(prev => {
-      const existing = prev[walkerId] ?? { stars: 0, comment: '' };
-      const next = { ...prev, [walkerId]: { ...existing, ...patch } };
-      saveDrafts(employeeId, next);
-      return next;
-    });
-  }, [employeeId]);
-
   const s = styles(c);
 
+  // Wizard hooks — declared unconditionally, BEFORE any early return, per the
+  // Rules of Hooks. cursor starts at 0; the effect below syncs it to the live step.
+  const [cursor, setCursor] = useState(0);
+  const reviewingRef = useRef(false);
+  const fade = useRef(new Animated.Value(1)).current;
+
+  // ── Derived gating flags ─────────────────────────────────────────────────
+  const {
+    confirmationStatus,
+    checkedIn, dockZone, preTripDone, fuelLog, stationLoadArrived, wasStaged,
+    missingItems, manifest, roster, rosterAvailable, departed, activeAP,
+    checkIn1, checkIn2, checkIn3,
+    rtsReport, rtsSummary, crew, stationReturnArrived,
+    stationHandoff, eodDone, returned, truckId, taId,
+  } = shift;
+
+  // A driver only runs the Field Ops flow if actually assigned to a truck today.
+  // truckId comes from the driver's crew for the date; without it there is no
+  // assignment — a stale dispatch notification or same-day confirmation record
+  // must NOT surface the check-in wizard.
+  const hasAssignment = !!truckId;
+
+  const walkers = crew.filter(m => m.role === 'walker');
+
+  // Truck loaded: roster-based check-off confirmed (ADR-181), or legacy manifest ack.
+  const loadDone = rosterAvailable ? !!roster?.load_confirmed : !!manifest;
+
+  const rtsApproved  = rtsReport?.status === 'rts_approved' || rtsReport?.status === 'approved';
+  const rtsPending   = rtsReport?.status === 'pending';
+
+  // Step progress for the driver-day header badge (19 gated steps; the paged
+  // wizard's own bar is the authoritative % — this just feeds the "n/19" pill).
+  const TOTAL_STEPS = 19;
+  const completedSteps = isDriver ? [
+    confirmationStatus === 'confirmed',
+    !!checkedIn,
+    !!dockZone,
+    !!preTripDone,
+    !!fuelLog?.odometer_start,
+    !!stationLoadArrived,
+    // tote check-off + confirm-load when a roster exists (ADR-181),
+    // legacy manifest acknowledge otherwise.
+    rosterAvailable ? !!roster?.load_confirmed : !!manifest,
+    !!departed,
+    !!(activeAP && activeAP.status !== 'preliminary'),
+    !!(activeAP && activeAP.status === 'arrived'),
+    !!checkIn1,
+    !!checkIn2,
+    !!checkIn3,
+    !!rtsReport,
+    !!stationReturnArrived,
+    !!stationHandoff,
+    !!(fuelLog?.odometer_end != null),
+    !!eodDone,
+    !!returned,
+  ].filter(Boolean).length : 0;
+
+  // ── Wizard step model (one step per page, fade + dots) ──────────────────────
+  // Each entry: reachable (is this step visible per the gates), done, section
+  // label, and the node to render. Only reachable steps become pages; the same
+  // gate booleans that drove the old checklist decide reachability, so the flow
+  // logic is unchanged — only the presentation (paged vs scrolled).
+  type WizStep = { key: string; section: string; reachable: boolean; done: boolean; node: React.ReactNode };
+  const allSteps: WizStep[] = isDriver ? [
+    { key: 'confirm', section: 'Offsite', reachable: hasAssignment, done: confirmationStatus === 'confirmed',
+      node: <StepDispatchConfirmation employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'checkin', section: 'Offsite', reachable: confirmationStatus === 'confirmed', done: !!checkedIn,
+      node: <StepCheckIn employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'pretrip', section: 'Offsite', reachable: !!checkedIn, done: !!preTripDone,
+      node: <StepInspection employeeId={employeeId} shift={shift} inspType="pre_trip" stepNum="2"
+              title="Pre-Trip Inspection" subtitle="Inspect the truck before leaving the offsite." onDone={reload} c={c} /> },
+    { key: 'odo_start', section: 'Offsite', reachable: !!preTripDone, done: !!fuelLog?.odometer_start,
+      node: <StepStartOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'station_arrive', section: 'Station — Loading', reachable: !!fuelLog, done: !!stationLoadArrived,
+      node: <StepStationArrival employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    // Gate / zone assignment from dispatch (ADR-206). Informational — it does NOT
+    // gate pre-trip/odometer/arrival (those don't need a zone). It gates LOADING,
+    // since the driver needs the zone to know where to load. done=true once reached
+    // so it never traps the cursor when dispatch hasn't assigned yet; the load step
+    // below is what actually waits on dockZone.
+    { key: 'dock', section: 'Station — Loading', reachable: !!stationLoadArrived, done: !!stationLoadArrived,
+      node: <StepDockAssignment dockZone={dockZone} c={c} /> },
+    { key: 'load', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived && !!dockZone,
+      done: loadDone,
+      node: rosterAvailable ? <StepLoadTruck roster={roster!} onDone={reload} c={c} />
+                            : <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} /> },
+    { key: 'depart', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived && loadDone, done: !!departed,
+      node: <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'ap', section: 'Route', reachable: !!departed, done: !!activeAP,
+      node: <StepAnchorPoint employeeId={employeeId} truckId={truckId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'ap_arrive', section: 'Route', reachable: !!departed && !!(activeAP && activeAP.status === 'preliminary'),
+      done: !!(activeAP && activeAP.status === 'arrived'),
+      node: activeAP ? <StepAPArrive ap={activeAP} onDone={reload} c={c} /> : null },
+    { key: 'ci1', section: 'Route', reachable: !!departed && !!(activeAP && activeAP.status === 'arrived'), done: !!checkIn1,
+      node: <StepCheckIn1 employeeId={employeeId} shift={shift} crew={crew} onDone={reload} c={c} /> },
+    // Walker Ratings step removed (ADR-201 follow-up) — peer rating now lives on the
+    // Preferences → Rate Team tab (all crew, incl. drivers), not the driver day flow.
+    { key: 'ci2', section: 'Route', reachable: !!departed && !!checkIn1, done: !!checkIn2,
+      node: <StepCheckInN employeeId={employeeId} shift={shift} num={2} time={CI_TIMES[1]}
+              record={checkIn2} prevRecord={checkIn1} crew={crew} onDone={reload} c={c} /> },
+    { key: 'ci3', section: 'Route', reachable: !!departed && !!checkIn2, done: !!checkIn3,
+      node: <StepCheckInN employeeId={employeeId} shift={shift} num={3} time={CI_TIMES[2]}
+              record={checkIn3} prevRecord={checkIn2} crew={crew} onDone={reload} c={c} /> },
+    { key: 'handoffs', section: 'Route',
+      reachable: !!departed && !!checkIn1 && !!rtsSummary && !!rtsSummary.routes.some(r => r.handoff_exists),
+      // Informational (ADR-193 D4) — doesn't gate the RTS step. done=true when all
+      // returned routes are driver-confirmed, so it never traps the live cursor.
+      done: !rtsSummary || rtsSummary.routes.filter(r => r.handoff_exists).every(r => !!r.driver_confirmed_at),
+      node: rtsSummary ? <StepWalkerHandoffs summary={rtsSummary} onDone={reload} c={c} /> : null },
+    { key: 'rts', section: 'Route', reachable: !!departed && !!checkIn3, done: !!rtsReport,
+      node: <StepRTSReport employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'return_arrive', section: 'Station — Return', reachable: !!rtsApproved, done: !!stationReturnArrived,
+      node: <StepStationReturn employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'handoff', section: 'Station — Return', reachable: !!rtsApproved && !!stationReturnArrived, done: !!stationHandoff,
+      node: <StepStationHandoff employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+
+    { key: 'odo_end', section: 'Offsite — End of Day', reachable: !!stationHandoff, done: !!(fuelLog?.odometer_end != null),
+      node: <StepEndOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+    { key: 'eod_insp', section: 'Offsite — End of Day', reachable: !!stationHandoff && fuelLog?.odometer_end != null, done: !!eodDone,
+      node: <StepInspection employeeId={employeeId} shift={shift} inspType="eod" stepNum="18"
+              title="End-of-Day Inspection" subtitle="Inspect the truck before parking. Note any new issues." onDone={reload} c={c} /> },
+    { key: 'signout', section: 'Offsite — End of Day', reachable: !!stationHandoff && !!eodDone, done: !!returned,
+      node: <StepSignOut employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
+  ].filter(st => st.reachable) : [];
+
+  // Live step = the furthest-incomplete reachable step (server-derived, as before).
+  // cursor = which page the driver is viewing; clamped so they can review COMPLETED
+  // steps (back) but never skip ahead of the live step.
+  const liveIndex = (() => {
+    const i = allSteps.findIndex(st => !st.done);
+    return i === -1 ? Math.max(0, allSteps.length - 1) : i;
+  })();
+
+  // Follow the live step forward unless the driver is reviewing a past step.
+  // (cursor / reviewingRef / fade are declared with the other hooks at the top of
+  // the component — BEFORE the early returns — to satisfy the Rules of Hooks.)
+  useEffect(() => {
+    const clampedLive = Math.max(0, Math.min(liveIndex, allSteps.length - 1));
+    setCursor(prev => {
+      if (reviewingRef.current && prev < clampedLive) return Math.min(prev, allSteps.length - 1);
+      return clampedLive;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveIndex, allSteps.length]);
+
+  // Cross-dissolve on page change. Going to/at the live step clears review mode.
+  const goToStep = (next: number) => {
+    if (next === cursor || next < 0 || next > liveIndex) return;
+    reviewingRef.current = next < liveIndex;
+    Animated.timing(fade, { toValue: 0, duration: duration.fast, useNativeDriver: true }).start(() => {
+      setCursor(next);
+      Animated.timing(fade, { toValue: 1, duration: duration.fast, useNativeDriver: true }).start();
+    });
+  };
+
+  // Early-return guards AFTER all hooks/derivations (Rules of Hooks: hooks must
+  // run unconditionally every render).
   if (loadingId) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
@@ -615,55 +892,6 @@ export default function FieldOpsScreen() {
     );
   }
 
-  // ── Derived gating flags ─────────────────────────────────────────────────
-  const {
-    confirmationStatus,
-    checkedIn, dockZone, preTripDone, fuelLog, stationLoadArrived, wasStaged,
-    missingItems, manifest, departed, activeAP, checkIn1, checkIn2, checkIn3,
-    rtsReport, crew, walkerRatingsSubmitted, stationReturnArrived, stationHandoff,
-    eodDone, returned, truckId,
-  } = shift;
-
-  const walkers      = crew.filter(m => m.role === 'walker');
-  // NCNS walkers from check-in 1 — we don't have individual mapping so use submitted rating as proxy
-  const presentWalkers = checkIn1
-    ? walkers.filter(w => walkerRatingsSubmitted[w.id] !== undefined
-        ? true // already rated means present
-        : true) // before any ratings, show all; absent ones will be filtered after CI1 submitted
-    : [];
-  // After CI1: only walkers not explicitly no-shown
-  // We determine absence from the ratings endpoint (present: false) — stored in walkerRatingsSubmitted
-  // For simplicity: show all walkers who don't have a no-show rating submitted
-  const ratableWalkers = checkIn1 ? walkers : [];
-
-  const rtsApproved  = rtsReport?.status === 'rts_approved' || rtsReport?.status === 'approved';
-  const rtsPending   = rtsReport?.status === 'pending';
-
-  // Step progress for driver shift (20 total gated steps 0–19)
-  const TOTAL_STEPS = 20;
-  const completedSteps = isDriver ? [
-    confirmationStatus === 'confirmed',
-    !!checkedIn,
-    !!dockZone,
-    !!preTripDone,
-    !!fuelLog?.odometer_start,
-    !!stationLoadArrived,
-    !!manifest,
-    !!departed,
-    !!(activeAP && activeAP.status !== 'preliminary'),
-    !!(activeAP && activeAP.status === 'arrived'),
-    !!checkIn1,
-    walkers.length === 0 || Object.keys(walkerRatingsSubmitted).length > 0,
-    !!checkIn2,
-    !!checkIn3,
-    !!rtsReport,
-    !!stationReturnArrived,
-    !!stationHandoff,
-    !!(fuelLog?.odometer_end != null),
-    !!eodDone,
-    !!returned,
-  ].filter(Boolean).length : 0;
-
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       <ScrollView style={s.scroll} contentContainerStyle={s.content}
@@ -678,9 +906,9 @@ export default function FieldOpsScreen() {
             <Text style={s.pageTitle}>Field Ops</Text>
             <Text style={s.subtitle}>{localToday()}</Text>
           </View>
-          {isDriver ? (
-            <View style={[s.stepBadge, { backgroundColor: completedSteps === TOTAL_STEPS ? '#10B98118' : c.primary + '18', borderColor: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
-              <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? '#10B981' : c.primary }]}>
+          {isDriver && hasAssignment ? (
+            <View style={[s.stepBadge, { backgroundColor: (completedSteps === TOTAL_STEPS ? c.success : c.primary) + '18', borderColor: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
+              <Text style={[s.stepBadgeText, { color: completedSteps === TOTAL_STEPS ? c.success : c.primary }]}>
                 {completedSteps}/{TOTAL_STEPS}
               </Text>
             </View>
@@ -689,171 +917,85 @@ export default function FieldOpsScreen() {
           )}
         </View>
 
-        {isDriver && (
+        {isDriver && allSteps.length > 0 && (() => {
+          const secColor  = sectionColor(allSteps[cursor]?.section ?? '', c);
+          const doneCount = allSteps.filter(st => st.done).length;
+          const pct       = Math.round((doneCount / allSteps.length) * 100);
+          const allDone   = doneCount === allSteps.length;
+          const barColor  = allDone ? c.success : secColor;
+          return (
           <>
-            {/* ── OFFSITE ─────────────────────────────────────── */}
-            <LocationDivider label="Offsite" c={c} />
+            {/* Section-colored progress bar with % + section eyebrow (ADR-207) */}
+            <View style={s.progWrap}>
+              <View style={s.progTopRow}>
+                <View style={[s.secDot, { backgroundColor: secColor }]} />
+                <Text style={[s.progSection, { color: c.foreground }]} numberOfLines={1}>
+                  {allSteps[cursor]?.section?.toUpperCase()}
+                </Text>
+                <Text style={[s.progPct, { color: barColor }]}>{pct}%</Text>
+              </View>
+              <View style={[s.progTrack, { backgroundColor: c.surfaceMuted }]}>
+                <View style={[s.progFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+              </View>
+            </View>
 
-            {/* 0 · Dispatch confirmation — must confirm before check-in unlocks */}
-            <StepDispatchConfirmation employeeId={employeeId} shift={shift} onDone={reload} c={c} />
+            {/* Nav row — back · Step N of M · jump-to-live */}
+            <View style={s.wizHeader}>
+              {cursor > 0 ? (
+                <TouchableOpacity onPress={() => goToStep(cursor - 1)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.wizBack}>
+                  <Text style={[s.wizBackArrow, { color: c.primary }]}>←</Text>
+                </TouchableOpacity>
+              ) : <View style={s.wizBack} />}
+              <Text style={[s.wizCount, { color: c.mutedForeground }]}>Step {cursor + 1} of {allSteps.length}</Text>
+              {cursor < liveIndex ? (
+                <TouchableOpacity onPress={() => goToStep(liveIndex)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={s.wizBack}>
+                  <Text style={[s.wizBackArrow, { color: c.primary }]}>→</Text>
+                </TouchableOpacity>
+              ) : <View style={s.wizBack} />}
+            </View>
 
-            {/* 1 · Check-in — only shown after assignment confirmed */}
-            {shift.confirmationStatus === 'confirmed' && (
-              <StepCheckIn employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-            )}
+            {/* Step dots — current widened + section-tinted; done filled, pending faint */}
+            <View style={s.dotRow}>
+              {allSteps.map((st, i) => {
+                const isCurrent = i === cursor;
+                const reviewable = i <= liveIndex;
+                return (
+                  <TouchableOpacity
+                    key={st.key}
+                    disabled={!reviewable}
+                    onPress={() => goToStep(i)}
+                    hitSlop={{ top: 8, bottom: 8, left: 2, right: 2 }}
+                  >
+                    <View style={[
+                      s.dot,
+                      { backgroundColor: st.done ? c.success : c.borderStrong },
+                      isCurrent && [s.dotCurrent, { backgroundColor: secColor }],
+                      !st.done && !isCurrent && { opacity: 0.5 },
+                    ]} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-            {/* 2 · Dock assignment (visible once checked in) */}
-            {checkedIn && (
-              <StepDockAssignment dockZone={dockZone} c={c} />
-            )}
-
-            {/* 3 · Pre-trip inspection (after check-in) */}
-            {checkedIn && (
-              <StepInspection
-                employeeId={employeeId} shift={shift}
-                inspType="pre_trip" stepNum="3"
-                title="Pre-Trip Inspection"
-                subtitle="Inspect the truck before leaving the offsite."
-                onDone={reload} c={c}
-              />
-            )}
-
-            {/* 4 · Start odometer (after pre-trip) */}
-            {preTripDone && (
-              <StepStartOdometer employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-            )}
-
-            {/* ── STATION (LOADING) ────────────────────────── */}
-            {fuelLog && (
-              <>
-                <LocationDivider label="Station — Loading" c={c} />
-
-                {/* 5 · Station arrival + staging check */}
-                <StepStationArrival employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-
-                {/* 6 · Package manifest (after station loading arrival) */}
-                {stationLoadArrived && (
-                  <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} />
-                )}
-
-                {/* 7 · Departure (after manifest acknowledged or no manifest) */}
-                {stationLoadArrived && (
-                  <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-              </>
-            )}
-
-            {/* ── ROUTE / AP ───────────────────────────────── */}
-            {departed && (
-              <>
-                <LocationDivider label="Route" c={c} />
-
-                {/* 8 · Post AP + ETA */}
-                <StepAnchorPoint employeeId={employeeId} truckId={truckId} shift={shift} onDone={reload} c={c} />
-
-                {/* 9 · Confirm arrival */}
-                {activeAP && activeAP.status === 'preliminary' && (
-                  <StepAPArrive ap={activeAP} onDone={reload} c={c} />
-                )}
-
-                {/* 10 · Check-in 1 (after AP arrived) */}
-                {activeAP && activeAP.status === 'arrived' && (
-                  <StepCheckIn1 employeeId={employeeId} shift={shift} crew={crew} onDone={reload} c={c} />
-                )}
-
-                {/* 11 · Walker ratings (after CI1, persisted drafts) */}
-                {checkIn1 && ratableWalkers.length > 0 && (
-                  <StepWalkerRatings
-                    walkers={ratableWalkers}
-                    drafts={walkerDrafts}
-                    submitted={walkerRatingsSubmitted}
-                    onUpdateDraft={updateDraft}
-                    c={c}
-                  />
-                )}
-
-                {/* 12 · Check-in 2 */}
-                {checkIn1 && (
-                  <StepCheckInN employeeId={employeeId} shift={shift} num={2} time={CI_TIMES[1]}
-                    record={checkIn2} prevRecord={checkIn1} crew={crew} onDone={reload} c={c} />
-                )}
-
-                {/* 13 · Check-in 3 */}
-                {checkIn2 && (
-                  <StepCheckInN employeeId={employeeId} shift={shift} num={3} time={CI_TIMES[2]}
-                    record={checkIn3} prevRecord={checkIn2} crew={crew} onDone={reload} c={c} />
-                )}
-
-                {/* 14 · Departure request (RTS) */}
-                {checkIn3 && (
-                  <StepRTSReport employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-
-                {/* Waiting for dispatch approval */}
-                {rtsPending && (
-                  <Card c={c}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-                      <ActivityIndicator color={c.warning} size="small" />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
-                          Waiting for dispatch approval
-                        </Text>
-                        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }}>
-                          Pull down to refresh. Dispatch is reviewing your departure request.
-                        </Text>
-                      </View>
-                    </View>
-                  </Card>
-                )}
-              </>
-            )}
-
-            {/* ── STATION (RETURN) ─────────────────────────── */}
-            {rtsApproved && (
-              <>
-                <LocationDivider label="Station — Return" c={c} />
-
-                {/* 15 · Station arrival return */}
-                <StepStationReturn employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-
-                {/* 16 · Station handoff */}
-                {stationReturnArrived && (
-                  <StepStationHandoff employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-              </>
-            )}
-
-            {/* ── OFFSITE (EOD) ────────────────────────────── */}
-            {stationHandoff && (
-              <>
-                <LocationDivider label="Offsite — End of Day" c={c} />
-
-                {/* 17 · End odometer + submit walker ratings */}
-                <StepEndOdometer
-                  employeeId={employeeId} shift={shift}
-                  walkers={ratableWalkers} drafts={walkerDrafts}
-                  submittedRatings={walkerRatingsSubmitted}
-                  onDone={reload} c={c}
-                />
-
-                {/* 18 · EOD inspection */}
-                {fuelLog?.odometer_end != null && (
-                  <StepInspection
-                    employeeId={employeeId} shift={shift}
-                    inspType="eod" stepNum="18"
-                    title="End-of-Day Inspection"
-                    subtitle="Inspect the truck before parking. Note any new issues."
-                    onDone={reload} c={c}
-                  />
-                )}
-
-                {/* 19 · Sign out */}
-                {eodDone && (
-                  <StepSignOut employeeId={employeeId} shift={shift} onDone={reload} c={c} />
-                )}
-              </>
-            )}
+            {/* The current step, cross-dissolved on change; section accent shared
+                with Card/SectionHeader via context */}
+            <SectionAccent.Provider value={secColor}>
+              <Animated.View style={{ opacity: fade }}>
+                {allSteps[cursor]?.node}
+              </Animated.View>
+            </SectionAccent.Provider>
           </>
+          );
+        })()}
+
+        {isDriver && !hasAssignment && (
+          <View style={s.noAssignCard}>
+            <Text style={s.noAssignEmoji}>🚚</Text>
+            <Text style={[s.noAssignTitle, { color: c.foreground }]}>No assignment today</Text>
+            <Text style={[s.noAssignSub, { color: c.mutedForeground }]}>
+              You're not assigned to a truck for {localToday()}. Check-in opens once dispatch assigns you a truck.
+            </Text>
+          </View>
         )}
 
         {isWalker && (
@@ -884,8 +1026,8 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
         status,
       });
       onDone();
-    } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail ?? 'Could not record response. Try again.');
+    } catch (e: unknown) {
+      Alert.alert('Error', errorText(e, 'Could not record response. Try again.'));
     } finally {
       setActing(null);
       submitting.current = false;
@@ -986,7 +1128,7 @@ function StepDispatchConfirmation({ employeeId, shift, onDone, c }: {
               opacity: acting === 'declining' ? 0.3 : 1 }}>
             {acting === 'confirming'
               ? <ActivityIndicator size="small" color="#fff" />
-              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: '#fff' }}>✓  Confirm Attendance</Text>}
+              : <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.primaryForeground }}>✓  Confirm Attendance</Text>}
           </TouchableOpacity>
         </View>
 
@@ -1002,7 +1144,7 @@ function StepCheckIn({ employeeId, shift, onDone, c }: { employeeId: string; shi
     try {
       await apiClient.post('/field-ops/check-in', { employee_id: employeeId, date: localToday() });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Check-in failed.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Check-in failed.')); }
     finally { setActing(false); }
   };
   if (shift.checkedIn) {
@@ -1022,7 +1164,7 @@ function StepDockAssignment({ dockZone, c }: { dockZone: string | null; c: Theme
   // keep it visible so the driver can see their gate.
   return (
     <Card c={c}>
-      <SectionHeader num="2" title="Your Gate Assignment" c={c} />
+      <SectionHeader num="5" title="Your Gate Assignment" c={c} />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md,
         backgroundColor: dockZone ? c.primary + '12' : c.surfaceMuted,
         borderRadius: radius.md, padding: spacing.md,
@@ -1078,32 +1220,22 @@ function StepStartOdometer({ employeeId, shift, onDone, c }: { employeeId: strin
     try {
       await apiClient.post('/field-ops/fuel-log', { driver_id: employeeId, date: localToday(), odometer_start: toMi(n, unit) });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not log odometer reading. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not log odometer reading. Try again.')); }
     finally { setSaving(false); }
   };
   if (done) {
-    return <CompletedRow num="4" title="Start Odometer" c={c}
+    return <CompletedRow num="3" title="Start Odometer" c={c}
       summary={`${shift.fuelLog ? toDisp(shift.fuelLog.odometer_start, unit) : '—'} ${distU}`} />;
   }
   return (
     <Card c={c}>
-      <SectionHeader num="4" title="Log Start Odometer"
+      <SectionHeader num="3" title="Log Start Odometer"
         subtitle="Record the truck's odometer before leaving the offsite." c={c} />
-      <View style={{ flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm }}>
-        {(['imperial', 'metric'] as const).map(u => (
-          <TouchableOpacity key={u} onPress={() => setUnit(u)}
-            style={{ flex: 1, paddingVertical: spacing.xs, borderRadius: radius.sm, borderWidth: 1,
-              alignItems: 'center', backgroundColor: unit === u ? c.primary : 'transparent',
-              borderColor: unit === u ? c.primary : c.border }}>
-            <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-              color: unit === u ? '#fff' : c.mutedForeground }}>{u === 'imperial' ? 'mi / gal' : 'km / L'}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={val} onChangeText={setVal} placeholder={`Odometer reading (${distU})`}
-        placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
+      <Segmented
+        options={[{ value: 'imperial', label: 'mi / gal' }, { value: 'metric', label: 'km / L' }]}
+        value={unit} onChange={setUnit} c={c} />
+      <FieldInput label={`Odometer reading (${distU})`} value={val} onChangeText={setVal}
+        placeholder={`e.g. 84213 ${distU}`} keyboardType="numeric" c={c} />
       <Btn label="Log Start Odometer" onPress={submit} disabled={!val} loading={saving} c={c} />
     </Card>
   );
@@ -1130,7 +1262,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
         missing_items: staged ? [] : Object.keys(missing).filter(k => missing[k]),
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record station arrival. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not record station arrival. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1141,27 +1273,21 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
       : shift.wasStaged === false
         ? `Not staged · ${missingArr.map(k => STAGING_LABELS[k] ?? k).join(', ') || fmtTime(shift.stationLoadAt)}`
         : `Arrived ${fmtTime(shift.stationLoadAt)}`;
-    return <CompletedRow num="5" title="Station Arrival — Loading" summary={summary} c={c} />;
+    return <CompletedRow num="4" title="Station Arrival — Loading" summary={summary} c={c} />;
   }
   return (
     <Card c={c}>
-      <SectionHeader num="5" title="Arrive at Station — Loading"
+      <SectionHeader num="4" title="Arrive at Station — Loading"
         subtitle="Record your arrival and check if your area was staged." c={c} />
       <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground, marginBottom: spacing.sm }}>
         Was your area already staged when you arrived?
       </Text>
-      <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
-        {([true, false] as const).map(v => (
-          <TouchableOpacity key={String(v)} onPress={() => setStaged(v)}
-            style={{ flex: 1, paddingVertical: spacing.sm, borderRadius: radius.md, borderWidth: 1,
-              alignItems: 'center',
-              backgroundColor: staged === v ? (v ? c.success : c.danger) : 'transparent',
-              borderColor: staged === v ? (v ? c.success : c.danger) : c.border }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold,
-              color: staged === v ? '#fff' : c.mutedForeground }}>{v ? 'Yes — Staged' : 'No — Not Ready'}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <Segmented<boolean>
+        options={[
+          { value: true,  label: 'Yes — Staged',   tone: c.success },
+          { value: false, label: 'No — Not Ready', tone: c.danger },
+        ]}
+        value={staged as boolean} onChange={setStaged} c={c} />
       {staged === false && (
         <View style={{ marginBottom: spacing.md }}>
           <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: spacing.sm }}>
@@ -1175,7 +1301,7 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
                 borderColor: missing[item] ? c.danger : c.border,
                 backgroundColor: missing[item] ? c.danger : 'transparent',
                 alignItems: 'center', justifyContent: 'center' }}>
-                {missing[item] && <Text style={{ color: '#fff', fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
+                {missing[item] && <Text style={{ color: c.primaryForeground, fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
               </View>
               <Text style={{ fontSize: fontSize.sm, color: c.foreground }}>{STAGING_LABELS[item]}</Text>
             </TouchableOpacity>
@@ -1183,6 +1309,289 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
         </View>
       )}
       <Btn label="Record Arrival" onPress={submit} disabled={staged === null} loading={saving} c={c} />
+    </Card>
+  );
+}
+
+function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () => void; c: ThemeColors }) {
+  const [togglingBag, setTogglingBag] = useState<string | null>(null);
+  const [confirming,  setConfirming]  = useState(false);
+  const [filter,      setFilter]      = useState('');
+  const [hideChecked, setHideChecked] = useState(false);
+  const [collapsed,   setCollapsed]   = useState<Record<string, boolean>>({});
+
+  const unchecked = roster.tote_count - roster.checked_count;
+  const pct = roster.tote_count > 0 ? Math.round((roster.checked_count / roster.tote_count) * 100) : 0;
+
+  // Group by dock tag (how totes are physically staged on the dock). A tote may
+  // carry multiple tags; group by its first, fall back to "Unstaged". Filter by
+  // bag or dock tag; optionally hide already-loaded totes.
+  const groups = useMemo(() => {
+    const q = filter.trim().toUpperCase();
+    const matches = (t: RosterTote) =>
+      (!hideChecked || !t.checked) &&
+      (!q || t.bag_id.toUpperCase().includes(q) || (t.dock_tags ?? []).some(d => d.toUpperCase().includes(q)));
+    const by: Record<string, RosterTote[]> = {};
+    for (const t of roster.totes) {
+      if (!matches(t)) continue;
+      const key = (t.dock_tags ?? [])[0] || 'Unstaged';
+      (by[key] ??= []).push(t);
+    }
+    return Object.keys(by).sort().map(label => {
+      const totes = by[label];
+      return { label, totes, loaded: totes.filter(t => t.checked).length };
+    });
+  }, [roster.totes, filter, hideChecked]);
+
+  const toggle = async (tote: RosterTote) => {
+    if (roster.load_confirmed || togglingBag) return;
+    setTogglingBag(tote.bag_id);
+    try {
+      await apiClient.post(`/sort/${localToday()}/totes/${tote.bag_id}/check`, { checked: !tote.checked });
+      onDone();
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not update the tote.')); }
+    finally { setTogglingBag(null); }
+  };
+
+  const confirmLoad = () => {
+    const doConfirm = async () => {
+      setConfirming(true);
+      try {
+        await apiClient.post(`/sort/${localToday()}/trucks/${roster.truck_id}/confirm-load`);
+        onDone();
+      } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not confirm the load.')); }
+      finally { setConfirming(false); }
+    };
+    if (unchecked > 0) {
+      Alert.alert(
+        'Confirm with missing totes?',
+        `${unchecked} roster tote${unchecked === 1 ? ' is' : 's are'} still unchecked. They'll be recorded as short and dispatch will be notified.`,
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Confirm Anyway', style: 'destructive', onPress: doConfirm }],
+      );
+    } else {
+      doConfirm();
+    }
+  };
+
+  const reopen = () => {
+    Alert.alert('Reopen loading?', 'This unlocks tote check-off and clears your confirmation.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reopen', style: 'destructive', onPress: async () => {
+        try {
+          await apiClient.delete(`/sort/${localToday()}/trucks/${roster.truck_id}/confirm-load`);
+          onDone();
+        } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not reopen loading.')); }
+      }},
+    ]);
+  };
+
+  if (roster.load_confirmed) {
+    return (
+      <View>
+        <CompletedRow num="6" title="Load Truck" c={c}
+          summary={`${roster.checked_count}/${roster.tote_count} totes confirmed ${fmtTime(roster.confirmed_at)}${roster.short_count ? ` · ${roster.short_count} short` : ''}`} />
+        <TouchableOpacity onPress={reopen} style={{ alignSelf: 'flex-end', marginTop: -6, marginBottom: spacing.sm, padding: spacing.xs }}>
+          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textDecorationLine: 'underline' }}>Reopen loading</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const noMatch = groups.length === 0;
+
+  return (
+    <Card c={c}>
+      <SectionHeader num="6" title="Load Truck"
+        subtitle="Check each tote off as it goes on the truck, then confirm your load. Dispatch sees this live." c={c} />
+
+      {/* Progress header */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
+        <View style={{ flex: 1, height: 6, borderRadius: 999, backgroundColor: c.border, overflow: 'hidden' }}>
+          <View style={{ width: `${pct}%`, height: '100%', borderRadius: 999, backgroundColor: pct === 100 ? c.success : c.primary }} />
+        </View>
+        <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.mutedForeground }}>
+          {roster.checked_count}/{roster.tote_count} loaded
+        </Text>
+      </View>
+
+      {/* Filter + hide-checked */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm }}>
+        <TextInput
+          value={filter}
+          onChangeText={setFilter}
+          placeholder="Filter bag or dock…"
+          placeholderTextColor={c.mutedForeground}
+          autoCapitalize="characters"
+          style={{ flex: 1, fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
+            borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs + 2 }}
+        />
+        <TouchableOpacity
+          onPress={() => setHideChecked(v => !v)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}
+        >
+          <Switch value={hideChecked} onValueChange={setHideChecked} />
+          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>Hide loaded</Text>
+        </TouchableOpacity>
+      </View>
+
+      {noMatch ? (
+        <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground, paddingVertical: spacing.md, textAlign: 'center' }}>
+          {roster.tote_count === 0 ? 'No totes on this roster.' : 'No totes match your filter.'}
+        </Text>
+      ) : groups.map(g => {
+        const isCollapsed = collapsed[g.label];
+        const allLoaded = g.loaded === g.totes.length;
+        return (
+          <View key={g.label} style={{ marginBottom: spacing.xs }}>
+            {/* Section header */}
+            <TouchableOpacity
+              onPress={() => setCollapsed(p => ({ ...p, [g.label]: !p[g.label] }))}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+                paddingVertical: spacing.xs + 2, borderTopWidth: 1, borderTopColor: c.border }}
+            >
+              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.foreground, flex: 1 }}>
+                {g.label}
+              </Text>
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: allLoaded ? c.success : c.mutedForeground }}>
+                {g.loaded}/{g.totes.length}{allLoaded ? ' ✓' : ''}
+              </Text>
+              <Text style={{ fontSize: fontSize.sm, color: c.mutedForeground }}>{isCollapsed ? '▸' : '▾'}</Text>
+            </TouchableOpacity>
+            {!isCollapsed && g.totes.map(t => (
+              <ToteRow key={t.bag_id} tote={t} toggling={togglingBag === t.bag_id}
+                disabled={togglingBag !== null} onPress={() => toggle(t)} c={c} />
+            ))}
+          </View>
+        );
+      })}
+
+      <View style={{ marginTop: spacing.md }}>
+        <Btn
+          label={unchecked > 0 ? `Confirm Load (${unchecked} unchecked)` : 'Confirm Load'}
+          onPress={confirmLoad} loading={confirming} c={c}
+        />
+      </View>
+    </Card>
+  );
+}
+
+function ToteRow({ tote: t, toggling, disabled, onPress, c }: {
+  tote: RosterTote; toggling: boolean; disabled: boolean; onPress: () => void; c: ThemeColors;
+}) {
+  const pullCount = t.pull_tbas?.length ?? 0;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+        paddingVertical: spacing.sm, paddingLeft: spacing.sm }}
+    >
+      <View style={{ width: 24, height: 24, borderRadius: 6, borderWidth: 2,
+        borderColor: t.checked ? c.success : c.border,
+        backgroundColor: t.checked ? c.success : 'transparent',
+        alignItems: 'center', justifyContent: 'center' }}>
+        {toggling
+          ? <ActivityIndicator size="small" color={t.checked ? c.primaryForeground : c.primary} />
+          : t.checked ? <Text style={{ color: c.primaryForeground, fontSize: 14, fontWeight: '700' }}>✓</Text> : null}
+      </View>
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>{t.bag_id}</Text>
+          {t.ov_count > 0 && (
+            <Badge tone="info" size="sm">{t.ov_count} OV</Badge>
+          )}
+          {pullCount > 0 && (
+            <Badge tone="warning" size="sm">⚠ pull {pullCount} at AP</Badge>
+          )}
+        </View>
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>
+          {t.package_count} pkgs
+          {t.checked && t.checked_by_name ? ` · ${t.checked_by_name}` : ''}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function StepWalkerHandoffs({ summary, onDone, c }: { summary: RTSSummary; onDone: () => void; c: ThemeColors }) {
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [flaggingId,   setFlaggingId]   = useState<string | null>(null);
+  const [flagNotes,    setFlagNotes]    = useState('');
+
+  const returned = summary.routes.filter(r => r.handoff_exists);
+  const pending  = returned.filter(r => !r.driver_confirmed_at);
+
+  const confirm = async (r: RTSSummaryRoute, discrepancy?: string) => {
+    setConfirmingId(r.route_id);
+    try {
+      await apiClient.post(`/rts/handoff/${r.route_id}/confirm`, discrepancy
+        ? { discrepancy_flagged: true, discrepancy_notes: discrepancy }
+        : { discrepancy_flagged: false });
+      setFlaggingId(null); setFlagNotes('');
+      onDone();
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not confirm the handoff.')); }
+    finally { setConfirmingId(null); }
+  };
+
+  return (
+    <Card c={c}>
+      <SectionHeader num="✓" title="Walker Handoffs"
+        subtitle={pending.length > 0
+          ? `Count each walker's returned RTS packages against their declared number, then confirm.`
+          : 'All returned routes confirmed.'} c={c} />
+      {returned.map(r => (
+        <View key={r.route_id} style={{ borderTopWidth: 1, borderTopColor: c.border, paddingVertical: spacing.sm }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground }}>
+                Route {r.route_number}{r.walker_name ? ` · ${r.walker_name}` : ''}
+              </Text>
+              <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 1 }}>
+                {r.rts_count} RTS{r.missing_count ? ` · ${r.missing_count} missing` : ''}
+                {r.discrepancy_flagged ? ' · ⚠ discrepancy flagged' : ''}
+              </Text>
+            </View>
+            {r.driver_confirmed_at ? (
+              <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.success }}>
+                ✓ {fmtTime(r.driver_confirmed_at)}
+              </Text>
+            ) : (
+              <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+                <TouchableOpacity
+                  onPress={() => { setFlaggingId(flaggingId === r.route_id ? null : r.route_id); setFlagNotes(''); }}
+                  style={{ borderWidth: 1, borderColor: c.warning + '66', borderRadius: radius.md,
+                    paddingHorizontal: spacing.sm, paddingVertical: spacing.xs + 2 }}>
+                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.warning }}>Flag</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => confirm(r)}
+                  disabled={confirmingId !== null}
+                  style={{ backgroundColor: c.success, borderRadius: radius.md,
+                    paddingHorizontal: spacing.sm + 2, paddingVertical: spacing.xs + 2 }}>
+                  {confirmingId === r.route_id
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.primaryForeground }}>Confirm</Text>}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+          {flaggingId === r.route_id && !r.driver_confirmed_at && (
+            <View style={{ marginTop: spacing.sm }}>
+              <TextInput
+                style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
+                  fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background }}
+                value={flagNotes} onChangeText={setFlagNotes}
+                placeholder="What doesn't match? (e.g. declared 4, received 3)"
+                placeholderTextColor={c.mutedForeground} multiline />
+              <View style={{ marginTop: spacing.xs }}>
+                <Btn label="Confirm with Discrepancy" variant="ghost"
+                  onPress={() => flagNotes.trim() ? confirm(r, flagNotes.trim()) : Alert.alert('Required', 'Describe the discrepancy first.')}
+                  loading={confirmingId === r.route_id} c={c} />
+              </View>
+            </View>
+          )}
+        </View>
+      ))}
     </Card>
   );
 }
@@ -1199,7 +1608,7 @@ function StepManifest({ truckId, shift, employeeId, onDone, c }: {
     try {
       await apiClient.patch(`/field-ops/manifest/${truckId}/acknowledge`);
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not confirm manifest. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not confirm manifest. Try again.')); }
     finally { setAcking(false); }
   };
 
@@ -1255,7 +1664,7 @@ function StepDeparture({ employeeId, shift, onDone, c }: { employeeId: string; s
     try {
       await apiClient.post('/field-ops/departure', { employee_id: employeeId, date: localToday() });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record departure. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not record departure. Try again.')); }
     finally { setActing(false); }
   };
   if (shift.departed) {
@@ -1279,7 +1688,21 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
   const [etaDate,     setEtaDate]     = useState<Date | null>(null);
   const [showPicker,  setShowPicker]  = useState(false);
   const [saving,      setSaving]      = useState(false);
+  const [hints,       setHints]       = useState<LocationHint[]>([]);
   const submitting = useRef(false);
+
+  // Suggested APs (ADR-225): historical spots ranked by proximity to today's
+  // package cluster, each scored (distance + use count) so the driver weighs a
+  // near spot against a proven-parkable one. Fetched once the truck is known and
+  // only while the step is still open (no AP posted yet).
+  useEffect(() => {
+    if (!truckId || done) return;
+    let cancelled = false;
+    apiClient.get<LocationHint[]>(`/anchor-points/truck/${truckId}/location-hints`)
+      .then(res => { if (!cancelled) setHints(res.data ?? []); })
+      .catch(() => { /* best-effort — form works without suggestions */ });
+    return () => { cancelled = true; };
+  }, [truckId, done]);
 
   const etaLabel = etaDate
     ? etaDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -1287,17 +1710,18 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
 
   const submit = async () => {
     if (submitting.current) return;
-    if (!location.trim()) { Alert.alert('Required', 'Enter your anchor point location.'); return; }
+    if (!location.trim()) { Alert.alert('Required', 'Enter a cross street or address for your anchor point.'); return; }
+    if (!etaLabel) { Alert.alert('Required', 'Set your ETA — crew and dispatch need your arrival time.'); return; }
     if (!truckId) { Alert.alert('No truck assigned', 'Your dispatch assignment hasn\'t loaded yet. Pull down to refresh — if this persists, contact dispatch.'); return; }
     submitting.current = true;
     setSaving(true);
     try {
       await apiClient.post('/anchor-points/', {
         truck_id: truckId, date: localToday(),
-        location: location.trim(), eta: etaLabel ?? null,
+        location: location.trim(), eta: etaLabel,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not post anchor point. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not post anchor point. Try again.')); }
     finally { setSaving(false); submitting.current = false; }
   };
 
@@ -1311,34 +1735,82 @@ function StepAnchorPoint({ employeeId, truckId, shift, onDone, c }: {
   return (
     <Card c={c}>
       <SectionHeader num="8" title="Post Anchor Point + ETA"
-        subtitle="Share your starting location and estimated arrival time with your crew and dispatch."
+        subtitle="Enter a cross street or address — it's geocoded to place your AP. ETA is required."
         c={c} />
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={location} onChangeText={setLocation}
-        placeholder="AP location (street, landmark…)" placeholderTextColor={c.mutedForeground} />
+
+      {/* Suggested APs (ADR-225) — ranked by proximity to today's package cluster;
+          each shows distance + how often it was used so you can pick a spot that's
+          both close AND known-parkable. Tap to fill the field, then edit if needed. */}
+      {hints.length > 0 && (
+        <View style={{ marginBottom: spacing.sm }}>
+          <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: c.mutedForeground, letterSpacing: 0.4, marginBottom: spacing.xs }}>
+            SUGGESTED — NEAR TODAY'S PACKAGES
+          </Text>
+          <View style={{ gap: spacing.xs }}>
+            {hints.map((h, i) => {
+              const picked = location.trim() === h.label;
+              const dist = h.distance_m != null
+                ? (h.distance_m < 1000 ? `~${h.distance_m} m` : `~${(h.distance_m / 1000).toFixed(1)} km`)
+                : null;
+              return (
+                <TouchableOpacity
+                  key={`${h.label}:${i}`}
+                  onPress={() => setLocation(h.label)}
+                  style={{
+                    borderWidth: 1, borderRadius: radius.md, padding: spacing.sm,
+                    borderColor: picked ? c.primary : c.border,
+                    backgroundColor: picked ? c.primaryLight : c.background,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+                    <Text style={{ flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: picked ? c.primary : c.foreground }} numberOfLines={1}>
+                      {h.label}
+                    </Text>
+                    {dist && (
+                      <View style={{ backgroundColor: c.infoLight, borderRadius: radius.xs, paddingHorizontal: spacing.xs, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 10, fontWeight: fontWeight.bold, color: c.info, fontVariant: ['tabular-nums'] }}>{dist}</Text>
+                      </View>
+                    )}
+                    {h.use_count != null && h.use_count > 0 && (
+                      <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.xs, paddingHorizontal: spacing.xs, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 10, fontWeight: fontWeight.bold, color: c.mutedForeground, fontVariant: ['tabular-nums'] }}>{h.use_count}×</Text>
+                      </View>
+                    )}
+                  </View>
+                  {(h.reason || h.sublabel) && (
+                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: 2 }} numberOfLines={1}>
+                      {h.reason ?? h.sublabel}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={{ fontSize: 10, color: c.mutedForeground, marginTop: spacing.xs, fontStyle: 'italic' }}>
+            Confirm parking/access before you commit — suggestions are past spots, not today's conditions.
+          </Text>
+        </View>
+      )}
+
+      <FieldInput label="Cross street or address" value={location} onChangeText={setLocation}
+        placeholder="e.g. W 28 St & 9 Ave" c={c} />
       <TouchableOpacity onPress={() => { setEtaDate(etaDate ?? new Date()); setShowPicker(true); }}
         style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
           borderWidth: 1, borderColor: etaDate ? c.primary : c.border, borderRadius: radius.md,
           padding: spacing.sm, backgroundColor: c.background, marginBottom: spacing.sm }}>
         <Text style={{ fontSize: fontSize.sm, color: etaDate ? c.foreground : c.mutedForeground }}>
-          {etaLabel ?? 'ETA — optional'}
+          {etaLabel ?? 'ETA — required'}
         </Text>
         <Text style={{ fontSize: fontSize.xs, color: c.primary }}>
           {etaDate ? 'Change' : 'Set time'}
         </Text>
       </TouchableOpacity>
-      {etaDate && (
-        <TouchableOpacity onPress={() => setEtaDate(null)} style={{ alignSelf: 'flex-start', marginBottom: spacing.sm }}>
-          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>Clear ETA</Text>
-        </TouchableOpacity>
-      )}
       {!truckId && (
         <Text style={{ fontSize: fontSize.xs, color: c.warning, marginBottom: spacing.sm }}>
           Truck assignment not loaded — pull down to refresh before posting.
         </Text>
       )}
-      <Btn label="Post Anchor Point" onPress={submit} disabled={!location.trim()} loading={saving} c={c} />
+      <Btn label="Post Anchor Point" onPress={submit} disabled={!location.trim() || !etaLabel} loading={saving} c={c} />
       {showPicker && (
         <TimePickerModal
           visible={showPicker}
@@ -1368,7 +1840,7 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeC
         notes: notes.trim() || undefined,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not confirm AP arrival. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not confirm AP arrival. Try again.')); }
     finally { setActing(false); }
   };
 
@@ -1376,12 +1848,9 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeC
     <Card c={c}>
       <SectionHeader num="9" title="Confirm AP Arrival"
         subtitle="Tap when you arrive. Correct the location if needed." c={c} />
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={location} onChangeText={setLocation} placeholderTextColor={c.mutedForeground} />
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.sm }}
-        value={notes} onChangeText={setNotes} placeholder="Notes (optional)" placeholderTextColor={c.mutedForeground} />
+      <FieldInput label="Location" value={location} onChangeText={setLocation} c={c} />
+      <FieldInput label="Notes (optional)" value={notes} onChangeText={setNotes}
+        placeholder="Anything the crew should know…" c={c} />
       <Btn label="Confirm Arrival at AP" onPress={confirm} loading={acting} c={c} />
     </Card>
   );
@@ -1390,170 +1859,97 @@ function StepAPArrive({ ap, onDone, c }: { ap: AP; onDone: () => void; c: ThemeC
 function StepCheckIn1({ employeeId, shift, crew, onDone, c }: {
   employeeId: string; shift: ShiftState; crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
+  const switchTab = useTabSwitch();
   const done = !!shift.checkIn1;
   const nonDriverCrew = crew.filter(m => m.role !== 'driver');
-  type Entry = { present: boolean; uniform: boolean; cartCover: boolean };
-  const defaultEntries = (): Record<string, Entry> =>
-    Object.fromEntries(nonDriverCrew.map(m => [m.id, { present: true, uniform: true, cartCover: true }]));
-  const [entries, setEntries] = useState<Record<string, Entry>>(defaultEntries);
+
+  // ADR-228: Check-In #1 no longer RE-collects the roster — the attendance +
+  // uniform/cart-cover are captured on the Crew Roster page (AP Sort). #1 is a
+  // gate + handoff: it verifies the roster is complete, then submits (the server
+  // finalizes the compliance drafts and hands them to Dispatch). The only signal
+  // this step can see locally is roll-call (rollCall); the server is the authority
+  // on compliance completeness and 422s with specifics, which we surface below.
+  const pending = nonDriverCrew.filter(m => {
+    const st = shift.rollCall[m.id];
+    return !st || st === 'pending';
+  });
+  const rolledCount = nonDriverCrew.length - pending.length;
+  const looksComplete = pending.length === 0;
+
   const [saving, setSaving] = useState(false);
+  const [problems, setProblems] = useState<string[] | null>(null);
 
-  // Re-initialize if crew list arrives after first render
-  useEffect(() => {
-    if (nonDriverCrew.length > 0)
-      setEntries(prev => {
-        const next = { ...prev };
-        for (const m of nonDriverCrew) {
-          if (!next[m.id]) next[m.id] = { present: true, uniform: true, cartCover: true };
-        }
-        return next;
-      });
-  }, [nonDriverCrew.length]);
-
-  const setField = (id: string, field: keyof Entry, val: boolean) =>
-    setEntries(p => { const cur = p[id] ?? { present: true, uniform: true, cartCover: true }; return { ...p, [id]: { ...cur, [field]: val } }; });
-
-  const allSet = nonDriverCrew.every(m => entries[m.id] !== undefined);
+  const goToRoster = () => switchTab('RouteSort');
 
   const submit = async () => {
-    if (!allSet) { Alert.alert('Incomplete', 'Mark attendance for all crew members.'); return; }
     setSaving(true);
-    const ncns = nonDriverCrew.filter(m => !entries[m.id]?.present).length;
-    const working = nonDriverCrew.filter(m => entries[m.id]?.present).length;
+    setProblems(null);
+    const ncns = nonDriverCrew.filter(m => shift.rollCall[m.id] === 'ncns').length;
+    const working = nonDriverCrew.filter(m => {
+      const st = shift.rollCall[m.id];
+      return st === 'early' || st === 'present' || st === 'late';
+    }).length;
     try {
-      // Submit crew compliance for all present members
-      const compEntries = nonDriverCrew
-        .filter(m => entries[m.id]?.present)
-        .map(m => ({
-          employee_id: m.id,
-          uniform_pass:    entries[m.id]?.uniform   ?? true,
-          cart_cover_pass: entries[m.id]?.cartCover ?? true,
-        }));
-      if (compEntries.length > 0) {
-        await apiClient.post('/shift-ops/crew-compliance', {
-          driver_id: employeeId, date: localToday(), entries: compEntries,
-        });
-      }
-      // Submit check-in 1
+      // Handoff only — no roll-call / compliance re-entry. The server gates on
+      // roster completeness (422 with problems) and finalizes the drafts.
       await apiClient.post('/shift-ops/check-in', {
         driver_id: employeeId, date: localToday(), check_in_number: 1,
-        routes_remaining: nonDriverCrew.length, // total routes initially = crew size
-        help_requested: false,
-        working_crew_count: working,
-        ncns_count: ncns,
+        routes_remaining: working, help_requested: false,
+        working_crew_count: working, ncns_count: ncns,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit check-in. Try again.'); }
-    finally { setSaving(false); }
+    } catch (e: any) {
+      // Roster-incomplete → the server returns { message, problems: [...] }.
+      const detail = e?.response?.data?.detail;
+      if (e?.response?.status === 422 && detail && typeof detail === 'object' && detail.problems) {
+        setProblems(detail.problems);
+      } else {
+        Alert.alert('Error', errorText(e, 'Could not submit check-in. Try again.'));
+      }
+    } finally { setSaving(false); }
   };
 
   if (done) {
     return <CompletedRow num="10" title="Check-in 1" c={c}
       summary={shift.checkIn1 ? `${shift.checkIn1.working_crew_count} working · ${shift.checkIn1.ncns_count} NCNS` : ''} />;
   }
+
   return (
     <Card c={c}>
       <SectionHeader num="10" title={`Check-in 1 ${CI_TIMES[0]}`}
-        subtitle="Routes handed out by captain. Mark attendance and uniform compliance for each crew member." c={c} />
-      {nonDriverCrew.map(m => {
-        const e = entries[m.id] ?? { present: true, uniform: true, cartCover: true };
-        return (
-          <View key={m.id} style={{ backgroundColor: c.background, borderRadius: radius.md, borderWidth: 1,
-            borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>
-              {m.name}
-            </Text>
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: e.present ? spacing.sm : 0 }}>
-              {([true, false] as const).map(v => (
-                <TouchableOpacity key={String(v)} onPress={() => setField(m.id, 'present', v)}
-                  style={{ flex: 1, paddingVertical: spacing.xs + 1, borderRadius: radius.sm, borderWidth: 1,
-                    alignItems: 'center',
-                    backgroundColor: e.present === v ? (v ? c.success : c.danger) : 'transparent',
-                    borderColor: e.present === v ? (v ? c.success : c.danger) : c.border }}>
-                  <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-                    color: e.present === v ? '#fff' : c.mutedForeground }}>{v ? 'Present' : 'NCNS'}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            {e.present && (
-              <View style={{ gap: spacing.xs }}>
-                {[
-                  { field: 'uniform' as const,    label: 'Uniform pass' },
-                  { field: 'cartCover' as const,  label: 'Cart cover pass' },
-                ].map(({ field, label }) => (
-                  <View key={field} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground }}>{label}</Text>
-                    <Switch
-                      value={e[field]}
-                      onValueChange={v => setField(m.id, field, v)}
-                      trackColor={{ false: c.danger + '80', true: c.success + '80' }}
-                      thumbColor={e[field] ? c.success : c.danger}
-                    />
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        );
-      })}
-      <Btn label="Submit Check-in 1 & Compliance" onPress={submit} disabled={!allSet} loading={saving} c={c} />
-    </Card>
-  );
-}
+        subtitle="Submits the completed Crew Roster + compliance to dispatch. Finish the roster on the AP Sort tab first." c={c} />
 
-function StepWalkerRatings({ walkers, drafts, submitted, onUpdateDraft, c }: {
-  walkers: CrewMember[];
-  drafts: Record<string, WalkerDraft>;
-  submitted: Record<string, boolean>;
-  onUpdateDraft: (id: string, patch: Partial<WalkerDraft>) => void;
-  c: ThemeColors;
-}) {
-  const pending = walkers.filter(w => !submitted[w.id]);
-  const done    = walkers.filter(w => submitted[w.id]);
-  if (walkers.length === 0) return null;
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm }}>
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, fontWeight: fontWeight.semibold }}>
+          {rolledCount}/{nonDriverCrew.length} crew rolled
+        </Text>
+        {!looksComplete && <Badge tone="warning" size="sm">{pending.length} awaiting roll-call</Badge>}
+      </View>
 
-  return (
-    <Card c={c}>
-      <SectionHeader num="11" title="Walker Ratings"
-        subtitle={`Rate each walker during the route. Drafts auto-save. Submitted with end odometer.\nTarget: ${CI_TIMES[3]}`}
-        done={pending.length === 0} doneLabel={`${done.length}/${walkers.length} rated`} c={c} />
-      {done.map(w => (
-        <View key={w.id} style={{ backgroundColor: c.success + '10', borderRadius: radius.md, borderWidth: 1,
-          borderColor: c.success + '30', padding: spacing.sm, marginBottom: spacing.xs,
-          flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
-          <Text style={{ color: c.success, fontSize: fontSize.xs }}>✓</Text>
-          <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium }}>{w.name}</Text>
-          <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginLeft: 'auto' }}>Submitted</Text>
+      {/* Incomplete roster (locally visible: someone unrolled) → guide to the roster page. */}
+      {!looksComplete && (
+        <View style={{ backgroundColor: c.warningLight, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.sm }}>
+          <Text style={{ fontSize: fontSize.sm, color: c.foreground, lineHeight: 20 }}>
+            ⏳ {pending.length} crew member{pending.length === 1 ? '' : 's'} still need roll-call. Complete the Crew Roster before Check-In #1.
+          </Text>
+          <Button variant="outline" size="sm" onPress={goToRoster}>Go to Crew Roster</Button>
         </View>
-      ))}
-      {pending.map(w => {
-        const d = drafts[w.id] ?? { stars: 0, comment: '' };
-        return (
-          <View key={w.id} style={{ backgroundColor: c.background, borderRadius: radius.md, borderWidth: 1,
-            borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm }}>
-            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: c.foreground, marginBottom: spacing.sm }}>{w.name}</Text>
-            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm }}>
-              {[1,2,3,4,5].map(star => (
-                <TouchableOpacity key={star} onPress={() => onUpdateDraft(w.id, { stars: star })}>
-                  <Text style={{ fontSize: 28, color: star <= d.stars ? c.gold : c.border }}>★</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <TextInput
-              style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-                fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.card,
-                minHeight: 52, textAlignVertical: 'top' }}
-              value={d.comment}
-              onChangeText={t => onUpdateDraft(w.id, { comment: t })}
-              placeholder="Comment (optional, private)…" placeholderTextColor={c.mutedForeground} multiline />
-            {d.stars > 0 && (
-              <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginTop: spacing.xs, textAlign: 'right' }}>
-                Draft saved — submits with end odometer
-              </Text>
-            )}
+      )}
+
+      {/* Server rejected as incomplete (covers missing uniform/cart-cover the step can't see). */}
+      {problems && (
+        <View style={{ backgroundColor: c.dangerLight, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.xs }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: c.danger }}>Roster isn't complete yet:</Text>
+          {problems.map((p, i) => (
+            <Text key={i} style={{ fontSize: fontSize.xs, color: c.danger }}>• {p}</Text>
+          ))}
+          <View style={{ marginTop: spacing.xs }}>
+            <Button variant="outline" size="sm" onPress={goToRoster}>Go to Crew Roster</Button>
           </View>
-        );
-      })}
+        </View>
+      )}
+
+      <Btn label="Submit Check-in 1" onPress={submit} disabled={saving} loading={saving} c={c} />
     </Card>
   );
 }
@@ -1563,9 +1959,17 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
   time: string; record: CheckInRecord | null; prevRecord: CheckInRecord | null;
   crew: CrewMember[]; onDone: () => void; c: ThemeColors;
 }) {
-  const maxWorking = prevRecord?.working_crew_count ?? shift.checkIn1?.working_crew_count ?? 0;
-  const nonDriverCrew = crew.filter(m => m.role !== 'driver');
-  const [routes,       setRoutes]       = useState('');
+  // Working crew excludes anyone the roll call marked NCNS — a no-show can't be a
+  // "left early" leaver at a later check-in, and shouldn't inflate the count.
+  const nonDriverCrew = crew.filter(m => m.role !== 'driver' && shift.rollCall[m.id] !== 'ncns');
+  // Ceiling for this check-in: never above the present (non-NCNS) crew size, so a
+  // no-show is auto-excluded even if the previous check-in's stored count was set
+  // before the NCNS mark. If a prior working count exists, take the lower of the two.
+  const maxWorking = prevRecord
+    ? Math.min(prevRecord.working_crew_count, nonDriverCrew.length)
+    : nonDriverCrew.length;
+  // Routes remaining auto-fills from the truck's not-yet-completed routes; editable.
+  const [routes,       setRoutes]       = useState(String(shift.routesRemaining || ''));
   const [working,      setWorking]      = useState(maxWorking);
   const [help,         setHelp]         = useState(false);
   const [saving,       setSaving]       = useState(false);
@@ -1574,6 +1978,8 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
   const [pendingSubmit, setPending]     = useState<{ r: number } | null>(null);
 
   useEffect(() => { setWorking(maxWorking); }, [maxWorking]);
+  // Re-seed routes if the computed remaining changes on reload (driver can still edit).
+  useEffect(() => { setRoutes(String(shift.routesRemaining || '')); }, [shift.routesRemaining]);
 
   const leftCount = maxWorking - working;
 
@@ -1609,7 +2015,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
         ncns_count: shift.checkIn1?.ncns_count ?? 0,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit check-in. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not submit check-in. Try again.')); }
     finally { setSaving(false); setPending(null); }
   };
 
@@ -1635,11 +2041,10 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
         c={c}
       />
 
-      {/* Routes remaining */}
-      <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-        fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.md }}
-        value={routes} onChangeText={setRoutes} placeholder="Routes remaining" keyboardType="numeric"
-        placeholderTextColor={c.mutedForeground} />
+      {/* Routes remaining — auto-filled from routes not yet completed; editable */}
+      <FieldInput label="Routes remaining (auto-filled — adjust if needed)"
+        value={routes} onChangeText={setRoutes} placeholder="Routes remaining"
+        keyboardType="numeric" c={c} />
 
       {/* Working crew stepper */}
       <View style={{ marginBottom: spacing.md }}>
@@ -1712,7 +2117,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
                     borderColor: selected ? c.warning : c.border,
                     backgroundColor: selected ? c.warning : 'transparent',
                     alignItems: 'center', justifyContent: 'center', marginRight: spacing.md }}>
-                    {selected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
+                    {selected && <Text style={{ color: c.primaryForeground, fontSize: 12, fontWeight: fontWeight.bold }}>✓</Text>}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: c.foreground }}>{m.name}</Text>
@@ -1731,7 +2136,7 @@ function StepCheckInN({ employeeId, shift, num, time, record, prevRecord, crew, 
                 style={{ flex: 2, padding: spacing.md, borderRadius: radius.md,
                   backgroundColor: leftEarly.size === leftCount ? c.primary : c.border, alignItems: 'center' }}>
                 <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold,
-                  color: leftEarly.size === leftCount ? '#fff' : c.mutedForeground }}>
+                  color: leftEarly.size === leftCount ? c.primaryForeground : c.mutedForeground }}>
                   Confirm & Submit
                 </Text>
               </TouchableOpacity>
@@ -1749,6 +2154,20 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
   const [crewCount,  setCrewCount]  = useState('');
   const [entries,    setEntries]    = useState<{ reason: string; count: string }[]>([{ reason: '', count: '' }]);
   const [saving,     setSaving]     = useState(false);
+  const [prefilled,  setPrefilled]  = useState(false);
+
+  // ADR-193 D4: prefill from what walkers actually recorded — the driver
+  // adjusts instead of recalling from memory. Runs once; never overwrites edits.
+  const reasonTotals = shift.rtsSummary?.reason_totals;
+  useEffect(() => {
+    if (prefilled || done || !reasonTotals) return;
+    const rows = Object.entries(reasonTotals)
+      .filter(([, n]) => n > 0)
+      .map(([type, n]) => ({ reason: RTS_TYPE_LABELS[type] ?? type, count: String(n) }));
+    if (rows.length > 0) { setEntries(rows); setPrefilled(true); }
+  }, [prefilled, done, reasonTotals]);
+
+  const unconfirmed = shift.rtsSummary?.unconfirmed_handoffs ?? 0;
 
   const addEntry    = () => setEntries(p => [...p, { reason: '', count: '' }]);
   const removeEntry = (i: number) => setEntries(p => p.filter((_, j) => j !== i));
@@ -1769,7 +2188,7 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
         crew_confirmed: cc, rts_packages: pkgs,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit departure request. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not submit departure request. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1797,6 +2216,19 @@ function StepRTSReport({ employeeId, shift, onDone, c }: { employeeId: string; s
     <Card c={c}>
       <SectionHeader num="14" title="Departure Request — RTS Report"
         subtitle="All walkers returned and all packages attempted. Submit RTS groupings for dispatch review." c={c} />
+      {unconfirmed > 0 && (
+        <View style={{ backgroundColor: c.warning + '12', borderWidth: 1, borderColor: c.warning + '40',
+          borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md }}>
+          <Text style={{ fontSize: fontSize.xs, color: c.warning, fontWeight: fontWeight.semibold }}>
+            {unconfirmed} walker handoff{unconfirmed === 1 ? '' : 's'} not confirmed yet — confirm them above so these counts are trustworthy.
+          </Text>
+        </View>
+      )}
+      {prefilled && (
+        <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, marginBottom: spacing.sm }}>
+          Prefilled from your walkers' recorded RTS packages — adjust if the physical count differs.
+        </Text>
+      )}
       <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
         fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.md }}
         value={crewCount} onChangeText={setCrewCount}
@@ -1850,7 +2282,7 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
         employee_id: employeeId, date: localToday(), arrival_type: 'return',
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not record station return. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not record station return. Try again.')); }
     finally { setActing(false); }
   };
   if (done) {
@@ -1867,8 +2299,10 @@ function StepStationReturn({ employeeId, shift, onDone, c }: { employeeId: strin
 
 function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: string; shift: ShiftState; onDone: () => void; c: ThemeColors }) {
   const done = shift.stationHandoff;
-  const [totes,  setTotes]  = useState('');
-  const [rtsN,   setRtsN]   = useState('');
+  // Prefill from what the system already knows: roster tote count and the
+  // approved RTS report total. Driver corrects to the physical count.
+  const [totes,  setTotes]  = useState(shift.roster ? String(shift.roster.tote_count) : '');
+  const [rtsN,   setRtsN]   = useState(shift.rtsReport ? String(shift.rtsReport.total_rts) : '');
   const [notes,  setNotes]  = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -1882,7 +2316,7 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
         totes_returned: t, rts_count: r, notes: notes.trim() || null,
       });
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not submit station handoff. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not submit station handoff. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1919,9 +2353,8 @@ function StepStationHandoff({ employeeId, shift, onDone, c }: { employeeId: stri
   );
 }
 
-function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings, onDone, c }: {
-  employeeId: string; shift: ShiftState; walkers: CrewMember[];
-  drafts: Record<string, WalkerDraft>; submittedRatings: Record<string, boolean>;
+function StepEndOdometer({ employeeId, shift, onDone, c }: {
+  employeeId: string; shift: ShiftState;
   onDone: () => void; c: ThemeColors;
 }) {
   const done = shift.fuelLog?.odometer_end != null;
@@ -1934,8 +2367,6 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
   const distU = unit === 'metric' ? 'km' : 'mi';
   const fuelU = unit === 'metric' ? 'L'  : 'gal';
 
-  const pendingRatings = walkers.filter(w => !submittedRatings[w.id] && (drafts[w.id]?.stars ?? 0) > 0);
-
   const submit = async () => {
     if (!log) return;
     const endMi = toMi(parseFloat(endOdo), unit);
@@ -1944,24 +2375,13 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
     }
     setSaving(true);
     try {
-      // Flush pending walker rating drafts first
-      for (const w of pendingRatings) {
-        const d = drafts[w.id];
-        await apiClient.post('/field-ops/rating', {
-          driver_id: employeeId, walker_id: w.id, date: localToday(),
-          present: true, stars: d.stars, comment: d.comment || null,
-        }).catch(() => {});
-      }
-      // Log end odometer
       await apiClient.patch(`/field-ops/fuel-log/${employeeId}`, {
         odometer_end: endMi,
         fuel_added: fuel ? fToGal(+fuel, unit) : null,
         notes: notes.trim() || null,
       });
-      // Clear drafts from storage
-      await AsyncStorage.removeItem(`asheflow_walker_drafts_${employeeId}_${localToday()}`);
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not log end odometer. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not log end odometer. Try again.')); }
     finally { setSaving(false); }
   };
 
@@ -1977,47 +2397,23 @@ function StepEndOdometer({ employeeId, shift, walkers, drafts, submittedRatings,
   return (
     <Card c={c}>
       <SectionHeader num="17" title="Log End Odometer"
-        subtitle={`Record truck odometer on return.${pendingRatings.length > 0 ? ` Also submits ${pendingRatings.length} walker rating draft${pendingRatings.length !== 1 ? 's' : ''}.` : ''}`}
-        c={c} />
+        subtitle="Record truck odometer on return." c={c} />
       {log && (
         <>
-          <View style={{ flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.sm }}>
-            {(['imperial', 'metric'] as const).map(u => (
-              <TouchableOpacity key={u} onPress={() => setUnit(u)}
-                style={{ flex: 1, paddingVertical: spacing.xs, borderRadius: radius.sm, borderWidth: 1,
-                  alignItems: 'center', backgroundColor: unit === u ? c.primary : 'transparent',
-                  borderColor: unit === u ? c.primary : c.border }}>
-                <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.semibold,
-                  color: unit === u ? '#fff' : c.mutedForeground }}>{u === 'imperial' ? 'mi / gal' : 'km / L'}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm }}>
+          <Segmented
+            options={[{ value: 'imperial', label: 'mi / gal' }, { value: 'metric', label: 'km / L' }]}
+            value={unit} onChange={setUnit} c={c} />
+          <View style={{ backgroundColor: c.surfaceMuted, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md }}>
             <Text style={{ fontSize: fontSize.xs, color: c.foreground }}>
               Start: <Text style={{ fontWeight: fontWeight.semibold }}>{displayStart} {distU}</Text>
             </Text>
           </View>
-          {pendingRatings.length > 0 && (
-            <View style={{ backgroundColor: c.info + '12', borderRadius: radius.md, borderWidth: 1,
-              borderColor: c.info + '40', padding: spacing.sm, marginBottom: spacing.sm }}>
-              <Text style={{ fontSize: fontSize.xs, color: c.info, fontWeight: fontWeight.semibold }}>
-                {pendingRatings.length} walker rating{pendingRatings.length !== 1 ? 's' : ''} will be submitted with this
-              </Text>
-            </View>
-          )}
-          <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-            fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.xs }}
-            value={endOdo} onChangeText={setEndOdo} placeholder={`End odometer (${distU})`}
-            placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
-          <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-            fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background, marginBottom: spacing.xs }}
-            value={fuel} onChangeText={setFuel} placeholder={`Fuel added (${fuelU}) — optional`}
-            placeholderTextColor={c.mutedForeground} keyboardType="numeric" />
-          <TextInput style={{ borderWidth: 1, borderColor: c.border, borderRadius: radius.md, padding: spacing.sm,
-            fontSize: fontSize.sm, color: c.foreground, backgroundColor: c.background,
-            minHeight: 52, textAlignVertical: 'top', marginBottom: spacing.sm }}
-            value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
-            placeholderTextColor={c.mutedForeground} multiline />
+          <FieldInput label={`End odometer (${distU})`} value={endOdo} onChangeText={setEndOdo}
+            placeholder={`e.g. 84350 ${distU}`} keyboardType="numeric" c={c} />
+          <FieldInput label={`Fuel added (${fuelU}) — optional`} value={fuel} onChangeText={setFuel}
+            placeholder={`e.g. 12 ${fuelU}`} keyboardType="numeric" c={c} />
+          <FieldInput value={notes} onChangeText={setNotes} placeholder="Notes (optional)…"
+            multiline style={{ minHeight: 56, textAlignVertical: 'top' }} c={c} />
           <Btn label="Log End Odometer" onPress={submit} disabled={!endOdo} loading={saving} c={c} />
         </>
       )}
@@ -2033,7 +2429,7 @@ function StepSignOut({ employeeId, shift, onDone, c }: { employeeId: string; shi
     try {
       await apiClient.post(`/field-ops/return/${employeeId}`, {});
       onDone();
-    } catch (e: any) { Alert.alert('Error', e.response?.data?.detail ?? 'Could not sign out. Try again.'); }
+    } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not sign out. Try again.')); }
     finally { setActing(false); }
   };
   if (done) {
@@ -2101,6 +2497,10 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   scroll:             { flex: 1 },
   content:            { padding: spacing.lg, paddingBottom: 100 },
   center:             { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  noAssignCard:       { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm },
+  noAssignEmoji:      { fontSize: 44 },
+  noAssignTitle:      { fontSize: fontSize.md, fontWeight: fontWeight.semibold },
+  noAssignSub:        { fontSize: fontSize.sm, textAlign: 'center', paddingHorizontal: spacing.lg },
   screenHeader:       {
     flexDirection: 'row', alignItems: 'center',
     marginBottom: spacing.lg,
@@ -2116,4 +2516,22 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   subtitle:           { fontSize: fontSize.xs, color: c.mutedForeground },
   stepBadge:          { width: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: radius.sm, paddingVertical: 3 },
   stepBadgeText:      { fontSize: 11, fontWeight: fontWeight.bold },
+  // Wizard (paged step flow)
+  // Progress header (ADR-207)
+  progWrap:           { marginTop: spacing.sm },
+  progTopRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: 6 },
+  secDot:             { width: 8, height: 8, borderRadius: 4 },
+  progSection:        { flex: 1, fontSize: fontSize.xs, fontWeight: fontWeight.bold, letterSpacing: 0.8 },
+  progPct:            { fontSize: fontSize.sm, fontWeight: fontWeight.extrabold },
+  progTrack:          { height: 8, borderRadius: 999, overflow: 'hidden' },
+  progFill:           { height: '100%', borderRadius: 999 },
+
+  dotRow:             { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 6, paddingVertical: spacing.sm },
+  dot:                { width: 8, height: 8, borderRadius: 999 },
+  dotCurrent:         { width: 22, height: 8, borderRadius: 4 },
+  wizHeader:          { flexDirection: 'row', alignItems: 'center', paddingTop: spacing.sm, paddingBottom: spacing.xs },
+  wizBack:            { width: 40, alignItems: 'center' },
+  wizBackArrow:       { fontSize: 26, fontWeight: fontWeight.bold, lineHeight: 28 },
+  wizSection:         { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.8 },
+  wizCount:           { flex: 1, textAlign: 'center', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });

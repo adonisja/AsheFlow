@@ -11,6 +11,8 @@ from app.models.employee import Employee
 from app.models.shift_session import ShiftSession
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
+from app.services.audit import write_audit
+from app.services.local_date import company_today
 
 router = APIRouter(prefix="/shift-sessions", tags=["shift-sessions"])
 
@@ -48,7 +50,7 @@ def start_shift(
     db: Session = Depends(get_db),
 ):
     """Start a new shift session for the calling driver. Fails if one is already active."""
-    today = date.today()
+    today = company_today(db, caller.company_id)
     assigned = (
         db.query(TruckAssignment)
         .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
@@ -82,6 +84,12 @@ def start_shift(
         current_gate=1,
     )
     db.add(session)
+    db.flush()
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="shift_session.started", target_table="shift_sessions",
+        target_id=str(session.id), after={"gate": 1},
+    )
     db.commit()
     db.refresh(session)
     return session
@@ -98,7 +106,7 @@ def check_eligibility(
     db: Session = Depends(get_db),
 ):
     """Return true if the driver is assigned to a truck today."""
-    today = date.today()
+    today = company_today(db, caller.company_id)
     assigned = (
         db.query(TruckAssignment)
         .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
@@ -170,6 +178,11 @@ def advance_gate(
     else:
         raise HTTPException(status_code=400, detail="Invalid gate state.")
 
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="shift_session.gate_advanced", target_table="shift_sessions",
+        target_id=str(session.id), after={"from_gate": gate, "to_gate": session.current_gate},
+    )
     db.commit()
     db.refresh(session)
     return session
@@ -215,6 +228,11 @@ def skip_to_gate(
         session.gate_4_completed_at = session.gate_4_completed_at or now
 
     session.current_gate = gate
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="shift_session.gate_skipped", target_table="shift_sessions",
+        target_id=str(session.id), after={"skipped_to_gate": gate},
+    )
     db.commit()
     db.refresh(session)
     return session
@@ -240,7 +258,7 @@ def list_active_sessions(
     db: Session = Depends(get_db),
 ):
     """Return all active (incomplete) shift sessions for the company today."""
-    today = date.today()
+    today = company_today(db, caller.company_id)
     rows = (
         db.query(ShiftSession, Employee)
         .join(Employee, Employee.id == ShiftSession.driver_id)
@@ -284,6 +302,11 @@ def abandon_session(
         raise HTTPException(status_code=404, detail="No active session found for this driver.")
 
     session.completed_at = datetime.now(timezone.utc)
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="shift_session.abandoned", target_table="shift_sessions",
+        target_id=str(session.id), after={"driver_id": str(driver_id)},
+    )
     db.commit()
 
 
@@ -312,5 +335,11 @@ def wipe_session(
     if not session:
         raise HTTPException(status_code=404, detail="No active session found for this driver.")
 
+    session_id = str(session.id)
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="shift_session.wiped", target_table="shift_sessions",
+        target_id=session_id, after={"driver_id": str(driver_id)},
+    )
     db.delete(session)
     db.commit()

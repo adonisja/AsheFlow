@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, RefreshControl,
@@ -200,8 +201,8 @@ export default function DriverSurveyScreen() {
                 notes:                 notes.trim() || null,
               });
               await loadSurveyData();
-            } catch (err: any) {
-              Alert.alert('Error', err.response?.data?.detail ?? 'Failed to submit. Please try again.');
+            } catch (err: unknown) {
+              Alert.alert('Error', errorText(err, 'Failed to submit. Please try again.'));
             } finally {
               setSubmitting(false);
             }
@@ -374,7 +375,7 @@ export default function DriverSurveyScreen() {
           activeOpacity={0.8}
         >
           {submitting
-            ? <ActivityIndicator color="#fff" />
+            ? <ActivityIndicator color={c.primaryForeground} />
             : <Text style={s.submitText}>Submit Survey</Text>
           }
         </TouchableOpacity>
@@ -409,7 +410,9 @@ const styles = (c: ThemeColors) => StyleSheet.create({
 
   submitBtn:        { backgroundColor: c.primary, borderRadius: radius.lg, paddingVertical: spacing.md, alignItems: 'center', marginTop: spacing.sm },
   submitBtnDisabled:{ opacity: 0.6 },
-  submitText:       { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  // `primaryForeground`, not '#fff': dark-theme `primary` is a LIGHT navy, so
+  // white measures 2.82:1 here. Same bug as the Commit Sort button (ADR-255).
+  submitText:       { color: c.primaryForeground, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
 
   // Read-only submitted view
   submittedBadge:   { marginTop: spacing.xs, alignSelf: 'flex-start', backgroundColor: c.success + '20', paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.sm },

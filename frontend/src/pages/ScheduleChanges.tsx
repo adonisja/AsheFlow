@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
@@ -139,7 +140,7 @@ function ScheduleAnalytics({ allRequests }: { allRequests: any[] }) {
 // ---------------------------------------------------------------------------
 
 const ScheduleChanges = () => {
-  const { user, groups } = useAuth();
+  const { groups } = useAuth();
   const isAdmin = groups.includes('admin');
   const isPrivileged = isAdmin || groups.includes('management') || groups.includes('dispatch');
   const { confirmState, confirm, cancelConfirm } = useConfirm();
@@ -242,8 +243,8 @@ const ScheduleChanges = () => {
       setSelectedDays([]);
       setReason('');
       loadMyRequests();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit request.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Failed to submit request.'));
     } finally {
       setSubmitting(false);
     }
@@ -260,8 +261,8 @@ const ScheduleChanges = () => {
     try {
       await axiosClient.delete(`/schedule-change-requests/${id}`);
       loadMyRequests();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to cancel.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Failed to cancel.'));
     }
   };
 
@@ -279,8 +280,8 @@ const ScheduleChanges = () => {
       await axiosClient.patch(`/schedule-change-requests/${id}/${action}`);
       loadPendingRequests();
       if (isPrivileged) loadAllRequests();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || `Failed to ${action}.`);
+    } catch (err: unknown) {
+      alert(errorText(err, `Failed to ${action}.`));
     }
   };
 
@@ -295,7 +296,7 @@ const ScheduleChanges = () => {
   // ---------------------------------------------------------------------------
   if (isPrivileged) {
     return (
-      <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+      <div className="space-y-6 animate-slide-up">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">
             <BarChart2 className="w-5 h-5 text-muted-foreground" />
@@ -346,7 +347,7 @@ const ScheduleChanges = () => {
   // Field staff view — personal form + own request history
   // ---------------------------------------------------------------------------
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <ConfirmDialog {...confirmState} onCancel={cancelConfirm} />
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-accent">

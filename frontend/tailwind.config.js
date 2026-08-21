@@ -40,6 +40,15 @@ export default {
           DEFAULT: 'hsl(var(--muted))',
           foreground: 'hsl(var(--muted-foreground))',
         },
+        // Brand accent (violet). Distinct from `accent`, which is a near-white
+        // SURFACE tint used by ~305 hover/chip/muted-fill classes — redefining
+        // that one turned every passive surface loud purple.
+        brand: {
+          DEFAULT: 'hsl(var(--brand))',
+          foreground: 'hsl(var(--brand-foreground))',
+          light: 'hsl(var(--brand-light))',
+          outdoor: 'hsl(var(--brand-outdoor))',
+        },
         accent: {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',

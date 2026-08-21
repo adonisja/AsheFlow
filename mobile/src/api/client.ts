@@ -1,7 +1,7 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { ASHEFLOW_API_URL, ASHEFLOW_LAN_IP } from '@env';
+import { getValidIdToken, touchLastActive } from './tokenRefresh';
 
 function resolveBaseUrl(): string {
   // Explicit override wins (e.g. staging/prod URL set in .env)
@@ -28,25 +28,35 @@ const apiClient = axios.create({
   },
 });
 
-// Attach the Cognito JWT on every request, same pattern as the web axiosClient
+// Attach a VALID Cognito JWT on every request — getValidIdToken silently
+// refreshes via the Cognito refresh token when the 1-hour ID token is stale,
+// and enforces the inactivity window (tokenRefresh.ts).
 apiClient.interceptors.request.use(async config => {
-  const token = await AsyncStorage.getItem('asheflow_id_token');
+  const token = await getValidIdToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
 });
 
-// On 401, clear stored tokens so the app forces re-login
+// 401 → try ONE silent refresh + retry; only a failed refresh forces re-login
+// (clearing the refresh token on every 401 is what broke auth persistence).
 apiClient.interceptors.response.use(
-  res => res,
+  async res => {
+    touchLastActive();   // successful traffic keeps the inactivity window open
+    return res;
+  },
   async err => {
-    if (err.response?.status === 401) {
-      await AsyncStorage.multiRemove([
-        'asheflow_access_token',
-        'asheflow_id_token',
-        'asheflow_refresh_token',
-      ]);
+    const original = err.config;
+    if (err.response?.status === 401 && original && !original._retried) {
+      original._retried = true;
+      const token = await getValidIdToken();
+      if (token) {
+        original.headers.Authorization = `Bearer ${token}`;
+        return apiClient(original);
+      }
+      // getValidIdToken cleared the tokens (refresh failed / window lapsed) —
+      // the app's auth state will force re-login on next restore.
     }
     return Promise.reject(err);
   },

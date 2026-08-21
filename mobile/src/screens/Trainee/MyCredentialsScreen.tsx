@@ -43,7 +43,7 @@ export default function MyCredentialsScreen() {
 
   if (!loading && !creds) {
     return (
-      <ScreenShell title="My Credentials">
+      <ScreenShell noHeader>
         <View style={s.empty}>
           <Text style={s.emptyIcon}>🔑</Text>
           <Text style={s.emptyTitle}>No credentials yet</Text>
@@ -55,7 +55,7 @@ export default function MyCredentialsScreen() {
 
   return (
     <ScreenShell
-      title="My Credentials"
+      noHeader
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}

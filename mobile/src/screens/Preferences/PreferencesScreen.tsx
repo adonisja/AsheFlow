@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView, Modal,
@@ -8,6 +9,7 @@ import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Relationship = {
@@ -30,24 +32,24 @@ type ReassignRequest = {
   created_at: string;
 };
 
+// Peer ratings (ADR-201): ratings RECEIVED, with rater names. No attendance here.
 type WalkerRatingRow = {
   id: string;
   date: string;
-  driver_name: string | null;
-  present: boolean;
-  stars: number | null;
+  rater_name: string | null;
+  stars: number;
   comment: string | null;
 };
 
 type WalkerProfile = {
-  total_shifts: number;
-  present: number;
-  no_shows: number;
+  ratings_received: number;
+  distinct_raters: number;
   avg_stars: number | null;
-  presence_rate: number | null;
   grade: string | null;
   ratings: WalkerRatingRow[];
 };
+
+type CrewMate = { id: string; name: string; role: string };
 
 // ── Limits (mirrors backend FAV_LIMITS) ───────────────────────────────────────
 const FAV_LIMITS: Record<string, Record<string, number>> = {
@@ -75,17 +77,19 @@ function gradeColor(grade: string | null, c: ThemeColors) {
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function PreferencesScreen() {
   const c = useColors();
-  const { user, hasRole } = useAuth();
+  const { hasRole } = useAuth();
 
   const isWalker  = hasRole('walker');
   const isTrainer = hasRole('trainer');
+  const isCrew    = isWalker || isTrainer || hasRole('driver') || hasRole('trainee');
   const canReassign = isWalker || isTrainer;
 
   // Determine which sub-tabs to show
   const tabs = [
     { key: 'favban', label: 'Fav / Ban' },
     ...(canReassign ? [{ key: 'reassign', label: 'Reassignment' }] : []),
-    ...(isWalker    ? [{ key: 'performance', label: 'My Performance' }] : []),
+    ...(isCrew      ? [{ key: 'rateteam', label: 'Rate Team' }] : []),
+    ...(isCrew      ? [{ key: 'performance', label: 'My Performance' }] : []),
   ];
   const [activeTab, setActiveTab] = useState(tabs[0].key);
 
@@ -112,6 +116,11 @@ export default function PreferencesScreen() {
   // Walker performance state
   const [profile,  setProfile]  = useState<WalkerProfile | null>(null);
   const [profLoad, setProfLoad] = useState(false);
+
+  // Rate Team state (ADR-201)
+  const [mates,    setMates]    = useState<CrewMate[]>([]);
+  const [given,    setGiven]    = useState<Record<string, number>>({});
+  const [ratingId, setRatingId] = useState<string | null>(null);
 
   // Resolve employee ID + role once
   useEffect(() => {
@@ -161,7 +170,7 @@ export default function PreferencesScreen() {
   }, [employeeId]);
 
   const fetchProfile = useCallback(async () => {
-    if (!employeeId || !isWalker) return;
+    if (!employeeId || !isCrew) return;
     setProfLoad(true);
     try {
       const res = await apiClient.get(`/field-ops/walker-profile/${employeeId}`);
@@ -171,15 +180,56 @@ export default function PreferencesScreen() {
     } finally {
       setProfLoad(false);
     }
-  }, [employeeId, isWalker]);
+  }, [employeeId, isCrew]);
+
+  // Rate Team (ADR-201): today's crew + my already-given ratings.
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const fetchRateTeam = useCallback(async () => {
+    if (!employeeId || !isCrew) return;
+    try {
+      const [crewRes, mineRes, rollRes] = await Promise.all([
+        apiClient.get(`/field-ops/crew/${employeeId}`),
+        apiClient.get(`/field-ops/rating/by/${employeeId}`, { params: { target_date: todayStr } }),
+        // Roll call for the truck — used to drop NCNS teammates from the rateable list.
+        apiClient.get(`/roll-call/my-truck/${todayStr}`).catch(() => ({ data: [] })),
+      ]);
+      // /field-ops/crew returns { truck_id, truck_name, crew: [...] } — read .crew,
+      // not the whole object (was silently yielding "no teammates").
+      const ncns = new Set(
+        (rollRes.data ?? []).filter((r: any) => r.status === 'ncns').map((r: any) => r.employee_id),
+      );
+      setMates((crewRes.data?.crew ?? [])
+        .filter((m: any) => m.id !== employeeId && !ncns.has(m.id)));
+      const g: Record<string, number> = {};
+      for (const r of (mineRes.data ?? [])) g[r.ratee_id] = r.stars;
+      setGiven(g);
+    } catch {
+      setMates([]);
+    }
+  }, [employeeId, isCrew, todayStr]);
+
+  const submitRating = async (rateeId: string, stars: number) => {
+    setRatingId(rateeId);
+    try {
+      await apiClient.post('/field-ops/rating', { ratee_id: rateeId, date: todayStr, stars });
+      await fetchRateTeam();
+    } catch (e: unknown) {
+      Alert.alert('Rating', errorText(e, 'Could not submit rating.'));
+    } finally {
+      setRatingId(null);
+    }
+  };
 
   useEffect(() => {
     if (employeeId) {
       fetchRelationships();
       if (canReassign) fetchReassignments();
-      if (isWalker) fetchProfile();
+      if (isCrew) { fetchProfile(); fetchRateTeam(); }
     }
-  }, [employeeId, fetchRelationships, fetchReassignments, fetchProfile, canReassign, isWalker]);
+  }, [employeeId, fetchRelationships, fetchReassignments, fetchProfile, fetchRateTeam, canReassign, isCrew]);
 
   // ── Add relationship ─────────────────────────────────────────────────────────
   const addRelationship = useCallback(async (targetId: string) => {
@@ -194,8 +244,8 @@ export default function PreferencesScreen() {
       setAddModal(false);
       setSearchQuery('');
       fetchRelationships();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not add. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not add. Try again.'));
     } finally {
       setAdding(false);
     }
@@ -233,8 +283,8 @@ export default function PreferencesScreen() {
       setReassignModal(false);
       setReassignReason('');
       fetchReassignments();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setReassigning(false);
     }
@@ -273,6 +323,7 @@ export default function PreferencesScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      <PageHeader title="Preferences" />
       {/* Sub-tab bar */}
       <View style={s.tabBar}>
         {tabs.map(t => (
@@ -304,7 +355,7 @@ export default function PreferencesScreen() {
                   style={[s.filterChip, filterType === t && { backgroundColor: t === 'fav' ? c.success : c.danger, borderColor: t === 'fav' ? c.success : c.danger }]}
                   onPress={() => setFilterType(t)}
                 >
-                  <Text style={[s.filterChipText, filterType === t && { color: '#fff' }]}>
+                  <Text style={[s.filterChipText, filterType === t && { color: c.primaryForeground }]}>
                     {t === 'fav' ? '★ Favorites' : '⊘ Blocked'}
                   </Text>
                 </TouchableOpacity>
@@ -396,11 +447,47 @@ export default function PreferencesScreen() {
           </>
         )}
 
-        {/* ── WALKER PERFORMANCE TAB ───────────────────────────────────────── */}
+        {/* ── RATE TEAM TAB (ADR-201) ──────────────────────────────────────── */}
+        {activeTab === 'rateteam' && (
+          <>
+            <Text style={s.pageTitle}>Rate Team</Text>
+            <Text style={s.subtitle}>Rate each teammate on your truck for today. Ratings open once the truck departs.</Text>
+            {mates.length === 0 ? (
+              <View style={s.emptyCard}><Text style={s.emptyText}>No teammates on your truck today</Text></View>
+            ) : mates.map(m => {
+              const done = given[m.id];
+              return (
+                <View key={m.id} style={[s.reviewCard, { backgroundColor: c.card, borderColor: c.border }]}>
+                  <View style={s.reviewTop}>
+                    <View>
+                      <Text style={[s.reviewDate, { color: c.foreground }]}>{m.name}</Text>
+                      <Text style={{ fontSize: fontSize.xs, color: c.mutedForeground, textTransform: 'capitalize' }}>{m.role}</Text>
+                    </View>
+                    {done ? (
+                      <Text style={{ fontSize: fontSize.sm, color: c.gold }}>{'★'.repeat(done) + '☆'.repeat(5 - done)}</Text>
+                    ) : ratingId === m.id ? (
+                      <ActivityIndicator size="small" color={c.primary} />
+                    ) : (
+                      <View style={{ flexDirection: 'row' }}>
+                        {[1, 2, 3, 4, 5].map(n => (
+                          <TouchableOpacity key={n} onPress={() => submitRating(m.id, n)} hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}>
+                            <Text style={{ fontSize: fontSize.lg, color: c.gold }}>☆</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+          </>
+        )}
+
+        {/* ── MY PERFORMANCE TAB ────────────────────────────────────────────── */}
         {activeTab === 'performance' && (
           <>
             <Text style={s.pageTitle}>My Performance</Text>
-            <Text style={s.subtitle}>Your all-time stats as rated by your drivers.</Text>
+            <Text style={s.subtitle}>Your all-time peer rating from teammates.</Text>
 
             {profLoad ? (
               <ActivityIndicator color={c.primary} style={{ marginTop: spacing.xl }} />
@@ -423,10 +510,8 @@ export default function PreferencesScreen() {
                 {/* KPI row */}
                 <View style={s.kpiRow}>
                   {[
-                    { label: 'Shifts',    value: String(profile.total_shifts) },
-                    { label: 'Present',   value: String(profile.present) },
-                    { label: 'No-Shows',  value: String(profile.no_shows) },
-                    { label: 'Presence',  value: profile.presence_rate != null ? `${profile.presence_rate}%` : '—' },
+                    { label: 'Ratings',   value: String(profile.ratings_received) },
+                    { label: 'Raters',    value: String(profile.distinct_raters) },
                     { label: 'Avg Stars', value: profile.avg_stars != null ? `${profile.avg_stars}★` : '—' },
                   ].map(({ label, value }) => (
                     <View key={label} style={[s.kpiCard, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -444,18 +529,12 @@ export default function PreferencesScreen() {
                   <View key={r.id} style={[s.reviewCard, { backgroundColor: c.card, borderColor: c.border }]}>
                     <View style={s.reviewTop}>
                       <Text style={[s.reviewDate, { color: c.foreground }]}>{r.date}</Text>
-                      {r.present ? (
-                        <Text style={{ fontSize: fontSize.sm, color: c.gold }}>
-                          {r.stars != null ? '★'.repeat(r.stars) + '☆'.repeat(5 - r.stars) : 'No rating'}
-                        </Text>
-                      ) : (
-                        <View style={[s.absentBadge, { backgroundColor: c.danger + '20' }]}>
-                          <Text style={[s.absentText, { color: c.danger }]}>Absent</Text>
-                        </View>
-                      )}
+                      <Text style={{ fontSize: fontSize.sm, color: c.gold }}>
+                        {'★'.repeat(r.stars) + '☆'.repeat(5 - r.stars)}
+                      </Text>
                     </View>
-                    {r.driver_name && (
-                      <Text style={[s.reviewDriver, { color: c.mutedForeground }]}>Driver: {r.driver_name}</Text>
+                    {r.rater_name && (
+                      <Text style={[s.reviewDriver, { color: c.mutedForeground }]}>By: {r.rater_name}</Text>
                     )}
                     {r.comment && (
                       <Text style={[s.reviewComment, { color: c.foreground }]}>{r.comment}</Text>
@@ -491,7 +570,7 @@ export default function PreferencesScreen() {
                   style={[s.filterChip, addType === t && { backgroundColor: t === 'fav' ? c.success : c.danger, borderColor: t === 'fav' ? c.success : c.danger }]}
                   onPress={() => setAddType(t)}
                 >
-                  <Text style={[s.filterChipText, addType === t && { color: '#fff' }]}>
+                  <Text style={[s.filterChipText, addType === t && { color: c.primaryForeground }]}>
                     {t === 'fav' ? '★ Fav' : '⊘ Block'}
                   </Text>
                 </TouchableOpacity>
@@ -563,7 +642,7 @@ export default function PreferencesScreen() {
                 onPress={submitReassign}
                 disabled={reassigning}
               >
-                {reassigning ? <ActivityIndicator color="#fff" /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                {reassigning ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: c.primaryForeground }]}>Submit</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -589,7 +668,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   filterChip:     { paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.full, borderWidth: 1, borderColor: c.border, backgroundColor: c.card },
   filterChipText: { fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium },
   addBtn:         { marginLeft: 'auto', borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2 },
-  addBtnText:     { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  addBtnText:     { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   hint:           { fontSize: fontSize.xs, marginBottom: spacing.sm },
   relCard:        { flexDirection: 'row', alignItems: 'center', backgroundColor: c.card, borderRadius: radius.md, borderWidth: 1, borderColor: c.border, padding: spacing.md, marginBottom: spacing.sm, gap: spacing.sm },
   roleTag:        { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
@@ -600,7 +679,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   emptyCard:      { backgroundColor: c.surfaceMuted, borderRadius: radius.lg, padding: spacing.xl, alignItems: 'center', marginTop: spacing.sm },
   emptyText:      { fontSize: fontSize.base, color: c.mutedForeground },
   primaryBtn:     { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.md },
-  primaryBtnText: { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  primaryBtnText: { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   statusBadge:    { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
   statusText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
   // Performance

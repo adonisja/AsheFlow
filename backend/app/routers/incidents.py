@@ -27,32 +27,38 @@ allow_field_staff = RoleChecker(["driver", "walker", "trainer", "trainee"])
 allow_management  = RoleChecker(["dispatch", "management", "admin"])
 
 
-def _resolve_assignment(reporter_id: UUID, date, db: Session) -> tuple[Optional[UUID], Optional[UUID]]:
+def _resolve_assignment(reporter_id: UUID, date, company_id: UUID, db: Session) -> tuple[Optional[UUID], Optional[UUID]]:
     """Return (truck_id, assignment_id) for the reporter on the given date, or (None, None)."""
     member = (
         db.query(AssignmentMember)
         .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
         .filter(
             AssignmentMember.employee_id == reporter_id,
-            TruckAssignment.date == date,
+            AssignmentMember.company_id  == company_id,
+            TruckAssignment.date         == date,
+            TruckAssignment.company_id   == company_id,
         )
         .first()
     )
     if not member:
         return None, None
-    assignment = db.query(TruckAssignment).filter(TruckAssignment.id == member.assignment_id).first()
+    assignment = db.query(TruckAssignment).filter(
+        TruckAssignment.id == member.assignment_id,
+        TruckAssignment.company_id == company_id,
+    ).first()
     if not assignment:
         return None, None
     return assignment.truck_id, assignment.id
 
 
-def _resolve_driver_id(assignment_id: UUID, db: Session) -> Optional[UUID]:
+def _resolve_driver_id(assignment_id: UUID, company_id: UUID, db: Session) -> Optional[UUID]:
     """Return the employee_id of the driver on the given assignment, or None."""
     driver_member = (
         db.query(AssignmentMember)
         .filter(
             AssignmentMember.assignment_id == assignment_id,
-            AssignmentMember.role == "driver",
+            AssignmentMember.company_id    == company_id,
+            AssignmentMember.role          == "driver",
         )
         .first()
     )
@@ -141,12 +147,12 @@ def submit_incident(
             detail=f"Severity for '{payload.category}' cannot be lower than '{min_severity}'.",
         )
 
-    truck_id, assignment_id = _resolve_assignment(reporter.id, payload.date, db)
+    truck_id, assignment_id = _resolve_assignment(reporter.id, payload.date, reporter.company_id, db)
 
     # Auto-resolve driver — for non-drivers, find the driver on the same truck
     driver_id: Optional[UUID] = None
     if reporter.role != "driver" and assignment_id:
-        driver_id = _resolve_driver_id(assignment_id, db)
+        driver_id = _resolve_driver_id(assignment_id, reporter.company_id, db)
     elif reporter.role == "driver":
         driver_id = reporter.id
 
@@ -169,6 +175,16 @@ def submit_incident(
     )
     db.add(incident)
     db.flush()
+
+    write_audit(
+        db=db,
+        company_id=reporter.company_id,
+        actor_id=reporter.id,
+        action_type="incident.submitted",
+        target_table="incidents",
+        target_id=str(incident.id),
+        after={"category": incident.category, "severity": incident.severity},
+    )
 
     _notify_management(incident, reporter, db)
 

@@ -8,6 +8,7 @@
  * Accessible to management and admin only (enforced at the call site and backend).
  */
 
+import { errorText } from '../utils/errorText';
 import React, { useRef, useState, useCallback } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -16,6 +17,7 @@ import {
   ChevronDown, Download, ArrowRight, RotateCcw,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import { getLocalYMD } from '../utils/date';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -222,7 +224,7 @@ function exportResults(results: ImportResult[]) {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `import-results-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `import-results-${getLocalYMD()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -602,9 +604,9 @@ export default function BulkImportModal({ onClose, onComplete }: Props) {
       setStep('results');
       const anyCreated = res.data.some(r => r.status === 'created');
       if (anyCreated) onComplete();
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Surface top-level API errors (e.g. 400 too many rows) back in preview
-      alert(e?.response?.data?.detail ?? 'Import failed. Please try again.');
+      alert(errorText(e, 'Import failed. Please try again.'));
     } finally {
       setSubmitting(false);
     }

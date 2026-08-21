@@ -304,6 +304,15 @@ def cancel_change_request(
     if caller.id != req.employee_id:
         raise HTTPException(status_code=403, detail="You can only cancel your own requests.")
 
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="assignment_change_request.cancel",
+        target_table="assignment_change_requests",
+        target_id=str(req.id),
+        before={"employee_id": str(req.employee_id), "status": req.status},
+    )
     db.delete(req)
     db.commit()
 
@@ -333,5 +342,14 @@ def purge_pending_request(
     if not req:
         raise HTTPException(status_code=404, detail="Pending request not found.")
 
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="assignment_change_request.purge",
+        target_table="assignment_change_requests",
+        target_id=str(req.id),
+        before={"employee_id": str(req.employee_id), "status": req.status},
+    )
     db.delete(req)
     db.commit()

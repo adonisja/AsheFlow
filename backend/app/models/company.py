@@ -19,6 +19,25 @@ class Company(Base):
     amazon_dsp_code  = Column(String(20),         nullable=True)
     timezone         = Column(String(64),         nullable=False, default="America/New_York")
     is_active        = Column(Boolean,            nullable=False, default=True, index=True)
+    # ADR-280: is this tenant's data real?
+    #
+    #   live — real operational data. Seed scripts refuse it, fault injection
+    #          refuses it, and analytics counts only this.
+    #   seed — script-generated. Disposable: wipeable, re-generatable, and a
+    #          legitimate fuzz/chaos target.
+    #   demo — synthetic but CURATED, shown to prospects. Non-live like `seed`,
+    #          but not something a chaos run may corrupt mid-demo.
+    #
+    # The default is `live` deliberately (D2). A company created by any path
+    # that does not know about this column is treated as real, so the failure
+    # mode is "a seeded tenant was mistakenly protected", never "a live tenant
+    # was mistakenly wiped".
+    #
+    # Tenant-level rather than per-row (D1): every seeded row already descends
+    # from a seeded company via company_id (ADR-064), so the tenancy boundary
+    # already IS the provenance boundary. A per-row is_seed would be 14 models
+    # and 14 places for a future write path to forget.
+    data_class       = Column(String(10),         nullable=False, server_default="live", index=True)
     created_at       = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     config = relationship("CompanyConfig", back_populates="company", uselist=False)
@@ -42,6 +61,12 @@ class CompanyConfig(Base):
     checkin_open   = Column(Time, nullable=True)   # earliest accepted check-in
     checkin_close  = Column(Time, nullable=True)   # latest accepted check-in
     dispatch_confirmation_cutoff = Column(Time, nullable=True)  # default 09:00 — pending notifications expire after this
+    # ADR-256: the earlier confirmation deadline for roles expected at the AP before
+    # the crew — driver and captain. A Time, read in the company's own timezone
+    # (Company.timezone) like every other column here; a hardcoded 08:20 is wrong
+    # for any tenant not on the seed company's clock. Null falls back to
+    # checkin_close, which is what these roles used before this column existed.
+    early_confirmation_deadline = Column(Time, nullable=True)
 
     # ── Walker rating window ──────────────────────────────────────────────────
     # Hours after driver departure that walker ratings are accepted.
@@ -59,8 +84,18 @@ class CompanyConfig(Base):
 
     # ── Dispatch algorithm weights ────────────────────────────────────────────
     dispatch_weight_driver          = Column(Float, nullable=True)   # default 0.70
-    dispatch_weight_trainer         = Column(Float, nullable=True)   # default 0.50
-    dispatch_weight_walker          = Column(Float, nullable=True)   # default 0.30
+    # ADR-256: a captain's fan pull sits between driver and trainer — they lead the
+    # truck's route work, the driver owns the vehicle and the day.
+    dispatch_weight_captain         = Column(Float, nullable=True)   # default 0.50
+    dispatch_weight_trainer         = Column(Float, nullable=True)   # default 0.25 (was 0.50)
+    dispatch_weight_walker          = Column(Float, nullable=True)   # default 0.15 (was 0.30)
+
+    # ── Captain truck familiarisation (ADR-256 D16) ───────────────────────────
+    # A new captain holds one truck for this many dispatched days, then rotates to
+    # a truck they have not yet completed. Familiarisation ends once every ACTIVE
+    # truck has a completed row — after which the normal consecutive-day penalty
+    # applies. Total cycle length is derived (active_trucks × this), never stored.
+    captain_truck_rotation_days     = Column(Integer, nullable=True)  # default 5
     dispatch_mutual_bonus           = Column(Float, nullable=True)   # default 0.10
     dispatch_tridirectional_bonus   = Column(Float, nullable=True)   # default 0.20
     dispatch_consecutive_penalty    = Column(Float, nullable=True)   # default 0.05
@@ -69,20 +104,79 @@ class CompanyConfig(Base):
     # ── Walker rating anomaly detection ───────────────────────────────────────
     flag_threshold = Column(Float, nullable=True)   # default 1.0
 
+    # ── Shift roll call ───────────────────────────────────────────────────────
+    late_window_minutes = Column(Integer, nullable=True)    # default 20; minutes past the attendance reference before "late"
+    # ADR-198: minutes past the attendance reference (max(shift_start, AP-established))
+    # with no AP arrival before a crew member is NCNS. Nullable → default 60 in code.
+    ncns_cutoff_minutes = Column(Integer, nullable=True)    # default 60
+
     # ── Driver mid-shift check-ins ────────────────────────────────────────────
     driver_checkin_count = Column(Integer, nullable=True)   # default 4
 
-    # ── Tier 1 tote verification (DBSCAN + classification thresholds) ─────────
-    tier1_dbscan_eps           = Column(Float,   nullable=True)   # default 0.015 degrees (~1 mile)
-    tier1_dbscan_min_samples   = Column(Integer, nullable=True)   # default 30
-    tier1_small_tote_cutoff    = Column(Integer, nullable=True)   # default 10 packages
-    tier1_small_stray_max      = Column(Integer, nullable=True)   # default 1 (count)
-    tier1_small_uncertain_max  = Column(Integer, nullable=True)   # default 3 (count)
-    tier1_stray_pct            = Column(Float,   nullable=True)   # default 0.10
-    tier1_uncertain_pct        = Column(Float,   nullable=True)   # default 0.40
+    # ── Route effort scoring tuning ───────────────────────────────────────────
+    # Weights applied to time_weight and physical_weight per workload_class.
+    # Default 0.5 each (equal contribution). Tuned per-company from field data.
+    effort_time_factor     = Column(Float, nullable=True)   # default 0.5
+    effort_physical_factor = Column(Float, nullable=True)   # default 0.5
 
-    # ── Location profile verification ─────────────────────────────────────────
-    location_profile_lock_threshold = Column(Integer, nullable=True)   # default 3 agreements to lock
+    # ── Amazon scorecard tier targets (ADR-262) ───────────────────────────────
+    # Per-DSP because Amazon sets several of these per station (DCR and DNR DPMO
+    # explicitly), and our researched values come from third-party/UK guides that
+    # are not authoritative for any given station. NULL means "no target
+    # configured" — the UI shows Amazon's reported value with no pass/fail
+    # judgement. Deliberately NOT in _REQUIRED_FIELDS: a DSP that has not yet read
+    # its first Amazon card cannot supply these, and gating setup on them would
+    # 503 the whole tenant. A missing threshold must never render as a failing one.
+    #
+    # Comparison DIRECTION is not stored here — it is domain truth, not tenant
+    # configuration. See METRIC_DIRECTION in services/company_config.py.
+    scorecard_dcr_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 99.0)
+    scorecard_dnr_dpmo_target  = Column(Integer, nullable=True)  # DPMO, LOWER better (e.g. 950)
+    scorecard_pod_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 97.0)
+    scorecard_cc_target        = Column(Float,   nullable=True)  # %, higher better  (e.g. 98.0)
+    scorecard_cdf_target       = Column(Float,   nullable=True)  # %, higher better  (e.g. 84.9)
+    scorecard_dsb_dpmo_target  = Column(Integer, nullable=True)  # DPMO, LOWER better
+
+    # Safety & Compliance — driver-only metrics (no walker analogue).
+    scorecard_fico_target            = Column(Integer, nullable=True)  # 100–850, higher better (e.g. 800)
+    scorecard_speeding_rate_target   = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 10.0)
+    scorecard_signsignal_rate_target = Column(Float,   nullable=True)  # per 100 trips, LOWER better (e.g. 15.0)
+    scorecard_dvic_target            = Column(Float,   nullable=True)  # %, higher better (e.g. 95.0)
+
+    # ── Route-sort tuning (ADR-273) ───────────────────────────────────────────
+    # These were hardcoded module constants in route_sort.py. Telemetry
+    # (route_sort_runs / route_sort_daily) exists to tell an operator WHICH of
+    # them to move, so they have to be movable without a deploy.
+    #
+    # ALL NULLABLE, and null means "use the code default" — deliberately NOT in
+    # _REQUIRED_FIELDS. A null in that tuple 503s the entire tenant (see the
+    # scorecard-target comment above), and a tenant that has never opened this
+    # page must keep sorting on the defaults. Every read site resolves via
+    # `cfg.x if cfg and cfg.x is not None else DEFAULT`.
+    #
+    # Seed priority (ADR-186 D3): W_TIME/W_DIFF sit above W_DENSE so a KNOWN
+    # urgent/hard block outranks the densest unknown-easy one.
+    sort_w_dense              = Column(Float(), nullable=True)   # default 1.0
+    sort_w_time               = Column(Float(), nullable=True)   # default 1.5
+    sort_w_diff               = Column(Float(), nullable=True)   # default 1.3
+    sort_w_doorman            = Column(Float(), nullable=True)   # default 0.5 (subtracted)
+
+    # Traversal guards (ADR-235). Both are inert when block centroids are
+    # missing (_centroid_gap_m returns 0.0), so raising them cannot rescue a
+    # coordinate-less run — see ADR-272 "Bug 3".
+    sort_walk_budget_m        = Column(Float(), nullable=True)   # default 900.0
+    sort_span_cap_m           = Column(Float(), nullable=True)   # default 700.0
+    sort_max_consecutive_no_fit = Column(Integer(), nullable=True)  # default 2
+
+    # F5 thin-block consolidation (ADR-197, reworked ADR-234). Retained under
+    # ADR-272 but expected to fire far less once group-first lands.
+    sort_f5_load_floor_hs     = Column(Integer(), nullable=True)  # default 6
+    sort_f5_max_hops          = Column(Integer(), nullable=True)  # default 2
+    sort_f5_walk_radius_km    = Column(Float(), nullable=True)    # default 0.8
+
+    # Route assembly mode (ADR-272). Default null -> "block_completion".
+    # "group_first" enables the ADR-272 branch. This is the switch Phase 3 flips.
+    route_assembly_mode       = Column(String(20), nullable=True)
 
     # ── Manifest ingestion mode ───────────────────────────────────────────────
     ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
@@ -94,6 +188,9 @@ class CompanyConfig(Base):
     discord_guild_id            = Column(BigInteger, nullable=True)
     discord_drivers_channel_id  = Column(BigInteger, nullable=True)
     discord_trainers_channel_id = Column(BigInteger, nullable=True)
+    # ADR-256: the captains' room. Crew embeds post here alongside #trainers-chat
+    # so the truck's route lead sees the crew they are leading.
+    discord_captains_channel_id = Column(BigInteger, nullable=True)
     discord_general_channel_id  = Column(BigInteger, nullable=True)
     discord_invite_channel_id   = Column(BigInteger, nullable=True)
     discord_role_admin          = Column(BigInteger, nullable=True)
@@ -102,6 +199,10 @@ class CompanyConfig(Base):
     discord_role_bot            = Column(BigInteger, nullable=True)
     discord_role_dispatch       = Column(BigInteger, nullable=True)
     discord_role_driver         = Column(BigInteger, nullable=True)
+    # ADR-256: distinct guild roles. discord_role_captain previously held the
+    # TRAINER role (Discord called trainers "Captain"); migration ff90779895f6
+    # moved that value to discord_role_trainer and nulled this one.
+    discord_role_trainer        = Column(BigInteger, nullable=True)
     discord_role_captain        = Column(BigInteger, nullable=True)
     discord_role_walker         = Column(BigInteger, nullable=True)
 
@@ -116,6 +217,8 @@ class CompanyConfig(Base):
 
     __table_args__ = (
         CheckConstraint("dispatch_weight_driver    IS NULL OR (dispatch_weight_driver    BETWEEN 0 AND 1)", name="ck_company_configs_weight_driver"),
+        CheckConstraint("dispatch_weight_captain   IS NULL OR (dispatch_weight_captain   BETWEEN 0 AND 1)", name="ck_company_configs_weight_captain"),
+        CheckConstraint("captain_truck_rotation_days IS NULL OR captain_truck_rotation_days > 0", name="ck_company_configs_captain_rotation_days"),
         CheckConstraint("dispatch_weight_trainer   IS NULL OR (dispatch_weight_trainer   BETWEEN 0 AND 1)", name="ck_company_configs_weight_trainer"),
         CheckConstraint("dispatch_weight_walker    IS NULL OR (dispatch_weight_walker    BETWEEN 0 AND 1)", name="ck_company_configs_weight_walker"),
         CheckConstraint("dispatch_mutual_bonus     IS NULL OR (dispatch_mutual_bonus     BETWEEN 0 AND 1)", name="ck_company_configs_mutual_bonus"),

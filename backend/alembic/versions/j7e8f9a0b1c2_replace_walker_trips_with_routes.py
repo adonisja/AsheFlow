@@ -16,6 +16,16 @@ Schema changes:
   - CREATE TABLE route_cluster_centroids (density map support)
 """
 from alembic import op
+
+# Loaded by path: alembic executes revision files standalone, so a package
+# import ("alembic.shared...") resolves to the INSTALLED alembic library, not
+# this directory. Load the helper from disk instead.
+import importlib.util as _ilu, pathlib as _pl
+_spec = _ilu.spec_from_file_location(
+    "_routes_ddl", _pl.Path(__file__).resolve().parent.parent / "_shared" / "routes_ddl.py")
+_routes_ddl = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_routes_ddl)
+create_routes_table = _routes_ddl.create_routes_table
+routes_exists = _routes_ddl.routes_exists
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 
@@ -44,46 +54,11 @@ def upgrade():
     op.add_column('walker_routes', sa.Column('total_slot_cost', sa.Integer(), nullable=False, server_default='0'))
 
     # ── Create routes table ────────────────────────────────────────────────
-    op.create_table(
-        'routes',
-        sa.Column('id',                    UUID(as_uuid=True), primary_key=True, server_default=sa.text('gen_random_uuid()')),
-        sa.Column('company_id',            UUID(as_uuid=True), nullable=False),
-        sa.Column('truck_assignment_id',   UUID(as_uuid=True), sa.ForeignKey('truck_assignments.id', ondelete='CASCADE'), nullable=False),
-        sa.Column('route_date',            sa.Date(), nullable=False),
-        sa.Column('route_number',          sa.Integer(), nullable=False),
-
-        # Geographic identity — persisted (was discarded in WalkerTrip)
-        sa.Column('block_keys',            ARRAY(sa.Text()), nullable=False, server_default='{}'),
-
-        # Tote and package lists
-        sa.Column('tote_ids',              ARRAY(sa.Text()), nullable=False, server_default='{}'),
-        sa.Column('tba_numbers',           ARRAY(sa.Text()), nullable=False, server_default='{}'),
-        sa.Column('tag_numbers',           ARRAY(sa.Text()), nullable=False, server_default='{}'),
-
-        # Capacity — half-slot integer arithmetic (×2 scale)
-        sa.Column('slot_cost',             sa.Integer(), nullable=False, default=0),
-        sa.Column('capacity_limit',        sa.Integer(), nullable=False),        # base, set at sort time
-        sa.Column('capacity_limit_paired', sa.Integer(), nullable=True),         # set at arrival if pair confirmed
-
-        # Effort classification
-        sa.Column('effort_class',          sa.String(20), nullable=False, server_default='standard'),  # easy|standard|heavy
-        sa.Column('workload_source',       sa.String(20), nullable=False, server_default='default'),   # profile|flag|default
-
-        # Assignment — nullable until wave distribution
-        sa.Column('assigned_to',           UUID(as_uuid=True), sa.ForeignKey('employees.id', ondelete='SET NULL'), nullable=True),
-        sa.Column('assigned_to_name',      sa.String(100), nullable=True),
-
-        # Trainer+trainee pairing
-        sa.Column('paired_trainee_id',     UUID(as_uuid=True), sa.ForeignKey('employees.id', ondelete='SET NULL'), nullable=True),
-        sa.Column('trainee_phase',         sa.Integer(), nullable=True),          # 1-5
-        sa.Column('phase4_solo_opted_in',  sa.Boolean(), nullable=False, server_default='false'),
-
-        # Status lifecycle
-        sa.Column('status',                sa.String(20), nullable=False, server_default='unassigned'),  # unassigned|assigned|in_progress|completed
-        sa.Column('departed_at',           sa.DateTime(timezone=True), nullable=True),
-        sa.Column('returned_at',           sa.DateTime(timezone=True), nullable=True),
-        sa.Column('created_at',            sa.DateTime(timezone=True), server_default=sa.text('now()')),
-    )
+    # DDL lives in alembic/shared/routes_ddl.py because f8g9h0i1j2k3 (seven
+    # revisions earlier) also needs it — it ALTERs routes before this point in
+    # the chain. Whichever runs first creates the table; this no-ops if it is
+    # already there.
+    create_routes_table()
 
     op.create_index('ix_routes_company_id',           'routes', ['company_id'])
     op.create_index('ix_routes_truck_assignment_id',  'routes', ['truck_assignment_id'])

@@ -555,3 +555,81 @@ class TestUnevenTruckSizes:
 
         counts = sorted([paired_count(crews, truck_a.id, t.id) for t in trainers])
         assert counts == [1, 1, 1, 2, 2], f"Expected [1,1,1,2,2], got {counts}"
+
+
+# ---------------------------------------------------------------------------
+# Pinned pairings via fav relationships (ADR-191)
+# ---------------------------------------------------------------------------
+
+from app.models.employee_relationship import EmployeeRelationship
+from tests.conftest import SEED_COMPANY_ID
+
+
+def _fav(db, a, b):
+    db.add(EmployeeRelationship(
+        company_id=SEED_COMPANY_ID, employee_id=a, target_employee_id=b,
+        relationship_type="fav",
+    ))
+    db.commit()
+
+
+class TestPinnedPairings:
+    def test_fav_pins_trainee_to_trainer(self, db):
+        trainer_a = make_employee(db, role="trainer", name="Trainer A")
+        trainer_b = make_employee(db, role="trainer", name="Trainer B")
+        trainee = make_employee(db, role="trainee", name="Trainee")
+        crews = make_crews("t1", "t2")
+        crews["t1"].append(trainer_entry(trainer_a.id))
+        crews["t2"].append(trainer_entry(trainer_b.id))
+        _fav(db, trainee.id, trainer_a.id)
+
+        # Random round-robin could land either truck — the pin must not.
+        for _ in range(5):
+            trial = {k: list(v) for k, v in crews.items()}
+            assign_trainees([trainee], trial, db)
+            placed = [m for m in trial["t1"] if m["role"] == "trainee"]
+            assert len(placed) == 1
+            assert placed[0]["paired_trainer_id"] == trainer_a.id
+            assert not [m for m in trial["t2"] if m["role"] == "trainee"]
+
+    def test_fav_reverse_direction_also_pins(self, db):
+        trainer_a = make_employee(db, role="trainer", name="Trainer A")
+        trainer_b = make_employee(db, role="trainer", name="Trainer B")
+        trainee = make_employee(db, role="trainee", name="Trainee")
+        crews = make_crews("t1", "t2")
+        crews["t1"].append(trainer_entry(trainer_a.id))
+        crews["t2"].append(trainer_entry(trainer_b.id))
+        _fav(db, trainer_b.id, trainee.id)   # trainer → trainee direction
+
+        assign_trainees([trainee], crews, db)
+        placed = [m for m in crews["t2"] if m["role"] == "trainee"]
+        assert len(placed) == 1 and placed[0]["paired_trainer_id"] == trainer_b.id
+
+    def test_fav_to_absent_trainer_falls_back_to_round_robin(self, db):
+        trainer_a = make_employee(db, role="trainer", name="Trainer A")
+        ghost_trainer = make_employee(db, role="trainer", name="Not On Truck")
+        trainee = make_employee(db, role="trainee", name="Trainee")
+        crews = make_crews("t1")
+        crews["t1"].append(trainer_entry(trainer_a.id))
+        _fav(db, trainee.id, ghost_trainer.id)
+
+        assign_trainees([trainee], crews, db)
+        placed = [m for m in crews["t1"] if m["role"] == "trainee"]
+        assert len(placed) == 1 and placed[0]["paired_trainer_id"] == trainer_a.id
+
+    def test_pin_beats_soft_cap(self, db):
+        # Trainer A already has a trainee; a pinned second trainee still goes
+        # to A even though trainer B is free — explicit dispatcher intent wins.
+        trainer_a = make_employee(db, role="trainer", name="Trainer A")
+        trainer_b = make_employee(db, role="trainer", name="Trainer B")
+        first = make_employee(db, role="trainee", name="First")
+        pinned = make_employee(db, role="trainee", name="Pinned")
+        crews = make_crews("t1", "t2")
+        crews["t1"].append(trainer_entry(trainer_a.id))
+        crews["t1"].append(trainee_entry(first.id, trainer_a.id))
+        crews["t2"].append(trainer_entry(trainer_b.id))
+        _fav(db, pinned.id, trainer_a.id)
+
+        assign_trainees([pinned], crews, db)
+        on_a = [m for m in crews["t1"] if m.get("paired_trainer_id") == trainer_a.id]
+        assert len(on_a) == 2

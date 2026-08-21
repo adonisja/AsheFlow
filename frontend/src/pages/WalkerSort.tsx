@@ -1,16 +1,36 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '../utils/errorText';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import StatCard from '../components/ui/StatCard';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import {
   Package, Route, Users, AlertTriangle, CheckCircle2,
-  RefreshCw, ChevronDown, ChevronUp, MapPin, Layers, Clock,
+  RefreshCw, ChevronDown, ChevronUp, MapPin, Layers,
+  UserCheck, Loader2, ShieldAlert, Send, Zap, CircleAlert,
+  ArrowRightLeft, Shuffle,
 } from 'lucide-react';
 import { getLocalYMD } from '../utils/date';
+import ApPullsPanel from '../components/ApPullsPanel';
+import CrewStatusPanel from '../components/CrewStatusPanel';
+import ReportDamagedModal from '../components/ReportDamagedModal';
+import type { RostersResponse } from '../api/types';
+
+/** Station-loading facts per truck, derived from /sort/{date}/rosters:
+ * feeds the commit soft-gate warning, the rider pre-warning, driver names,
+ * and the per-truck load sheet link. */
+interface StationTruckInfo {
+  driverName: string | null;
+  pendingTransfers: number;
+  riderCount: number;
+}
+import { useAuth } from '../contexts/AuthContext';
+import { useCan } from '../hooks/useCan';
 import type {
-  CommitSortResponse, RouteResponse, WaveAssignmentEntry,
-  ArrivalConfirmResponse, RebalanceOffer, MisroutedPackageOut,
+  RouteResponse, MisroutedPackageOut,
+  CommitSortResponse, WaveAssignmentEntry, ArrivalConfirmResponse,
+  WavePoolResponse, ProposedAssignmentEntry, WaveDistributionProposal,
 } from '../api/types';
 
 // ---------------------------------------------------------------------------
@@ -22,32 +42,39 @@ interface TruckAssignment {
   truck_id: string;
   truck_name: string;
   status: string;
-  route_date: string;
+  date: string;
+  paired_arrival_confirmed?: boolean;
 }
 
-interface SortStatus {
-  truck_assignment_id: string;
-  truck_name: string;
-  committed: boolean;
+interface Employee {
+  id: string;
+  name: string;
+  role: string;
+  injury_status?: string | null;
+}
+
+type SortPhase = 'idle' | 'committed' | 'distributed' | 'arrived';
+
+interface TruckSortState {
+  ta: TruckAssignment;
+  phase: SortPhase;
   routes: RouteResponse[];
   unassigned_misroutes: MisroutedPackageOut[];
   packages_sorted: number;
   packages_dropped: number;
+  dropped_tbas: string[];
+  rebalanceResult: ArrivalConfirmResponse | null;
 }
 
-type WaveStep = 'idle' | 'distributing' | 'done';
-
 // ---------------------------------------------------------------------------
-// Effort class badge
+// Helpers
 // ---------------------------------------------------------------------------
 
 function EffortBadge({ effort }: { effort: string }) {
   const cls =
-    effort === 'heavy'
-      ? 'bg-danger/10 text-danger'
-      : effort === 'easy'
-      ? 'bg-success/10 text-success'
-      : 'bg-primary/10 text-primary';
+    effort === 'heavy'  ? 'bg-danger/10 text-danger'
+    : effort === 'easy' ? 'bg-success/10 text-success'
+    :                     'bg-primary/10 text-primary';
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
       {effort}
@@ -55,16 +82,12 @@ function EffortBadge({ effort }: { effort: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Route status badge
-// ---------------------------------------------------------------------------
-
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    unassigned: 'bg-muted text-muted-foreground',
-    assigned: 'bg-info/10 text-info',
+    unassigned:  'bg-muted text-muted-foreground',
+    assigned:    'bg-info/10 text-info',
     in_progress: 'bg-warning/10 text-warning',
-    completed: 'bg-success/10 text-success',
+    completed:   'bg-success/10 text-success',
   };
   return (
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${map[status] ?? 'bg-muted text-muted-foreground'}`}>
@@ -74,27 +97,389 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Route row — expandable
+// Reassign modal
 // ---------------------------------------------------------------------------
 
-function RouteRow({ route }: { route: RouteResponse }) {
+interface ReassignModalProps {
+  route: RouteResponse;
+  walkers: Employee[];
+  onClose: () => void;
+  onReassigned: () => void;
+}
+
+function ReassignModal({ route, walkers, onClose, onReassigned }: ReassignModalProps) {
+  const [selectedId, setSelectedId] = useState('');
+  const [saving, setSaving]         = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+
+  const eligible = walkers.filter(w =>
+    w.role !== 'trainer' &&
+    !(w.injury_status != null && route.effort_class === 'heavy')
+  );
+
+  async function submit() {
+    if (!selectedId) return;
+    setSaving(true);
+    setError(null);
+    const emp = walkers.find(w => w.id === selectedId);
+    try {
+      await axiosClient.patch(`/walker-routes/routes/${route.id}/reassign`, {
+        new_employee_id: selectedId,
+        new_employee_name: emp?.name ?? '',
+      });
+      onReassigned();
+      onClose();
+    } catch (e: unknown) {
+      const detail = errorText(e, '') || undefined;
+      setError(typeof detail === 'string' ? detail : 'Reassign failed.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <UserCheck className="w-4 h-4 text-primary" />
+          <h3 className="font-semibold text-foreground">Reassign route #{route.route_number}</h3>
+        </div>
+        <div className="text-xs text-muted-foreground space-y-0.5">
+          <p>Current: <span className="text-foreground font-medium">{route.executor?.name ?? 'Unassigned'}</span></p>
+          <p>Effort: <EffortBadge effort={route.effort_class} /></p>
+          {route.effort_class === 'heavy' && (
+            <p className="text-warning flex items-center gap-1">
+              <ShieldAlert className="w-3.5 h-3.5" /> Injured/modified-duty walkers excluded
+            </p>
+          )}
+        </div>
+        <select
+          className="input w-full"
+          value={selectedId}
+          onChange={e => setSelectedId(e.target.value)}
+        >
+          <option value="">Select walker…</option>
+          {eligible.map(w => (
+            <option key={w.id} value={w.id}>{w.name}{w.injury_status ? ` (${w.injury_status})` : ''}</option>
+          ))}
+        </select>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+          <button onClick={submit} disabled={!selectedId || saving} className="btn-primary text-sm flex items-center gap-1.5">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Reassign
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Misroute resolve modal
+// ---------------------------------------------------------------------------
+
+interface MisrouteResolveModalProps {
+  routeId: string;
+  flagId: string;
+  tbaNumber: string;
+  routes: RouteResponse[];
+  suggestedRouteNumber?: number | null;
+  onClose: () => void;
+  onResolved: () => void;
+}
+
+function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRouteNumber, onClose, onResolved }: MisrouteResolveModalProps) {
+  // The sort already knows which route covers this package's block - default
+  // to it (dispatch can still pick another route or hand back to the truck).
+  const suggested = routes.find(r => r.route_number === suggestedRouteNumber);
+  const [destRouteId, setDestRouteId] = useState(suggested?.id ?? '');
+  const [saving, setSaving]           = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+
+  async function submit() {
+    if (!destRouteId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await axiosClient.patch(`/walker-routes/routes/${routeId}/misroutes/${flagId}/resolve`, {
+        destination_route_id: destRouteId,
+      });
+      onResolved();
+      onClose();
+    } catch (e: unknown) {
+      setError(errorText(e, 'Resolve failed.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+      <div className="card w-full max-w-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-warning" />
+          <h3 className="font-semibold text-foreground">Resolve misroute</h3>
+        </div>
+        <p className="text-xs text-muted-foreground font-mono">{tbaNumber}</p>
+
+        {/* Lead with the answer: the sort already knows which route covers
+            this block. One click for the common case; the dropdown stays as
+            the escape hatch. */}
+        {suggested && (
+          <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 flex items-center justify-between gap-2">
+            <div className="text-xs">
+              <span className="font-semibold text-foreground">Belongs on #{suggested.route_number}</span>
+              <span className="text-muted-foreground"> · {suggested.executor?.name ?? 'unassigned'} — covers this block</span>
+            </div>
+            {destRouteId !== suggested.id ? (
+              <button
+                onClick={() => setDestRouteId(suggested.id)}
+                className="text-xs font-medium text-primary border border-primary/30 rounded px-2 py-0.5 hover:bg-primary/10 shrink-0"
+              >
+                Use suggestion
+              </button>
+            ) : (
+              <span className="text-xs text-primary font-semibold shrink-0">✓ selected</span>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">
+            {suggested ? 'Or pick a different route' : 'Package moved to route'}
+          </label>
+          <select
+            className="input w-full"
+            value={destRouteId}
+            onChange={e => setDestRouteId(e.target.value)}
+          >
+            <option value="">Select destination route…</option>
+            {/* Suggested route floats to the top */}
+            {[...routes].sort((a, b) =>
+              (a.route_number === suggestedRouteNumber ? -1 : 0) - (b.route_number === suggestedRouteNumber ? -1 : 0)
+              || a.route_number - b.route_number,
+            ).map(r => (
+              <option key={r.id} value={r.id}>
+                {r.route_number === suggestedRouteNumber ? '★ ' : ''}#{r.route_number} — {r.executor?.name ?? 'unassigned'} ({r.effort_class}){r.route_number === suggestedRouteNumber ? ' — suggested' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+          <button onClick={submit} disabled={!destRouteId || saving} className="btn-primary text-sm flex items-center gap-1.5">
+            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Mark resolved
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RouteCard — unified route card for all phases:
+//   committed   → shows walker assignment dropdown (dispatch-time)
+//   distributed → shows status badge, reassign trigger, misroute resolve
+//   arrived     → same as distributed
+// ---------------------------------------------------------------------------
+
+/** Searchable, role-grouped staff picker for route assignment.
+ *
+ * Replaces the native <select> that rendered every staff member as one flat,
+ * unsearchable list (painful at 40+ routes). Adds: type-ahead filter, Walkers/
+ * Trainees/Trainers grouping, injury markers, and "route #N" tags on staff
+ * already staged on another route (dimmed, sorted last — still selectable,
+ * since re-picking someone is a legitimate reassignment).
+ */
+function AssignCombobox({
+  walkers, takenBy, currentId, onSelect,
+}: {
+  walkers: Employee[];
+  takenBy: Record<string, number>;   // employee_id → route_number staged elsewhere
+  currentId: string;
+  onSelect: (employeeId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const slotPct = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
-  const barColor = slotPct >= 90 ? 'bg-danger' : slotPct >= 70 ? 'bg-warning' : 'bg-success';
+  const [q, setQ] = useState('');
+  // Portal positioning: RouteCard's overflow-hidden (rounded corners) clipped an
+  // absolutely-positioned panel to the card, making it invisible. Rendering the
+  // panel through a portal at document.body escapes ANY ancestor clipping; it's
+  // fixed-positioned from the trigger's rect and closes on scroll so it never
+  // drifts away from its button.
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  const toggle = () => {
+    if (!open && boxRef.current) {
+      const r = boxRef.current.getBoundingClientRect();
+      setRect({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
+    setOpen(o => !o);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (boxRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onScroll = (e: Event) => {
+      // typing in the panel can scroll its own list — only close on outside scrolls
+      if (panelRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open]);
+
+  const current = walkers.find(w => w.id === currentId);
+  const needle = q.trim().toLowerCase();
+  const groups: { label: string; list: Employee[] }[] = [
+    { label: 'Walkers', list: [] }, { label: 'Trainees', list: [] }, { label: 'Trainers', list: [] },
+  ];
+  for (const w of walkers) {
+    if (needle && !w.name.toLowerCase().includes(needle)) continue;
+    groups[w.role === 'walker' ? 0 : w.role === 'trainee' ? 1 : 2].list.push(w);
+  }
+  for (const g of groups) {
+    g.list.sort((a, b) =>
+      Number(!!takenBy[a.id] && a.id !== currentId) - Number(!!takenBy[b.id] && b.id !== currentId)
+      || a.name.localeCompare(b.name));
+  }
+  const empty = groups.every(g => g.list.length === 0);
+
+  return (
+    <div ref={boxRef} className="relative flex-1 min-w-0">
+      <button
+        type="button"
+        onClick={toggle}
+        className="w-full flex items-center justify-between gap-2 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground hover:bg-accent/40 focus:outline-none focus:ring-1 focus:ring-primary/40"
+      >
+        <span className={`truncate ${current ? 'font-medium' : 'text-muted-foreground'}`}>
+          {current ? current.name : 'Assign walker…'}
+        </span>
+        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+      </button>
+      {open && rect && createPortal(
+        <div
+          ref={panelRef}
+          style={{ position: 'fixed', top: rect.top, left: rect.left, width: rect.width, zIndex: 50 }}
+          className="rounded-xl border border-border bg-background shadow-lg overflow-hidden"
+        >
+          <input
+            autoFocus
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            placeholder="Search staff…"
+            className="w-full px-3 py-1.5 text-xs bg-accent/30 border-b border-border text-foreground placeholder:text-muted-foreground focus:outline-none"
+          />
+          <div className="max-h-56 overflow-y-auto py-1">
+            {groups.map(g => g.list.length > 0 && (
+              <div key={g.label}>
+                <p className="px-3 pt-1.5 pb-0.5 text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">{g.label}</p>
+                {g.list.map(w => {
+                  const taken = takenBy[w.id];
+                  const isCurrent = w.id === currentId;
+                  return (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => { onSelect(w.id); setOpen(false); setQ(''); }}
+                      className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-accent/50 ${taken && !isCurrent ? 'opacity-50' : ''}`}
+                    >
+                      <span className="flex-1 truncate text-foreground">{w.name}</span>
+                      {w.injury_status && <ShieldAlert className="w-3 h-3 text-warning shrink-0" />}
+                      {isCurrent
+                        ? <span className="text-[10px] text-success font-semibold shrink-0">assigned</span>
+                        : taken ? <span className="text-[10px] text-muted-foreground shrink-0">route #{taken}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {empty && <p className="px-3 py-2 text-xs text-muted-foreground">No staff match “{q}”</p>}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+
+interface RouteCardProps {
+  route: RouteResponse;
+  phase: SortPhase;
+  walkers: Employee[];
+  // committed phase
+  waveMap?: Record<number, string>;   // staged assignments: route_number → employee_id
+  onAssign?: (routeNumber: number, employeeId: string) => void;
+  // distributed/arrived phase
+  canReassign?: boolean;
+  onReassign?: (route: RouteResponse) => void;
+  onResolveMisroute?: (routeId: string, flagId: string, tba: string, suggestedRouteNumber?: number | null) => void;
+  /** All routes on the truck — resolves misroute suggested_route_id to a
+   * route number + assignee so the row can SHOW where the package belongs. */
+  allRoutes?: RouteResponse[];
+}
+
+function RouteCard({
+  route,
+  phase,
+  walkers,
+  waveMap,
+  onAssign,
+  canReassign,
+  onReassign,
+  onResolveMisroute,
+  allRoutes,
+}: RouteCardProps) {
+  // Staff staged on OTHER routes (for the combobox's "route #N" tags).
+  const takenBy: Record<string, number> = {};
+  if (waveMap) {
+    for (const [rn, eid] of Object.entries(waveMap)) {
+      if (Number(rn) !== route.route_number && eid) takenBy[eid] = Number(rn);
+    }
+  }
+  const [open, setOpen] = useState(false);
+  const slotPct  = Math.min(100, Math.round((route.slot_cost / route.capacity_limit) * 100));
+  // The sort PACKS routes to capacity by design — a 12/12 route is healthy,
+  // not an alarm. Red-at-full painted every route red and buried real signal.
+  // Over capacity (shouldn't happen) = danger; badly underfilled = warning
+  // (wasted cart trip); otherwise the fill just reads as fill.
+  const overCap  = route.slot_cost > route.capacity_limit;
+  const barColor = overCap ? 'bg-danger' : slotPct < 60 ? 'bg-warning' : 'bg-primary';
+  const assignee     = walkers.find(w => w.id === route.executor?.id);
+  const injuryStatus = assignee?.injury_status ?? null;
+  const isOperational = phase === 'distributed' || phase === 'arrived';
 
   return (
     <div className="border border-border rounded-xl overflow-hidden">
+      {/* Header row — shared by all phases */}
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/40 transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-accent/40 transition-colors text-left"
       >
         <span className="text-sm font-semibold text-foreground w-8 shrink-0">#{route.route_number}</span>
         <EffortBadge effort={route.effort_class} />
-        <StatusBadge status={route.status} />
-        <span className="text-xs text-muted-foreground ml-1">{route.package_count} pkgs</span>
-        <span className="text-xs text-muted-foreground">{route.tote_ids.length} totes</span>
-
-        {/* Capacity bar */}
+        {isOperational && <StatusBadge status={route.status} />}
+        <span className="text-xs text-muted-foreground">{route.package_count} pkgs</span>
+        {!isOperational && (
+          <span className="text-xs text-muted-foreground">{route.tote_ids.length} totes</span>
+        )}
         <div className="flex-1 min-w-0 mx-2">
           <div className="h-1.5 bg-accent rounded-full overflow-hidden">
             <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${slotPct}%` }} />
@@ -103,71 +488,137 @@ function RouteRow({ route }: { route: RouteResponse }) {
         <span className="text-xs text-muted-foreground shrink-0 w-12 text-right">
           {route.slot_cost}/{route.capacity_limit}
         </span>
-
-        {route.assigned_to_name && (
+        {isOperational && route.executor?.name && (
           <span className="text-xs text-foreground font-medium shrink-0 max-w-[120px] truncate hidden sm:block">
-            {route.assigned_to_name}
+            {route.executor?.name}
           </span>
         )}
-
+        {injuryStatus && (
+          <ShieldAlert className="w-3.5 h-3.5 text-warning shrink-0" aria-label={`${assignee?.name}: ${injuryStatus}`} />
+        )}
         {route.misrouted_packages.length > 0 && (
           <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
         )}
         {open ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
       </button>
 
+      {/* Committed phase: searchable role-grouped assignment picker */}
+      {phase === 'committed' && onAssign && (
+        <div className="px-3 pb-2.5 flex items-center gap-2">
+          <UserCheck className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+          <AssignCombobox
+            walkers={walkers}
+            takenBy={takenBy}
+            currentId={waveMap?.[route.route_number] ?? route.executor?.id ?? ''}
+            onSelect={eid => onAssign(route.route_number, eid)}
+          />
+        </div>
+      )}
+
+      {/* Expanded panel */}
       {open && (
-        <div className="border-t border-border px-4 py-3 space-y-3 bg-surface/40">
-          {/* Block keys */}
+        <div className="border-t border-border px-3 py-3 space-y-3 bg-surface/40">
           <div>
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-1.5">Blocks</p>
             <div className="flex flex-wrap gap-1">
-              {route.block_keys.map(k => (
-                <span key={k} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs text-foreground font-mono">
-                  <MapPin className="w-2.5 h-2.5 text-muted-foreground" />{k}
+              {(() => {
+                // block_keys is CARRIED coverage — it includes each stray
+                // rider's own (distant) block, which made routes look like
+                // they sprawled across the map. Ghost the chips that exist
+                // only because a flagged misroute is riding here.
+                const strayBlocks = new Set(
+                  (route.misrouted_packages ?? [])
+                    // pre-commit shape lacks `resolved`; treat missing as unresolved
+                    .filter(m => !(m as any).resolved && m.destination_block_key)
+                    .map(m => m.destination_block_key as string),
+                );
+                return route.block_keys.map(k => strayBlocks.has(k) ? (
+                  <span
+                    key={k}
+                    title="Carried by accident — a flagged misroute rides in this route's totes; not part of its territory"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-warning/10 border border-dashed border-warning/40 rounded text-xs text-muted-foreground font-mono line-through"
+                  >
+                    <MapPin className="w-2.5 h-2.5 text-warning" />{k}
+                  </span>
+                ) : (
+                  <span key={k} className="inline-flex items-center gap-1 px-2 py-0.5 bg-accent rounded text-xs text-foreground font-mono">
+                    <MapPin className="w-2.5 h-2.5 text-muted-foreground" />{k}
+                  </span>
+                ));
+              })()}
+            </div>
+          </div>
+
+          {/* Operational-phase extras: assignee detail, trainee pairing, injury warning */}
+          {isOperational && route.executor?.name && (
+            <div className="flex items-start gap-3 text-xs text-muted-foreground flex-wrap">
+              <span>Assigned: <span className="text-foreground font-medium">{route.executor.name}</span></span>
+              {route.supervisors.length > 0 && (
+                <span>Trainee paired (Phase {route.trainee_phase})</span>
+              )}
+              {injuryStatus && route.effort_class === 'heavy' && (
+                <span className="text-warning flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3" /> {assignee?.name} is {injuryStatus} — consider reassigning
                 </span>
-              ))}
+              )}
             </div>
-          </div>
+          )}
 
-          {/* Totes */}
-          <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-1.5">Totes</p>
-            <div className="flex flex-wrap gap-1">
-              {route.tote_ids.map(t => (
-                <span key={t} className="px-2 py-0.5 bg-accent rounded text-xs text-foreground font-mono">{t}</span>
-              ))}
-            </div>
-          </div>
-
-          {/* Misroutes */}
           {route.misrouted_packages.length > 0 && (
             <div>
               <p className="text-[10px] uppercase tracking-widest text-warning font-semibold mb-1.5 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" /> Misrouted packages
               </p>
-              <div className="space-y-1">
-                {route.misrouted_packages.map(m => (
-                  <div key={m.tba_number} className="flex items-center gap-2 text-xs">
-                    <span className="font-mono text-foreground">{m.tba_number}</span>
-                    <span className="text-muted-foreground">bag: {m.current_bag_id}</span>
-                    {m.destination_block_key && (
-                      <span className="text-warning">→ {m.destination_block_key}</span>
-                    )}
-                  </div>
-                ))}
+              <div className="space-y-1.5">
+                {route.misrouted_packages.map(m => {
+                  // The sort already computed WHERE this package belongs —
+                  // the flag carries suggested_route_id, but the row never
+                  // showed it (and passed the wrong field to the modal, so
+                  // the suggestion was silently dropped). Resolve it to a
+                  // route + walker and lead with that.
+                  const suggestedRaw = allRoutes?.find(r =>
+                    r.id === (m as any).suggested_route_id
+                    || r.route_number === (m as any).suggested_route_number);
+                  // Never suggest the route the package was flagged FROM —
+                  // stale carried-block-derived data produced self-suggestions.
+                  const suggested = suggestedRaw && suggestedRaw.id !== route.id ? suggestedRaw : undefined;
+                  return (
+                    <div key={m.tba_number} className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs min-w-0 flex-wrap">
+                        <span className="font-mono text-foreground">{m.tba_number}</span>
+                        {m.destination_block_key && (
+                          <span className="text-warning">→ {m.destination_block_key}</span>
+                        )}
+                        {suggested && (
+                          <span className="text-primary font-medium">
+                            → belongs on #{suggested.route_number}
+                            {suggested.executor?.name ? ` · ${suggested.executor?.name}` : ' (unassigned)'}
+                          </span>
+                        )}
+                      </div>
+                      {isOperational && canReassign && onResolveMisroute && (
+                        <button
+                          onClick={() => onResolveMisroute(route.id, m.id, m.tba_number, suggested?.route_number ?? null)}
+                          className="text-xs text-primary hover:text-primary/80 px-2 py-0.5 rounded border border-primary/30 hover:bg-primary/5 transition-colors shrink-0"
+                          title={suggested ? `Move to route #${suggested.route_number}` : 'Pick destination route'}
+                        >
+                          {suggested ? `Move to #${suggested.route_number}` : 'Resolve'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* Assignment info */}
-          {route.assigned_to_name && (
-            <div className="flex items-center gap-4 text-xs text-muted-foreground">
-              <span>Assigned: <span className="text-foreground font-medium">{route.assigned_to_name}</span></span>
-              {route.paired_trainee_id && (
-                <span>Trainee paired (Phase {route.trainee_phase})</span>
-              )}
-            </div>
+          {isOperational && canReassign && onReassign && (
+            <button
+              onClick={() => onReassign(route)}
+              className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
+            >
+              <UserCheck className="w-3.5 h-3.5" /> Reassign route
+            </button>
           )}
         </div>
       )}
@@ -176,80 +627,910 @@ function RouteRow({ route }: { route: RouteResponse }) {
 }
 
 // ---------------------------------------------------------------------------
-// Truck sort card
+// Wave pool panel
 // ---------------------------------------------------------------------------
 
-function TruckSortCard({
-  sortStatus,
-  onRefresh,
+function WavePoolPanel({
+  taId,
+  routeDate,
+  walkers,
+  onSecondWavePropose,
 }: {
-  sortStatus: SortStatus;
-  onRefresh: () => void;
+  taId: string;
+  routeDate: string;
+  walkers: Employee[];
+  onSecondWavePropose: (taId: string, proposal: ProposedAssignmentEntry[]) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const assignedCount = sortStatus.routes.filter(r => r.status !== 'unassigned').length;
-  const completedCount = sortStatus.routes.filter(r => r.status === 'completed').length;
+  const [pool, setPool]           = useState<WavePoolResponse | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [proposing, setProposing] = useState(false);
+  const [propError, setPropError] = useState<string | null>(null);
+  const intervalRef               = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // The wave is settled when nothing is left to distribute: no unassigned
+  // routes AND no route still assigned/in-progress. Once settled the pool can't
+  // change, so the poll stops (ADR-179 — this loop previously had no stop
+  // condition and ran forever).
+  const isWaveSettled = useCallback((data: WavePoolResponse): boolean => {
+    if (data.unassigned_routes.length > 0) return false;
+    return Object.values(data.wave_summary.waves).every(
+      w => w.assigned === 0 && w.in_progress === 0 && w.unassigned === 0,
+    );
+  }, []);
+
+  const fetchPool = useCallback(async () => {
+    try {
+      const { data } = await axiosClient.get<WavePoolResponse>(
+        `/walker-routes/${taId}/wave-pool`,
+        { params: { route_date: routeDate } },
+      );
+      setPool(data);
+      if (isWaveSettled(data) && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    } catch {
+      // silent — pool is advisory
+    } finally {
+      setLoading(false);
+    }
+  }, [taId, routeDate, isWaveSettled]);
+
+  useEffect(() => {
+    fetchPool();
+    // Visibility-gated 45s poll (ADR-179: was an ungated 30s loop). A
+    // backgrounded tab doesn't poll; focus resumes it.
+    const tick = () => { if (document.visibilityState === 'visible') fetchPool(); };
+    const start = () => {
+      if (!intervalRef.current) intervalRef.current = setInterval(tick, 45_000);
+    };
+    start();
+    const onFocus = () => { fetchPool(); start(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [fetchPool]);
+
+  async function handleAutoPropose() {
+    setProposing(true);
+    setPropError(null);
+    try {
+      const res = await axiosClient.post<WaveDistributionProposal>(
+        '/walker-routes/wave-distribution',
+        { truck_assignment_id: taId, route_date: routeDate, auto_assign: true, assignments: [], trainer_id: null, trainee_id: null, trainee_phase: null },
+      );
+      onSecondWavePropose(taId, res.data.proposed_assignments);
+      if (res.data.conflicts.length > 0) {
+        setPropError(`Conflicts: ${res.data.conflicts.join('; ')}`);
+      }
+    } catch (e: unknown) {
+      setPropError(errorText(e, 'Auto-propose failed.'));
+    } finally {
+      setProposing(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading wave pool…
+      </div>
+    );
+  }
+  if (!pool) return null;
+
+  const { returned_walkers, unassigned_routes, wave_summary } = pool;
+  const waveKeys = Object.keys(wave_summary.waves).sort();
 
   return (
-    <div className="card-elevated space-y-0">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 p-4 hover:bg-accent/20 transition-colors rounded-xl text-left"
-      >
-        <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-primary/10 shrink-0">
-          <Layers className="w-4.5 h-4.5 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">{sortStatus.truck_name}</p>
-          <p className="text-xs text-muted-foreground">
-            {sortStatus.routes.length} routes · {sortStatus.packages_sorted} pkgs sorted
-            {sortStatus.packages_dropped > 0 && ` · ${sortStatus.packages_dropped} dropped`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {completedCount === sortStatus.routes.length && sortStatus.routes.length > 0 ? (
-            <CheckCircle2 className="w-4 h-4 text-success" />
-          ) : assignedCount > 0 ? (
-            <Clock className="w-4 h-4 text-info" />
-          ) : (
-            <span className="text-xs text-muted-foreground">unassigned</span>
-          )}
-          {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-        </div>
-      </button>
-
-      {open && (
-        <div className="border-t border-border px-4 pb-4 pt-3 space-y-2">
-          {sortStatus.routes.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">No routes committed yet.</p>
-          ) : (
-            sortStatus.routes
-              .slice()
-              .sort((a, b) => a.route_number - b.route_number)
-              .map(r => <RouteRow key={r.id} route={r} />)
-          )}
-
-          {sortStatus.unassigned_misroutes.length > 0 && (
-            <div className="mt-3 p-3 bg-warning/5 border border-warning/20 rounded-xl">
-              <p className="text-xs font-semibold text-warning mb-2 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                {sortStatus.unassigned_misroutes.length} unresolved misroutes (no destination found)
-              </p>
-              {sortStatus.unassigned_misroutes.map(m => (
-                <div key={m.tba_number} className="text-xs text-muted-foreground font-mono">{m.tba_number}</div>
-              ))}
-            </div>
-          )}
-
-          <button
-            onClick={e => { e.stopPropagation(); onRefresh(); }}
-            className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
-          </button>
+    <div className="space-y-4 pt-2">
+      {waveKeys.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Wave progress</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {waveKeys.map(wk => {
+              const counts = wave_summary.waves[wk];
+              const done  = counts.completed;
+              const total = counts.assigned + counts.in_progress + counts.completed + counts.unassigned;
+              const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+              return (
+                <div key={wk} className="p-2 rounded-lg bg-accent/50 space-y-1">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase">Wave {wk}</p>
+                  <div className="h-1 bg-border rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${pct === 100 ? 'bg-success' : 'bg-primary'}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">{done}/{total} complete · {counts.in_progress} active</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
+
+      {returned_walkers.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+              <ArrowRightLeft className="w-3.5 h-3.5" /> Returned walkers
+            </p>
+            <span className="text-xs text-success font-medium">{returned_walkers.length} available</span>
+          </div>
+          <div className="space-y-1">
+            {returned_walkers.map(w => (
+              <div key={w.employee_id} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-success/5 border border-success/20">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-medium text-foreground truncate">{w.employee_name}</span>
+                  {w.injury_status && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-warning/10 text-warning font-medium shrink-0">
+                      {w.injury_status}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {w.completed_routes.map(r => `#${r.route_number}`).join(', ')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {unassigned_routes.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-warning" /> Unassigned pool
+            <span className="text-warning font-medium">({unassigned_routes.length})</span>
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {unassigned_routes.slice().sort((a, b) => a.route_number - b.route_number).map(r => (
+              <div key={r.route_id} className="flex items-center gap-1 px-2 py-1 rounded-lg border border-border bg-accent/40 text-xs">
+                <span className="font-semibold text-foreground">#{r.route_number}</span>
+                <EffortBadge effort={r.effort_class} />
+                <span className="text-muted-foreground">{r.package_count}p</span>
+              </div>
+            ))}
+          </div>
+          {returned_walkers.length > 0 && (
+            <div className="space-y-1.5">
+              <button
+                onClick={handleAutoPropose}
+                disabled={proposing}
+                className="btn-primary flex items-center gap-1.5 text-sm"
+              >
+                {proposing
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Proposing…</>
+                  : <><Shuffle className="w-3.5 h-3.5" /> Auto-propose second wave</>}
+              </button>
+              {propError && (
+                <p className="text-xs text-warning flex items-start gap-1">
+                  <CircleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />{propError}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {unassigned_routes.length === 0 && returned_walkers.length === 0 && (
+        <p className="text-xs text-muted-foreground py-1">No walkers returned yet — pool is empty.</p>
+      )}
+
+      <button
+        onClick={() => { setLoading(true); fetchPool(); }}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <RefreshCw className="w-3 h-3" /> Refresh pool
+      </button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Proposal review panel
+// ---------------------------------------------------------------------------
+
+function ProposalReviewPanel({
+  taId,
+  routeDate,
+  proposal,
+  walkers,
+  onConfirm,
+  onDiscard,
+}: {
+  taId: string;
+  routeDate: string;
+  proposal: ProposedAssignmentEntry[];
+  walkers: Employee[];
+  onConfirm: (taId: string, assignments: WaveAssignmentEntry[]) => Promise<void>;
+  onDiscard: () => void;
+}) {
+  const [overrides, setOverrides]   = useState<Record<number, string>>(() =>
+    Object.fromEntries(proposal.map(p => [p.route_number, p.employee_id]))
+  );
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setConfirming(true);
+    setError(null);
+    try {
+      const assignments: WaveAssignmentEntry[] = Object.entries(overrides)
+        .filter(([, eid]) => eid)
+        .map(([rn, eid]) => ({ route_number: Number(rn), employee_id: eid }));
+      await onConfirm(taId, assignments);
+    } catch (e: unknown) {
+      setError(errorText(e, 'Confirm failed.'));
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 p-3 bg-info/5 border border-info/20 rounded-xl">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-info uppercase tracking-widest">Review proposed assignments</p>
+        <button onClick={onDiscard} className="text-xs text-muted-foreground hover:text-foreground">Discard</button>
+      </div>
+      <p className="text-xs text-muted-foreground">Edit any assignment before confirming.</p>
+      <div className="space-y-1.5">
+        {proposal.map(p => (
+          <div key={p.route_number} className={`flex items-center gap-2 p-2 rounded-lg border ${p.auto_proposed ? 'bg-info/5 border-info/20' : 'bg-background border-border'}`}>
+            <span className="text-xs font-semibold text-foreground w-8 shrink-0">#{p.route_number}</span>
+            <EffortBadge effort={p.effort_class} />
+            <select
+              value={overrides[p.route_number] ?? ''}
+              onChange={e => setOverrides(prev => ({ ...prev, [p.route_number]: e.target.value }))}
+              className="flex-1 text-xs border border-border rounded-lg px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+            >
+              <option value="">Unassign…</option>
+              {walkers.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+            {p.auto_proposed && <span className="text-[10px] text-info shrink-0">auto</span>}
+          </div>
+        ))}
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <button
+        onClick={handleConfirm}
+        disabled={confirming}
+        className="btn-primary w-full flex items-center justify-center gap-1.5 text-sm"
+      >
+        {confirming
+          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending…</>
+          : <><Send className="w-3.5 h-3.5" /> Confirm wave assignments</>}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Truck sort panel — full 3-step commit / wave / arrival workflow
+// ---------------------------------------------------------------------------
+
+function TruckSortPanel({
+  state,
+  walkers,
+  trainers,
+  routeDate,
+  zoneExists,
+  isHub,
+  hubState,
+  onCommit,
+  onDistribute,
+  onArrivalConfirm,
+  onRefresh,
+  station,
+}: {
+  state: TruckSortState;
+  walkers: Employee[];
+  trainers: Employee[];
+  routeDate: string;
+  zoneExists: boolean;
+  /* ADR-274 D9 — a hub's packages come from its OWN manifest, never the
+     station sort. Readiness is the same flag; only the copy differs. */
+  isHub: boolean;
+  /* ADR-274 D11 — 'enriching' | 'failed' | null, hub only. */
+  hubState: string | null;
+  onCommit: (taId: string) => Promise<void>;
+  onDistribute: (taId: string, assignments: WaveAssignmentEntry[], trainerId: string, traineeId?: string, traineePhase?: number) => Promise<void>;
+  onArrivalConfirm: (taId: string, trainerId: string, traineeId: string) => Promise<void>;
+  onRefresh: (taId: string) => Promise<void>;
+  station?: StationTruckInfo;
+}) {
+  const [open, setOpen]                         = useState(false);
+  const [commitLoading, setCommitLoading]       = useState(false);
+  const [distributeLoading, setDistributeLoading] = useState(false);
+  const [arrivalLoading, setArrivalLoading]     = useState(false);
+  const [error, setError]                       = useState<string | null>(null);
+  // ── Staging persistence (sessionStorage) ──────────────────────────────────
+  // waveMap / proposal / trainer picks are pre-confirmation staging state that
+  // previously lived only in component state — any refresh (or crash) lost the
+  // whole staged wave. Persisted per truck-assignment+date, restored on mount,
+  // cleared on successful Send Wave. Same pattern as the sort task id.
+  const stagingKey = `apsort-staging:${state.ta.id}:${routeDate}`;
+  const stagedRef = useRef<{
+    waveMap?: Record<number, string>;
+    firstWaveProposal?: ProposedAssignmentEntry[] | null;
+    proposalMap?: Record<number, string>;
+    selectedTrainerId?: string;
+    selectedTraineeId?: string;
+    traineePhase?: number;
+  } | null>(null);
+  if (stagedRef.current === null) {
+    try { stagedRef.current = JSON.parse(sessionStorage.getItem(stagingKey) ?? '{}'); }
+    catch { stagedRef.current = {}; }
+  }
+  const staged = stagedRef.current!;
+
+  const [waveMap, setWaveMap]                   = useState<Record<number, string>>(staged.waveMap ?? {});
+  const [firstWaveProposal, setFirstWaveProposal] = useState<ProposedAssignmentEntry[] | null>(staged.firstWaveProposal ?? null);
+  // route_number → ORIGINALLY auto-proposed employee_id. At Send Wave each row's
+  // auto_proposed flag derives from this (kept as-is vs overridden vs manual) —
+  // the D9.2 override-rate telemetry that tunes the matcher's weights.
+  const [proposalMap, setProposalMap] = useState<Record<number, string>>(staged.proposalMap ?? {});
+  const [firstWaveConflicts, setFirstWaveConflicts] = useState<string[]>([]);
+  const [firstWaveProposing, setFirstWaveProposing] = useState(false);
+  const [secondWaveProposal, setSecondWaveProposal] = useState<ProposedAssignmentEntry[] | null>(null);
+  const [selectedTrainerId, setSelectedTrainerId] = useState(staged.selectedTrainerId ?? '');
+  const [selectedTraineeId, setSelectedTraineeId] = useState(staged.selectedTraineeId ?? '');
+  const [traineePhase, setTraineePhase]         = useState<number>(staged.traineePhase ?? 1);
+
+  // Write-through: every staging change survives a refresh until Send Wave.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(stagingKey, JSON.stringify({
+        waveMap, firstWaveProposal, proposalMap, selectedTrainerId, selectedTraineeId, traineePhase,
+      }));
+    } catch { /* storage quota — non-fatal, staging just won't survive refresh */ }
+  }, [stagingKey, waveMap, firstWaveProposal, proposalMap, selectedTrainerId, selectedTraineeId, traineePhase]);
+  // ADR-145 flow rework: the pair comes from dispatch (paired_trainer_id) and
+  // the trainee confirms arrival from their app — no manual picking.
+  const [pairStatus, setPairStatus] = useState<{
+    trainerId: string; traineeId: string; arrivedAt: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (state.phase !== 'distributed') return;
+    axiosClient.get<{ employee_id: string; role: string; paired_trainer_id?: string | null; ap_arrived_at?: string | null }[]>(
+      `/assignment-members/${state.ta.id}`,
+    ).then(({ data }) => {
+      const pair = data.find(m => m.role === 'trainee' && m.paired_trainer_id);
+      setPairStatus(pair
+        ? { trainerId: pair.paired_trainer_id!, traineeId: pair.employee_id, arrivedAt: pair.ap_arrived_at ?? null }
+        : null);
+    }).catch(() => setPairStatus(null));
+  }, [state.phase, state.ta.id]);
+  const [reassignTarget, setReassignTarget]     = useState<RouteResponse | null>(null);
+  const [misrouteTarget, setMisrouteTarget]     = useState<{ routeId: string; flagId: string; tba: string; suggestedRouteNumber?: number | null } | null>(null);
+
+  useEffect(() => {
+    setWaveMap(prev => {
+      const next = { ...prev };
+      state.routes.forEach(r => {
+        if (r.executor?.id && !next[r.route_number]) next[r.route_number] = r.executor?.id;
+      });
+      return next;
+    });
+  }, [state.routes]);
+
+  // D6 (ADR-187): pairing derives from dispatch. Pre-fill the trainer/trainee
+  // selectors from AssignmentMember.paired_trainer_id (dispatch is the source
+  // of truth); the dropdowns stay editable for day-of overrides. Skip if the
+  // user already staged a selection (sessionStorage restore).
+  useEffect(() => {
+    if (state.phase !== 'committed' || selectedTrainerId || selectedTraineeId) return;
+    axiosClient.get<{ employee_id: string; role: string; paired_trainer_id?: string | null }[]>(
+      `/assignment-members/${state.ta.id}`,
+    ).then(({ data }) => {
+      const pairedTrainee = data.find(m => m.role === 'trainee' && m.paired_trainer_id);
+      if (pairedTrainee?.paired_trainer_id) {
+        setSelectedTrainerId(pairedTrainee.paired_trainer_id);
+        setSelectedTraineeId(pairedTrainee.employee_id);
+      } else {
+        // no pair on this truck — default trainer to any trainer on the crew
+        const trainer = data.find(m => m.role === 'trainer');
+        if (trainer) setSelectedTrainerId(trainer.employee_id);
+      }
+    }).catch(() => { /* derive is best-effort; selectors remain manual */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.phase, state.ta.id]);
+
+  const handleCommit = async () => {
+    setError(null);
+    setCommitLoading(true);
+    try { await onCommit(state.ta.id); }
+    catch (e: unknown) { setError(errorText(e, 'Commit failed.')); }
+    finally { setCommitLoading(false); }
+  };
+
+  const handleFirstWaveAutoPropose = async () => {
+    setError(null);
+    setFirstWaveProposing(true);
+    try {
+      const { data } = await axiosClient.post<WaveDistributionProposal>(
+        '/walker-routes/wave-distribution',
+        { truck_assignment_id: state.ta.id, route_date: routeDate, auto_assign: true },
+      );
+      setFirstWaveProposal(data.proposed_assignments);
+      setFirstWaveConflicts(data.conflicts ?? []);
+      // snapshot the ORIGINAL proposal for D9.2 override telemetry
+      setProposalMap(Object.fromEntries(
+        data.proposed_assignments.map(p => [p.route_number, p.employee_id]),
+      ));
+    } catch (e: unknown) {
+      setError(errorText(e, 'Auto-propose failed.'));
+    } finally {
+      setFirstWaveProposing(false);
+    }
+  };
+
+  const handleFirstWaveProposalConfirm = (proposed: ProposedAssignmentEntry[]) => {
+    setWaveMap(prev => {
+      const next = { ...prev };
+      proposed.forEach(p => { next[p.route_number] = p.employee_id; });
+      return next;
+    });
+    setFirstWaveProposal(null);
+  };
+
+  const handleDistribute = async () => {
+    setError(null);
+    const assignments = Object.entries(waveMap)
+      .filter(([, eid]) => eid)
+      .map(([rn, eid]) => ({
+        route_number: Number(rn),
+        employee_id: eid,
+        // D9.2: kept-as-proposed vs overridden vs manual — the matcher's tuning signal
+        auto_proposed: proposalMap[Number(rn)] === undefined
+          ? null
+          : proposalMap[Number(rn)] === eid,
+      }));
+    if (assignments.length === 0) { setError('Assign at least one route before distributing.'); return; }
+    if (!selectedTrainerId) { setError('Select a trainer.'); return; }
+    setDistributeLoading(true);
+    try {
+      await onDistribute(
+        state.ta.id, assignments, selectedTrainerId,
+        selectedTraineeId || undefined,
+        selectedTraineeId ? traineePhase : undefined,
+      );
+      // Wave is committed server-side — staged state has served its purpose.
+      try { sessionStorage.removeItem(stagingKey); } catch { /* non-fatal */ }
+    } catch (e: unknown) {
+      setError(errorText(e, 'Wave distribution failed.'));
+    } finally {
+      setDistributeLoading(false);
+    }
+  };
+
+  const handleArrival = async () => {
+    setError(null);
+    if (!pairStatus) { setError('No trainer–trainee pair on this truck.'); return; }
+    setArrivalLoading(true);
+    try { await onArrivalConfirm(state.ta.id, pairStatus.trainerId, pairStatus.traineeId); }
+    catch (e: unknown) { setError(errorText(e, 'Arrival confirmation failed.')); }
+    finally { setArrivalLoading(false); }
+  };
+
+  const phaseComplete = state.phase === 'arrived';
+  const pkgCount = state.routes.reduce((s, r) => s + r.tba_numbers.length, 0);
+
+  return (
+    <>
+      <div className="card-elevated">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="w-full flex items-center gap-3 p-4 hover:bg-accent/20 transition-colors rounded-xl text-left"
+        >
+          <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-primary/10 shrink-0">
+            <Layers className="w-4.5 h-4.5 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground">
+              {state.ta.truck_name}
+              {station?.driverName && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">{station.driverName}</span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {state.phase === 'idle'        && 'Not committed'}
+              {state.phase === 'committed'   && `${state.routes.length} routes · ${pkgCount} pkgs — awaiting distribution`}
+              {state.phase === 'distributed' && `${state.routes.length} routes assigned — awaiting arrival confirm`}
+              {state.phase === 'arrived'     && `${state.routes.length} routes · rebalance complete`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {phaseComplete
+              ? <CheckCircle2 className="w-4 h-4 text-success" />
+              : state.phase !== 'idle'
+              ? <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
+              : null}
+            {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </div>
+        </button>
+
+        {open && (
+          <div className="border-t border-border px-4 pb-4 pt-3 space-y-5">
+            <div className="flex justify-end -mb-3">
+              <a
+                href={`/sort/print?date=${routeDate}&truck=${state.ta.truck_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+              >
+                Print load sheet ↗
+              </a>
+            </div>
+            {error && (
+              <div className="p-3 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
+            )}
+
+            {/* ── Step 1: Commit ── */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Step 1 — Commit sort</p>
+                {state.phase !== 'idle' && <CheckCircle2 className="w-4 h-4 text-success" />}
+              </div>
+              {state.phase === 'idle' ? (
+                zoneExists ? (
+                  <div className="space-y-2">
+                  {(station?.pendingTransfers ?? 0) > 0 && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-warning/5 border border-warning/20 text-xs text-warning">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      {station!.pendingTransfers} pending station transfer{station!.pendingTransfers === 1 ? '' : 's'} touch this
+                      truck - committing now builds routes on data that may still change. Not blocked (soft gate).
+                    </div>
+                  )}
+                  {(station?.riderCount ?? 0) > 0 && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-accent/40 border border-border text-xs text-muted-foreground">
+                      <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
+                      Carries {station!.riderCount} package{station!.riderCount === 1 ? '' : 's'} off their tote's home block -
+                      expect that many cross-walker transfers after commit.
+                    </div>
+                  )}
+                  <button
+                    onClick={handleCommit}
+                    disabled={commitLoading}
+                    className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+                  >
+                    {commitLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                    {commitLoading ? 'Committing sort…' : 'Commit Sort'}
+                  </button>
+                  </div>
+                ) : (
+                  <div className={
+                    // A failed manifest is an error the dispatcher must act on,
+                    // not the neutral "not yet" the other two states describe.
+                    isHub && hubState === 'failed'
+                      ? "flex items-center gap-2 p-3 rounded-xl bg-destructive/5 border border-destructive/20 text-xs text-destructive"
+                      : "flex items-center gap-2 p-3 rounded-xl bg-accent/40 border border-border text-xs text-muted-foreground"
+                  }>
+                    {isHub && hubState === 'failed'
+                      ? <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      : <Layers className="w-3.5 h-3.5 shrink-0" />}
+                    {!isHub
+                      ? 'Run Zone Assignment on Station Sort first to assign packages to this truck.'
+                      : hubState === 'failed'
+                        ? 'This hub\u2019s manifest could not be processed. Upload it again on Station Sort \u2014 waiting will not clear this.'
+                        : hubState === 'enriching'
+                          ? 'Looking up addresses for this hub\u2019s manifest. The commit opens on its own when it finishes.'
+                          : 'Upload this hub\u2019s manifest on Station Sort first \u2014 a hub carries its own packages and is never fed by the truck sort.'}
+                  </div>
+                )
+              ) : (
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">
+                    {state.routes.length} routes committed · {pkgCount} packages
+                  </div>
+                  {state.packages_dropped > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-warning">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      {state.packages_dropped} package{state.packages_dropped === 1 ? '' : 's'} dropped — TBAs not found in enriched manifest.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ── Step 2: Assign routes ── */}
+            {state.phase !== 'idle' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Step 2 — Assign routes to staff</p>
+                  {state.phase !== 'committed' && <CheckCircle2 className="w-4 h-4 text-success" />}
+                </div>
+
+                {/* Route cards — committed shows assignment dropdown; distributed/arrived shows operational controls */}
+                <div className="space-y-2">
+                  {state.routes
+                    .slice()
+                    .sort((a, b) => a.route_number - b.route_number)
+                    .map(r => (
+                      <RouteCard
+                          key={r.id}
+                          route={r}
+                          phase={state.phase}
+                          walkers={walkers}
+                          waveMap={waveMap}
+                          onAssign={(rn, eid) => setWaveMap(prev => ({ ...prev, [rn]: eid }))}
+                          canReassign={true}
+                          onReassign={setReassignTarget}
+                          onResolveMisroute={(routeId, flagId, tba, suggestedRouteNumber) => setMisrouteTarget({ routeId, flagId, tba, suggestedRouteNumber })}
+                          allRoutes={state.routes}
+                        />
+                      ))}
+                </div>
+
+                {/* Trainer / trainee selectors (committed phase only) */}
+                {state.phase === 'committed' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">Trainer</label>
+                      <select
+                        value={selectedTrainerId}
+                        onChange={e => setSelectedTrainerId(e.target.value)}
+                        className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      >
+                        <option value="">Select trainer…</option>
+                        {trainers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-muted-foreground mb-1">Trainee (optional)</label>
+                      <select
+                        value={selectedTraineeId}
+                        onChange={e => setSelectedTraineeId(e.target.value)}
+                        className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      >
+                        <option value="">No trainee</option>
+                        {walkers.filter(w => w.role === 'trainee').map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
+                    {selectedTraineeId && (
+                      <div>
+                        <label className="block text-xs text-muted-foreground mb-1">Trainee phase</label>
+                        <select
+                          value={traineePhase}
+                          onChange={e => setTraineePhase(Number(e.target.value))}
+                          className="w-full text-xs border border-border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        >
+                          {[1, 2, 3, 4, 5].map(p => <option key={p} value={p}>Phase {p}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {state.phase === 'committed' && firstWaveProposal && (
+                  <div className="space-y-2 p-3 bg-info/5 border border-info/20 rounded-xl">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-info uppercase tracking-widest">
+                        Auto-proposed assignments · wave of {firstWaveProposal.length}
+                      </p>
+                      <button onClick={() => { setFirstWaveProposal(null); setFirstWaveConflicts([]); }} className="text-xs text-muted-foreground hover:text-foreground">Discard</button>
+                    </div>
+                    {firstWaveConflicts.length > 0 && (
+                      <div className="p-2 rounded-lg bg-warning/5 border border-warning/20 space-y-0.5">
+                        {firstWaveConflicts.map((c, i) => (
+                          <p key={i} className="text-[11px] text-warning">{c}</p>
+                        ))}
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      {firstWaveProposal
+                        .slice()
+                        .sort((a, b) => a.route_number - b.route_number)
+                        .map(p => {
+                          const overridden = proposalMap[p.route_number] !== undefined
+                            && proposalMap[p.route_number] !== p.employee_id;
+                          const takenBy: Record<string, number> = {};
+                          firstWaveProposal.forEach(q => {
+                            if (q.route_number !== p.route_number) takenBy[q.employee_id] = q.route_number;
+                          });
+                          return (
+                            <div key={p.route_number} className="flex items-center gap-2 text-xs">
+                              <span className="font-semibold text-foreground w-8 shrink-0">#{p.route_number}</span>
+                              <EffortBadge effort={p.effort_class} />
+                              <AssignCombobox
+                                walkers={walkers}
+                                takenBy={takenBy}
+                                currentId={p.employee_id}
+                                onSelect={eid => {
+                                  const emp = walkers.find(w => w.id === eid);
+                                  setFirstWaveProposal(prev => prev?.map(q =>
+                                    q.route_number === p.route_number
+                                      ? { ...q, employee_id: eid, employee_name: emp?.name ?? '?', auto_proposed: false }
+                                      : q,
+                                  ) ?? prev);
+                                }}
+                              />
+                              <span className={`text-[10px] shrink-0 ${overridden ? 'text-warning' : 'text-info'}`}>
+                                {overridden ? 'edited' : 'auto'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                    <button
+                      onClick={() => handleFirstWaveProposalConfirm(firstWaveProposal)}
+                      className="btn-primary w-full text-sm"
+                    >
+                      Accept proposals
+                    </button>
+                  </div>
+                )}
+
+                {state.phase === 'committed' && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleFirstWaveAutoPropose}
+                      disabled={firstWaveProposing || !!firstWaveProposal}
+                      className="btn-secondary flex items-center justify-center gap-2 text-sm flex-1"
+                    >
+                      {firstWaveProposing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      {firstWaveProposing ? 'Proposing…' : 'Auto-propose'}
+                    </button>
+                    <button
+                      onClick={handleDistribute}
+                      disabled={distributeLoading}
+                      className="btn-primary flex items-center justify-center gap-2 text-sm flex-1"
+                    >
+                      {distributeLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shuffle className="w-4 h-4" />}
+                      {distributeLoading ? 'Distributing…' : 'Send Wave'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Step 3: Arrival confirm ── */}
+            {state.phase === 'distributed' && (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Step 3 — Paired arrival & rebalance</p>
+                {pairStatus ? (
+                  <>
+                    <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-border bg-surface">
+                      <div className="text-xs">
+                        <p className="font-semibold text-foreground">
+                          {trainers.find(t => t.id === pairStatus.trainerId)?.name ?? 'Trainer'}
+                          {' + '}
+                          {walkers.find(w => w.id === pairStatus.traineeId)?.name ?? 'Trainee'}
+                        </p>
+                        <p className="text-muted-foreground mt-0.5">Paired at dispatch — rebalance expands their route to 1.5×.</p>
+                      </div>
+                      {pairStatus.arrivedAt ? (
+                        <span className="text-xs font-semibold text-success shrink-0">
+                          📍 Trainee arrived {new Date(pairStatus.arrivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-warning shrink-0">
+                          Waiting for the trainee to confirm arrival in their app…
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleArrival}
+                      disabled={arrivalLoading}
+                      className="btn-primary w-full flex items-center justify-center gap-2 text-sm"
+                      title={pairStatus.arrivedAt ? undefined : 'You can confirm anyway if the trainee is physically present'}
+                    >
+                      {arrivalLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                      {arrivalLoading ? 'Confirming…' : 'Confirm Arrival & Rebalance'}
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-surface">
+                    No trainer–trainee pair on this truck today — the rebalance step doesn't apply.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── Rebalance result ── */}
+            {state.rebalanceResult && !state.rebalanceResult.sort_not_yet_committed && (
+              <div className="space-y-1.5 p-3 bg-success/5 border border-success/20 rounded-xl">
+                <p className="text-xs font-semibold uppercase tracking-widest text-success flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Rebalance complete — capacity {state.rebalanceResult.paired_capacity_limit} half-slots
+                </p>
+                {state.rebalanceResult.absorbed_route_numbers.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Absorbed routes: {state.rebalanceResult.absorbed_route_numbers.map(n => `#${n}`).join(', ')}
+                  </p>
+                )}
+                {state.rebalanceResult.trimmed_route_numbers.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Trimmed routes: {state.rebalanceResult.trimmed_route_numbers.map(n => `#${n}`).join(', ')}
+                  </p>
+                )}
+              </div>
+            )}
+            {state.rebalanceResult?.sort_not_yet_committed && (
+              <div className="p-3 bg-info/5 border border-info/20 rounded-xl">
+                <p className="text-xs text-muted-foreground">
+                  Arrival recorded — paired capacity will apply when sort is committed.
+                </p>
+              </div>
+            )}
+
+            {/* ── Unassigned misroutes ── */}
+            {state.unassigned_misroutes.length > 0 && (
+              <div className="p-3 bg-warning/5 border border-warning/20 rounded-xl">
+                <p className="text-xs font-semibold text-warning mb-2 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {state.unassigned_misroutes.length} unresolved misroutes
+                </p>
+                {state.unassigned_misroutes.map(m => (
+                  <div key={m.tba_number} className="text-xs text-muted-foreground font-mono">{m.tba_number}</div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Second-wave pool ── */}
+            {(state.phase === 'distributed' || state.phase === 'arrived') && (
+              <div className="border-t border-border pt-4">
+                <CrewStatusPanel assignmentId={state.ta.id} routes={state.routes} />
+              </div>
+            )}
+
+            {(state.phase === 'distributed' || state.phase === 'arrived') && (
+              <div className="space-y-3 border-t border-border pt-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Second-wave pool</p>
+                {secondWaveProposal ? (
+                  <ProposalReviewPanel
+                    taId={state.ta.id}
+                    routeDate={routeDate}
+                    proposal={secondWaveProposal}
+                    walkers={walkers}
+                    onConfirm={async (taId, assignments) => {
+                      await onDistribute(taId, assignments, '', undefined, undefined);
+                      setSecondWaveProposal(null);
+                      await onRefresh(taId);
+                    }}
+                    onDiscard={() => setSecondWaveProposal(null)}
+                  />
+                ) : (
+                  <WavePoolPanel
+                    taId={state.ta.id}
+                    routeDate={routeDate}
+                    walkers={walkers}
+                    onSecondWavePropose={(_taId, proposed) => setSecondWaveProposal(proposed)}
+                  />
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={() => onRefresh(state.ta.id)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Refresh
+            </button>
+          </div>
+        )}
+      </div>
+
+      {reassignTarget && (
+        <ReassignModal
+          route={reassignTarget}
+          walkers={walkers}
+          onClose={() => setReassignTarget(null)}
+          onReassigned={() => onRefresh(state.ta.id)}
+        />
+      )}
+      {misrouteTarget && (
+        <MisrouteResolveModal
+          routeId={misrouteTarget.routeId}
+          flagId={misrouteTarget.flagId}
+          tbaNumber={misrouteTarget.tba}
+          suggestedRouteNumber={misrouteTarget.suggestedRouteNumber}
+          routes={state.routes}
+          onClose={() => setMisrouteTarget(null)}
+          onResolved={() => onRefresh(state.ta.id)}
+        />
+      )}
+    </>
   );
 }
 
@@ -259,94 +1540,280 @@ function TruckSortCard({
 
 export default function WalkerSortMonitor() {
   const today = getLocalYMD();
-  const [assignments, setAssignments] = useState<TruckAssignment[]>([]);
-  const [sortStatuses, setSortStatuses] = useState<SortStatus[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { can } = useCan();
+  const { groups } = useAuth();
 
-  const fetchSortStatus = useCallback(async (ta: TruckAssignment): Promise<SortStatus> => {
-    try {
-      const res = await axiosClient.get<RouteResponse[]>(`/walker-routes/assignment/${ta.id}`);
-      return {
-        truck_assignment_id: ta.id,
-        truck_name: ta.truck_name,
-        committed: res.data.length > 0,
-        routes: res.data,
-        unassigned_misroutes: [],
-        packages_sorted: res.data.reduce((s, r) => s + r.tba_numbers.length, 0),
-        packages_dropped: 0,
-      };
-    } catch {
-      return {
-        truck_assignment_id: ta.id,
-        truck_name: ta.truck_name,
-        committed: false,
-        routes: [],
-        unassigned_misroutes: [],
-        packages_sorted: 0,
-        packages_dropped: 0,
-      };
+  // Driver/trainer (no oversight): the AP Sort page is scoped to their own truck
+  // — only their commit-sort card, only their AP returns (server-scoped), and
+  // zoned-state from the driver-readable /zone-status endpoint (they can't call
+  // the dispatch-only /sort/{date} zones endpoint). ADR-185.
+  const isTruckScoped =
+    (groups.includes('driver') || groups.includes('trainer')) &&
+    !groups.some(g => ['dispatch', 'management', 'admin'].includes(g));
+
+  const [assignments, setAssignments]   = useState<TruckAssignment[]>([]);
+  const [showDamaged, setShowDamaged]   = useState(false);
+  const [truckStates, setTruckStates]   = useState<TruckSortState[]>([]);
+  const [walkers, setWalkers]           = useState<Employee[]>([]);
+  const [trainers, setTrainers]         = useState<Employee[]>([]);
+  const [zonedTruckIds, setZonedTruckIds] = useState<Set<string>>(new Set());
+  const [hubTruckIds,   setHubTruckIds]   = useState<Set<string>>(new Set());
+  /* ADR-274 D11 — truck_id -> 'enriching' | 'failed', so the not-ready copy can
+     tell "still working" from "re-upload, waiting won't help". */
+  const [hubStates,     setHubStates]     = useState<Record<string, string>>({});
+  const [scopedTruckIds, setScopedTruckIds] = useState<Set<string>>(new Set());  // ADR-185: driver's own truck(s)
+  const [stationInfo, setStationInfo]   = useState<Map<string, StationTruckInfo>>(new Map());
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState<string | null>(null);
+
+  const canReassign = can('reassignRoute');
+
+  // ADR-185: a driver/trainer sees only their own truck's card. zone-status is
+  // server-scoped to their truck, so scopedTruckIds names it; oversight roles
+  // see every truck.
+  const visibleTruckStates = isTruckScoped
+    ? truckStates.filter(s => scopedTruckIds.has(s.ta.truck_id))
+    : truckStates;
+
+  const buildInitialState = (ta: TruckAssignment, routes: RouteResponse[], resp?: CommitSortResponse): TruckSortState => {
+    const phase: SortPhase =
+      routes.length === 0                                  ? 'idle'
+      // arrival-confirm is persisted on the assignment — reconstruct the
+      // 'arrived' phase after a page refresh instead of losing it
+      : ta.paired_arrival_confirmed && routes.some(r => r.status !== 'unassigned') ? 'arrived'
+      : routes.some(r => r.status !== 'unassigned')       ? 'distributed'
+      : 'committed';
+    return {
+      ta,
+      phase,
+      routes,
+      unassigned_misroutes: resp?.unassigned_misroutes ?? [],
+      packages_sorted: resp?.packages_sorted ?? routes.reduce((s, r) => s + r.tba_numbers.length, 0),
+      packages_dropped: resp?.packages_dropped ?? 0,
+      dropped_tbas: resp?.dropped_tbas ?? [],
+      rebalanceResult: null,
+    };
+  };
+
+  const assignmentsRef = useRef<TruckAssignment[]>([]);
+
+  // Refetch the dynamic per-day state: station rosters, zone status, and each
+  // truck's routes. Reused by both the full load and the periodic tick, so the
+  // tick doesn't have to refetch the static assignments+employees lists.
+  const fetchDynamic = useCallback(async (tas: TruckAssignment[]) => {
+    // zone-status (ADR-185) replaces the dispatch-only /sort/{date} zones call so
+    // a driver's page can read its own truck's zoned state. Scoped for drivers.
+    const [zoneRes, rosterRes] = await Promise.allSettled([
+      axiosClient.get<{ trucks: { truck_id: string; zoned: boolean; is_hub?: boolean; hub_manifest_state?: string | null }[] }>(`/sort/${today}/zone-status`),
+      axiosClient.get<RostersResponse>(`/sort/${today}/rosters`, { params: isTruckScoped ? { mine: true } : {} }),
+    ]);
+    if (rosterRes.status === 'fulfilled') {
+      const info = new Map<string, StationTruckInfo>();
+      rosterRes.value.data.rosters.forEach(r => {
+        const prev = info.get(r.truck_id);
+        const pending = [...r.incoming, ...r.outgoing].filter(t => t.status === 'suggested' || t.status === 'confirmed').length;
+        const riders = r.totes.reduce((n, t) => n + (t.rider_count ?? 0), 0);
+        info.set(r.truck_id, {
+          driverName: r.driver_name ?? prev?.driverName ?? null,
+          pendingTransfers: (prev?.pendingTransfers ?? 0) + pending,
+          riderCount: (prev?.riderCount ?? 0) + riders,
+        });
+      });
+      setStationInfo(info);
     }
-  }, []);
+    // For a scoped driver/trainer, only fetch routes for THEIR truck — fetching
+    // every assignment's routes 403s on all other trucks (server-side ownership
+    // guard) and just spams the console/server with forbidden requests.
+    let routeTas = tas;
+    if (zoneRes.status === 'fulfilled') {
+      const trucks = zoneRes.value.data.trucks ?? [];
+      setZonedTruckIds(new Set(trucks.filter(t => t.zoned).map(t => t.truck_id)));
+      setHubTruckIds(new Set(trucks.filter(t => t.is_hub).map(t => t.truck_id)));
+      setHubStates(Object.fromEntries(
+        trucks.filter(t => t.is_hub && t.hub_manifest_state)
+              .map(t => [t.truck_id, t.hub_manifest_state as string]),
+      ));
+      // For a scoped driver/trainer, zone-status returns ONLY their truck — use
+      // it to filter the page to their own truck card.
+      if (isTruckScoped) {
+        const ids = new Set(trucks.map(t => t.truck_id));
+        setScopedTruckIds(ids);
+        routeTas = tas.filter(ta => ids.has(ta.truck_id));
+      }
+    } else if (isTruckScoped) {
+      routeTas = [];  // can't resolve own truck this tick — skip, retry next tick
+    }
+    const states = await Promise.all(routeTas.map(async ta => {
+      try {
+        const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${ta.id}/routes`);
+        return buildInitialState(ta, r.data);
+      } catch {
+        return buildInitialState(ta, []);
+      }
+    }));
+    setTruckStates(states);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today]);
 
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
+  const fetchAll = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
-      const taRes = await axiosClient.get<TruckAssignment[]>(`/truck-assignments/`, { params: { date: today } });
-      const tas = taRes.data;
+      const [taRes, empRes] = await Promise.allSettled([
+        axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
+        axiosClient.get<{ id: string; role: string; name: string; injury_status?: string | null }[]>('/employees/', { params: { is_active: true } }),
+      ]);
+      if (taRes.status === 'rejected') throw taRes.reason;
+      if (empRes.status === 'rejected') throw empRes.reason;
+
+      const tas  = Array.from(new Map(taRes.value.data.map(a => [a.truck_id, a])).values());
+      const emps = empRes.value.data;
+      assignmentsRef.current = tas;
       setAssignments(tas);
-      const statuses = await Promise.all(tas.map(fetchSortStatus));
-      setSortStatuses(statuses);
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to load sort status.');
+      setWalkers(emps.filter(e => ['walker', 'trainee', 'trainer'].includes(e.role)));
+      setTrainers(emps.filter(e => e.role === 'trainer'));
+
+      await fetchDynamic(tas);
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to load data.'));
     } finally {
       setLoading(false);
     }
-  }, [today, fetchSortStatus]);
-
-  const refreshOne = useCallback(async (ta: TruckAssignment) => {
-    const updated = await fetchSortStatus(ta);
-    setSortStatuses(prev => prev.map(s => s.truck_assignment_id === ta.id ? updated : s));
-  }, [fetchSortStatus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today, fetchDynamic]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // Live-ish updates without SSE (ADR-179): the periodic 90s tick refetches only
+  // the dynamic state (rosters/zones/routes) against the assignments already in
+  // hand — it no longer re-pulls the static assignments+employees lists every
+  // tick (those refresh on full load and on window focus). Visibility-gated so a
+  // backgrounded tab is silent.
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === 'visible' && assignmentsRef.current.length) {
+        fetchDynamic(assignmentsRef.current);
+      }
+    };
+    const interval = setInterval(tick, 90_000);
+    const onFocus = () => { fetchAll(true); };
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(interval); window.removeEventListener('focus', onFocus); };
+  }, [fetchAll, fetchDynamic]);
+
+  const updateState = (taId: string, patch: Partial<TruckSortState>) => {
+    setTruckStates(prev => prev.map(s => s.ta.id === taId ? { ...s, ...patch } : s));
+  };
+
+  const handleCommit = async (taId: string) => {
+    const res = await axiosClient.post<CommitSortResponse>('/walker-routes/commit-sort', {
+      truck_assignment_id: taId,
+      route_date: today,
+      ovs: [],
+    });
+    updateState(taId, {
+      phase: 'committed',
+      routes: res.data.routes,
+      unassigned_misroutes: res.data.unassigned_misroutes,
+      packages_sorted: res.data.packages_sorted,
+      packages_dropped: res.data.packages_dropped,
+      dropped_tbas: res.data.dropped_tbas,
+    });
+  };
+
+  const handleDistribute = async (
+    taId: string,
+    assignments: WaveAssignmentEntry[],
+    trainerId: string,
+    traineeId?: string,
+    traineePhase?: number,
+  ) => {
+    await axiosClient.post('/walker-routes/wave-distribution', {
+      truck_assignment_id: taId,
+      route_date: today,
+      assignments,
+      trainer_id: trainerId,
+      trainee_id: traineeId ?? null,
+      trainee_phase: traineePhase ?? null,
+    });
+    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${taId}/routes`);
+    updateState(taId, { phase: 'distributed', routes: r.data });
+  };
+
+  const handleArrivalConfirm = async (taId: string, trainerId: string, traineeId: string) => {
+    const res = await axiosClient.post<ArrivalConfirmResponse>('/walker-routes/arrival-confirm', {
+      truck_assignment_id: taId,
+      route_date: today,
+      trainer_id: trainerId,
+      trainee_id: traineeId,
+    });
+    const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${taId}/routes`);
+    updateState(taId, { phase: 'arrived', routes: r.data, rebalanceResult: res.data });
+  };
+
+  const handleRefresh = async (taId: string) => {
+    const ta = assignments.find(a => a.id === taId);
+    if (!ta) return;
+    try {
+      const r = await axiosClient.get<RouteResponse[]>(`/walker-routes/${taId}/routes`);
+      updateState(taId, buildInitialState(ta, r.data));
+    } catch { /* ignore */ }
+  };
+
   // Aggregate stats
-  const totalRoutes = sortStatuses.reduce((s, st) => s + st.routes.length, 0);
-  const totalPkgs = sortStatuses.reduce((s, st) => s + st.packages_sorted, 0);
-  const assignedRoutes = sortStatuses.reduce((s, st) => s + st.routes.filter(r => r.status !== 'unassigned').length, 0);
-  const completedRoutes = sortStatuses.reduce((s, st) => s + st.routes.filter(r => r.status === 'completed').length, 0);
-  const misrouteCount = sortStatuses.reduce((s, st) => s + st.routes.reduce((rs, r) => rs + r.misrouted_packages.length, 0) + st.unassigned_misroutes.length, 0);
+  // Stats reflect the visible scope: a scoped driver sees their truck's totals only.
+  const totalRoutes     = visibleTruckStates.reduce((s, st) => s + st.routes.length, 0);
+  const totalPkgs       = visibleTruckStates.reduce((s, st) => s + st.packages_sorted, 0);
+  const assignedRoutes  = visibleTruckStates.reduce((s, st) => s + st.routes.filter(r => r.status !== 'unassigned').length, 0);
+  const completedRoutes = visibleTruckStates.reduce((s, st) => s + st.routes.filter(r => r.status === 'completed').length, 0);
+  const misrouteCount   = visibleTruckStates.reduce((s, st) =>
+    s + st.routes.reduce((rs, r) => rs + r.misrouted_packages.length, 0) + st.unassigned_misroutes.length, 0);
 
   return (
     <div className="space-y-8 animate-slide-up">
       <SectionHeader
-        eyebrow="Walker Sort"
-        title="Sort Monitor"
-        description={`Route assignment status for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        eyebrow="Anchor Point Operations"
+        title="AP Sort"
+        description={`Package sort, route assignment, and walker dispatch for ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
-          <button onClick={fetchAll} className="btn-ghost flex items-center gap-1.5 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowDamaged(true)} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <AlertTriangle className="w-4 h-4" /> Report damaged
+            </button>
+            <button onClick={() => fetchAll()} className="btn-ghost flex items-center gap-1.5 text-sm">
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+          </div>
         }
       />
 
+      {showDamaged && (
+        <ReportDamagedModal
+          routeDate={today}
+          defaultStage="truck_load"
+          truckAssignmentId={assignments.length === 1 ? assignments[0].id : null}
+          onClose={() => setShowDamaged(false)}
+        />
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard label="Total Routes" value={loading ? '—' : totalRoutes} icon={Route} tone="primary" delay={0} />
-        <StatCard label="Packages Sorted" value={loading ? '—' : totalPkgs} icon={Package} tone="info" delay={0.05} />
-        <StatCard label="Assigned" value={loading ? '—' : `${assignedRoutes}/${totalRoutes}`} icon={Users} tone="success" delay={0.1} />
-        <StatCard
-          label="Misroutes"
-          value={loading ? '—' : misrouteCount}
-          icon={AlertTriangle}
-          tone={misrouteCount > 0 ? 'warning' : 'success'}
-          delay={0.15}
-        />
+        <StatCard label="Total Routes"    value={loading ? '—' : totalRoutes}                          icon={Route}         tone="primary"  delay={0} />
+        <StatCard label="Packages Sorted" value={loading ? '—' : totalPkgs}                           icon={Package}       tone="info"     delay={0.05} />
+        <StatCard label="Assigned"        value={loading ? '—' : `${assignedRoutes}/${totalRoutes}`}  icon={Users}         tone="success"  delay={0.1} />
+        <StatCard label="Misroutes"       value={loading ? '—' : misrouteCount}                       icon={AlertTriangle} tone={misrouteCount > 0 ? 'warning' : 'success'} delay={0.15} />
       </div>
 
-      {/* Progress bar */}
+      {/* AP returns — out-of-zone packages walkers hand back to the driver at
+          the anchor point (ADR-178). Tote check-off itself lives ONLY on
+          Station Sort now (deduplicated); this page keeps just the AP-stage
+          actions that physically happen at the anchor point. */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Anchor point returns</p>
+        <ApPullsPanel date={today} />
+      </div>
+
+      {/* Completion progress */}
       {totalRoutes > 0 && (
         <div className="card p-4 space-y-2">
           <div className="flex items-center justify-between text-xs">
@@ -362,27 +1829,40 @@ export default function WalkerSortMonitor() {
         </div>
       )}
 
-      {/* Error */}
       {error && (
         <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl text-sm text-danger">{error}</div>
       )}
 
-      {/* Truck cards */}
+      {/* Truck panels */}
       {loading ? (
         <div className="space-y-3">
           {[0, 1, 2].map(i => <SkeletonCard key={i} />)}
         </div>
-      ) : sortStatuses.length === 0 ? (
+      ) : visibleTruckStates.length === 0 ? (
         <div className="card text-center py-12">
-          <p className="text-muted-foreground">No truck assignments found for today.</p>
+          <p className="text-muted-foreground">
+            {isTruckScoped
+              ? 'You are not on a truck crew today yet, or your truck has not been zoned. This updates automatically.'
+              : 'No truck assignments found for today.'}
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {sortStatuses.map((st, i) => (
-            <TruckSortCard
-              key={st.truck_assignment_id}
-              sortStatus={st}
-              onRefresh={() => refreshOne(assignments[i])}
+          {visibleTruckStates.map(state => (
+            <TruckSortPanel
+              key={state.ta.id}
+              state={state}
+              walkers={walkers}
+              trainers={trainers}
+              routeDate={today}
+              zoneExists={zonedTruckIds.has(state.ta.truck_id)}
+              isHub={hubTruckIds.has(state.ta.truck_id)}
+              hubState={hubStates[state.ta.truck_id] ?? null}
+              station={stationInfo.get(state.ta.truck_id)}
+              onCommit={handleCommit}
+              onDistribute={handleDistribute}
+              onArrivalConfirm={handleArrivalConfirm}
+              onRefresh={handleRefresh}
             />
           ))}
         </div>

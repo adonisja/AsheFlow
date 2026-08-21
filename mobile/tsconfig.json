@@ -10,7 +10,8 @@
       "@screens/*":    ["screens/*"],
       "@components/*": ["components/*"],
       "@hooks/*":      ["hooks/*"],
-      "@theme/*":      ["theme/*"]
+      "@theme/*":      ["theme/*"],
+      "@assets/*":     ["assets/*"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],

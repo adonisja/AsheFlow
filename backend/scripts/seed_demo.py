@@ -90,6 +90,10 @@ def seed_company(db, company_def: dict, suffix: str, truck_names: list) -> None:
             slug=company_def["slug"],
             timezone=company_def["timezone"],
             is_active=True,
+            # ADR-280: this script CREATES the disposable tenants, so it is the
+            # one place that may classify them. Without this they inherit the
+            # 'live' default and every other seed script correctly refuses them.
+            data_class="seed",
         ))
         print(f"  + company  {company_def['name']}")
     else:

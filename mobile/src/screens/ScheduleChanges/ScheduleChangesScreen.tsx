@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   TextInput, Alert, ActivityIndicator, RefreshControl,
@@ -8,6 +9,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import { spacing, fontSize, fontWeight, radius, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type RequestType = 'add_day' | 'drop_day' | 'full_rework';
@@ -119,8 +121,8 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
       setSelected([]);
       setReason('');
       load(myId);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit request.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Failed to submit request.'));
     } finally {
       setSubmitting(false);
     }
@@ -136,8 +138,8 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
           try {
             await apiClient.delete(`/schedule-change-requests/${id}`);
             load(myId);
-          } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || 'Failed to cancel.');
+          } catch (err: unknown) {
+            Alert.alert('Error', errorText(err, 'Failed to cancel.'));
           }
         },
       },
@@ -198,7 +200,7 @@ function FieldStaffView({ c }: { c: ThemeColors }) {
                   onPress={() => toggleDay(day)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[s.dayChipText, active && { color: '#fff' }]}>{day.slice(0, 3)}</Text>
+                  <Text style={[s.dayChipText, active && { color: c.primaryForeground }]}>{day.slice(0, 3)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -305,8 +307,8 @@ function PrivilegedView({ c }: { c: ThemeColors }) {
           try {
             await apiClient.patch(`/schedule-change-requests/${id}/${action}`);
             load();
-          } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || `Failed to ${action}.`);
+          } catch (err: unknown) {
+            Alert.alert('Error', errorText(err, `Failed to ${action}.`));
           }
         },
       },
@@ -400,12 +402,10 @@ export default function ScheduleChangesScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>Schedule Changes</Text>
-        <Text style={s.subtitle}>
-          {isPrivileged ? 'Review pending requests' : 'Request a change to your weekly schedule'}
-        </Text>
-      </View>
+      <PageHeader
+        title={isPrivileged ? 'Change Requests' : 'Schedule Changes'}
+        subtitle={isPrivileged ? 'Review pending requests' : 'Request a change to your weekly schedule'}
+      />
       {isPrivileged ? <PrivilegedView c={c} /> : <FieldStaffView c={c} />}
     </SafeAreaView>
   );
@@ -442,7 +442,8 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   // Submit
   submitBtn:         { backgroundColor: c.primary, borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center', marginBottom: spacing.xs },
   submitBtnDisabled: { opacity: 0.5 },
-  submitBtnText:     { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  // `primaryForeground`, not '#fff' — 2.82:1 on dark `primary` (ADR-255).
+  submitBtnText:     { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   hintText:          { fontSize: fontSize.xs, textAlign: 'center', marginBottom: spacing.md },
   errorText:         { fontSize: fontSize.xs, color: c.danger, marginBottom: spacing.sm },
 
@@ -466,7 +467,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   // Review buttons
   reviewBtns:        { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   reviewBtn:         { flex: 1, paddingVertical: spacing.xs + 2, borderRadius: radius.md, alignItems: 'center' },
-  reviewBtnText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: '#fff' },
+  reviewBtnText:     { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: c.primaryForeground },
 
   // Empty
   emptyText:         { fontSize: fontSize.sm, color: c.mutedForeground, textAlign: 'center', paddingVertical: spacing.md },

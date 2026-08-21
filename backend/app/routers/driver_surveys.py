@@ -38,6 +38,7 @@ from app.schemas.driver_survey import (
     MyResponseStatus,
     SurveyStats,
 )
+from app.services.audit import write_audit
 from app.services.company_config import get_company_config
 
 router = APIRouter(prefix="/driver-surveys", tags=["driver-surveys"])
@@ -101,9 +102,14 @@ def _build_response_item(
     resp: DriverSurveyResponse,
     survey_date: date,
     db: Session,
+    company_id: UUID = None,
 ) -> DriverSurveyResponseItem:
     """Resolve display fields (name, email, driver, truck) and build the response schema."""
-    respondent = db.query(Employee).filter(Employee.id == resp.respondent_id).first()
+    cid = company_id or resp.company_id
+    respondent = db.query(Employee).filter(
+        Employee.id == resp.respondent_id,
+        Employee.company_id == cid,
+    ).first()
     respondent_name  = respondent.name  if respondent else str(resp.respondent_id)
     respondent_email = respondent.email if respondent else None
     respondent_role  = respondent.role  if respondent else "unknown"
@@ -111,7 +117,10 @@ def _build_response_item(
     truck_name  = None
     driver_name = None
     if resp.truck_assignment_id:
-        assignment = db.query(TruckAssignment).filter(TruckAssignment.id == resp.truck_assignment_id).first()
+        assignment = db.query(TruckAssignment).filter(
+            TruckAssignment.id == resp.truck_assignment_id,
+            TruckAssignment.company_id == cid,
+        ).first()
         if assignment:
             truck = db.query(Truck).filter(Truck.id == assignment.truck_id).first()
             truck_name = truck.name if truck else None
@@ -119,12 +128,16 @@ def _build_response_item(
                 db.query(AssignmentMember)
                 .filter(
                     AssignmentMember.assignment_id == assignment.id,
+                    AssignmentMember.company_id    == cid,
                     AssignmentMember.role          == "driver",
                 )
                 .first()
             )
             if driver_member:
-                driver_emp  = db.query(Employee).filter(Employee.id == driver_member.employee_id).first()
+                driver_emp  = db.query(Employee).filter(
+                    Employee.id == driver_member.employee_id,
+                    Employee.company_id == cid,
+                ).first()
                 driver_name = driver_emp.name if driver_emp else None
 
     return DriverSurveyResponseItem(
@@ -343,7 +356,7 @@ def get_survey(
         driver_support_pct   = _pct("driver_support"),
     )
 
-    responses = [_build_response_item(r, survey_date, db) for r in raw_responses]
+    responses = [_build_response_item(r, survey_date, db, caller.company_id) for r in raw_responses]
 
     return DriverSurveyDetail(
         id         = survey.id,
@@ -415,7 +428,7 @@ def submit_response(
     db.commit()
     db.refresh(response)
 
-    return _build_response_item(response, survey.date, db)
+    return _build_response_item(response, survey.date, db, caller.company_id)
 
 
 # ---------------------------------------------------------------------------
@@ -447,5 +460,5 @@ def get_my_response(
 
     return MyResponseStatus(
         responded = True,
-        response  = _build_response_item(existing, survey.date, db),
+        response  = _build_response_item(existing, survey.date, db, caller.company_id),
     )

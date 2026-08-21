@@ -1,7 +1,9 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 from app.celery_app import celery_app
 from app.database import SessionLocal
+from app.services.local_date import task_today, fetch_company_timezones
+from app.services.local_date import task_today
 from app.models.employee import Employee
 from app.models.notification import Notification
 from app.models.trainer_mark import TrainerMark
@@ -27,39 +29,43 @@ def check_training_submissions() -> dict:
 
     Returns a summary dict for Celery task result inspection.
     """
-    yesterday = date.today() - timedelta(days=1)
     flagged = 0
     skipped_not_dispatched = 0
     marks_issued = 0
 
     db = SessionLocal()
     try:
+        tz_map = fetch_company_timezones(db)
+
         unsubmitted = db.query(TrainingRecord).filter(
-            TrainingRecord.record_date == yesterday,
             TrainingRecord.submitted_at == None,
             TrainingRecord.is_locked == False,
         ).all()
 
         for record in unsubmitted:
+            yesterday = task_today(tz_map.get(record.company_id)) - timedelta(days=1)
+
+            # Only process records from yesterday in the company's local timezone
+            if record.record_date != yesterday:
+                continue
+
             # Confirm the trainee was actually dispatched yesterday.
-            # Check AssignmentMember for this employee on yesterday's assignments.
             was_dispatched = db.query(AssignmentMember).join(
                 TruckAssignment,
                 AssignmentMember.assignment_id == TruckAssignment.id,
             ).filter(
                 AssignmentMember.employee_id == record.trainee_id,
+                AssignmentMember.company_id == record.company_id,
                 TruckAssignment.date == yesterday,
+                TruckAssignment.company_id == record.company_id,
             ).first() is not None
 
             if not was_dispatched:
-                # Missed day — no penalty, training just paused
                 skipped_not_dispatched += 1
                 continue
 
-            # Soft-lock the record
             record.is_locked = True
 
-            # Issue trainer mark if warranted
             cfg = get_company_config(db, record.company_id)
             mark = record_trainer_mark(
                 db, str(record.id), reason="phase_not_closed",
@@ -68,7 +74,6 @@ def check_training_submissions() -> dict:
             if mark:
                 marks_issued += 1
 
-            # Notify management
             trainee = db.query(Employee).filter(Employee.id == record.trainee_id).first()
             trainer = db.query(Employee).filter(Employee.id == record.trainer_id).first()
             trainee_name = trainee.name if trainee else "Unknown trainee"
@@ -80,11 +85,13 @@ def check_training_submissions() -> dict:
                 f"The record has been locked. Reopen it from the training management view."
             )
             recipients = db.query(Employee).filter(
+                Employee.company_id == record.company_id,
                 Employee.role.in_(["management", "admin"]),
                 Employee.is_active == True,
             ).all()
             for recipient in recipients:
                 db.add(Notification(
+                    company_id=record.company_id,
                     employee_id=recipient.id,
                     type="training_record_unsubmitted",
                     message=message,

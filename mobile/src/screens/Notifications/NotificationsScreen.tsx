@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl, Modal, Pressable, Alert,
@@ -222,8 +223,8 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
           : 'Your assignment has been declined. Dispatch has been notified.',
         [{ text: 'OK', onPress: onClose }],
       );
-    } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail ?? 'Could not record your response. Try again.');
+    } catch (e: unknown) {
+      Alert.alert('Error', errorText(e, 'Could not record your response. Try again.'));
     } finally {
       setActing(null);
       submitting.current = false;
@@ -367,7 +368,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
                   }]}>
                   {acting === 'confirming'
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[ms.btnText, { color: '#fff' }]}>Confirm Attendance</Text>
+                    : <Text style={[ms.btnText, { color: c.primaryForeground }]}>Confirm Attendance</Text>
                   }
                 </TouchableOpacity>
               </View>
@@ -494,11 +495,25 @@ export default function NotificationsScreen() {
     if (!eid) return;
     setMarkingAll(true);
     try {
-      await apiClient.patch(`/notifications/employee/${eid}/read-all`);
-      setNotifications(prev =>
-        prev.map(n => n.type === 'dispatch_assignment' ? n : { ...n, is_read: true })
-      );
-    } catch { /* no-op */ }
+      const res = await apiClient.patch(`/notifications/employee/${eid}/read-all`);
+      // Server marks everything except assignments still awaiting a
+      // Confirm/Decline (today/future) — mirror that locally.
+      const today = new Date().toISOString().slice(0, 10);
+      setNotifications(prev => prev.map(n =>
+        n.type === 'dispatch_assignment' && (!n.dispatch_date || n.dispatch_date >= today)
+          ? n
+          : { ...n, is_read: true },
+      ));
+      const skipped = res.data?.skipped_actionable ?? 0;
+      if (skipped > 0) {
+        Alert.alert(
+          'Almost all read',
+          `${skipped} assignment notification${skipped === 1 ? '' : 's'} still need${skipped === 1 ? 's' : ''} a Confirm/Decline response — respond to clear ${skipped === 1 ? 'it' : 'them'}.`,
+        );
+      }
+    } catch (e) {
+      Alert.alert('Error', errorText(e, 'Could not mark notifications read.'));
+    }
     finally { setMarkingAll(false); }
   }, []);
 
@@ -670,7 +685,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   headerRight:     { width: 64, alignItems: 'flex-end' },
   pageTitle:       { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: c.foreground, letterSpacing: -0.3 },
   unreadBadge:     { minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  unreadBadgeText: { color: '#fff', fontSize: 11, fontWeight: fontWeight.bold },
+  unreadBadgeText: { color: c.primaryForeground, fontSize: 11, fontWeight: fontWeight.bold },
   markAllText:     { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   center:          { flex: 1, justifyContent: 'center', alignItems: 'center' },
 

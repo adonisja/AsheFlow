@@ -5,6 +5,12 @@
    display=swap prevents FOIT — shows system font until these load. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Sora:wght@600;700&family=JetBrains+Mono:wght@400&display=swap');
 
+/* Colour tokens, GENERATED from design/palette.json (plan §0.1).
+   MUST sit with the other @import rules, above @tailwind: CSS requires imports
+   to precede all other rules, and a later @import is silently discarded — the
+   build still succeeds and the tokens simply never ship. */
+@import './generated-tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -22,22 +28,12 @@
 @layer base {
   :root {
     /* ─── Surfaces — Frost White ──────────────────────── */
-    --background: 220 25% 98%;
-    --foreground: 224 35% 10%;
-    --surface: 0 0% 100%;
-    --surface-muted: 220 20% 96%;   /* receding fill — inputs, table alternates, disabled. Never use as card bg. */
-    --card: 0 0% 100%;
     --card-foreground: 224 35% 10%;
 
     /* ─── Brand — Blue Indigo (AA 4.9:1 on white) ──── */
-    --primary: 225 70% 55%;
-    --primary-foreground: 0 0% 100%;
-    --primary-light: 225 80% 96%;   /* tint fills */
     --primary-glow: 225 75% 65%;    /* hover lift */
-    --primary-strong: 225 70% 42%;  /* active / press */
 
     /* ─── Accent — Amber Gold (AA 4.7:1 on white) ──── */
-    --gold: 35 80% 38%;             /* trainer role, chart series #1 */
     --gold-foreground: 0 0% 100%;
     --gold-tint: 35 80% 96%;
 
@@ -45,25 +41,14 @@
     --secondary: 220 18% 96%;
     --secondary-foreground: 224 25% 25%;
     --muted: 220 18% 96%;
-    --muted-foreground: 220 10% 46%;
     /* Accent surface uses hue 243 (more violet-blue) — intentional.
        Gives hover/nav states a distinct interactive character. Do not "fix" this. */
-    --accent: 243 100% 97%;
-    --accent-foreground: 225 70% 42%;
-    --border: 220 14% 88%;
-    --border-strong: 220 14% 78%;
-    --ring: 225 70% 55%;
 
     /* ─── Semantic (≥4.5:1 on white) ─────────────────── */
-    --success: 158 65% 32%;         /* confirmed — 5.1:1 */
     --success-foreground: 0 0% 100%;
-    --warning: 22 90% 50%;          /* pending — distinct from gold */
     --warning-foreground: 0 0% 100%;
-    --danger: 4 70% 44%;            /* declined — 4.9:1 */
     --danger-foreground: 0 0% 100%;
-    --info: 210 75% 40%;            /* assigned — 5.4:1 */
     --info-foreground: 0 0% 100%;
-    --neutral: 220 10% 38%;         /* admin role, off-duty — 6.0:1 */
     --neutral-foreground: 0 0% 100%;
 
     /* ─── Extended palette (charts, roles) ───────────── */
@@ -119,22 +104,12 @@
 
   .dark {
     /* ─── Surfaces — Deep Charcoal ────────────────────── */
-    --background: 224 24% 6%;
-    --foreground: 210 25% 96%;
-    --surface: 224 22% 9%;
-    --surface-muted: 224 20% 12%;
-    --card: 224 22% 9%;
     --card-foreground: 210 25% 96%;
 
     /* ─── Brand — Blue Indigo (lifted for dark contrast) ─ */
-    --primary: 225 80% 68%;
-    --primary-foreground: 225 50% 10%;
-    --primary-light: 225 40% 18%;
     --primary-glow: 225 85% 75%;
-    --primary-strong: 225 70% 80%;
 
     /* ─── Accent — Amber Gold (brightened for dark) ───── */
-    --gold: 38 85% 62%;
     --gold-foreground: 224 30% 8%;
     --gold-tint: 38 60% 14%;
 
@@ -142,23 +117,12 @@
     --secondary: 224 18% 14%;
     --secondary-foreground: 210 20% 90%;
     --muted: 224 18% 14%;
-    --muted-foreground: 220 12% 65%;
-    --accent: 225 35% 18%;
-    --accent-foreground: 225 80% 75%;
-    --border: 224 15% 20%;
-    --border-strong: 224 15% 30%;
-    --ring: 38 85% 62%;
 
     /* ─── Semantic — calibrated for dark surfaces ─────── */
-    --success: 158 55% 58%;
     --success-foreground: 224 30% 8%;
-    --warning: 22 92% 60%;
     --warning-foreground: 224 30% 8%;
-    --danger: 4 75% 65%;
     --danger-foreground: 0 0% 100%;
-    --info: 210 75% 65%;
     --info-foreground: 224 30% 8%;
-    --neutral: 220 12% 70%;
     --neutral-foreground: 224 30% 8%;
 
     /* ─── Extended palette ───────────────────────────── */
@@ -287,6 +251,49 @@
   }
   .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
   .btn-primary:active { transform: translateY(0) scale(0.98); }
+
+  /* ── Page width ────────────────────────────────────────────────────────────
+     TWO widths, not five. 21 pages each wrapped themselves in their own
+     `max-w-{2,3,4,5,6}xl mx-auto` INSIDE main's max-w-7xl, so page content sat
+     64-304px narrower than the notification banner above it — visibly indented
+     — and the measure jumped on every navigation (1280 -> 1024 -> 672).
+
+     `main` no longer sets a width; the banner and the page each take one of
+     these, so they always agree. Pick by CONTENT:
+       layout-wide  tables, dashboards, dense data
+       layout-form  single-column forms and reading (~75ch at 16px) */
+  .layout-wide { @apply w-full mx-auto; max-width: min(100%, 80rem); }
+
+  /* Dynamic rather than a single number. 768px was chosen because it was the
+     most common existing wrapper — a popularity argument, not a design one.
+     Measured at `text-sm`, 768px is already 87 characters per line, above the
+     45-75ch comfort band, so a bigger FIXED value would hurt prose while
+     helping card layouts.
+
+     `clamp` serves both: it tracks the viewport between a readable floor and a
+     ceiling, so a form breathes on a 1512px display without a paragraph
+     running to 116ch. Long prose blocks should still carry `max-w-prose`,
+     which caps the MEASURE independently of the container. */
+  .layout-form { @apply w-full mx-auto; max-width: clamp(20rem, 62vw, 56rem); }
+
+  /* ── Brand gradients ───────────────────────────────────────────────────────
+     These were USED but never DEFINED — `gradient-primary` at 6 call sites and
+     `gradient-text-brand` at 1, including the navbar. An undefined utility is
+     silently inert, so the navbar rendered a white icon on a transparent tile
+     (invisible on a light navbar) and a plain-black wordmark. Found by opening
+     the page, not by any gate: no build step errors on a class that does not
+     exist. Token-driven so they follow the theme. */
+  .gradient-primary {
+    background-image: linear-gradient(135deg,
+      hsl(var(--primary)), hsl(var(--brand)));
+  }
+  .gradient-text-brand {
+    background-image: linear-gradient(90deg,
+      hsl(var(--primary)), hsl(var(--brand)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
 
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
@@ -460,4 +467,9 @@
 @keyframes afFadeUp {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide {
+  0%   { transform: translateX(-200%); }
+  100% { transform: translateX(400%); }
 }

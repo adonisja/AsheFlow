@@ -1,0 +1,28 @@
+# LOCAL DEVELOPMENT ONLY — hot-reload mounts and dev-only settings.
+#
+# Renamed from docker-compose.override.yml (ADR-282). Compose auto-loads any
+# file named docker-compose.override.yml, so this was silently applying itself
+# on staging and production — the two environments its own header forbade.
+# Under this name it applies only when asked for by hand:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# The `worker --beat` below is why it mattered. Prod also ran a standalone beat
+# container, so five tasks fired TWICE daily for a month. Embedded beat is fine
+# for one local worker and wrong anywhere workers might scale — servers use
+# docker-compose.prod.yml, which runs beat as its own service.
+
+services:
+  backend:
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ~/.aws:/root/.aws:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery_worker:
+    volumes:
+      - ./backend:/app
+      - ~/.aws:/root/.aws:ro
+    command: celery -A app.celery_app worker --beat --loglevel=info

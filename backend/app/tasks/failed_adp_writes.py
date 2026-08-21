@@ -61,13 +61,34 @@ def retry_failed_adp_writes():
             
             for adjustment in company_adjustments:
                 employee = employee_map[adjustment.employee_id]
-                pay_period = pay_period_id_map[adjustment.pay_period_id]
                 associate_oid = employee.hr_system_id_adp
-                pay_period_id = pay_period.adp_pay_period_id
+                work_assignment_id = employee.hr_system_work_assignment_id_adp
                 break_start = adjustment.proposed_break_start_at
                 break_end = adjustment.proposed_break_end_at
-                try: 
-                    new_timecard = asyncio.run(patch_adp_timecard(integration, associate_oid, pay_period_id, break_start, break_end))
+
+                # Both ADP references are required by the write. Retrying without
+                # them would burn attempts on a payload ADP must reject, so the
+                # adjustment is parked as non-retryable for human review instead.
+                if not adjustment.adp_entry_id or not work_assignment_id:
+                    logger.warning(
+                        "Adjustment %s (company %s) not retryable: missing %s",
+                        adjustment.id, adjustment.company_id,
+                        "adp_entry_id" if not adjustment.adp_entry_id else "work assignment id",
+                    )
+                    adjustment.is_retryable = False
+                    db.commit()
+                    continue
+
+                try:
+                    new_timecard = asyncio.run(patch_adp_timecard(
+                        integration,
+                        associate_oid,
+                        work_assignment_id,
+                        adjustment.adp_entry_id,
+                        adjustment.work_date,
+                        break_start,
+                        break_end,
+                    ))
                     adjustment.status = "applied"
                     adjustment.adp_applied_at = datetime.now(timezone.utc)
                     adjustment.adp_response_payload = new_timecard

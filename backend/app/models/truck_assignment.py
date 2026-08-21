@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -31,5 +31,18 @@ class TruckAssignment(Base):
     truck_id            = Column(UUID(as_uuid=True), ForeignKey("trucks.id", ondelete="CASCADE"), nullable=False, index=True)
     date                = Column(Date,               nullable=False, index=True)
     status              = Column(String(50),         nullable=False, default="planned")
-    sort_initiated_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
-    sort_committed_at   = Column(DateTime(timezone=True), nullable=True)
+    sort_initiated_by       = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
+    sort_committed_at       = Column(DateTime(timezone=True), nullable=True)
+    paired_arrival_confirmed = Column(Boolean, nullable=False, default=False)
+    # ADR-274 D17: the physical bay this truck occupies for the day, set by
+    # dispatch on the assignment page and DM'd to the crew at publish.
+    #
+    # On the ASSIGNMENT, not on Truck: a bay can differ day to day, so a column
+    # on Truck would silently rewrite history every time it changed. It is also
+    # not on DockAssignment (per-driver) — a dock is a place a TRUCK sits, and
+    # every driver crewed on it collects from the same bay. DockAssignment stays
+    # the per-driver read the home cards use, written from this at publish.
+    #
+    # Nullable: a truck-day with no bay set yet is normal, and the value is
+    # prefilled from the truck's previous assignment for dispatch to confirm.
+    dock_zone           = Column(String(50), nullable=True)

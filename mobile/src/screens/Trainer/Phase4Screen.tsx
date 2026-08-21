@@ -93,7 +93,7 @@ export default function Phase4Screen() {
 
   if (!loading && !session) {
     return (
-      <ScreenShell edges={[]} noHeader title="Phase 4 Observation" subtitle="No active Phase 4 session today.">
+      <ScreenShell title="Phase 4 Observation" subtitle="No active Phase 4 session today.">
         <View style={s.emptyCard}>
           <Text style={s.emptyText}>Not applicable today</Text>
           <Text style={s.emptySubtext}>This screen is only active when your trainee is in Phase 4</Text>
@@ -104,7 +104,7 @@ export default function Phase4Screen() {
 
   if (result) {
     return (
-      <ScreenShell edges={[]} noHeader title="Observation Submitted" subtitle={session?.trainee_name}>
+      <ScreenShell title="Observation Submitted" subtitle={session?.trainee_name}>
         <View style={[s.resultCard, { borderColor: result.passed ? c.success : c.danger, backgroundColor: (result.passed ? c.success : c.danger) + '12' }]}>
           <Text style={[s.resultTitle, { color: result.passed ? c.success : c.danger }]}>
             {result.passed ? 'PASSED' : 'DID NOT PASS'}
@@ -119,7 +119,7 @@ export default function Phase4Screen() {
   const optional  = session?.tasks.filter(t => !t.mandatory) ?? [];
 
   return (
-    <ScreenShell edges={[]} noHeader title="Phase 4 Observation" subtitle={session?.trainee_name} loading={loading}>
+    <ScreenShell title="Phase 4 Observation" subtitle={session?.trainee_name} loading={loading}>
       <Text style={s.hint}>Tap each task the trainee demonstrated correctly.</Text>
 
       {mandatory.length > 0 && (
@@ -170,7 +170,7 @@ export default function Phase4Screen() {
         onPress={doPreview}
         disabled={previewing}
       >
-        {previewing ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Preview Score</Text>}
+        {previewing ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Preview Score</Text>}
       </TouchableOpacity>
 
       {preview && (
@@ -179,7 +179,7 @@ export default function Phase4Screen() {
           onPress={doSubmit}
           disabled={submitting}
         >
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Submit Final Record</Text>}
+          {submitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={s.btnText}>Submit Final Record</Text>}
         </TouchableOpacity>
       )}
     </ScreenShell>
@@ -196,7 +196,7 @@ function ObsRow({ task, observed, onToggle, c }: {
       activeOpacity={0.7}
     >
       <View style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: observed ? c.success : c.border, backgroundColor: observed ? c.success : 'transparent', alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
-        {observed && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+        {observed && <Text style={{ color: c.primaryForeground, fontSize: 12, fontWeight: '700' }}>✓</Text>}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={{ fontSize: fontSize.sm, color: c.foreground, fontWeight: fontWeight.medium }}>{task.topic}</Text>
@@ -215,7 +215,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   previewMeta:  { fontSize: fontSize.sm, color: '#666', marginTop: 4 },
   previewFailed:{ fontSize: fontSize.xs, marginTop: 4 },
   btn:          { borderRadius: radius.md, paddingVertical: spacing.sm + 2, alignItems: 'center' },
-  btnText:      { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:      { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   resultCard:   { borderWidth: 1.5, borderRadius: radius.xl, padding: spacing.xl, alignItems: 'center', marginTop: spacing.xl },
   resultTitle:  { fontSize: fontSize.xxl, fontWeight: fontWeight.extrabold, marginBottom: spacing.sm },
   resultMsg:    { fontSize: fontSize.base, textAlign: 'center', lineHeight: 24, color: '#555' },

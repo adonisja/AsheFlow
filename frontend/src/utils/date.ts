@@ -15,12 +15,12 @@ export const fmtDate = (d: Date): string =>
 export const isoWeekStart = (offset = 0): string => {
   const d = new Date();
   d.setDate(d.getDate() - d.getDay() + 1 + offset * 7);
-  return d.toISOString().split('T')[0];
+  return fmtDate(d);
 };
 
 /** Returns the date `n` weeks ago as YYYY-MM-DD. */
 export const nWeeksAgo = (n: number): string => {
   const d = new Date();
   d.setDate(d.getDate() - n * 7);
-  return d.toISOString().split('T')[0];
+  return fmtDate(d);
 };

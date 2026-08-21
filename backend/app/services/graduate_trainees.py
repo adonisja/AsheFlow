@@ -31,11 +31,27 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
     warnings = []
     _graduation_dms: list[tuple[str, str]] = []
 
+    # Walker track only: trainee -> walker. ADR-264 makes driver_trainee -> driver a
+    # PARALLEL track with its own promotion target, not a case to fold in here; that
+    # ADR is proposed and unimplemented, so driver trainees are counted and warned
+    # about below rather than silently passed over.
     trainees = db.query(Employee).filter(
         Employee.role == "trainee",
         Employee.is_active == True,
         Employee.company_id == company_id,
     ).all()
+
+    pending_driver_trainees = db.query(Employee).filter(
+        Employee.role == "driver_trainee",
+        Employee.is_active == True,
+        Employee.company_id == company_id,
+    ).count()
+    if pending_driver_trainees:
+        logger.warning(
+            "graduate_trainees: %d active driver_trainee(s) for company=%s were not "
+            "evaluated — the driver promotion path (ADR-264) is not implemented",
+            pending_driver_trainees, company_id,
+        )
 
     recipients = db.query(Employee).filter(
         Employee.role.in_(["management", "admin", "dispatch"]),

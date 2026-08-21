@@ -62,6 +62,7 @@ class StationHandoff(Base):
     driver_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     date         = Column(Date, nullable=False, index=True)
     totes_returned = Column(Integer, nullable=False, default=0)
-    rts_count    = Column(Integer, nullable=False, default=0)   # physical RTS packages handed back
+    rts_count    = Column(Integer, nullable=False, default=0)   # physical RTS packages handed back (excludes missing)
+    missing_count = Column(Integer, nullable=False, default=0)  # missing packages reported across all routes
     notes        = Column(Text, nullable=True)
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())

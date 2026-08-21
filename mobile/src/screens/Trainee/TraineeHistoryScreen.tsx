@@ -9,6 +9,7 @@ import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useLayoutTransition } from '@hooks/useLayoutTransition';
 
 type Record_ = {
   record_id: string;
@@ -32,6 +33,7 @@ export default function TraineeHistoryScreen() {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expanded,   setExpanded]   = useState<Set<string>>(new Set());
+  const animateNext = useLayoutTransition();
   const [reviewState, setReviewState] = useState<Record<string, { stars: number; comment: string; submitting: boolean }>>({});
 
   const fetch = useCallback(async () => {
@@ -77,8 +79,10 @@ export default function TraineeHistoryScreen() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  const toggle = (id: string) =>
+  const toggle = (id: string) => {
+    animateNext();
     setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
 
   const setStars = (id: string, stars: number) =>
     setReviewState(prev => ({ ...prev, [id]: { ...prev[id] ?? { stars: 0, comment: '', submitting: false }, stars } }));
@@ -108,10 +112,7 @@ export default function TraineeHistoryScreen() {
 
   return (
     <ScreenShell
-      edges={[]}
       noHeader
-      title="Training History"
-      subtitle="All past sessions"
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); fetch(); }}
@@ -175,7 +176,7 @@ export default function TraineeHistoryScreen() {
                       disabled={rv.submitting}
                     >
                       {rv.submitting
-                        ? <ActivityIndicator color="#fff" />
+                        ? <ActivityIndicator color={c.primaryForeground} />
                         : <Text style={s.btnText}>Submit Review</Text>
                       }
                     </TouchableOpacity>
@@ -220,7 +221,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   starBtn:    { fontSize: 28 },
   textArea:   { borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, fontSize: fontSize.sm, minHeight: 70 },
   btn:        { borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center' },
-  btnText:    { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  btnText:    { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   emptyCard:  { backgroundColor: c.surfaceMuted, borderRadius: radius.lg, padding: spacing.xl, alignItems: 'center' },
   emptyText:  { fontSize: fontSize.base, color: c.mutedForeground },
 });

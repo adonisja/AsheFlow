@@ -51,6 +51,12 @@ async def get_all_confirmations(dispatch_date: str) -> dict[str, str]:
     return await r.hgetall(_make_key(dispatch_date))
 
 
+async def clear_confirmations(dispatch_date: str) -> None:
+    """Delete all confirmation state for a date (called when dispatch is cleared)."""
+    r = get_redis()
+    await r.delete(_make_key(dispatch_date))
+
+
 async def seed_pending(dispatch_date: str, employee_ids: list[str]) -> None:
     """Initialise every employee in the dispatch as 'pending'.
 

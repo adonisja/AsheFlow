@@ -55,14 +55,18 @@ if [ "${1:-}" = "--init" ]; then
 fi
 
 # Determine which private branch to push to based on current public branch.
+# The private branch MIRRORS the public branch 1:1 so a feature branch never
+# clobbers staging's proprietary code (which would poison staging's CI — a
+# feature branch and staging can have divergent proprietary/public APIs). CI
+# reads the matching private branch by the same rule (see .github/workflows/ci.yml).
+#   master  → main
+#   staging → staging
+#   <other> → <other>   (a private branch named exactly like the public one)
 CURRENT_BRANCH=$(git -C "$PUBLIC_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "staging")
 if [ "$CURRENT_BRANCH" = "master" ]; then
   PRIVATE_BRANCH="main"
-elif [ "$CURRENT_BRANCH" = "staging" ]; then
-  PRIVATE_BRANCH="staging"
 else
-  # Feature branches sync to staging so they can be tested without touching main.
-  PRIVATE_BRANCH="staging"
+  PRIVATE_BRANCH="$CURRENT_BRANCH"
 fi
 
 echo "Public branch:  $CURRENT_BRANCH"
@@ -72,7 +76,15 @@ echo "Cloning private repo to: $TMP_DIR"
 if $INIT_MODE; then
   git clone "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
 else
-  git clone -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+  # A feature branch may not have a private counterpart yet — branch it off staging
+  # (the closest baseline) so the first sync of a new feature branch succeeds.
+  if git clone -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private" 2>/dev/null; then
+    echo "Cloned existing private branch: $PRIVATE_BRANCH"
+  else
+    echo "Private branch '$PRIVATE_BRANCH' does not exist yet — creating it off staging."
+    git clone -b staging "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+    git -C "$TMP_DIR/AsheFlow-private" checkout -B "$PRIVATE_BRANCH"
+  fi
 fi
 
 cd "$TMP_DIR/AsheFlow-private"
@@ -90,26 +102,29 @@ mkdir -p docs/journals
 mkdir -p docs/templates
 
 # ── Proprietary files ───────────────────────────────────────────────────────
-ROUTERS=(
-  dispatch.py
-  training.py
-  field_ops.py
-  walker_routes.py
-)
+# Read from PROPRIETARY.txt — the single source of truth. Previously these were
+# two hardcoded arrays that had to agree with .gitignore by hand, and they
+# drifted in both directions: assign_captains.py was in NEITHER list (so nothing
+# had it), while run_sort/persist_zones/sort_analysis were in SERVICES but not
+# .gitignore (so they synced to private AND stayed public). One list removes the
+# whole failure class.
+MANIFEST="$PUBLIC_ROOT/PROPRIETARY.txt"
+if [ ! -f "$MANIFEST" ]; then
+  echo "ERROR: $MANIFEST not found — cannot determine what is proprietary."
+  exit 1
+fi
 
-SERVICES=(
-  calculate_weights.py
-  run_dispatch.py
-  assign_drivers.py
-  assign_trainers.py
-  assign_trainees.py
-  assign_walkers.py
-  rebalance_crews.py
-  resolve_conflict.py
-  ban_override.py
-  route_sort.py
-  score_phase4.py
-)
+ROUTERS=()
+SERVICES=()
+while IFS= read -r _p; do
+  case "$_p" in ''|\#*) continue ;; esac
+  case "$_p" in
+    backend/app/routers/*.py)  ROUTERS+=("$(basename "$_p")") ;;
+    backend/app/services/*.py) SERVICES+=("$(basename "$_p")") ;;
+  esac
+done < "$MANIFEST"
+
+echo "  manifest: ${#ROUTERS[@]} routers, ${#SERVICES[@]} services"
 
 echo ""
 echo "Copying routers..."
@@ -135,17 +150,120 @@ for f in "${SERVICES[@]}"; do
   fi
 done
 
-# ── Docs (PII-scrubbed ADRs, journals, guides) ───────────────────────────────
+# ── Orphan guard: a service in NEITHER the manifest nor the public index ─────
+# The manifest removed the two-list drift class, but one gap survives it: a NEW
+# service file that nobody has classified yet. It is untracked publicly (so the
+# public repo does not have it) and absent from the manifest (so this sync does
+# not copy it) — exactly how assign_captains.py became invisible to everything
+# at once. Fail the push rather than let it disappear.
 echo ""
-echo "Copying docs..."
-cp -r "$PUBLIC_ROOT/docs/decisions/." "docs/decisions/"
-cp -r "$PUBLIC_ROOT/docs/journals/." "docs/journals/"
-cp -r "$PUBLIC_ROOT/docs/templates/." "docs/templates/"
-# Top-level docs (LEARNING_GUIDE, ARCHITECTURE, etc.)
-for f in "$PUBLIC_ROOT/docs/"*.md; do
-  [ -f "$f" ] && cp "$f" "docs/$(basename "$f")"
+echo "Checking for unclassified services..."
+_orphans=0
+for src in "$PUBLIC_ROOT"/backend/app/services/*.py; do
+  f="$(basename "$src")"
+  printf '%s\n' "${SERVICES[@]}" | grep -qx "$f" && continue
+  git -C "$PUBLIC_ROOT" ls-files --error-unmatch "backend/app/services/$f" >/dev/null 2>&1 && continue
+  echo "  ✗ $f is neither tracked publicly nor listed in PROPRIETARY.txt."
+  echo "    Decide which it is: add it to PROPRIETARY.txt (then run"
+  echo "    scripts/sync_proprietary_lists.sh), or git add it."
+  _orphans=1
 done
-echo "  ✓ docs/"
+if [ "$_orphans" -eq 1 ]; then
+  echo ""
+  echo "ERROR: unclassified proprietary file(s) would be lost. Push aborted."
+  exit 1
+fi
+echo "  ✓ every service is classified"
+
+# ── Proprietary tests ────────────────────────────────────────────────────────
+# These import proprietary routers/services, so they're gitignored from the public
+# repo and can't run in public CI. Sync them here so the CI test job (which pulls
+# this repo) can run the FULL suite instead of silently skipping proprietary paths.
+# Relative paths under backend/tests/ so services tests sync too, not just routers.
+TESTS=(
+  routers/test_arrival_confirm.py
+  routers/test_back_at_truck.py
+  routers/test_confirmation_gate.py
+  routers/test_dispatch_move_pairing.py
+  routers/test_clear_dispatch.py
+  routers/test_finalize_gate.py
+  routers/test_my_performance.py
+  routers/test_pair_split.py
+  routers/test_cover_remaining.py
+  routers/test_route_detail.py
+  routers/test_route_reassign_unassign.py
+  routers/test_peer_ratings.py
+  routers/test_reassign_trainee.py
+  services/test_stop_cutoff.py
+)
+echo ""
+echo "Copying proprietary tests..."
+for f in "${TESTS[@]}"; do
+  src="$PUBLIC_ROOT/backend/tests/$f"
+  if [ -f "$src" ]; then
+    mkdir -p "backend/tests/$(dirname "$f")"
+    cp "$src" "backend/tests/$f"
+    echo "  ✓ tests/$f"
+  else
+    echo "  ✗ MISSING: tests/$f (skipped)"
+  fi
+done
+
+# ── Docs (PII-scrubbed ADRs, journals, guides) ───────────────────────────────
+# MIRROR, not append. `cp -r` into a persistent clone never removes a file that
+# was deleted or renamed locally, so the private repo silently accumulated
+# orphans: ADR-107-graduation-quiz.md and ADR-119-Sort-Pipeline-Web-Frontend.md
+# both survived a local renumber and re-created duplicate ADR numbers in the
+# backup. --delete makes the private copy a true mirror of local docs/.
+#
+# .obsidian/ is excluded: per-machine editor state, not documentation. The vault
+# has its own git repo (docs/.git) for history; this sync is a backup mirror.
+echo ""
+# Regenerate the ADR catalog BEFORE mirroring, so the copy that lands in the
+# private repo is current. CLAUDE.md points every session at this index first,
+# and nothing was regenerating it: on 2026-08-14 it stopped at ADR-253 while the
+# repo had 271 decisions. A stale index is worse than none — it answers
+# confidently and wrongly, so nobody looks further.
+# $PUBLIC_ROOT, not a relative path: by this point the script has cd'd into the
+# temp clone of the private repo (line ~90), so `.githooks/...` would miss.
+if [ -f "$PUBLIC_ROOT/.githooks/gen_adr_catalog.py" ]; then
+  echo "Regenerating ADR catalog..."
+  (cd "$PUBLIC_ROOT" && python3 .githooks/gen_adr_catalog.py) || {
+    echo "ERROR: ADR catalog generation failed. Push aborted." >&2
+    exit 1
+  }
+fi
+
+echo "Copying docs..."
+# docs/business/ is NOT excluded from the mirror by accident — it is populated
+# further down from pricing_analysis_*.md at the repo root, which has no
+# counterpart under local docs/. Without this exclude, --delete would remove it
+# on every run and the block below would immediately re-create it.
+rsync -a --delete \
+  --exclude='.obsidian/' \
+  --exclude='.git/' \
+  --exclude='.githooks/' \
+  --exclude='.gitignore' \
+  --exclude='.DS_Store' \
+  --exclude='business/' \
+  "$PUBLIC_ROOT/docs/" "docs/"
+echo "  ✓ docs/ (mirrored)"
+
+# ── Design memory + business docs (gitignored from public, preserved here) ──
+echo ""
+echo "Copying design memory and business docs..."
+if [ -d "$PUBLIC_ROOT/memory" ]; then
+  mkdir -p memory
+  cp -r "$PUBLIC_ROOT/memory/." "memory/"
+  echo "  ✓ memory/"
+fi
+mkdir -p docs/business
+for f in "$PUBLIC_ROOT"/pricing_analysis_*.md; do
+  if [ -f "$f" ]; then
+    cp "$f" "docs/business/$(basename "$f")"
+    echo "  ✓ docs/business/$(basename "$f")"
+  fi
+done
 
 # ── Black-box registration module ───────────────────────────────────────────
 # main.py does: from asheflow_private.register import register_proprietary_routers
@@ -218,6 +336,10 @@ CI clones the branch that matches the environment it is deploying to.
 - `backend/app/services/ban_override.py`
 - `backend/app/services/route_sort.py`
 - `backend/app/services/score_phase4.py`
+- `backend/app/services/tier1_verify.py`
+- `backend/app/services/run_sort.py`
+- `backend/app/services/persist_zones.py`
+- `backend/app/services/stop_cutoff.py`
 EOF
 
   cat > .gitignore << 'EOF'

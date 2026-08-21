@@ -22,16 +22,38 @@ from app.services.adp_exceptions import ADPAuthError, ADPClientError, ADPServerE
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/adp", tags=["adp"])
 
 allow_admin = RoleChecker(["admin"])
-allow_manager_or_admin = RoleChecker(["admin", "manager"])
+allow_manager_or_admin = RoleChecker(["admin", "management"])
+
+
+def require_adp_enabled():
+    """Block all ADP endpoints until ADP_ENABLED=true is set in the environment.
+
+    Returns 503 so the route is discoverable internally but clearly
+    unavailable to callers until the integration is signed off.
+    """
+    if not settings.adp_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ADP integration is not yet enabled for this environment.",
+        )
+
+
+router = APIRouter(
+    prefix="/adp",
+    tags=["adp"],
+    dependencies=[Depends(require_adp_enabled)],
+)
 
 class ADPConfigureRequest(BaseModel):
     adp_client_id: str
     adp_client_secret: str
     adp_certificate: str
     adp_environment: str = "sandbox"
+    # Payroll group whose pay period schedule drives correction deadlines.
+    # Without it, pay period sync no-ops and mismatch detection stays blocked.
+    adp_payroll_group_id: str | None = None
 
     @field_validator("adp_environment")
     @classmethod
@@ -92,7 +114,23 @@ async def configure_adp(
     integration.adp_client_secret_arn = secret_arn
     integration.adp_certificate_arn   = cert_arn
     integration.adp_environment       = payload.adp_environment
+    integration.adp_payroll_group_id  = payload.adp_payroll_group_id
 
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=str(caller.id),
+        action_type="adp_integration.configure",
+        target_table="adp_integrations",
+        target_id=str(integration.id),
+        # Credentials are deliberately absent — only the non-sensitive config is
+        # recorded, never the secret or certificate material.
+        after={
+            "adp_environment": payload.adp_environment,
+            "adp_payroll_group_id": payload.adp_payroll_group_id,
+        },
+    )
     db.commit()
     return {"detail": "ADP integration configured"}
 
@@ -142,8 +180,8 @@ async def upload_flex_timesheets(
             work_date = date.fromisoformat(row.work_date)
             break_start = datetime.fromisoformat(row.break_start_at)
             break_end = datetime.fromisoformat(row.break_end_at)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid date/time for employee {row.employee_id}: {e}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid date/time format for employee {row.employee_id}. Use ISO format: YYYY-MM-DD and YYYY-MM-DDTHH:MM:SS.")
         
         existing = db.query(FlexTimesheet).filter(
             FlexTimesheet.company_id == caller.company_id,
@@ -168,6 +206,18 @@ async def upload_flex_timesheets(
             ))
             created += 1
     
+    # Payroll-adjacent: these rows feed break-compliance and the ADP mismatch
+    # detector, so a bulk overwrite of someone's recorded breaks needs a record
+    # of who uploaded it. Bulk shape — counts, not per-row snapshots.
+    write_audit(
+        db,
+        action_type="flex_timesheet.upload",
+        target_table="flex_timesheets",
+        target_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"created": created, "updated": updated},
+    )
     db.commit()
     return {"created": created, "updated": updated}
 
@@ -207,7 +257,7 @@ async def employee_signoff(
 
     managers_and_admins = db.query(Employee).filter(
         Employee.company_id == caller.company_id,
-        Employee.role.in_(["admin", "manager"]),
+        Employee.role.in_(["admin", "management"]),
         Employee.is_active == True
     ).all()
     for person in managers_and_admins:
@@ -256,16 +306,28 @@ async def manager_sign_off(
         Employee.id == adjustment.employee_id,
     ).first()
 
-    pay_period = db.query(ADPPayPeriod).filter(
-        ADPPayPeriod.company_id == caller.company_id,
-        ADPPayPeriod.id == adjustment.pay_period_id
-    ).first()
+    # The Workforce Now write addresses the correction by the ADP entry it is
+    # amending and the employee's work assignment (PFID). Neither is recoverable
+    # here if absent, so fail before contacting ADP rather than sending a payload
+    # ADP will reject (ADR-233).
+    if not adjustment.adp_entry_id or not employee.hr_system_work_assignment_id_adp:
+        logger.warning(
+            "Adjustment %s (company %s) cannot be written to ADP: missing %s",
+            adjustment.id, caller.company_id,
+            "adp_entry_id" if not adjustment.adp_entry_id else "work assignment id",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This adjustment is missing the ADP references needed to submit a correction.",
+        )
 
     try:
         adp_response = await patch_adp_timecard(
             integration,
             employee.hr_system_id_adp,
-            pay_period.adp_pay_period_id,
+            employee.hr_system_work_assignment_id_adp,
+            adjustment.adp_entry_id,
+            adjustment.work_date,
             adjustment.proposed_break_start_at,
             adjustment.proposed_break_end_at
         )
@@ -273,7 +335,7 @@ async def manager_sign_off(
         adjustment.status = "applied"
         adjustment.adp_applied_at = datetime.now(timezone.utc)
         adjustment.adp_response_payload = adp_response
-    
+
     except ADPAuthError as e:
         logger.warning(
             "ADP auth failed during manager approval of adjustment %s (company %s) with status %s: %s",
@@ -288,9 +350,9 @@ async def manager_sign_off(
             f"{adjustment.proposed_break_end_at.strftime('%I:%M %p')}"
         )
         logger.warning(
-            "ADP rejected timecard write for adjustment %s (employee %s, company %s) "
+            "ADP rejected timecard write for adjustment %s (employee_id %s, company %s) "
             "with status %s — marking non-retryable. ADP response: %s",
-            adjustment.id, employee.name, caller.company_id, e.status_code, e.body
+            adjustment.id, adjustment.employee_id, caller.company_id, e.status_code, e.body
         )
         notif_message = (
             f"ADP rejected the timecard correction for {employee.name.title()} "
@@ -302,7 +364,7 @@ async def manager_sign_off(
         adjustment.is_retryable = False
         managers_and_admins = db.query(Employee).filter(
             Employee.company_id == caller.company_id,
-            Employee.role.in_(["admin", "manager"]),
+            Employee.role.in_(["admin", "management"]),
             Employee.is_active == True
         ).all()
         for person in managers_and_admins:
@@ -372,7 +434,7 @@ def reject_adjustment(
             raise HTTPException(status_code=403, detail="Only the employee on record or an admin can reject at this stage")
     
     elif adjustment.status == "pending_manager":
-        if caller.role not in ["admin", "manager"]:
+        if caller.role not in ["admin", "management"]:
             raise HTTPException(status_code=403, detail="Only a manager or admin can reject at this stage")
 
     else:
@@ -396,7 +458,7 @@ def reject_adjustment(
         # Employee disputed — notify managers/admins
         managers_and_admins = db.query(Employee).filter(
             Employee.company_id == caller.company_id,
-            Employee.role.in_(["admin", "manager"]),
+            Employee.role.in_(["admin", "management"]),
             Employee.is_active == True
         ).all()
         for person in managers_and_admins:

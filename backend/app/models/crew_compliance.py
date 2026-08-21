@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, Boolean, Date, DateTime, Time, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Boolean, Date, DateTime, Time, String, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.models.base import Base
@@ -25,4 +25,8 @@ class CrewCompliance(Base):
     arrival_time    = Column(Time, nullable=True)        # local time the crew member arrived at AP
     uniform_pass    = Column(Boolean, nullable=False, default=True)
     cart_cover_pass = Column(Boolean, nullable=False, default=True)
+    # ADR-228: compliance is captured live on the Crew Roster page as a DRAFT, then
+    # Check-In #1 finalizes it (draft → submitted) and notifies Dispatch. The
+    # standalone POST /crew-compliance writes 'submitted' directly (corrections).
+    status          = Column(String(20), nullable=False, server_default="submitted")  # draft | submitted
     submitted_at    = Column(DateTime(timezone=True), server_default=func.now())

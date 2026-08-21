@@ -35,8 +35,15 @@ PLATFORM_DEFAULTS: dict = {
     "underperforming_trainer_threshold": 3,
     "max_training_phase":               4,
     "dispatch_weight_driver":           0.70,
-    "dispatch_weight_trainer":          0.50,
-    "dispatch_weight_walker":           0.30,
+    # ADR-256: captain between driver and trainer; trainer and walker drop because a
+    # trainer no longer holds operational context on the truck. Existing tenants with
+    # a STORED value keep it — a platform default only covers the unset case, so the
+    # migration backfills the old 0.50/0.30 explicitly rather than silently reweighting
+    # a live dispatch.
+    "dispatch_weight_captain":          0.50,
+    "dispatch_weight_trainer":          0.25,
+    "dispatch_weight_walker":           0.15,
+    "captain_truck_rotation_days":      5,
     "dispatch_mutual_bonus":            0.10,
     "dispatch_tridirectional_bonus":    0.20,
     "dispatch_consecutive_penalty":     0.05,
@@ -62,6 +69,64 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "dispatch_weight_cap",
     "flag_threshold",
 )
+
+
+# ---------------------------------------------------------------------------
+# Scorecard metric direction (ADR-262)
+#
+# Which way "good" lies is a property of the METRIC, not of the tenant. A DSP
+# may configure what its target is; it may not configure whether higher or lower
+# passes. Keeping direction here rather than in CompanyConfig is what stops a
+# generic `value >= target` from silently inverting every DPMO metric — an
+# inverted comparison does not raise, does not fail typing, and reports an
+# excellent DNR DPMO of 400 as failing a <=950 target.
+#
+# Keys are the metric keys used by ScorecardMetric.key (ADR-204).
+# ---------------------------------------------------------------------------
+
+METRIC_DIRECTION: dict[str, str] = {
+    # Quality — walker + driver
+    "dcr":              "higher",
+    "pod":              "higher",
+    "cc":               "higher",
+    "cdf":              "higher",
+    "dnr_dpmo":         "lower",
+    "dsb_dpmo":         "lower",
+    # Safety & Compliance — driver only
+    "fico":             "higher",
+    "speeding_rate":    "lower",
+    "signsignal_rate":  "lower",
+    "dvic":             "higher",
+}
+
+# Maps a metric key to the CompanyConfig column holding its target.
+METRIC_TARGET_FIELD: dict[str, str] = {
+    "dcr":             "scorecard_dcr_target",
+    "pod":             "scorecard_pod_target",
+    "cc":              "scorecard_cc_target",
+    "cdf":             "scorecard_cdf_target",
+    "dnr_dpmo":        "scorecard_dnr_dpmo_target",
+    "dsb_dpmo":        "scorecard_dsb_dpmo_target",
+    "fico":            "scorecard_fico_target",
+    "speeding_rate":   "scorecard_speeding_rate_target",
+    "signsignal_rate": "scorecard_signsignal_rate_target",
+    "dvic":            "scorecard_dvic_target",
+}
+
+
+def meets_target(key: str, value: float, target: float) -> bool:
+    """True if `value` meets `target` for metric `key`.
+
+    Takes the metric KEY rather than a direction argument on purpose: a caller
+    that can pass the direction is a caller that can pass the wrong one.
+
+    Raises:
+        KeyError — unknown metric key. Deliberate: a new metric cannot be
+        compared until someone states which direction is good.
+    """
+    if METRIC_DIRECTION[key] == "lower":
+        return value <= target
+    return value >= target
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +174,36 @@ class ResolvedConfig:
     # Dispatch confirmation cutoff (optional — None means no cutoff enforced)
     dispatch_confirmation_cutoff: time | None
 
+    # ── ADR-256 (defaulted, so they sit last: dataclass ordering) ─────────────
+    # Deliberately NOT in _REQUIRED_FIELDS. A null in that tuple raises 503 for the
+    # entire company, so listing these would take every existing tenant offline the
+    # moment the migration adds a nullable column. The migration backfills them; the
+    # defaults here cover the window between deploy and backfill, and any tenant
+    # created by a path that predates the column.
+    dispatch_weight_captain:     float = 0.50
+    captain_truck_rotation_days: int = 5
+    # Earlier confirmation deadline for driver + captain. None → fall back to
+    # checkin_close, which is what those roles used before this column existed.
+    early_confirmation_deadline: time | None = None
+
+    # Scorecard tier targets (ADR-262) — all optional. None means the DSP has not
+    # configured a target for that metric; callers must render the reported value
+    # with no pass/fail judgement rather than treating None as a failure.
+    scorecard_dcr_target:             float | None = None
+    scorecard_dnr_dpmo_target:        int   | None = None
+    scorecard_pod_target:             float | None = None
+    scorecard_cc_target:              float | None = None
+    scorecard_cdf_target:             float | None = None
+    scorecard_dsb_dpmo_target:        int   | None = None
+    scorecard_fico_target:            int   | None = None
+    scorecard_speeding_rate_target:   float | None = None
+    scorecard_signsignal_rate_target: float | None = None
+    scorecard_dvic_target:            float | None = None
+
+    def target_for(self, key: str) -> float | None:
+        """Configured target for a metric key, or None if unset."""
+        return getattr(self, METRIC_TARGET_FIELD[key], None)
+
 
 # ---------------------------------------------------------------------------
 # Discord guild config — separate from ResolvedConfig (optional integration)
@@ -121,6 +216,7 @@ class DiscordGuildConfig:
     guild_id:            int | None
     drivers_channel_id:  int | None
     trainers_channel_id: int | None
+    captains_channel_id: int | None
     general_channel_id:  int | None
     invite_channel_id:   int | None
     role_admin:          int | None
@@ -148,6 +244,7 @@ def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
     if row is None:
         return DiscordGuildConfig(
             guild_id=None, drivers_channel_id=None, trainers_channel_id=None,
+            captains_channel_id=None,
             general_channel_id=None, invite_channel_id=None,
             role_admin=None, role_manager=None, role_asheflow=None,
             role_bot=None, role_dispatch=None, role_driver=None,
@@ -157,6 +254,7 @@ def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
         guild_id            = row.discord_guild_id,
         drivers_channel_id  = row.discord_drivers_channel_id,
         trainers_channel_id = row.discord_trainers_channel_id,
+        captains_channel_id = row.discord_captains_channel_id,
         general_channel_id  = row.discord_general_channel_id,
         invite_channel_id   = row.discord_invite_channel_id,
         role_admin          = row.discord_role_admin,
@@ -222,4 +320,20 @@ def get_company_config(db: Session, company_id: UUID) -> ResolvedConfig:
         checkin_close                     = row.checkin_close,
         driver_checkin_count              = row.driver_checkin_count,
         dispatch_confirmation_cutoff      = row.dispatch_confirmation_cutoff,
+        # `or DEFAULT` rather than passing the column through: these are nullable and
+        # excluded from _REQUIRED_FIELDS, so a null must resolve to the platform
+        # default instead of propagating None into weight arithmetic.
+        dispatch_weight_captain           = row.dispatch_weight_captain or PLATFORM_DEFAULTS["dispatch_weight_captain"],
+        captain_truck_rotation_days       = row.captain_truck_rotation_days or PLATFORM_DEFAULTS["captain_truck_rotation_days"],
+        early_confirmation_deadline       = row.early_confirmation_deadline,
+        scorecard_dcr_target              = row.scorecard_dcr_target,
+        scorecard_dnr_dpmo_target         = row.scorecard_dnr_dpmo_target,
+        scorecard_pod_target              = row.scorecard_pod_target,
+        scorecard_cc_target               = row.scorecard_cc_target,
+        scorecard_cdf_target              = row.scorecard_cdf_target,
+        scorecard_dsb_dpmo_target         = row.scorecard_dsb_dpmo_target,
+        scorecard_fico_target             = row.scorecard_fico_target,
+        scorecard_speeding_rate_target    = row.scorecard_speeding_rate_target,
+        scorecard_signsignal_rate_target  = row.scorecard_signsignal_rate_target,
+        scorecard_dvic_target             = row.scorecard_dvic_target,
     )

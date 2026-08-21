@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, RefreshControl, Modal,
@@ -8,7 +9,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
-import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type CrewMember = { id: string; name: string; role: string };
@@ -36,9 +38,6 @@ const MONTHS  = ['January','February','March','April','May','June','July','Augus
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
-const ROLE_COLORS: Record<string, string> = {
-  driver: '#5B4FE8', trainer: '#0FA870', trainee: '#0EA5D8', walker: '#E8820C',
-};
 const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
 };
@@ -115,9 +114,9 @@ export default function ScheduleScreen() {
       setPtoList(ptoRes.data ?? []);
       setScrList(scrRes.data ?? []);
       setFetchError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSchedule([]);
-      setFetchError(err?.response?.data?.detail ?? err?.message ?? 'Failed to load schedule.');
+      setFetchError(errorText(err, 'Failed to load schedule.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -170,8 +169,8 @@ export default function ScheduleScreen() {
       Alert.alert('Submitted', `PTO request for ${selectedDate} sent to management.`);
       setPtoModal(false);
       fetchSchedule();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setPtoSubmitting(false);
     }
@@ -206,8 +205,8 @@ export default function ScheduleScreen() {
       setScrModal(false);
       setScrDaysAdd([]); setScrDaysDrop([]); setScrProposed([]); setScrReason('');
       fetchSchedule();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail ?? 'Could not submit. Try again.');
+    } catch (err: unknown) {
+      Alert.alert('Error', errorText(err, 'Could not submit. Try again.'));
     } finally {
       setScrSubmitting(false);
     }
@@ -221,10 +220,7 @@ export default function ScheduleScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.pageTitle}>Schedule</Text>
-        <Text style={s.pageSubtitle}>{MONTHS[viewMonth]} {viewYear}</Text>
-      </View>
+      <PageHeader title="Schedule" subtitle={`${MONTHS[viewMonth]} ${viewYear}`} />
 
       <ScrollView
         style={s.scroll}
@@ -272,13 +268,13 @@ export default function ScheduleScreen() {
 
                 if (isSelected && isToday) {
                   circleStyle = { backgroundColor: c.primary };
-                  textColor   = '#fff';
+                  textColor   = c.primaryForeground;
                 } else if (isSelected) {
                   circleStyle = { backgroundColor: c.primary + '22', borderWidth: 1.5, borderColor: c.primary };
                   textColor   = c.primary;
                 } else if (isToday) {
                   circleStyle = { backgroundColor: c.primary };
-                  textColor   = '#fff';
+                  textColor   = c.primaryForeground;
                 } else if (isPtoApp || isOff) {
                   circleStyle = { borderWidth: 1, borderColor: c.danger + '60', backgroundColor: c.danger + '12' };
                   textColor   = c.danger;
@@ -383,8 +379,8 @@ export default function ScheduleScreen() {
                 onPress={submitPTO} disabled={ptoSubmitting}
               >
                 {ptoSubmitting
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                  ? <ActivityIndicator color={c.primaryForeground} />
+                  : <Text style={[s.modalBtnText, { color: c.primaryForeground }]}>Submit</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -406,7 +402,7 @@ export default function ScheduleScreen() {
                     style={[s.chip, scrType === t && { backgroundColor: c.primary, borderColor: c.primary }]}
                     onPress={() => setScrType(t)}
                   >
-                    <Text style={[s.chipText, { color: scrType === t ? '#fff' : c.foreground }]}>{SCR_TYPE_LABELS[t]}</Text>
+                    <Text style={[s.chipText, { color: scrType === t ? c.primaryForeground : c.foreground }]}>{SCR_TYPE_LABELS[t]}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -439,7 +435,7 @@ export default function ScheduleScreen() {
                   style={[s.modalBtn, { backgroundColor: c.primary, borderColor: c.primary, opacity: scrSubmitting ? 0.6 : 1 }]}
                   onPress={submitSCR} disabled={scrSubmitting}
                 >
-                  {scrSubmitting ? <ActivityIndicator color="#fff" /> : <Text style={[s.modalBtnText, { color: '#fff' }]}>Submit</Text>}
+                  {scrSubmitting ? <ActivityIndicator color={c.primaryForeground} /> : <Text style={[s.modalBtnText, { color: c.primaryForeground }]}>Submit</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -455,13 +451,6 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
   const s = styles(c);
   const isOff     = OFF_STATUSES.has(entry.status);
   const isWorking = !isOff;
-  const crew      = entry.crew ?? [];
-
-  const grouped: Record<string, CrewMember[]> = {};
-  for (const m of crew) {
-    (grouped[m.role] = grouped[m.role] ?? []).push(m);
-  }
-  const roleOrder = ['driver', 'trainer', 'trainee', 'walker'].filter(r => grouped[r]?.length);
 
   return (
     <View style={[s.selectedCard, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -475,30 +464,13 @@ function SelectedDayCard({ entry, dateStr, c }: { entry: ScheduleEntry; dateStr:
         </Text>
       </View>
 
+      {/* Crew roster intentionally omitted here — the live crew + AP status lives
+          on the Anchor Point tab (ADR-207); showing it here duplicated that. */}
       {isWorking && entry.truck_name && (
-        <>
-          <View style={s.truckRow}>
-            <Text style={s.truckIcon}>🚚</Text>
-            <Text style={[s.truckName, { color: c.foreground }]}>Assigned to: {entry.truck_name}</Text>
-          </View>
-
-          {crew.length > 0 && (
-            <View style={s.crewSection}>
-              <Text style={[s.crewLabel, { color: c.mutedForeground }]}>Crew</Text>
-              {roleOrder.map(role => (
-                grouped[role].map((m, i) => (
-                  <View key={m.id} style={[s.crewRow, i < grouped[role].length - 1 && { borderBottomWidth: 1, borderBottomColor: c.border }]}>
-                    <View style={[s.crewDot, { backgroundColor: ROLE_COLORS[role] ?? c.primary }]} />
-                    <Text style={[s.crewName, { color: c.foreground }]}>{m.name}</Text>
-                    <Text style={[s.crewRole, { color: ROLE_COLORS[role] ?? c.mutedForeground }]}>
-                      {ROLE_LABELS[role] ?? role}
-                    </Text>
-                  </View>
-                ))
-              ))}
-            </View>
-          )}
-        </>
+        <View style={s.truckRow}>
+          <Text style={s.truckIcon}>🚚</Text>
+          <Text style={[s.truckName, { color: c.foreground }]}>Assigned to: {entry.truck_name}</Text>
+        </View>
       )}
 
       {isWorking && !entry.truck_name && (
@@ -580,7 +552,7 @@ function DayPicker({ selected, onToggle, c }: { selected: string[]; onToggle: (d
             style={{ paddingHorizontal: spacing.sm, paddingVertical: spacing.xs, borderRadius: radius.full, borderWidth: 1, borderColor: on ? c.primary : c.border, backgroundColor: on ? c.primary : c.card }}
             onPress={() => onToggle(day)}
           >
-            <Text style={{ fontSize: fontSize.xs, color: on ? '#fff' : c.foreground, fontWeight: on ? fontWeight.semibold : fontWeight.regular }}>
+            <Text style={{ fontSize: fontSize.xs, color: on ? c.primaryForeground : c.foreground, fontWeight: on ? fontWeight.semibold : fontWeight.regular }}>
               {day.slice(0, 3)}
             </Text>
           </TouchableOpacity>
@@ -641,12 +613,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   truckRow:        { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.sm },
   truckIcon:       { fontSize: 16 },
   truckName:       { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  crewSection:     { backgroundColor: c.surfaceMuted, borderRadius: radius.md, overflow: 'hidden' },
-  crewLabel:       { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.8, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
-  crewRow:         { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.sm, paddingVertical: 8 },
-  crewDot:         { width: 7, height: 7, borderRadius: 4 },
-  crewName:        { fontSize: fontSize.sm, flex: 1 },
-  crewRole:        { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   selectedEmpty:   { fontSize: fontSize.sm, marginTop: spacing.xs },
 
   subTabBar:        { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: c.border, marginBottom: spacing.md },
@@ -665,7 +631,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   emptyCard:   { backgroundColor: c.surfaceMuted, borderRadius: radius.lg, padding: spacing.xl, alignItems: 'center', marginBottom: spacing.sm },
   emptyText:   { fontSize: fontSize.sm, color: c.mutedForeground },
   newBtn:      { borderRadius: radius.md, paddingVertical: spacing.sm, alignItems: 'center', marginBottom: spacing.md },
-  newBtnText:  { color: '#fff', fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  newBtnText:  { color: c.primaryForeground, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalCard:    { width: '85%', borderRadius: radius.xl, padding: spacing.lg, gap: spacing.sm },

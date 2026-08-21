@@ -35,18 +35,22 @@ class Departure(Base):
 
 
 class WalkerRating(Base):
+    """Peer rating (ADR-201): any crew member rates any OTHER member of their own
+    truck for a date. One row per (rater, ratee, date). Attendance is no longer
+    here — roll call (ADR-200) owns presence — so a rating is just stars + comment.
+    (Kept the class/table name for continuity; the old driver→walker rows survive
+    as rater=driver, ratee=walker peer ratings.)"""
     __tablename__ = "walker_ratings"
     __table_args__ = (
-        UniqueConstraint("driver_id", "walker_id", "date", name="uq_walker_ratings_driver_walker_date"),
+        UniqueConstraint("rater_id", "ratee_id", "date", name="uq_walker_ratings_rater_ratee_date"),
     )
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id  = Column(UUID(as_uuid=True), nullable=False, index=True)
-    driver_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
-    walker_id   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    rater_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    ratee_id    = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
     date        = Column(Date, nullable=False, index=True)
-    present     = Column(Boolean, nullable=False, default=True)  # False = no-show; stars will be null
-    stars       = Column(Integer, nullable=True)   # nullable to support no-show records
+    stars       = Column(Integer, nullable=False)   # 1–5; attendance lives in ShiftRollCall now
     comment     = Column(Text, nullable=True)
     rated_at    = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -55,6 +55,40 @@ class Settings(BaseSettings):
                     "Unencrypted database connections are not permitted. "
                     "Example: postgresql://user:pass@host:5432/db?sslmode=require"
                 )
+
+        # ADR-283. The ORE certificate settings default to "" so a deploy WITHOUT
+        # the S3 infrastructure degrades (uploads 503) rather than crashing. That
+        # is still the intent for a fresh environment.
+        #
+        # What it does not cover is the case that actually happened: the bucket
+        # and key exist, and the config was LOST. CI rebuilds backend/.env from
+        # SSM Parameter Store on every deploy, so any key absent from the store
+        # is erased. An empty value then reads as "feature intentionally off",
+        # and a trainee's certificate upload starts failing with nobody alerted.
+        #
+        # The two states are indistinguishable from inside the process, so the
+        # environment decides: staging and production have the infrastructure
+        # provisioned, therefore an empty value there is a wiped config, not a
+        # choice. Fail at startup, where it is one log line, instead of at a
+        # trainee's upload, where it is a support ticket.
+        if self.app_env not in {"development", "test"}:
+            missing_ore = [
+                name
+                for name, value in (
+                    ("ORE_CERTIFICATE_BUCKET", self.ore_certificate_bucket),
+                    ("ORE_CERTIFICATE_KMS_KEY_ID", self.ore_certificate_kms_key_id),
+                )
+                if not value
+            ]
+            if missing_ore:
+                raise RuntimeError(
+                    f"{', '.join(missing_ore)} is empty in a non-development environment. "
+                    "The S3 infrastructure is provisioned in staging and production, so an "
+                    "empty value means the config was lost rather than deliberately disabled "
+                    "(CI rebuilds backend/.env from SSM Parameter Store, dropping any key "
+                    "absent from it). Restore the parameter under /asheflow/<env>/ and "
+                    "redeploy. See ADR-283."
+                )
     
     
 
@@ -83,16 +117,66 @@ class Settings(BaseSettings):
     # Default is 1095 (3 years); set to 0 to disable automatic purge.
     operational_record_retention_days: int = 1095
 
-    # NYC GeoClient API — used for address enrichment at manifest ingestion time.
-    # Register at https://api.nyc.gov/  (free, requires NYC account).
-    # Leave unset in development/test; enrichment task will skip GeoClient calls.
-    geoclient_app_id: str = ""
+    # ADR-219: null the customer delivery address on delivery rows this many hours
+    # after the route date (block_key + counts kept). Disputes are same-shift; the
+    # troublesome signal is distilled to BuildingProfile (ADR-218). 0 disables.
+    delivery_address_retention_hours: int = 48
+
+    # ── ADR-281: ORE completion certificates ────────────────────────────────
+    # A phase-0 certificate carries the trainee's name and an Amazon training
+    # id, so the FILE is short-lived. The attestation on the training record is
+    # what persists; this is only the evidence window.
+    #
+    # Empty bucket name disables the feature: uploads 503 with a clear message
+    # rather than throwing a boto3 error at a trainee. That is deliberate — a
+    # deploy without the infrastructure should degrade, not crash.
+    ore_certificate_bucket: str = ""
+    ore_certificate_kms_key_id: str = ""
+    ore_certificate_retention_hours: int = 48
+    # 5 minutes: long enough to open a PDF, short enough that a URL copied out
+    # of a browser's history or a screenshot is useless by the time it lands
+    # anywhere else.
+    ore_presign_ttl_seconds: int = 300
+    ore_max_upload_bytes: int = 10 * 1024 * 1024
+
+    # ADR-221: redact a departed employee's denormalized name copies this many days
+    # after deactivation (covers post-departure disputes/references). 0 disables.
+    employee_name_retention_days: int = 180
+
+    # ADR-216 Phase 3: per-stop cutoff-urgency gradient windows (minutes before a
+    # building's closing/break cutoff). A stop is RED (urgent) within
+    # stop_urgent_window_minutes of its cutoff, YELLOW (caution) the
+    # stop_caution_window_minutes immediately before that, else green/blue.
+    # Surfaced on the route-detail response so client colours match this tuning.
+    stop_urgent_window_minutes: int = 60
+    stop_caution_window_minutes: int = 60
+
+    # ADR-227: prune notifications older than this many days (applies to read AND
+    # unread — an operational notice's shift is long over after a few days).
+    # Expired notifications (past expires_at) are pruned regardless of age. The
+    # inbox already hides expired/old ones; this reclaims the storage. 0 disables.
+    notification_retention_days: int = 3
+
+    # NYC GeoClient API v2 — used for address enrichment at manifest ingestion time.
+    # Register at https://api.nyc.gov/ (free, requires NYC account).
+    # v2 auth: subscription-key query param only — no app_id needed.
+    # Leave unset in development/test; enrichment falls back to raw address parsing.
     geoclient_app_key: str = ""
+
+    # If the fraction of packages that fail GeoClient enrichment exceeds this
+    # threshold, the task marks the manifest as "failed" (not "ready") so that
+    # sort is blocked rather than silently running on unusable data.
+    geoclient_failure_threshold: float = 0.80
 
     # Fernet key for encrypting trainee credentials (flex email, clock-in code).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     # Required — no default. Add CREDENTIAL_ENCRYPTION_KEY to .env locally; set via env var in staging/prod.
     credential_encryption_key: str
+
+    # Feature flag — ADP payroll integration.
+    # Keep False until the integration is fully tested and signed off.
+    # Flip to True via ADP_ENABLED=true in the environment to enable all /adp endpoints.
+    adp_enabled: bool = False
 
     # SES sender address — must be a verified identity in SES.
     ses_from_email: str = "AsheFlow <noreply@asheflow.com>"
@@ -108,7 +192,7 @@ class Settings(BaseSettings):
         "http://localhost:5173,http://127.0.0.1:5173"
     )
 
-    cors_allow_methods: str = "GET,POST,PATCH,DELETE"
+    cors_allow_methods: str = "GET,POST,PUT,PATCH,DELETE"
     cors_allow_headers: str = "Authorization,Content-Type"
 
     def get_cors_origins(self) -> List[str]:

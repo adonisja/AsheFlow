@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import axiosClient from '../../api/axiosClient';
 import { useAuth } from '../../contexts/AuthContext';
-import NotificationBanner from '../../components/NotificationBanner';
 import { getLocalYMD } from '../../utils/date';
 import {
   Loader2, Users, ClipboardList, History, MessageSquare,
   AlertTriangle, Star, CheckCircle2, XCircle, RefreshCw,
-  UserCheck, Calendar, ChevronDown, ChevronUp, Info, BarChart2,
+  UserCheck, ChevronDown, ChevronUp, Info, BarChart2,
 } from 'lucide-react';
 import TaskChecklist from '../../components/TrainerDashboard/TaskChecklist';
 import ManagerComments from '../../components/TrainerDashboard/ManagerComments';
@@ -575,7 +574,6 @@ export default function TrainerDashboard() {
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
       </div>
-      {trainerId && <NotificationBanner employeeId={trainerId} />}
 
       <ErrorBanner message={error} />
 

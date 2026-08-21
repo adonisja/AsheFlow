@@ -51,6 +51,11 @@ class Incident(Base):
     incident_time     = Column(Time, nullable=True)
     packages_tba      = Column(Integer, nullable=True)
     incident_location = Column(Text, nullable=True)
+    # ADR-221: witness gets a mapped employee FK so the denormalized witness_name
+    # is redactable on departure (was free-text only — the oversight). Nullable:
+    # a witness may be a non-employee (e.g. a resident), in which case only
+    # witness_name is set and it's treated as free text (not employee PII).
+    witness_id        = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     witness_name      = Column(Text, nullable=True)
 
     # Injury fields

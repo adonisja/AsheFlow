@@ -44,6 +44,11 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
       - INTERNAL_SECRET=${INTERNAL_SECRET:?INTERNAL_SECRET must be set in .env}
+      # Settings() validates this at import, so beat cannot start without it —
+      # it was missing here while backend and celery_worker both declared it in
+      # docker-compose.yml, which is why this service crash-looped the first
+      # time it was ever run (ADR-282).
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY must be set in .env}
       - APP_ENV=production
       - TZ=America/New_York
     env_file:
