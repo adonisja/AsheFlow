@@ -55,6 +55,40 @@ class Settings(BaseSettings):
                     "Unencrypted database connections are not permitted. "
                     "Example: postgresql://user:pass@host:5432/db?sslmode=require"
                 )
+
+        # ADR-283. The ORE certificate settings default to "" so a deploy WITHOUT
+        # the S3 infrastructure degrades (uploads 503) rather than crashing. That
+        # is still the intent for a fresh environment.
+        #
+        # What it does not cover is the case that actually happened: the bucket
+        # and key exist, and the config was LOST. CI rebuilds backend/.env from
+        # SSM Parameter Store on every deploy, so any key absent from the store
+        # is erased. An empty value then reads as "feature intentionally off",
+        # and a trainee's certificate upload starts failing with nobody alerted.
+        #
+        # The two states are indistinguishable from inside the process, so the
+        # environment decides: staging and production have the infrastructure
+        # provisioned, therefore an empty value there is a wiped config, not a
+        # choice. Fail at startup, where it is one log line, instead of at a
+        # trainee's upload, where it is a support ticket.
+        if self.app_env not in {"development", "test"}:
+            missing_ore = [
+                name
+                for name, value in (
+                    ("ORE_CERTIFICATE_BUCKET", self.ore_certificate_bucket),
+                    ("ORE_CERTIFICATE_KMS_KEY_ID", self.ore_certificate_kms_key_id),
+                )
+                if not value
+            ]
+            if missing_ore:
+                raise RuntimeError(
+                    f"{', '.join(missing_ore)} is empty in a non-development environment. "
+                    "The S3 infrastructure is provisioned in staging and production, so an "
+                    "empty value means the config was lost rather than deliberately disabled "
+                    "(CI rebuilds backend/.env from SSM Parameter Store, dropping any key "
+                    "absent from it). Restore the parameter under /asheflow/<env>/ and "
+                    "redeploy. See ADR-283."
+                )
     
     
 

@@ -2,10 +2,15 @@
 
 THE FAILURE THIS PREVENTS
 -------------------------
-`backend/.env` is gitignored, and a `git merge` or `git reset --hard` on a
-server can remove it — that happened three times across staging and prod in one
-session. Recovery means recreating it by hand, and the only reference for what
-belongs in it is `.env.example`.
+`backend/.env` is regenerated from SSM Parameter Store on every deploy
+(ADR-283), so its contents are only ever as complete as the store. `.env.example`
+is the reference for which keys the store must hold — and for a local developer,
+the reference for what to write by hand.
+
+(An earlier version of this docstring blamed `git merge` for removing the file.
+That was wrong: `backend/.env` is gitignored and has never been committed, so
+git cannot touch it. The wrong cause survived four retellings and reached a
+runbook before anyone ran `git log --all -- backend/.env`.)
 
 When that template is stale, recovery is silently incomplete. It was missing
 `CREDENTIAL_ENCRYPTION_KEY` — a REQUIRED setting with no default, so a rebuilt

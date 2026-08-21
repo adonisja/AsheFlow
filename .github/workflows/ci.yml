@@ -384,6 +384,7 @@ jobs:
               "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "cp /home/ubuntu/AsheFlow/.env /home/ubuntu/AsheFlow/backend/.env",
               "grep -q GEOCLIENT_APP_KEY /home/ubuntu/AsheFlow/backend/.env && echo GEOCLIENT_APP_KEY_OK || (echo GEOCLIENT_APP_KEY_MISSING && exit 1)",
+              "grep -q ^ORE_CERTIFICATE_BUCKET= /home/ubuntu/AsheFlow/backend/.env && echo ORE_CERTIFICATE_BUCKET_OK || (echo ORE_CERTIFICATE_BUCKET_MISSING_IN_PARAM_STORE && exit 1)",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
@@ -614,6 +615,7 @@ jobs:
               "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "cp /home/ubuntu/AsheFlow/.env /home/ubuntu/AsheFlow/backend/.env",
               "grep -q GEOCLIENT_APP_KEY /home/ubuntu/AsheFlow/backend/.env && echo GEOCLIENT_APP_KEY_OK || (echo GEOCLIENT_APP_KEY_MISSING && exit 1)",
+              "grep -q ^ORE_CERTIFICATE_BUCKET= /home/ubuntu/AsheFlow/backend/.env && echo ORE_CERTIFICATE_BUCKET_OK || (echo ORE_CERTIFICATE_BUCKET_MISSING_IN_PARAM_STORE && exit 1)",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
               "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
