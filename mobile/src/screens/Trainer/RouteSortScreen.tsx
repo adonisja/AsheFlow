@@ -96,6 +96,15 @@ type RouteResp = {
   misrouted_packages: MisrouteFlag[];
 };
 
+// ADR-229 — POST /walker-routes/routes/{id}/cover-remaining.
+// Mirrors CoverRemainingResponse; typed so a schema rename fails the build
+// rather than silently reading undefined off `res.data`.
+type CoverRemainingResp = {
+  original_route: RouteResp;
+  covering_route: RouteResp;
+  stops_moved: number;
+};
+
 type Proposal = {
   route_number: number;
   route_id: string;
@@ -516,9 +525,9 @@ export default function RouteSortScreen() {
           onPress: async () => {
             setRouteActionId(routeId);
             try {
-              const res = await apiClient.post(`/walker-routes/routes/${routeId}/cover-remaining`, {});
-              const moved = res.data?.stops_moved ?? 0;
-              const covNum = res.data?.covering_route?.route_number;
+              const res = await apiClient.post<CoverRemainingResp>(`/walker-routes/routes/${routeId}/cover-remaining`, {});
+              const moved = res.data.stops_moved;
+              const covNum = res.data.covering_route.route_number;
               await load();
               Alert.alert(
                 'Coverage route created',

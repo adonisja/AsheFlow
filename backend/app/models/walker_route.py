@@ -92,8 +92,15 @@ class Route(Base):
     # Blocks the traversal WALKED (ADR-235 walked_blocks) — always >= the count
     # of blocks it collected from, so drift across skipped blocks is observable.
     blocks_walked         = Column(Integer(), nullable=True)
-    # capacity | no_adjacent_fit | group_complete | no_fit_streak |
-    # walk_budget | span_cap | forced_single
+    # Sort-time closures (ADR-272 diagnosis; these are what closed_reason_hist
+    # counts, because telemetry is written at sort time):
+    #   capacity | no_adjacent_fit | group_complete | no_fit_streak |
+    #   walk_budget | span_cap | forced_single
+    # Runtime closure (ADR-229) — NOT a sort outcome. Only reachable on an
+    # in_progress route with a help request, so it cannot appear in a sort
+    # telemetry histogram; listed here so a future pass over existing routes
+    # does not meet an undocumented value:
+    #   covered
     closed_reason         = Column(String(30), nullable=True)
     # The decision record this route came from. No FK: RouteSortRun outlives the
     # Route (re-sort deletes routes, never runs), so a FK would either block the

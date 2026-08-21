@@ -192,3 +192,43 @@ class TestSchema:
         col = Route.__table__.columns.get("help_requested_at")
         assert col is not None
         assert col.nullable is True
+
+
+class TestClosedReasonStaysOutOfSortTelemetry:
+    """ADR-115 dimension 8. `closed_reason` is ADR-272's sort diagnosis, and
+    ADR-229 added an eighth value to a column that documented seven.
+
+    "covered" is safe today only because telemetry is computed at SORT time,
+    over routes the sort just produced — a route cannot be covered until it is
+    in_progress with a help request. That is a timing property, not a
+    structural one, so it is worth pinning."""
+
+    def test_covered_is_only_reachable_after_the_sort(self):
+        src = _code_only(wr.cover_remaining)
+        assert 'route.status != "in_progress"' in src
+        assert "route.help_requested_at is None" in src
+
+    def test_the_column_documents_the_value(self):
+        """The model listed seven values; a reader diagnosing an unexpected
+        histogram bucket would have found no explanation for the eighth."""
+        import inspect
+
+        from app.models import walker_route
+
+        src = inspect.getsource(walker_route)
+        i = src.index("closed_reason         = Column")
+        assert "covered" in src[max(0, i - 700):i]
+
+    def test_sort_telemetry_is_computed_at_sort_time(self):
+        """If this ever runs over persisted historical routes instead, a
+        "covered" bucket enters ADR-272's diagnosis and the finding is real."""
+        import inspect
+
+        from app.services import sort_telemetry
+
+        src = inspect.getsource(sort_telemetry.compute_sort_metrics)
+        assert "closed_reason" in src
+        assert "db.query(Route)" not in src, (
+            "telemetry now reads routes itself — re-check whether a covered "
+            "route can reach closed_reason_hist (ADR-229 / ADR-272)"
+        )
