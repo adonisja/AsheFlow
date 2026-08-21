@@ -259,16 +259,34 @@ class TestPhaseZeroCurriculum:
         assert any("website" in t.lower() for t in titles)
         assert any("procedure" in t.lower() for t in titles)
 
-    def test_they_reach_both_tracks(self):
-        """A driver_trainee's first day is the same ORE day."""
-        import re
+    def test_phase_zero_is_walker_only(self):
+        """ORE is the WALKER onboarding course. A driver_trainee has no phase 0
+        and starts at phase 1.
+
+        Marking these ["walker", "driver"] would give every new driver an ORE
+        day they can never complete — no certificate exists for them to upload,
+        so the phase would never close and they would be stuck before phase 1.
+        """
         from pathlib import Path
 
         src = (Path(__file__).resolve().parents[2] / "scripts"
                / "seed_training_curriculum.py").read_text()
-        i = src.index('(0, "AsheFlow app')
-        block = src[i : src.index("# ── Phase 1", i)] if "# ── Phase 1" in src[i:] else src[i : i + 1200]
-        assert block.count('["walker", "driver"]') >= 3
+        # Scope to the phase-0 TUPLES themselves. A byte window past them runs
+        # into phase-1 rows, which legitimately DO include the driver track —
+        # the first version of this test failed on exactly that.
+        import re
+
+        rows = re.findall(r"^\s{4}\(0,.*?\),\s*$", src, re.M | re.S)
+        assert len(rows) == 3, f"expected 3 phase-0 rows, found {len(rows)}"
+        for row in rows:
+            code = "\n".join(
+                ln for ln in row.splitlines() if not ln.lstrip().startswith("#")
+            )
+            assert '["walker"]' in code, f"not walker-scoped: {code[:60]}"
+            assert '"driver"' not in code, (
+                "phase 0 must not reach the driver track — a driver_trainee has "
+                "no ORE certificate to upload, so the phase would never close"
+            )
 
     def test_curriculum_must_exist_before_phase_zero_activates(self):
         """Without seeded rows the record would carry no mandatory tasks and
@@ -323,10 +341,19 @@ class TestStayingStartsPhaseOne:
         assert "day_number == 1" in src
         assert "TrainingTask(" in src
 
-    def test_it_respects_the_trainees_track(self):
-        """A driver_trainee gets driver items, not walker ones (ADR-263)."""
+    def test_it_seeds_the_walker_track(self):
+        """Phase 0 is walker-only, so phase 1 started FROM it is too.
+
+        A per-trainee track lookup here would be dead code implying a
+        driver_trainee could have an ORE day to stay after. This mirrors
+        training_injection, which filters the same way (ADR-263: `trainer` is a
+        WALKER trainer and never supervises a driver).
+        """
         src = _code_only(tr.stay_after_ore)
-        assert "driver_trainee" in src
+        assert 'track = "walker"' in src
+        assert "driver_trainee" not in src, (
+            "phase 0 is walker-only — a driver branch here is unreachable"
+        )
         assert "item.roles" in src
 
     def test_every_query_is_company_scoped(self):
@@ -339,3 +366,43 @@ class TestStayingStartsPhaseOne:
         from app.schemas.training import TrainingRecordResponse
 
         assert "phase_one_started" in TrainingRecordResponse.model_fields
+
+
+class TestDriverTrackHasNoPhaseZero:
+    """ORE is the walker onboarding course (operator, 2026-08-21).
+
+    The failure this prevents is a stuck trainee, not a crash: give a driver an
+    ORE day and there is no certificate for them to upload, so the phase never
+    closes and they never reach phase 1.
+    """
+
+    def test_the_injector_filters_before_deciding_the_phase(self):
+        """curriculum_by_phase is built from the ROLE-FILTERED list, so a
+        driver's get(0) is empty and they fall through to phase 1. If the
+        filter moved after the phase decision this would silently break."""
+        from app.services import training_injection
+
+        src = _code_only(training_injection)
+        filter_at = src.index("TRAINEE_CURRICULUM_ROLE in (item.roles")
+        build_at = src.index("curriculum_by_phase.setdefault")
+        decide_at = src.index("current_phase = 0 if curriculum_by_phase.get(0)")
+        assert filter_at < build_at < decide_at, (
+            "the role filter must run before the phase decision"
+        )
+
+    def test_seeded_data_gives_each_track_the_right_first_phase(self):
+        """Against the seed file itself: walkers have phase-0 rows, drivers
+        have none."""
+        import re
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[2] / "scripts"
+               / "seed_training_curriculum.py").read_text()
+        rows = re.findall(r"^\s{4}\(0,.*?\),\s*$", src, re.M | re.S)
+        driver_rows = [r for r in rows if '"driver"' in
+                       "\n".join(ln for ln in r.splitlines()
+                                 if not ln.lstrip().startswith("#"))]
+        assert rows, "no phase-0 rows seeded"
+        assert not driver_rows, (
+            f"{len(driver_rows)} phase-0 row(s) reach the driver track"
+        )

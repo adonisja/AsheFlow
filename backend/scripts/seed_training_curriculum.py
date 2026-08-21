@@ -49,19 +49,23 @@ CURRICULUM: list[tuple[int, str, str | None, str, bool, list[str]]] = [
     # These three are the only things a TRAINER does on this day, which is why
     # the phase is short: everything else that day happens inside AtoZ.
     #
-    # Both tracks: a driver_trainee's first day is the same ORE day.
+    # WALKER TRACK ONLY. ORE is the walker onboarding course; the driver track
+    # does not have a phase 0, and a driver_trainee starts at phase 1. Marking
+    # these ["walker", "driver"] would give every new driver an ORE day they
+    # can never complete — no certificate exists for them to upload, so the
+    # phase would never close and they would be stuck before phase 1.
     (0, "AsheFlow app: install and first login",
      "Install the AsheFlow app and confirm the new hire can log in with their "
      "own credentials. Covers password reset if the invite has expired.",
-     "app_setup", True, ["walker", "driver"]),
+     "app_setup", True, ["walker"]),
     (0, "Website access",
      "Show where the web app lives and confirm the new hire can reach it and "
      "sign in. Covers which surfaces are web-only versus in the app.",
-     "app_setup", True, ["walker", "driver"]),
+     "app_setup", True, ["walker"]),
     (0, "Procedure walkthrough",
      "Walk through the procedures on the page with the new hire — what they "
      "will be asked to do each day and where each action lives.",
-     "policy", True, ["walker", "driver"]),
+     "policy", True, ["walker"]),
 
 
     # -----------------------------------------------------------------------
