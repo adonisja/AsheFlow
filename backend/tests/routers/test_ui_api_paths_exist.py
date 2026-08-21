@@ -45,15 +45,7 @@ _CALL = re.compile(
 # visible and dated, and so removing the entry is what proves the feature
 # landed.
 #
-#   /walker-routes/routes/{}/cover-remaining
-#     ADR-229 (status: in-progress). The mobile "Cover remaining stops" button
-#     in RouteSortScreen calls it; `cover_remaining` does not exist in
-#     walker_routes.py on local OR staging, and tests/routers/
-#     test_cover_remaining.py skips itself on the failed import — so nothing
-#     was failing to say so. Tapping the button errors at runtime.
-_KNOWN_UNBUILT = {
-    "/walker-routes/routes/{}/cover-remaining",
-}
+_KNOWN_UNBUILT: set[str] = set()
 
 
 def _registered() -> set[str]:
