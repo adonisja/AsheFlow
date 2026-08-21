@@ -6,6 +6,7 @@ from sqlalchemy import and_
 
 
 from app.database import get_db
+from app.services.audit import write_audit
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
@@ -14,7 +15,7 @@ from app.schemas.employee_relationship import EmployeeRelationshipResponse, Empl
 
 router = APIRouter(prefix="/employee-relationships", tags=["employee-relationships"])
 
-allow_field_staff = RoleChecker(["driver", "walker", "trainer"])
+allow_field_staff = RoleChecker(["captain", "driver", "walker", "trainer"])
 allow_admin       = RoleChecker(["admin"])
 
 @router.post("/", response_model=EmployeeRelationshipResponse, status_code=status.HTTP_201_CREATED)
@@ -43,9 +44,23 @@ def create_employee_relationship(
         HTTPException(400): If an employee attempts to relate to themselves.
         HTTPException(409): If a limit is exceeded or the relationship already exists.
     """
-    # defines how many favs each role can have per target role — drivers can't fav other drivers,
-    # but can fav 1 trainer and 2 walkers; trainers and walkers are symmetric
-    FAV_LIMITS = {"driver": {"driver": 0, "trainer": 1, "walker": 2}, "trainer": {"driver": 1, "trainer": 1, "walker": 2}, "walker": {"driver": 1, "trainer": 1, "walker": 2}}
+    # How many favs each role may hold, per target role (ADR-256).
+    #
+    # A missing key means ZERO, not unlimited — the lookup below defaults to 0. The
+    # gaps are deliberate:
+    #   driver→driver, captain→captain: one per truck, so the preference is meaningless.
+    #   trainer→walker, walker→trainer: a trainer no longer supervises walkers on the
+    #     truck (D5 moved route-lead authority to the captain), so neither side has
+    #     the contact that made the preference mean anything.
+    #   walker→walker is 1, down from 2 — a staffing-constraint call, not a
+    #     hierarchy one. Existing rows above the cap are not deleted; they simply
+    #     block new ones.
+    FAV_LIMITS = {
+        "driver":  {"driver": 0, "captain": 1, "trainer": 1, "walker": 2},
+        "captain": {"driver": 1, "captain": 0, "trainer": 1, "walker": 2},
+        "trainer": {"driver": 1, "captain": 1},
+        "walker":  {"driver": 1, "captain": 1, "walker": 1},
+    }
 
     # Ownership — field staff can only create relationships for themselves
     if caller.id != employee_relationship.employee_id:
@@ -83,9 +98,28 @@ def create_employee_relationship(
                     Employee.role == db_target.role,
                     EmployeeRelationship.relationship_type == employee_relationship.relationship_type)).count()
 
-        # look up the cap for this specific initiator-role → target-role pair
-        if existing_count >= FAV_LIMITS[db_employee.role][db_target.role]:
-            raise HTTPException(status_code=409, detail=f"Employee already has {FAV_LIMITS[db_employee.role][db_target.role]} members in {employee_relationship.relationship_type} list")
+        # Look up the cap for this initiator-role → target-role pair. `.get(..., 0)`
+        # on BOTH levels: a missing pair means "not allowed", not a KeyError 500.
+        # Direct subscripting was safe only while every role appeared in every row;
+        # ADR-256 removed trainer→walker and walker→trainer, so gaps are now normal.
+        # An unknown role (dispatch, field_supervisor, driver_trainee) also lands
+        # here and is correctly refused rather than crashing.
+        cap = FAV_LIMITS.get(db_employee.role, {}).get(db_target.role, 0)
+        if existing_count >= cap:
+            if cap == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"A {db_employee.role} cannot add a {db_target.role} as a favourite."
+                    ),
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Employee already has {cap} {db_target.role}(s) in their "
+                    f"{employee_relationship.relationship_type} list"
+                ),
+            )
 
     else:
         # ban limit is global (not role-segmented) — each employee may only ban 2 people total
@@ -114,6 +148,21 @@ def create_employee_relationship(
         company_id=caller.company_id,
     )
     db.add(db_relationship)
+    db.flush()
+    # The delete side is audited (ADR-132 DP-3/DP-5) and the clear side now is
+    # too (D13) — create was the remaining hole, so a relationship could appear
+    # with no record and be removed with one.
+    write_audit(
+        db,
+        action_type="employee_relationship.create",
+        target_table="employee_relationships",
+        target_id=str(db_relationship.id),
+        actor_id=str(caller.id),
+        company_id=str(caller.company_id),
+        after={"employee_id": str(db_relationship.employee_id),
+               "target_employee_id": str(db_relationship.target_employee_id),
+               "relationship_type": db_relationship.relationship_type},
+    )
     db.commit()
     # refresh to populate server-generated fields (e.g. id, created_at) before returning
     db.refresh(db_relationship)
@@ -173,10 +222,29 @@ def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db
     if not employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found")
 
-    db.query(EmployeeRelationship).filter(
+    # Snapshot before deleting: ADR-132 DP-3/DP-5 audited the sibling
+    # `delete_employee_relationships` for exactly this (GDPR Art. 17); this
+    # bulk-clear path was missed and deleted the same personal data silently.
+    doomed = db.query(EmployeeRelationship).filter(
         EmployeeRelationship.employee_id == employee_id,
         EmployeeRelationship.company_id == caller.company_id,
-    ).delete()
+    ).all()
+    before = {
+        "count": len(doomed),
+        "relationship_ids": [str(r.id) for r in doomed],
+    }
+    for r in doomed:
+        db.delete(r)
+
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="employee_relationship.clear",
+        target_table="employee_relationships",
+        target_id=str(employee_id),
+        before=before,
+    )
     db.commit()
 
 @router.delete("/{employee_relationship_id}", status_code=status.HTTP_204_NO_CONTENT)

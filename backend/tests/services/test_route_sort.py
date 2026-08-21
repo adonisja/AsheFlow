@@ -2,22 +2,24 @@
 Tests for route_sort.py — the walker route distribution algorithm.
 
 Covers:
-  - _derive_block_key: address parsing (directional, non-directional, noise stripping)
-  - _block_key_adjacent: structural adjacency (same street, contiguous range, cross-side)
+  - derive_block_key: address parsing (directional, non-directional, noise stripping)
+  - _build_adjacency_graph: BFS cross-street adjacency (replaces _block_key_adjacent)
   - _haversine_km: distance sanity checks
-  - _resolve_effort_class: flag → profile → default override chain
+  - _resolve_effort_class: weighted package-aware scoring (address_workloads + difficulty_flags)
   - _pair_ovs: half-slot OV cost accumulation
-  - run_sort: end-to-end — capacity enforcement, clustering, misroute detection,
+  - run_sort: end-to-end — capacity enforcement, BFS clustering, misroute detection,
               no address data in output, empty input, oversize block
 """
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
+from app.services.derive_block_key import derive_block_key, ParsedBlock, UnparseableAddress
 from app.services.route_sort import (
-    _derive_block_key,
-    _block_key_adjacent,
+    _build_adjacency_graph,
+    _nearest_block_within_hops,
+    _build_stops,
     _haversine_km,
     _resolve_effort_class,
     _pair_ovs,
@@ -27,7 +29,6 @@ from app.services.route_sort import (
 )
 from app.schemas.walker_routes import (
     PackageInput,
-    OVInput,
     SortRequest,
     EFFORT_CAPACITY,
     OV_HALF_SLOTS,
@@ -42,102 +43,199 @@ _TA_ID = uuid.uuid4()
 _DATE = date.today()
 
 
-def _request(packages: list[PackageInput], ovs: list[OVInput] = None) -> SortRequest:
+def _request(packages: list[PackageInput]) -> SortRequest:
     return SortRequest(
         truck_assignment_id=_TA_ID,
         route_date=_DATE,
         packages=packages,
-        ovs=ovs or [],
     )
 
 
-def _pkg(tba: str, address: str, bag_id: str, lat: float = 40.75, lng: float = -73.99) -> PackageInput:
-    return PackageInput(tba_number=tba, bag_id=bag_id, address=address, lat=lat, lng=lng)
+def _pkg(
+    tba: str,
+    address: str,
+    bag_id: str,
+    lat: float = 40.75,
+    lng: float = -73.99,
+    package_type: str | None = None,
+    first_cross_street: str | None = None,
+    second_cross_street: str | None = None,
+    normalised_address: str | None = None,
+    segment_id: str | None = None,
+    from_lion_node_id: str | None = None,
+    to_lion_node_id: str | None = None,
+) -> PackageInput:
+    parsed = derive_block_key(address, tba=tba)
+    block_key = parsed.block_key if isinstance(parsed, ParsedBlock) else None
+    return PackageInput(
+        tba_number=tba,
+        bag_id=bag_id,
+        block_key=block_key,
+        package_type=package_type,
+        lat=lat,
+        lng=lng,
+        first_cross_street=first_cross_street,
+        second_cross_street=second_cross_street,
+        normalised_address=normalised_address,
+        segment_id=segment_id,
+        from_lion_node_id=from_lion_node_id,
+        to_lion_node_id=to_lion_node_id,
+    )
+
+
+def _make_tote(bag_id: str, block_key: str) -> _Tote:
+    t = _Tote(bag_id=bag_id)
+    t.packages.append(_Package(
+        tba_number=f"TBA_{bag_id}", bag_id=bag_id,
+        block_key=block_key, lat=40.75, lng=-73.99,
+    ))
+    return t
 
 
 # ---------------------------------------------------------------------------
-# _derive_block_key
+# derive_block_key (canonical — from derive_block_key.py)
 # ---------------------------------------------------------------------------
+
+def _bk(address: str) -> str | None:
+    """Unwrap ParsedBlock.block_key, or return None for UnparseableAddress."""
+    result = derive_block_key(address, tba="test")
+    return result.block_key if isinstance(result, ParsedBlock) else None
+
 
 class TestDeriveBlockKey:
     def test_directional_street(self):
-        assert _derive_block_key("350 W 36th St") == "W_36_St_350s_even"
+        # 350 → hundred floor 300, no side
+        assert _bk("350 W 36th St") == "W_36_St_300"
 
     def test_directional_odd(self):
-        assert _derive_block_key("351 W 36th St") == "W_36_St_350s_odd"
+        # 351 → same hundred block as 350: W_36_St_300
+        assert _bk("351 W 36th St") == "W_36_St_300"
 
     def test_non_directional(self):
-        assert _derive_block_key("410 5th Ave") == "5_Ave_410s_even"
+        assert _bk("410 5th Ave") == "5_Ave_400"
 
     def test_ordinal_suffix_stripped(self):
-        # "37th" → street_num 37
-        assert _derive_block_key("410 W 37th St") == "W_37_St_410s_even"
+        assert _bk("410 W 37th St") == "W_37_St_400"
 
     def test_noise_stripped(self):
-        # "APT 4B" noise stripped before parsing
-        assert _derive_block_key("350 W 36th St APT 4B") == "W_36_St_350s_even"
+        assert _bk("350 W 36th St APT 4B") == "W_36_St_300"
 
     def test_hundred_boundary(self):
-        # 399 → range 390s
-        assert _derive_block_key("399 W 36th St") == "W_36_St_390s_odd"
+        # 399 → floors to 300
+        assert _bk("399 W 36th St") == "W_36_St_300"
 
     def test_400s(self):
-        assert _derive_block_key("415 W 37th St") == "W_37_St_410s_odd"
+        # 415 → floors to 400
+        assert _bk("415 W 37th St") == "W_37_St_400"
 
     def test_unparseable_no_house_number(self):
-        assert _derive_block_key("Somewhere over the rainbow") is None
+        assert isinstance(derive_block_key("Somewhere over the rainbow", tba="t"), UnparseableAddress)
 
     def test_empty_string(self):
-        assert _derive_block_key("") is None
+        assert isinstance(derive_block_key("", tba="t"), UnparseableAddress)
 
     def test_unknown_street_type(self):
-        # "Pkwy" is not in _STREET_TYPE_MAP
-        assert _derive_block_key("350 W 36th Pkwy") is None
+        assert isinstance(derive_block_key("350 W 36th Pkwy", tba="t"), UnparseableAddress)
 
     def test_avenue_alias(self):
-        assert _derive_block_key("410 W 36th Avenue") == "W_36_Ave_410s_even"
+        assert _bk("410 W 36th Avenue") == "W_36_Ave_400"
+
+    def test_uppercase_street_type(self):
+        # GeoClient returns uppercase: "433 W 32 ST" → floors to 400
+        assert _bk("433 W 32 ST") == "W_32_St_400"
+
+    def test_uppercase_ave(self):
+        assert _bk("433 W 9 AVE") == "W_9_Ave_400"
 
 
 # ---------------------------------------------------------------------------
-# _block_key_adjacent
+# _build_adjacency_graph (replaces _block_key_adjacent)
+# BFS uses a weighted adjacency graph; these tests verify edge costs
 # ---------------------------------------------------------------------------
 
-class TestBlockKeyAdjacent:
-    def test_same_block(self):
-        # Same block_key is structurally adjacent to itself
-        assert _block_key_adjacent("W_36_St_300s_odd", "W_36_St_300s_odd")
+class TestBuildAdjacencyGraph:
+    def _graph(self, block_to_totes: dict) -> dict:
+        return _build_adjacency_graph(block_to_totes)
 
-    def test_contiguous_hundred_same_side(self):
-        assert _block_key_adjacent("W_36_St_300s_odd", "W_36_St_400s_odd")
+    def _tote(self, bk: str, first_cs: str | None = None, second_cs: str | None = None) -> list[_Tote]:
+        t = _Tote(bag_id=bk)
+        t.packages.append(_Package(
+            tba_number=f"T_{bk}", bag_id=bk, block_key=bk,
+            lat=40.75, lng=-73.99,
+            first_cross_street=first_cs,
+            second_cross_street=second_cs,
+        ))
+        return [t]
 
-    def test_contiguous_hundred_cross_side(self):
-        # odd and even on the same block range are adjacent
-        assert _block_key_adjacent("W_36_St_300s_odd", "W_36_St_300s_even")
+    def test_cross_street_adjacency_cost_1(self):
+        # W 32 St 400 block borders 9 Ave — any block ON 9 Ave gets cost 1
+        b2t = {
+            "W_32_St_400": self._tote("W_32_St_400", first_cs="9 AVENUE"),
+            "W_9_Ave_400": self._tote("W_9_Ave_400"),
+        }
+        graph = self._graph(b2t)
+        neighbours = {bk: cost for bk, cost in graph.get("W_32_St_400", [])}
+        assert "W_9_Ave_400" in neighbours
+        assert neighbours["W_9_Ave_400"] == 1
 
-    def test_contiguous_300_400(self):
-        assert _block_key_adjacent("W_37_St_300s_odd", "W_37_St_400s_even")
+    def test_adjacent_hundred_range_cost_2(self):
+        # W_36_St_300 ↔ W_36_St_400 — differ by 100 → cost 2
+        b2t = {
+            "W_36_St_300": self._tote("W_36_St_300"),
+            "W_36_St_400": self._tote("W_36_St_400"),
+        }
+        graph = self._graph(b2t)
+        neighbours = {bk: cost for bk, cost in graph.get("W_36_St_300", [])}
+        assert "W_36_St_400" in neighbours
+        assert neighbours["W_36_St_400"] == 2
 
-    def test_non_contiguous(self):
-        # 300s and 500s differ by 200 — not adjacent
-        assert not _block_key_adjacent("W_36_St_300s_odd", "W_36_St_500s_odd")
+    def test_parallel_street_cost_3(self):
+        # W_36_St_300 ↔ W_37_St_300 — adjacent street number, same range → cost 3
+        b2t = {
+            "W_36_St_300": self._tote("W_36_St_300"),
+            "W_37_St_300": self._tote("W_37_St_300"),
+        }
+        graph = self._graph(b2t)
+        neighbours = {bk: cost for bk, cost in graph.get("W_36_St_300", [])}
+        assert "W_37_St_300" in neighbours
+        assert neighbours["W_37_St_300"] == 3
 
-    def test_different_street_number(self):
-        assert not _block_key_adjacent("W_36_St_300s_odd", "W_37_St_300s_odd")
+    def test_non_adjacent_streets_no_edge(self):
+        # W 36 St and W 57 St — 21 streets apart, no structural edge
+        b2t = {
+            "W_36_St_300": self._tote("W_36_St_300"),
+            "W_57_St_300": self._tote("W_57_St_300"),
+        }
+        graph = self._graph(b2t)
+        neighbours = {bk for bk, _ in graph.get("W_36_St_300", [])}
+        assert "W_57_St_300" not in neighbours
 
-    def test_different_direction(self):
-        assert not _block_key_adjacent("W_36_St_300s_odd", "E_36_St_300s_odd")
+    def test_non_contiguous_hundred_range_no_edge(self):
+        # W_36_St_300 and W_36_St_500 differ by 200 — no adjacency edge
+        b2t = {
+            "W_36_St_300": self._tote("W_36_St_300"),
+            "W_36_St_500": self._tote("W_36_St_500"),
+        }
+        graph = self._graph(b2t)
+        neighbours = {bk for bk, _ in graph.get("W_36_St_300", [])}
+        assert "W_36_St_500" not in neighbours
 
-    def test_different_street_type(self):
-        assert not _block_key_adjacent("W_36_St_300s_odd", "W_36_Ave_300s_odd")
+    def test_graph_is_bidirectional(self):
+        # cost-2 edge between 300 and 400 must appear in both directions
+        b2t = {
+            "W_36_St_300": self._tote("W_36_St_300"),
+            "W_36_St_400": self._tote("W_36_St_400"),
+        }
+        graph = self._graph(b2t)
+        fwd = {bk for bk, _ in graph.get("W_36_St_300", [])}
+        rev = {bk for bk, _ in graph.get("W_36_St_400", [])}
+        assert "W_36_St_400" in fwd
+        assert "W_36_St_300" in rev
 
-    def test_non_directional_contiguous(self):
-        assert _block_key_adjacent("5_Ave_400s_even", "5_Ave_500s_even")
-
-    def test_non_directional_non_contiguous(self):
-        assert not _block_key_adjacent("5_Ave_300s_even", "5_Ave_600s_even")
-
-    def test_malformed_key(self):
-        assert not _block_key_adjacent("not_a_key", "W_36_St_300s_odd")
+    def test_single_block_no_edges(self):
+        b2t = {"W_36_St_300": self._tote("W_36_St_300")}
+        graph = self._graph(b2t)
+        assert graph.get("W_36_St_300", []) == []
 
 
 # ---------------------------------------------------------------------------
@@ -149,73 +247,109 @@ class TestHaversineKm:
         assert _haversine_km(40.75, -73.99, 40.75, -73.99) == pytest.approx(0.0, abs=1e-6)
 
     def test_one_block_approx_80m(self):
-        # ~0.00072 degrees lat ≈ 80m (one short NYC block)
         d = _haversine_km(40.750, -73.990, 40.7508, -73.990)
         assert 0.05 < d < 0.15
 
-    def test_within_adjacency_threshold(self):
-        # Two points ~0.2km apart should be under _BLOCK_ADJACENCY_KM (0.25)
-        d = _haversine_km(40.750, -73.990, 40.752, -73.990)
-        assert d < 0.25
-
-    def test_beyond_adjacency_threshold(self):
-        # Points ~0.5km apart should exceed threshold
+    def test_half_km_distance(self):
         d = _haversine_km(40.750, -73.990, 40.755, -73.990)
         assert d > 0.25
 
 
 # ---------------------------------------------------------------------------
-# _resolve_effort_class
+# _resolve_effort_class — weighted package-aware scoring
+# Signature: (packages, address_workloads, block_workloads, difficulty_flags,
+#              t_factor, p_factor) -> (effort_class, source, score, coverage_pct)
 # ---------------------------------------------------------------------------
 
 class TestResolveEffortClass:
+
+    def _pkg(self, bk: str, addr: str | None = None) -> _Package:
+        return _Package(tba_number="T", bag_id="B", block_key=bk,
+                        lat=40.75, lng=-73.99, normalised_address=addr)
+
     def test_default_when_no_profile_no_flag(self):
-        effort, source = _resolve_effort_class(["W_36_St_300s_odd"], {}, {})
+        effort, source, score, cov = _resolve_effort_class(
+            [self._pkg("W_36_St_300")], {}, {}, {}
+        )
         assert effort == "standard"
         assert source == "default"
+        assert cov == 0.0
 
-    def test_profile_overrides_default(self):
-        profiles = {"W_36_St_300s_odd": "high_wait"}
-        effort, source = _resolve_effort_class(["W_36_St_300s_odd"], profiles, {})
-        assert effort == "heavy"
-        assert source == "profile"
-
-    def test_flag_overrides_profile(self):
-        profiles = {"W_36_St_300s_odd": "standard"}
-        flags = {"W_36_St_300s_odd": "heavy"}
-        effort, source = _resolve_effort_class(["W_36_St_300s_odd"], profiles, flags)
-        assert effort == "heavy"
-        assert source == "flag"
-
-    def test_moderate_flag_maps_to_heavy(self):
-        flags = {"W_36_St_300s_odd": "moderate"}
-        effort, source = _resolve_effort_class(["W_36_St_300s_odd"], {}, flags)
-        assert effort == "heavy"
-        assert source == "flag"
-
-    def test_worst_block_wins_across_multiple(self):
-        # One standard block, one heavy block — result should be heavy
-        profiles = {
-            "W_36_St_300s_odd": "standard",
-            "W_36_St_400s_odd": "high_touch",
-        }
-        effort, source = _resolve_effort_class(
-            ["W_36_St_300s_odd", "W_36_St_400s_odd"], profiles, {}
+    def test_address_profile_overrides_default(self):
+        pkg = self._pkg("W_36_St_300", addr="350 W 36 ST")
+        effort, source, score, cov = _resolve_effort_class(
+            [pkg], {"350 W 36 ST": "high_wait"}, {}, {}
         )
         assert effort == "heavy"
-        assert source == "profile"
+        assert source == "address_profile"
+        assert cov == 1.0
 
-    def test_bulk_drop_maps_to_easy(self):
-        # bulk_drop → easy. The algorithm only escalates upward from "easy",
-        # so a single easy block leaves source as "default" (no escalation occurred).
-        # The effort_class is still correct — easy is the result.
-        profiles = {"W_36_St_300s_odd": "bulk_drop"}
-        effort, source = _resolve_effort_class(["W_36_St_300s_odd"], profiles, {})
-        assert effort == "easy"
+    def test_block_workload_used_when_no_address_match(self):
+        pkg = self._pkg("W_36_St_300")
+        effort, source, score, cov = _resolve_effort_class(
+            [pkg], {}, {"W_36_St_300": "high_touch"}, {}
+        )
+        assert effort == "heavy"
+        assert source == "block_profile"
+        assert cov == 0.0
 
-    def test_empty_block_list(self):
-        effort, source = _resolve_effort_class([], {}, {})
-        assert effort == "easy"   # worst_effort initialises to "easy"
+    def test_difficulty_flag_overrides_address_profile(self):
+        pkg = self._pkg("W_36_St_300", addr="350 W 36 ST")
+        effort, source, score, cov = _resolve_effort_class(
+            [pkg],
+            {"350 W 36 ST": "standard"},
+            {},
+            {"W_36_St_300": "heavy"},
+        )
+        assert effort == "heavy"
+        assert source == "flag"
+
+    def test_moderate_flag_maps_to_heavy_effort(self):
+        pkg = self._pkg("W_36_St_300")
+        effort, source, score, cov = _resolve_effort_class(
+            [pkg], {}, {}, {"W_36_St_300": "moderate"}
+        )
+        assert effort == "heavy"
+        assert source == "flag"
+
+    def test_bulk_drop_address_maps_to_standard(self):
+        # bulk_drop: tw=0.6, pw=1.4. At default t=p=0.5: 0.6*0.5+1.4*0.5=1.0 → standard
+        pkg = self._pkg("W_36_St_300", addr="350 W 36 ST")
+        effort, source, score, cov = _resolve_effort_class(
+            [pkg], {"350 W 36 ST": "bulk_drop"}, {}, {}
+        )
+        assert effort == "standard"
+        assert cov == 1.0
+
+    def test_empty_package_list_returns_standard(self):
+        effort, source, score, cov = _resolve_effort_class([], {}, {}, {})
+        assert effort == "standard"
+        assert cov == 0.0
+
+    def test_mixed_route_score_is_weighted(self):
+        # 1 high_wait pkg + 9 bulk_drop pkgs → weighted toward bulk_drop
+        pkgs = [self._pkg("W_36_St_300", addr=f"addr{i}") for i in range(10)]
+        addr_workloads = {f"addr{i}": "bulk_drop" for i in range(9)}
+        addr_workloads["addr9"] = "high_wait"
+        effort, source, score, cov = _resolve_effort_class(
+            pkgs, addr_workloads, {}, {}
+        )
+        # 9 bulk_drop (score ~0.6+0.7=1.3*0.5+1.4*0.5=1.0) + 1 high_wait (2.0*0.5+0.8*0.5=1.4)
+        # weighted avg ≈ (9*1.0 + 1*1.4) / 10 = 1.04 → standard (< 1.3)
+        assert effort == "standard"
+        assert cov == 1.0
+
+    def test_coverage_pct_partial(self):
+        # 3 packages: 2 with address matches, 1 without
+        pkgs = [
+            self._pkg("bk1", addr="addr1"),
+            self._pkg("bk1", addr="addr2"),
+            self._pkg("bk1"),               # no normalised_address
+        ]
+        effort, source, score, cov = _resolve_effort_class(
+            pkgs, {"addr1": "standard", "addr2": "standard"}, {}, {}
+        )
+        assert cov == pytest.approx(2 / 3)
 
 
 # ---------------------------------------------------------------------------
@@ -223,44 +357,56 @@ class TestResolveEffortClass:
 # ---------------------------------------------------------------------------
 
 class TestPairOvs:
-    def _make_tote(self, bag_id: str) -> _Tote:
-        return _Tote(bag_id=bag_id)
+    def _make_tote_with_ov(self, bag_id: str, ov_types: list[str]) -> _Tote:
+        tote = _Tote(bag_id=bag_id)
+        for i, pt in enumerate(ov_types):
+            tote.packages.append(_Package(
+                tba_number=f"OV{i}", bag_id=bag_id,
+                block_key="W_36_St_300", lat=None, lng=None,
+                package_type=pt,
+            ))
+        return tote
 
     def test_ov_s_adds_one_half_slot(self):
-        totes = {"Bag1": self._make_tote("Bag1")}
-        _pair_ovs(totes, [OVInput(sort_zone="A-1", size_tier="S", paired_bag_id="Bag1")])
-        assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["S"]  # 1
-        assert totes["Bag1"].half_slot_cost == TOTE_HALF_SLOTS + 1  # 3
+        totes = {"Bag1": self._make_tote_with_ov("Bag1", ["OV_S"])}
+        _pair_ovs(totes)
+        assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["S"]
+        # An all-OV bag is a STANDALONE item — no tote base (see TestStandaloneOVCost)
+        assert totes["Bag1"].half_slot_cost == OV_HALF_SLOTS["S"]
 
     def test_ov_xl_adds_four_half_slots(self):
-        totes = {"Bag1": self._make_tote("Bag1")}
-        _pair_ovs(totes, [OVInput(sort_zone="A-1", size_tier="XL", paired_bag_id="Bag1")])
-        assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["XL"]  # 4
-        assert totes["Bag1"].half_slot_cost == TOTE_HALF_SLOTS + 4  # 6
+        totes = {"Bag1": self._make_tote_with_ov("Bag1", ["OV_XL"])}
+        _pair_ovs(totes)
+        assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["XL"]
+        # An all-OV bag is a STANDALONE item — no tote base (see TestStandaloneOVCost)
+        assert totes["Bag1"].half_slot_cost == OV_HALF_SLOTS["XL"]
 
-    def test_multiple_ovs_on_same_tote_accumulate(self):
-        totes = {"Bag1": self._make_tote("Bag1")}
-        _pair_ovs(totes, [
-            OVInput(sort_zone="A-1", size_tier="M", paired_bag_id="Bag1"),
-            OVInput(sort_zone="A-2", size_tier="L", paired_bag_id="Bag1"),
-        ])
-        assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["M"] + OV_HALF_SLOTS["L"]  # 2+3=5
+    def test_multiple_ovs_accumulate(self):
+        totes = {"Bag1": self._make_tote_with_ov("Bag1", ["OV_M", "OV_L"])}
+        _pair_ovs(totes)
+        assert totes["Bag1"].ov_half_slots == OV_HALF_SLOTS["M"] + OV_HALF_SLOTS["L"]
 
-    def test_ov_for_unknown_bag_creates_tote(self):
-        totes = {}
-        _pair_ovs(totes, [OVInput(sort_zone="A-1", size_tier="M", paired_bag_id="NewBag")])
-        assert "NewBag" in totes
-        assert totes["NewBag"].ov_half_slots == OV_HALF_SLOTS["M"]
+    def test_standard_package_not_counted_as_ov(self):
+        tote = _Tote(bag_id="Bag1")
+        tote.packages.append(_Package(
+            tba_number="T1", bag_id="Bag1",
+            block_key="W_36_St_300", lat=None, lng=None,
+            package_type="standard",
+        ))
+        _pair_ovs({"Bag1": tote})
+        assert tote.ov_half_slots == 0
 
 
 # ---------------------------------------------------------------------------
 # run_sort — end-to-end
+# Signature: (request, address_workloads, block_workloads, difficulty_flags,
+#              t_factor=0.5, p_factor=0.5)
 # ---------------------------------------------------------------------------
 
 class TestRunSort:
 
     def test_empty_input_returns_no_routes(self):
-        result = run_sort(_request([]), {}, {})
+        result = run_sort(_request([]), {}, {}, {})
         assert result.routes == []
         assert result.unassigned_misroutes == []
 
@@ -269,22 +415,16 @@ class TestRunSort:
             _pkg("TBA001", "350 W 36th St", "BagA"),
             _pkg("TBA002", "352 W 36th St", "BagA"),
         ]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert len(result.routes) == 1
         assert result.routes[0].route_number == 1
         assert set(result.routes[0].tba_numbers) == {"TBA001", "TBA002"}
 
     def test_no_address_data_in_output(self):
-        # The raw address string must not appear in the output.
-        # block_keys derived from the address ARE allowed — they're stable identifiers.
-        # We verify the original address tokens (street name "36th St", house "350")
-        # don't appear literally in any field other than block_keys.
         pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         serialised = result.model_dump_json()
-        # Street name must not appear outside block_keys
         assert "36th" not in serialised
-        # tba_numbers, tote_ids, tag_numbers must contain no address fragments
         for route in result.routes:
             for tba in route.tba_numbers:
                 assert "36th" not in tba and "St" not in tba
@@ -292,173 +432,173 @@ class TestRunSort:
                 assert "36th" not in tote_id
 
     def test_routes_numbered_from_one(self):
-        # Build enough totes for 2 routes — two well-separated locations
         pkgs_a = [_pkg(f"TBA{i:03}", "350 W 36th St", "BagA", lat=40.750, lng=-73.990) for i in range(3)]
         pkgs_b = [_pkg(f"TBA{i:03}", "800 W 57th St", "BagB", lat=40.770, lng=-73.985) for i in range(100, 103)]
-        result = run_sort(_request(pkgs_a + pkgs_b), {}, {})
+        result = run_sort(_request(pkgs_a + pkgs_b), {}, {}, {})
         route_numbers = [r.route_number for r in result.routes]
         assert route_numbers == sorted(route_numbers)
         assert route_numbers[0] == 1
 
     def test_capacity_respected_standard(self):
-        # Fill a standard route (12 half-slots = 6 totes at 2 half-slots each)
-        # Then add a 7th tote at a nearby but non-adjacent location — forces overflow
-        pkgs = []
-        for i in range(7):
-            # 7 distinct bags, all on the same block key
-            pkgs.append(_pkg(f"TBA{i:03}", f"{350 + i*2} W 36th St", f"Bag{i}", lat=40.750, lng=-73.990))
-        result = run_sort(_request(pkgs), {}, {})
-        # 7 totes × 2 half-slots = 14 > 12 capacity — must split into 2 routes
+        # 7 totes × 2 half-slots = 14 > 12 capacity — must split
+        pkgs = [_pkg(f"TBA{i:03}", f"{350 + i*2} W 36th St", f"Bag{i}", lat=40.750, lng=-73.990) for i in range(7)]
+        result = run_sort(_request(pkgs), {}, {}, {})
         total_totes = sum(len(r.tote_ids) for r in result.routes)
         assert total_totes == 7
         assert len(result.routes) >= 1
 
     def test_heavy_route_has_reduced_capacity(self):
-        flags = {"W_36_St_350s_even": "heavy"}
+        flags = {"W_36_St_300": "heavy"}
         pkgs = [_pkg(f"TBA{i:03}", "350 W 36th St", f"Bag{i}") for i in range(5)]
-        result = run_sort(_request(pkgs), {}, flags)
+        result = run_sort(_request(pkgs), {}, {}, flags)
         assert result.routes[0].effort_class == "heavy"
-        assert result.routes[0].capacity_limit == EFFORT_CAPACITY["heavy"]  # 8
+        assert result.routes[0].capacity_limit == EFFORT_CAPACITY["heavy"]
 
-    def test_easy_route_from_bulk_drop_profile(self):
-        # bulk_drop → easy. Source stays "default" because easy never escalates
-        # the worst_effort tracker — the algorithm only moves upward from easy.
-        profiles = {"W_36_St_350s_even": "bulk_drop"}
-        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
-        result = run_sort(_request(pkgs), profiles, {})
-        assert result.routes[0].effort_class == "easy"
+    def test_bulk_drop_address_profile_yields_standard_effort(self):
+        # bulk_drop at default t=p=0.5 scores 1.0 → standard (easy threshold is < 0.8)
+        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA", normalised_address="350 W 36 ST")]
+        result = run_sort(_request(pkgs), {"350 W 36 ST": "bulk_drop"}, {}, {})
+        assert result.routes[0].effort_class == "standard"
 
     def test_flag_overrides_profile_in_route(self):
-        profiles = {"W_36_St_350s_even": "standard"}
-        flags = {"W_36_St_350s_even": "heavy"}
-        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
-        result = run_sort(_request(pkgs), profiles, flags)
+        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA", normalised_address="350 W 36 ST")]
+        result = run_sort(
+            _request(pkgs),
+            {"350 W 36 ST": "standard"},
+            {},
+            {"W_36_St_300": "heavy"},
+        )
         assert result.routes[0].effort_class == "heavy"
         assert result.routes[0].workload_source == "flag"
 
-    def test_adjacent_blocks_cluster_together(self):
-        # 300s and 400s on W 36th St are structurally adjacent
+    def test_coverage_pct_zero_with_no_address_profiles(self):
+        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert result.routes[0].coverage_pct == 0.0
+
+    def test_coverage_pct_one_with_full_address_profiles(self):
+        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA", normalised_address="350 W 36 ST")]
+        result = run_sort(_request(pkgs), {"350 W 36 ST": "standard"}, {}, {})
+        assert result.routes[0].coverage_pct == 1.0
+
+    def test_effort_score_present(self):
+        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert isinstance(result.routes[0].effort_score, float)
+
+    def test_adjacent_blocks_cluster_together_via_bfs(self):
+        # 300 W 36th St → W_36_St_300, 400 W 36th St → W_36_St_400.
+        # abs(300 - 400) == 100 → cost-2 edge; BFS absorbs both when capacity allows.
         pkgs = [
-            _pkg("TBA001", "350 W 36th St", "BagA", lat=40.750, lng=-73.993),
-            _pkg("TBA002", "410 W 36th St", "BagB", lat=40.750, lng=-73.991),
+            _pkg("TBA001", "300 W 36th St", "BagA", lat=40.750, lng=-73.993),
+            _pkg("TBA002", "400 W 36th St", "BagB", lat=40.750, lng=-73.991),
         ]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert len(result.routes) == 1
         assert len(result.routes[0].tote_ids) == 2
 
-    def test_non_adjacent_blocks_split_into_separate_routes(self):
-        # W 36th St and W 57th St — different street numbers, far apart
+    def test_opposite_sides_same_block_cluster_together(self):
+        # odd and even on same range → same block key (W_36_St_300), always same route
+        pkgs = [
+            _pkg("TBA001", "351 W 36th St", "BagA", lat=40.750, lng=-73.993),
+            _pkg("TBA002", "352 W 36th St", "BagB", lat=40.750, lng=-73.993),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert len(result.routes) == 1
+        assert set(result.routes[0].tba_numbers) == {"TBA001", "TBA002"}
+
+    def test_far_apart_streets_split_into_separate_routes(self):
+        # W 36th St and W 57th St — 21 streets apart, no BFS edge
         pkgs = [
             _pkg("TBA001", "350 W 36th St", "BagA", lat=40.750, lng=-73.993),
             _pkg("TBA002", "350 W 57th St", "BagB", lat=40.769, lng=-73.984),
         ]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert len(result.routes) == 2
 
     def test_ov_cost_included_in_slot_cost(self):
-        pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
-        ovs = [OVInput(sort_zone="A-1", size_tier="XL", paired_bag_id="BagA")]
-        result = run_sort(_request(pkgs, ovs), {}, {})
-        # tote cost = 2 (tote) + 4 (XL OV) = 6 half-slots
+        pkgs = [
+            _pkg("TBA001", "350 W 36th St", "BagA"),
+            _pkg("TBA_OV", "350 W 36th St", "BagA", package_type="OV_XL"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert result.routes[0].slot_cost == TOTE_HALF_SLOTS + OV_HALF_SLOTS["XL"]
 
     def test_misroute_detected_wrong_bag(self):
-        # TBA001 address is W 36th St but bag BagB is dominated by W 57th St packages.
-        # TBA001 is flagged as a misroute. Since there's no separate tote on W 36th St,
-        # no route exists for that block_key → lands in unassigned_misroutes.
-        pkgs = [
-            _pkg("TBA001", "350 W 36th St", "BagB", lat=40.750, lng=-73.993),  # wrong bag
-            _pkg("TBA002", "350 W 57th St", "BagB", lat=40.768, lng=-73.985),
-            _pkg("TBA003", "350 W 57th St", "BagB", lat=40.768, lng=-73.985),
-        ]
-        result = run_sort(_request(pkgs), {}, {})
-        assert "TBA001" in [m.tba_number for m in result.unassigned_misroutes]
-
-    def test_misroute_has_destination_block_key(self):
-        # Same setup — the unassigned misroute must carry destination_block_key
-        # so the trainer knows which pile to move the package to at the anchor point.
         pkgs = [
             _pkg("TBA001", "350 W 36th St", "BagB", lat=40.750, lng=-73.993),
             _pkg("TBA002", "350 W 57th St", "BagB", lat=40.768, lng=-73.985),
             _pkg("TBA003", "350 W 57th St", "BagB", lat=40.768, lng=-73.985),
         ]
-        result = run_sort(_request(pkgs), {}, {})
-        misrouted = next(m for m in result.unassigned_misroutes if m.tba_number == "TBA001")
-        assert misrouted.destination_block_key == "W_36_St_350s_even"
-        assert misrouted.current_bag_id == "BagB"
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert "TBA001" in [m.tba_number for m in result.unassigned_misroutes]
+
+    def test_misroute_has_destination_block_key(self):
+        pkgs = [
+            _pkg("TBA001", "350 W 36th St", "BagB", lat=40.750, lng=-73.993),
+            _pkg("TBA002", "350 W 57th St", "BagB", lat=40.768, lng=-73.985),
+            _pkg("TBA003", "350 W 57th St", "BagB", lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        m = next(x for x in result.unassigned_misroutes if x.tba_number == "TBA001")
+        assert m.destination_block_key == "W_36_St_300"
+        assert m.current_bag_id == "BagB"
 
     def test_oversize_single_block_gets_own_route(self):
-        # One block with 8 totes (16 half-slots) exceeds standard capacity (12)
-        # The seed block must still get its own route — not silently dropped
         pkgs = [_pkg(f"TBA{i:03}", "350 W 36th St", f"Bag{i}") for i in range(8)]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         all_tba = [tba for r in result.routes for tba in r.tba_numbers]
-        assert len(all_tba) == 8  # all packages present in output
+        assert len(all_tba) == 8
 
     def test_result_truck_assignment_id_preserved(self):
         pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert result.truck_assignment_id == _TA_ID
 
     def test_result_route_date_preserved(self):
         pkgs = [_pkg("TBA001", "350 W 36th St", "BagA")]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert result.route_date == _DATE
 
     def test_slot_cost_never_exceeds_capacity_for_normal_blocks(self):
-        # All packages on the same block, one package per tote, standard capacity
         pkgs = [_pkg(f"TBA{i:03}", f"{350+i*2} W 36th St", f"Bag{i}") for i in range(6)]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         for r in result.routes:
             assert r.slot_cost <= r.capacity_limit
 
 
 # ---------------------------------------------------------------------------
-# Segment counting — odd+even on the same range = 1 segment, not 2
-# (regression tests for the segments_used overcounting fix, ADR-120)
+# BFS clustering properties
+# (replaces the old linear segment-window tests)
 # ---------------------------------------------------------------------------
 
-class TestSegmentCounting:
+class TestBFSClustering:
     """
-    The 3-segment budget must count distinct (street, hundred-block range) pairs,
-    not individual block_keys. W_36_St_350s_odd and W_36_St_350s_even are the
-    same segment — they should not consume two budget slots.
+    BFS expands from the densest seed using edge costs:
+      1 = cross-street adjacency (via first/second_cross_street)
+      2 = adjacent hundred-block range on same street
+      3 = parallel adjacent street
 
-    Before the fix, segments_used was a plain counter incremented per block.
-    Two odd/even blocks on the same range would use 2 slots instead of 1,
-    causing premature rejection of valid cross-street absorptions and producing
-    extra orphan routes.
+    Block key format: W_36_St_300 (hundred floor, no side).
+    Both sides of a block share one key — no cost-0 odd↔even edge.
+
+    These tests verify BFS grouping behaviour — replacing the old 3-segment
+    window tests coupled to the removed linear Phase 2a/2b model.
     """
 
-    def test_odd_and_even_same_range_cluster_together(self):
-        # Both sides of W 36th St 350s should land in one route, not two.
+    def test_same_hundred_block_clusters_together(self):
+        # 351 and 352 both floor to W_36_St_300 — same block key, always one route
         pkgs = [
-            _pkg("TBA001", "351 W 36th St", "BagA", lat=40.750, lng=-73.993),  # 350s odd
-            _pkg("TBA002", "352 W 36th St", "BagB", lat=40.750, lng=-73.993),  # 350s even
+            _pkg("TBA001", "351 W 36th St", "BagA", lat=40.750, lng=-73.993),
+            _pkg("TBA002", "352 W 36th St", "BagB", lat=40.750, lng=-73.993),
         ]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert len(result.routes) == 1
         assert set(result.routes[0].tba_numbers) == {"TBA001", "TBA002"}
 
-    def test_odd_even_pair_consumes_only_one_segment_of_budget(self):
-        # Odd + even on range 350s = 1 segment. Should still be able to absorb
-        # a second range (400s) since budget allows 3 segments.
-        pkgs = [
-            _pkg("TBA001", "351 W 36th St", "BagA", lat=40.750, lng=-73.993),  # 350s odd
-            _pkg("TBA002", "352 W 36th St", "BagB", lat=40.750, lng=-73.993),  # 350s even
-            _pkg("TBA003", "410 W 36th St", "BagC", lat=40.750, lng=-73.991),  # 400s even
-        ]
-        result = run_sort(_request(pkgs), {}, {})
-        # All three should be in one route — 350s_odd + 350s_even = 1 segment,
-        # 400s = 2nd segment; budget not exhausted.
-        assert len(result.routes) == 1
-        assert set(result.routes[0].tba_numbers) == {"TBA001", "TBA002", "TBA003"}
-
-    def test_three_ranges_with_odd_even_pairs_all_fit(self):
-        # 300s_odd + 300s_even = segment 1
-        # 400s_odd + 400s_even = segment 2
-        # 500s_even            = segment 3
-        # Total: 3 segments. All should land in one route.
+    def test_three_contiguous_ranges_cluster_together(self):
+        # 300s, 400s, 500s on W 36 St — adjacent hundred-block cost-2 edges
+        # 5 totes × 2 half-slots = 10 ≤ 12 capacity, all fit in one route
         pkgs = [
             _pkg("TBA001", "301 W 36th St", "Bag1", lat=40.750, lng=-73.995),
             _pkg("TBA002", "302 W 36th St", "Bag2", lat=40.750, lng=-73.995),
@@ -466,27 +606,821 @@ class TestSegmentCounting:
             _pkg("TBA004", "402 W 36th St", "Bag4", lat=40.750, lng=-73.992),
             _pkg("TBA005", "502 W 36th St", "Bag5", lat=40.750, lng=-73.989),
         ]
-        result = run_sort(_request(pkgs), {}, {})
+        result = run_sort(_request(pkgs), {}, {}, {})
         all_tbas = {tba for r in result.routes for tba in r.tba_numbers}
         assert all_tbas == {"TBA001", "TBA002", "TBA003", "TBA004", "TBA005"}
-        # Should be at most 2 routes given capacity (5 totes × 2 half-slots = 10 ≤ 12)
-        assert len(result.routes) <= 2
+        # 10 half-slots total — fits in one route
+        assert len(result.routes) == 1
 
-    def test_four_ranges_split_at_segment_boundary_not_block_count(self):
-        # 300s + 400s + 500s = 3 segments → max window; 600s must start a new route.
-        # Before the fix, 300s_odd + 300s_even + 400s = 3 blocks consumed 3 segments,
-        # causing 500s to also get a separate route — 3 routes instead of 2.
+    def test_all_packages_present_in_output_regardless_of_split(self):
+        # 8 totes on the same block — oversize, will split but all must appear
+        pkgs = [_pkg(f"TBA{i:03}", "350 W 36th St", f"Bag{i}") for i in range(8)]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        all_tba = {tba for r in result.routes for tba in r.tba_numbers}
+        assert all_tba == {f"TBA{i:03}" for i in range(8)}
+
+    def test_cross_street_adjacency_clusters_via_first_cross_street(self):
+        # W 32 St and 9 Ave intersect — if packages on W 32 St declare
+        # first_cross_street="9 AVENUE" and 9 Ave block is present,
+        # BFS should connect them at cost 1.
         pkgs = [
-            _pkg("TBA001", "301 W 36th St", "Bag1", lat=40.750, lng=-73.995),
-            _pkg("TBA002", "302 W 36th St", "Bag2", lat=40.750, lng=-73.995),
-            _pkg("TBA003", "402 W 36th St", "Bag3", lat=40.750, lng=-73.992),
-            _pkg("TBA004", "502 W 36th St", "Bag4", lat=40.750, lng=-73.989),
-            _pkg("TBA005", "602 W 36th St", "Bag5", lat=40.750, lng=-73.986),
+            _pkg("TBA001", "433 W 32nd St", "BagA",
+                 lat=40.750, lng=-73.993, first_cross_street="9 AVENUE"),
+            _pkg("TBA002", "433 W 9 Ave",   "BagB",
+                 lat=40.750, lng=-73.991),
         ]
-        result = run_sort(_request(pkgs), {}, {})
-        # All packages present in output
-        all_tbas = {tba for r in result.routes for tba in r.tba_numbers}
-        assert all_tbas == {"TBA001", "TBA002", "TBA003", "TBA004", "TBA005"}
-        # Should produce exactly 2 routes: [300s, 400s, 500s] and [600s]
-        # (not 3 routes as the broken counter would produce)
+        result = run_sort(_request(pkgs), {}, {}, {})
+        # These two blocks are cost-1 neighbours — both fit in capacity, one route
+        assert len(result.routes) == 1
+
+    def test_capacity_cap_still_splits_even_with_adjacency(self):
+        # Fill W_36_St_300 with exactly a full standard route's worth of totes,
+        # then add one cost-2-adjacent tote on W_36_St_400. Absorbing it would
+        # exceed capacity — BFS must reject it, producing 2 separate routes.
+        # Written relative to the constants so it tracks the true tote weight.
+        from app.schemas.walker_routes import EFFORT_CAPACITY
+        n_full = EFFORT_CAPACITY["standard"] // TOTE_HALF_SLOTS
+        pkgs_a = [_pkg(f"TBA{i:03}", "300 W 36th St", f"BagA{i}") for i in range(n_full)]
+        pkgs_b = [_pkg("TBA099", "400 W 36th St", "BagB0")]
+        result = run_sort(_request(pkgs_a + pkgs_b), {}, {}, {})
+        assert len(result.routes) >= 2
+        total = sum(len(r.tote_ids) for r in result.routes)
+        assert total == n_full + 1
+
+
+# ---------------------------------------------------------------------------
+# ADR-186 — block-completion building, neighborhood misroutes, seed priority,
+# tote-atomic scoring
+# ---------------------------------------------------------------------------
+
+class TestADR186BlockCompletion:
+    def test_block_completed_before_next(self):
+        # Two adjacent blocks, each small enough to co-exist in one route. The
+        # route should hold BOTH (block completion + neighborhood expansion).
+        pkgs = (
+            [_pkg(f"A{i}", "300 W 36th St", f"BagA{i}", first_cross_street="8 AVENUE") for i in range(2)]
+            + [_pkg(f"B{i}", "400 W 36th St", f"BagB{i}", first_cross_street="9 AVENUE") for i in range(2)]
+        )
+        result = run_sort(_request(pkgs), {}, {}, {})
+        # 4 totes, standard cap = 6 totes → one route holding all 4
+        assert len(result.routes) == 1
+        assert len(result.routes[0].tote_ids) == 4
+
+    def test_large_block_spills_contiguously_across_routes(self):
+        # One block with more totes than a standard route holds must span
+        # consecutive routes, each carrying part of the SAME block.
+        n_full = EFFORT_CAPACITY["standard"] // TOTE_HALF_SLOTS
+        pkgs = [_pkg(f"T{i:03}", "300 W 36th St", f"Bag{i}") for i in range(n_full + 2)]
+        result = run_sort(_request(pkgs), {}, {}, {})
         assert len(result.routes) == 2
+        # every route's dominant coverage is the same block
+        for r in result.routes:
+            assert "W_36_St_300" in r.block_keys
+        assert sum(len(r.tote_ids) for r in result.routes) == n_full + 2
+
+
+class TestADR186NeighborhoodMisroute:
+    def test_adjacent_block_package_not_flagged(self):
+        # A tote dominated by W_36_St_300 with one W_36_St_400 package (adjacent).
+        # The adjacent package must NOT be flagged (rides silently).
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagX"),
+            _pkg("D2", "310 W 36th St", "BagX"),
+            _pkg("R1", "400 W 36th St", "BagX", first_cross_street="9 AVENUE"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "R1" not in flagged
+
+    def test_distant_block_package_flagged(self):
+        # W_57 package inside a W_36-dominant bag is genuinely distant → flagged.
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagY"),
+            _pkg("D2", "310 W 36th St", "BagY"),
+            _pkg("FAR", "350 W 57th St", "BagY", lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "FAR" in flagged
+
+
+class TestADR186SeedPriority:
+    def test_cold_start_is_densest_first(self):
+        # No profile/urgency data → seeding falls back to density. The densest
+        # block seeds route #1, so its blocks lead.
+        pkgs = (
+            [_pkg(f"H{i}", "300 W 36th St", f"BagH{i}") for i in range(5)]     # dense
+            + [_pkg("L1", "300 W 50th St", "BagL1", lat=40.76, lng=-73.98)]    # sparse, far
+        )
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert "W_36_St_300" in result.routes[0].block_keys
+
+
+class TestADR186NoInfiniteLoop:
+    def test_ov_near_full_route_terminates_and_spills(self):
+        # An OV_S tote costs 3 half-slots (2 + 1), making fits NON-exact:
+        # capacity 12 → OV tote (3) + 4 normal (8) = 11; the next tote (2)
+        # doesn't fit but 11 < 12. The original block-completion loop asked for
+        # the nearest neighbor, got the SAME block back, and spun forever
+        # (144% CPU in prod). Must terminate and spill the rest to route 2.
+        pkgs = [_pkg("OV1", "300 W 36th St", "BagOV", package_type="OV_S")]
+        pkgs += [_pkg(f"N{i}", "300 W 36th St", f"BagN{i}") for i in range(6)]
+        result = run_sort(_request(pkgs), {}, {}, {})   # hangs forever if regressed
+        assert len(result.routes) >= 2
+        total_totes = sum(len(r.tote_ids) for r in result.routes)
+        assert total_totes == 7
+        # every route respects its capacity lock
+        for r in result.routes:
+            assert r.slot_cost <= r.capacity_limit
+
+
+class TestStandaloneOVCost:
+    def test_standalone_ov_bag_costs_only_ov_half_slots(self):
+        # An OV with its own bag_id is a loose item, not a tote: no +2 base.
+        pkgs = [_pkg("OV1", "300 W 36th St", "OV0001", package_type="OV_L")]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert result.routes[0].slot_cost == OV_HALF_SLOTS["L"]   # 3, not 5
+
+    def test_five_totes_plus_two_small_ovs_fill_one_route(self):
+        # 5 totes (2 each) + 2 standalone OV_S (1 each) = 12 = exactly one
+        # standard route — the operational definition of a full cart.
+        pkgs = [_pkg(f"N{i}", "300 W 36th St", f"Bag{i}") for i in range(5)]
+        pkgs += [_pkg(f"OV{i}", "300 W 36th St", f"OV000{i}", package_type="OV_S") for i in range(2)]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert len(result.routes) == 1
+        assert result.routes[0].slot_cost == 12
+        assert len(result.routes[0].tote_ids) == 7
+
+    def test_in_tote_ov_still_adds_to_tote_base(self):
+        # A bag with a normal package AND an OV is a real tote: 2 + OV extras.
+        pkgs = [
+            _pkg("N1", "300 W 36th St", "BagA"),
+            _pkg("OVX", "300 W 36th St", "BagA", package_type="OV_XL"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        assert result.routes[0].slot_cost == TOTE_HALF_SLOTS + OV_HALF_SLOTS["XL"]
+
+
+# ---------------------------------------------------------------------------
+# ADR-194 — structured stops + cross-street range gate
+# ---------------------------------------------------------------------------
+
+class TestStopsOutput:
+    def test_stops_grouped_by_address_and_sorted(self):
+        # Two addresses on the 300 block, one on the 400 block — stops must be
+        # one entry per unique address, blocks ascending, house numbers
+        # ascending within a block, TBAs grouped under their address.
+        pkgs = [
+            _pkg("T1", "310 W 36th St", "Bag1", normalised_address="310 WEST 36 STREET"),
+            _pkg("T2", "310 W 36th St", "Bag1", normalised_address="310 WEST 36 STREET"),
+            _pkg("T3", "302 W 36th St", "Bag1", normalised_address="302 WEST 36 STREET"),
+            _pkg("T4", "410 W 36th St", "Bag2", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE"),
+            _pkg("T5", "410 W 36th St", "Bag2", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE"),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        all_stops = [s for r in result.routes for s in r.stops]
+        assert [(s.block_key, s.address) for s in all_stops] == [
+            ("W_36_St_300", "302 WEST 36 STREET"),
+            ("W_36_St_300", "310 WEST 36 STREET"),
+            ("W_36_St_400", "410 WEST 36 STREET"),
+        ]
+        by_addr = {s.address: s.tba_numbers for s in all_stops}
+        assert by_addr["310 WEST 36 STREET"] == ["T1", "T2"]
+        assert by_addr["410 WEST 36 STREET"] == ["T4", "T5"]
+
+    def test_stops_exclude_flagged_riders_but_tba_numbers_keep_them(self):
+        # The W_57 rider is flagged, so it is NOT a stop — but it still rides
+        # physically in the tote, so it stays in tba_numbers until resolved.
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagY", normalised_address="300 WEST 36 STREET"),
+            _pkg("D2", "310 W 36th St", "BagY", normalised_address="310 WEST 36 STREET"),
+            _pkg("FAR", "350 W 57th St", "BagY", normalised_address="350 WEST 57 STREET",
+                 lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        route = result.routes[0]
+        assert "FAR" in route.tba_numbers
+        assert all("FAR" not in s.tba_numbers for s in route.stops)
+        assert all(s.address != "350 WEST 57 STREET" for s in route.stops)
+
+    def test_flagged_rider_carries_normalised_address(self):
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagY", normalised_address="300 WEST 36 STREET"),
+            _pkg("D2", "310 W 36th St", "BagY", normalised_address="310 WEST 36 STREET"),
+            _pkg("FAR", "350 W 57th St", "BagY", normalised_address="350 WEST 57 STREET",
+                 lat=40.768, lng=-73.985),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flags = [m for r in result.routes for m in r.misrouted_packages]
+        flags += list(result.unassigned_misroutes)
+        far = next(m for m in flags if m.tba_number == "FAR")
+        assert far.normalised_address == "350 WEST 57 STREET"
+
+    def test_package_without_address_is_not_a_stop_but_stays_in_tbas(self):
+        pkgs = [
+            _pkg("D1", "300 W 36th St", "BagZ", normalised_address="300 WEST 36 STREET"),
+            _pkg("NOADDR", "310 W 36th St", "BagZ", normalised_address=None),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        route = result.routes[0]
+        assert "NOADDR" in route.tba_numbers
+        assert all("NOADDR" not in s.tba_numbers for s in route.stops)
+
+
+class TestCrossStreetRangeGate:
+    """Detection by physical proximity (ADR-196 Model E supersedes the ADR-194
+    block_key cross-street gate for MISROUTE DETECTION; the gate itself still
+    runs in _build_adjacency_graph for CLUSTERING). A far-avenue rider is flagged
+    (no shared node, far from dominant); an adjacent-avenue rider rides silently.
+    These packages carry no segment_id, so they exercise the coordinate backstop."""
+
+    # W 36th St @ 9th Ave ≈ (40.7544, -73.9931); 9th Ave 800-range (W 53rd)
+    # ≈ (40.7645, -73.9870) — ~1.2 km apart.
+    _W36 = (40.7544, -73.9931)
+    _AVE_FAR = (40.7645, -73.9870)
+    _AVE_NEAR = (40.7553, -73.9925)   # 9th Ave 500-range (W 38th) — ~0.11 km
+
+    def test_far_avenue_rider_flagged_despite_shared_avenue(self):
+        pkgs = [
+            _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("D2", "410 W 36th St", "BagA", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("RIDER", "810 9th Ave", "BagA", normalised_address="810 9 AVENUE",
+                 lat=self._AVE_FAR[0], lng=self._AVE_FAR[1]),
+            # The far avenue range is a dominant block of its own tote — the
+            # exact configuration that used to legitimize the rider.
+            _pkg("F1", "800 9th Ave", "BagB", normalised_address="800 9 AVENUE",
+                 lat=self._AVE_FAR[0], lng=self._AVE_FAR[1]),
+            _pkg("F2", "820 9th Ave", "BagB", normalised_address="820 9 AVENUE",
+                 lat=self._AVE_FAR[0], lng=self._AVE_FAR[1]),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "RIDER" in flagged
+
+    def test_adjacent_avenue_rider_not_flagged(self):
+        pkgs = [
+            _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("D2", "410 W 36th St", "BagA", normalised_address="410 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=self._W36[0], lng=self._W36[1]),
+            _pkg("NEAR", "510 9th Ave", "BagA", normalised_address="510 9 AVENUE",
+                 lat=self._AVE_NEAR[0], lng=self._AVE_NEAR[1]),
+            _pkg("N1", "500 9th Ave", "BagC", normalised_address="500 9 AVENUE",
+                 lat=self._AVE_NEAR[0], lng=self._AVE_NEAR[1]),
+            _pkg("N2", "520 9th Ave", "BagC", normalised_address="520 9 AVENUE",
+                 lat=self._AVE_NEAR[0], lng=self._AVE_NEAR[1]),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "NEAR" not in flagged
+
+    def test_no_geometry_at_all_flags_conservatively(self):
+        # A package with NEITHER coordinates NOR LION data cannot be proven to
+        # belong to its route, so Model E flags it (fail-safe). NOTE: this never
+        # occurs in real enriched data — 100% of GeoClient rows carry lat/lng
+        # (0.9% lack only segment_id, which the coordinate backstop covers). The
+        # old block_key cross-street edge that silenced it is retired (ADR-196).
+        pkgs = [
+            _pkg("D1", "400 W 36th St", "BagA", normalised_address="400 WEST 36 STREET",
+                 first_cross_street="9 AVENUE", lat=None, lng=None),
+            _pkg("NOGEO", "810 9th Ave", "BagA", normalised_address="810 9 AVENUE",
+                 lat=None, lng=None),
+        ]
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = [m.tba_number for r in result.routes for m in r.misrouted_packages]
+        flagged += [m.tba_number for m in result.unassigned_misroutes]
+        assert "NOGEO" in flagged
+
+
+# ---------------------------------------------------------------------------
+# ADR-195 F3 — geographic fallback for misroute suggestions (thin/diagonal blocks)
+# ---------------------------------------------------------------------------
+
+class TestMisrouteGeographicFallback:
+    """Block-key adjacency is a discrete grid and misses 'diagonal' proximity
+    (different street AND different hundred). A package physically near another
+    route but not block-key-adjacent to it used to dead-end as 'no covering
+    route'. The centroid fallback should suggest the nearest route within
+    _MISROUTE_SUGGEST_MAX_KM, while a genuinely distant outlier still dead-ends."""
+
+    def test_near_no_node_package_rides_silently_via_backstop(self):
+        # A thin W_32 rider ~112 m from its route's dominant W_31 stops, with NO
+        # LION data (segment_id=None). Under Model E it rides silently via the
+        # coordinate backstop — a package one block from its route is NOT a
+        # misroute. (This case dead-ended under the old block_key detector.)
+        pkgs = []
+        for i in range(12):
+            pkgs.append(_pkg(f"A{i}", f"3{i}0 W 31st St", "BagA", lat=40.7503, lng=-73.9925))
+        for i in range(12):
+            pkgs.append(_pkg(f"C{i}", f"2{i}0 W 33rd St", "BagC", lat=40.7519, lng=-73.9910))
+        pkgs.append(_pkg("THIN", "110 W 32nd St", "BagA", lat=40.7511, lng=-73.9917))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = {m.tba_number for r in result.routes for m in r.misrouted_packages}
+        flagged |= {m.tba_number for m in result.unassigned_misroutes}
+        assert "THIN" not in flagged, "a package ~112 m from its route should ride silently"
+
+    def test_shared_lion_node_rides_silently(self):
+        # A rider whose segment shares a LION node with the route's carried
+        # segments rides silently — the authoritative adjacency, even when the
+        # coordinate backstop would be borderline.
+        pkgs = []
+        for i in range(12):
+            pkgs.append(_pkg(f"A{i}", f"3{i}0 W 31st St", "BagA", lat=40.7503, lng=-73.9925,
+                             segment_id="SEG_A", from_lion_node_id="N1", to_lion_node_id="N2"))
+        # rider on a segment that shares node N2 with the route's SEG_A
+        pkgs.append(_pkg("SHARED", "110 W 32nd St", "BagA", lat=40.7560, lng=-73.9800,
+                         segment_id="SEG_B", from_lion_node_id="N2", to_lion_node_id="N3"))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = {m.tba_number for r in result.routes for m in r.misrouted_packages}
+        flagged |= {m.tba_number for m in result.unassigned_misroutes}
+        assert "SHARED" not in flagged, "shared LION node = adjacent = rides silently"
+
+    def test_distant_outlier_flagged_and_dead_ends(self):
+        # A W_57 rider ~2 km from the only (W_36) route: no shared node, backstop
+        # fails (far from dominant), and beyond _MISROUTE_SUGGEST_MAX_KM → flagged,
+        # captain review (no suggestion).
+        pkgs = [_pkg(f"D{i}", f"3{i}0 W 36th St", "BagX", lat=40.7501, lng=-73.9886,
+                     segment_id="SEG_D", from_lion_node_id="D1", to_lion_node_id="D2")
+                for i in range(12)]
+        pkgs.append(_pkg("FAR", "450 W 57th St", "BagX", lat=40.7680, lng=-73.9850,
+                         segment_id="SEG_F", from_lion_node_id="F1", to_lion_node_id="F2"))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        orphan_tbas = {m.tba_number for m in result.unassigned_misroutes}
+        assert "FAR" in orphan_tbas, "distant outlier must flag and dead-end to captain review"
+
+    def test_genuine_misroute_gets_nearest_route_suggestion(self):
+        # Two separate routes; a package physically in route 2's territory but
+        # riding in route 1's tote (no shared node, outside backstop of route 1's
+        # dominant) is flagged AND suggested to route 2 (within SUGGEST cap).
+        from app.services.route_sort import _haversine_km, _MISROUTE_SUGGEST_MAX_KM
+        pkgs = []
+        for i in range(12):
+            pkgs.append(_pkg(f"A{i}", f"3{i}0 W 23rd St", "BagA", lat=40.7440, lng=-73.9980,
+                             segment_id="SEG_A", from_lion_node_id="A1", to_lion_node_id="A2"))
+        for i in range(12):
+            pkgs.append(_pkg(f"B{i}", f"3{i}0 W 50th St", "BagB", lat=40.7620, lng=-73.9900,
+                             segment_id="SEG_B", from_lion_node_id="B1", to_lion_node_id="B2"))
+        # rider physically at W_50 (~route 2) but riding in BagA (route 1)
+        pkgs.append(_pkg("STRAY", "355 W 50th St", "BagA", lat=40.7620, lng=-73.9900,
+                         segment_id="SEG_S", from_lion_node_id="S1", to_lion_node_id="S2"))
+        result = run_sort(_request(pkgs), {}, {}, {})
+        flagged = {m.tba_number: m.suggested_route_number
+                   for r in result.routes for m in r.misrouted_packages}
+        assert flagged.get("STRAY") is not None, "genuine misroute should get a suggestion"
+        dest = next(r for r in result.routes if r.route_number == flagged["STRAY"])
+        dpk = [p for p in pkgs if p.tba_number in dest.tba_numbers and p.lat is not None]
+        nearest = min(_haversine_km(40.7620, -73.9900, p.lat, p.lng) for p in dpk)
+        assert nearest <= _MISROUTE_SUGGEST_MAX_KM
+
+
+# ---------------------------------------------------------------------------
+# ADR-195 F4 — time-urgency seeding (ADR-186 W_TIME term, now fed data)
+# ---------------------------------------------------------------------------
+
+class TestTimeUrgencySeeding:
+    """The W_TIME seed-priority term was implemented in ADR-186 but never fed
+    data (commit-sort passed no block_time_urgency). These pin the behavior now
+    that it is wired: a time-critical block seeds an earlier route than a denser
+    block with no time pressure, and empty urgency preserves densest-first."""
+
+    def _dense_plus_urgent(self):
+        pkgs = []
+        for i in range(20):
+            pkgs.append(_pkg(f"DENSE{i}", f"3{i:02d} W 50th St", f"BAGD{i//10}",
+                             lat=40.7613, lng=-73.9906))
+        for i in range(8):
+            pkgs.append(_pkg(f"URG{i}", f"1{i:02d} W 23rd St", "BAGU",
+                             lat=40.7464, lng=-73.9980))
+        return _request(pkgs)
+
+    def test_urgent_block_seeds_before_denser_block(self):
+        req = self._dense_plus_urgent()
+        res = run_sort(req, {}, {}, {}, block_time_urgency={"W_23_St_100": 1.0})
+        assert res.routes[0].block_keys == ["W_23_St_100"], \
+            "an imminent-cutoff block must seed route #1 over a denser no-pressure block"
+
+    def test_no_urgency_is_densest_first(self):
+        req = self._dense_plus_urgent()
+        res = run_sort(req, {}, {}, {})   # no block_time_urgency → cold start
+        assert res.routes[0].block_keys == ["W_50_St_300"], \
+            "without urgency, the densest block seeds first (unchanged cold-start order)"
+
+
+# ---------------------------------------------------------------------------
+# ADR-197 Phase 1 (F5) — coordinate-based consolidation of sparse routes
+# ---------------------------------------------------------------------------
+
+class TestF5Consolidation:
+    """F5 consolidates thin blocks into viable routes up to a load floor when
+    crew_size is passed (crew_size=None = baseline).
+
+    ADR-234: consolidation follows the ADJACENCY GRAPH (within F5_MAX_HOPS street
+    steps), NOT straight-line centroid distance. The original ADR-197 mechanism
+    merged anything within 1.2 km, which put blocks five Manhattan streets apart on
+    one walking route (reported from the field). Blocks with no hop-path are now
+    left unmerged — the honest outcome; orphan handling is a separate concern."""
+
+    def _sparse_zone(self):
+        # 4 thin blocks, 1 tote each, PAIRWISE NON-ADJACENT by block-key (streets
+        # >1 apart AND different hundreds → no cost-2/3 edge; no cross-street data
+        # → no cost-1 edge) but clustered within ~1km. The graph has ZERO edges, so
+        # there is no hop-path between any pair: ADR-234 must NOT merge these, even
+        # though the old centroid radius did.
+        specs = [
+            ("S0", "10 W 20th St",  40.7000, -74.0000),
+            ("S1", "250 W 23rd St", 40.7030, -73.9980),
+            ("S2", "410 W 27th St", 40.7060, -73.9965),
+            ("S3", "120 W 31st St", 40.7090, -73.9950),
+        ]
+        return [_pkg(t, a, f"BAG{i}", lat=lat, lng=lng) for i, (t, a, lat, lng) in enumerate(specs)]
+
+    def _hop_reachable_zone(self):
+        # Thin blocks that ARE adjacency-reachable: contiguous hundred-blocks on
+        # ONE street (cost-2 edges chain 100→200→300→400), so a walker can cover
+        # them as a continuous walk. These SHOULD consolidate.
+        specs = [
+            ("H0", "110 W 36th St", 40.7501, -73.9886),
+            ("H1", "210 W 36th St", 40.7503, -73.9902),
+            ("H2", "310 W 36th St", 40.7505, -73.9918),
+            ("H3", "410 W 36th St", 40.7507, -73.9934),
+        ]
+        return [_pkg(t, a, f"BAGH{i}", lat=lat, lng=lng) for i, (t, a, lat, lng) in enumerate(specs)]
+
+    def test_baseline_fragments_sparse_without_crew(self):
+        # crew_size=None → no consolidation → each thin block is its own route.
+        res = run_sort(_request(self._sparse_zone()), {}, {}, {})
+        assert len(res.routes) == 4
+        assert res.routes_built is None and res.crew_size is None
+
+    def test_non_adjacent_blocks_are_not_merged(self):
+        # ADR-234: no hop-path between these blocks (graph has zero edges), so even
+        # with crew they must stay separate. Previously the 1.2 km centroid radius
+        # merged them — that produced the unwalkable routes reported from the field.
+        res = run_sort(_request(self._sparse_zone()), {}, {}, {}, crew_size=8)
+        assert len(res.routes) == 4, (
+            "blocks with no adjacency hop-path must not be merged (ADR-234)"
+        )
+        for r in res.routes:
+            assert len(r.block_keys) == 1
+
+    def test_consolidates_hop_reachable_blocks_with_crew(self):
+        # The case F5 exists for, done correctly: contiguous hundred-blocks on one
+        # street are hop-reachable, so they consolidate into fewer routes.
+        res = run_sort(_request(self._hop_reachable_zone()), {}, {}, {}, crew_size=8)
+        assert len(res.routes) < 4, "hop-reachable thin blocks should consolidate"
+        assert res.crew_size == 8
+        assert res.routes_built == len(res.routes)
+
+    def test_surplus_signal(self):
+        # Hop-reachable thin blocks consolidate to fewer routes than crew →
+        # surplus reported (uses the reachable fixture; the scattered one no
+        # longer consolidates by design).
+        res = run_sort(_request(self._hop_reachable_zone()), {}, {}, {}, crew_size=8)
+        surplus = res.crew_size - res.routes_built
+        assert surplus > 0, "fewer routes than crew → walkers can be released"
+
+    def test_regression_five_streets_apart_never_one_route(self):
+        # The reported bug: W 50 St + W 55 St 400 + W 55 St 600 on one route.
+        # No hop-path joins them, so no route may contain blocks from both streets.
+        pkgs = [
+            _pkg("R0", "695 W 50th St", "BAGR0", lat=40.7615, lng=-73.9882),
+            _pkg("R1", "402 W 55th St", "BAGR1", lat=40.7660, lng=-73.9820),
+            _pkg("R2", "659 W 55th St", "BAGR2", lat=40.7660, lng=-73.9882),
+        ]
+        res = run_sort(_request(pkgs), {}, {}, {}, crew_size=6)
+        for r in res.routes:
+            streets = {bk.split("_")[1] for bk in r.block_keys}
+            assert len(streets) == 1, (
+                f"route mixes streets {streets} — blocks are not hop-connected"
+            )
+            # and never both non-adjacent hundreds of W 55th
+            hundreds = {bk.split("_")[3] for bk in r.block_keys if bk.split("_")[1] == "55"}
+            assert not {"400", "600"}.issubset(hundreds), (
+                "W 55th 400 and 600 blocks merged with no 500 block between them"
+            )
+
+    def test_walk_radius_respected(self):
+        # Two thin blocks FAR apart (>1.2km) must NOT merge even with crew.
+        pkgs = [
+            _pkg("A", "10 W 20th St", "BAGA", lat=40.700, lng=-74.000),
+            _pkg("B", "10 W 90th St", "BAGB", lat=40.780, lng=-73.960),  # ~10km away
+        ]
+        res = run_sort(_request(pkgs), {}, {}, {}, crew_size=4)
+        assert len(res.routes) == 2, "blocks beyond the walk radius must not consolidate"
+
+    def test_dense_unchanged_by_crew_size(self):
+        # Dense adjacent blocks (graph HAS edges) route identically with/without
+        # crew_size — the coord fallback never fires.
+        pkgs = []
+        for h in (100, 200, 300):
+            for i in range(8):
+                pkgs.append(_pkg(f"D{h}_{i}", f"{h+i} W 36th St", f"BAG{h}", lat=40.7501, lng=-73.9886))
+        base = run_sort(_request(pkgs), {}, {}, {})
+        withcrew = run_sort(_request(pkgs), {}, {}, {}, crew_size=5)
+        assert [sorted(r.block_keys) for r in base.routes] == [sorted(r.block_keys) for r in withcrew.routes]
+
+
+# ── ADR-214: out-of-zone packages become removals, not captain-review misroutes ──
+
+class TestOutOfZoneRemovals:
+    # A small square boundary around the in-zone cluster (~40.750, -73.990).
+    _BOUNDARY = [
+        {"lat": 40.740, "lng": -74.000},
+        {"lat": 40.760, "lng": -74.000},
+        {"lat": 40.760, "lng": -73.980},
+        {"lat": 40.740, "lng": -73.980},
+    ]
+
+    def _in_zone_pkgs(self):
+        # A cohesive in-zone route on W 36th St.
+        return [_pkg(f"IZ{i}", f"{400+i} W 36th St", "BAGZ", lat=40.7501, lng=-73.9886)
+                for i in range(6)]
+
+    def test_out_of_zone_package_becomes_removal(self):
+        pkgs = self._in_zone_pkgs()
+        # An Astoria package riding in the same bag — far outside the boundary.
+        pkgs.append(_pkg("OOZ1", "31-15 Steinway St", "BAGZ", lat=40.770, lng=-73.920))
+        result = run_sort(_request(pkgs), {}, {}, {}, boundary=self._BOUNDARY)
+        ooz_tbas = {m.tba_number for m in result.out_of_zone_removals}
+        assert "OOZ1" in ooz_tbas
+        # It must NOT be a captain-review misroute anymore.
+        assert "OOZ1" not in {m.tba_number for m in result.unassigned_misroutes}
+
+    def test_no_boundary_keeps_old_behaviour(self):
+        pkgs = self._in_zone_pkgs()
+        pkgs.append(_pkg("FAR1", "31-15 Steinway St", "BAGZ", lat=40.770, lng=-73.920))
+        result = run_sort(_request(pkgs), {}, {}, {})   # boundary=None
+        # With no boundary, nothing is classified out-of-zone.
+        assert result.out_of_zone_removals == []
+
+    def test_in_zone_outlier_stays_misroute_not_removal(self):
+        # A package inside the boundary but with no covering route stays a
+        # (captain-review) misroute — it is NOT out of zone.
+        pkgs = self._in_zone_pkgs()
+        # Far from W 36th but still inside the square (e.g. near the SE corner).
+        pkgs.append(_pkg("INZ_OUT", "100 W 24th St", "BAGZ", lat=40.7415, lng=-73.9815))
+        result = run_sort(_request(pkgs), {}, {}, {}, boundary=self._BOUNDARY)
+        assert "INZ_OUT" not in {m.tba_number for m in result.out_of_zone_removals}
+
+
+# ---------------------------------------------------------------------------
+# _nearest_block_within_hops — F5 consolidation follows the adjacency graph
+# (ADR-234; replaces the old straight-line-distance fallback)
+# ---------------------------------------------------------------------------
+
+class TestF5HopBoundedConsolidation:
+    """The F5 fallback may only extend a thin route to a block reachable within
+    F5_MAX_HOPS real street steps. The old centroid version merged blocks five
+    Manhattan streets apart into one walking route (the reported bug)."""
+
+    def _tote(self, bk: str) -> list[_Tote]:
+        t = _Tote(bag_id=bk)
+        t.packages.append(_Package(
+            tba_number=f"T_{bk}", bag_id=bk, block_key=bk, lat=40.76, lng=-73.99,
+        ))
+        return [t]
+
+    def _graph(self, bks: list[str]) -> dict:
+        return _build_adjacency_graph({bk: self._tote(bk) for bk in bks})
+
+    # Real Manhattan geometry: a cross-town hundred-block is ~0.26 km, so blocks
+    # on W 55th step westward at that spacing. All pairs here sit inside the OLD
+    # 1.2 km radius (400->600 is 0.52 km), so if these tests pass it is the HOP
+    # BOUND doing the work, not distance.
+    _CENTROIDS = {
+        "W_50_St_600": (40.7615, -73.9882),   # 5 streets south of W 55th
+        "W_55_St_400": (40.7660, -73.9820),
+        "W_55_St_500": (40.7660, -73.9851),
+        "W_55_St_600": (40.7660, -73.9882),
+        "W_55_St_700": (40.7660, -73.9913),
+    }
+
+    def test_two_hop_reachable_block_merges(self):
+        # 400 -> 500 -> 600 along W 55th: a contiguous walk, 2 hops. Allowed.
+        bks = ["W_55_St_400", "W_55_St_500", "W_55_St_600"]
+        graph = self._graph(bks)
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_600"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=0.8,
+        )
+        assert got == "W_55_St_600"
+
+    def test_gap_block_absent_is_unreachable(self):
+        # The reported case: 400 and 600 with NO 500 block in the manifest. There
+        # is no node to walk through, so it must be refused (was merged at 0.65 km).
+        graph = self._graph(["W_55_St_400", "W_55_St_600"])
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_600"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=0.8,
+        )
+        assert got is None
+
+    def test_five_streets_apart_never_merges(self):
+        # W 50 St -> W 55 St is 5 streets: no path at any sane hop bound.
+        graph = self._graph(["W_50_St_600", "W_55_St_400"])
+        got = _nearest_block_within_hops(
+            {"W_50_St_600"}, {"W_55_St_400"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=0.8,
+        )
+        assert got is None
+
+    def test_hop_bound_is_respected(self):
+        # 400 -> 500 -> 600 -> 700 is 3 hops from 400; max_hops=2 must refuse 700.
+        # max_km is generous (1.0 > the 0.78 km 3-hop span) so the HOP bound, not
+        # distance, is what refuses it.
+        bks = ["W_55_St_400", "W_55_St_500", "W_55_St_600", "W_55_St_700"]
+        graph = self._graph(bks)
+        assert _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_700"}, graph, self._CENTROIDS,
+            max_hops=2, max_km=1.0,
+        ) is None
+        # ...but 3 hops reaches it
+        assert _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_700"}, graph, self._CENTROIDS,
+            max_hops=3, max_km=1.0,
+        ) == "W_55_St_700"
+
+    def test_prefers_fewest_hops(self):
+        # Both 500 (1 hop) and 600 (2 hops) unassigned → the nearer one wins.
+        bks = ["W_55_St_400", "W_55_St_500", "W_55_St_600"]
+        graph = self._graph(bks)
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_500", "W_55_St_600"}, graph,
+            self._CENTROIDS, max_hops=2, max_km=0.8,
+        )
+        assert got == "W_55_St_500"
+
+    def test_km_cap_rejects_absurdly_far_hop_neighbour(self):
+        # Hop-reachable but centroid far beyond the cap → refused (backstop).
+        bks = ["W_55_St_400", "W_55_St_500"]
+        graph = self._graph(bks)
+        cents = {"W_55_St_400": (40.7655, -73.9835), "W_55_St_500": (41.20, -73.60)}
+        got = _nearest_block_within_hops(
+            {"W_55_St_400"}, {"W_55_St_500"}, graph, cents, max_hops=2, max_km=0.8,
+        )
+        assert got is None
+
+    def test_no_candidates_returns_none(self):
+        graph = self._graph(["W_55_St_400"])
+        assert _nearest_block_within_hops(
+            {"W_55_St_400"}, set(), graph, self._CENTROIDS, max_hops=2, max_km=0.8,
+        ) is None
+
+
+# ---------------------------------------------------------------------------
+# _order_stops — block-coherent nearest-neighbour stop ordering (ADR-239)
+# ---------------------------------------------------------------------------
+
+class TestGeometricStopOrdering:
+    """Stops are ordered by geometry, not by house number, but each block's stops
+    stay contiguous. Measured on a clean 4,000-package manifest: 43.96 -> 38.94 km
+    (-11.4%) with ZERO block re-visits. Free nearest-neighbour is 1.7 points better
+    but leaves a block and comes back, which reads like a missed stop to a walker."""
+
+    def _pkg(self, bk, addr, lat, lng, tba=None):
+        return _Package(tba_number=tba or f"T_{addr}", bag_id="BAG1", block_key=bk,
+                        lat=lat, lng=lng, normalised_address=addr)
+
+    def test_keeps_each_block_contiguous(self):
+        # Two blocks interleaved by house number; ordering must not alternate.
+        pkgs = [
+            self._pkg("W_33_St_600", "601 W 33 ST", 40.7550, -73.9990),
+            self._pkg("W_34_St_600", "602 W 34 ST", 40.7560, -73.9995),
+            self._pkg("W_33_St_600", "603 W 33 ST", 40.7551, -73.9991),
+            self._pkg("W_34_St_600", "604 W 34 ST", 40.7561, -73.9996),
+        ]
+        stops = _build_stops(pkgs)
+        keys = [s.block_key for s in stops]
+        # every block appears as one contiguous run
+        runs = [k for i, k in enumerate(keys) if i == 0 or keys[i - 1] != k]
+        assert len(runs) == len(set(runs)), f"block revisited: {keys}"
+
+    def test_no_stop_is_lost_or_duplicated(self):
+        pkgs = [self._pkg("W_23_St_100", f"{100+i} W 23 ST", 40.74 + i / 1000, -73.99)
+                for i in range(8)]
+        stops = _build_stops(pkgs)
+        assert len(stops) == 8
+        assert len({s.address for s in stops}) == 8
+
+    def test_deterministic(self):
+        pkgs = [self._pkg("W_23_St_100", f"{100+i} W 23 ST", 40.74 + i / 1000, -73.99)
+                for i in range(6)]
+        a = [(s.block_key, s.address) for s in _build_stops(pkgs)]
+        b = [(s.block_key, s.address) for s in _build_stops(pkgs)]
+        assert a == b
+
+    def test_coordless_stops_keep_lexical_order_and_are_not_dropped(self):
+        # No coordinates anywhere -> must reproduce today's house-number ordering.
+        pkgs = [
+            _Package(tba_number="T3", bag_id="B", block_key="W_23_St_100",
+                     lat=None, lng=None, normalised_address="300 W 23 ST"),
+            _Package(tba_number="T1", bag_id="B", block_key="W_23_St_100",
+                     lat=None, lng=None, normalised_address="100 W 23 ST"),
+            _Package(tba_number="T2", bag_id="B", block_key="W_23_St_100",
+                     lat=None, lng=None, normalised_address="200 W 23 ST"),
+        ]
+        stops = _build_stops(pkgs)
+        assert [s.address for s in stops] == ["100 W 23 ST", "200 W 23 ST", "300 W 23 ST"]
+
+    def test_geometric_order_beats_house_number_on_a_detour(self):
+        # House numbers ascend but geography does not: 200 is far, 300 is next door
+        # to 100. Geometric ordering must not walk 100 -> 200 -> 300.
+        pkgs = [
+            self._pkg("W_23_St_100", "100 W 23 ST", 40.7400, -73.9900),
+            self._pkg("W_23_St_100", "200 W 23 ST", 40.7480, -73.9900),   # far north
+            self._pkg("W_23_St_100", "300 W 23 ST", 40.7401, -73.9901),   # beside 100
+        ]
+        order = [s.address for s in _build_stops(pkgs)]
+        assert order[1] == "300 W 23 ST", f"expected the near stop second, got {order}"
+
+
+class TestCutoffFirstOrdering:
+    """ADR-240 — a missed cutoff is a FAILED delivery, so a stop whose deadline is
+    inside the urgency window jumps the queue. But the queue is DYNAMIC, not a static
+    two-tier split: only stops urgent *right now* are promoted. When the urgent set is
+    empty the walker proceeds by proximity from where they are standing, and a stop
+    that becomes urgent as the simulated clock advances jumps the line at that moment.
+
+    The static version (promote every in-window stop up front) cost +63.7% walking at
+    5% cutoff density; this dynamic form costs +18.7% with zero missed deadlines."""
+
+    BASE = datetime(2026, 7, 27, 9, 0, 0)
+
+    def _pkg(self, bk, addr, lat, lng, tba=None):
+        return _Package(tba_number=tba or f"T_{addr}", bag_id="BAG1", block_key=bk,
+                        lat=lat, lng=lng, normalised_address=addr)
+
+    def _three(self):
+        # Two stops adjacent to each other, one ~900 m north (a real detour).
+        return [
+            self._pkg("W_23_St_100", "100 W 23 ST", 40.7400, -73.9900),
+            self._pkg("W_23_St_100", "102 W 23 ST", 40.7401, -73.9900),
+            self._pkg("W_23_St_400", "400 W 23 ST", 40.7480, -73.9900),
+        ]
+
+    def _order(self, pkgs, cutoffs=None):
+        return [s.address for s in _build_stops(pkgs, stop_cutoffs=cutoffs, now=self.BASE)]
+
+    def test_stop_inside_the_urgency_window_jumps_the_line(self):
+        # The far stop closes in 30 min -> inside the 120 min window -> visited first,
+        # even though geometry would leave it for last.
+        order = self._order(self._three(),
+                            {"400 W 23 ST": self.BASE + timedelta(minutes=30)})
+        assert order[0] == "400 W 23 ST", f"urgent stop not promoted: {order}"
+
+    def test_cutoff_far_outside_the_window_is_not_promoted(self):
+        # Closes in 10 hours: real deadline, no pressure at 09:00. Pure geometry.
+        order = self._order(self._three(),
+                            {"400 W 23 ST": self.BASE + timedelta(hours=10)})
+        assert order == self._order(self._three()), \
+            f"a non-urgent deadline changed the order: {order}"
+
+    def test_soonest_deadline_wins_over_a_nearer_deadline(self):
+        # Both urgent; the tighter deadline goes first even though it is further away.
+        order = self._order(self._three(), {
+            "102 W 23 ST": self.BASE + timedelta(minutes=90),
+            "400 W 23 ST": self.BASE + timedelta(minutes=20),
+        })
+        assert order[0] == "400 W 23 ST", f"later deadline served first: {order}"
+
+    def test_passed_cutoff_sorts_first(self):
+        # Already closed = maximally at risk (matches _get_block_time_urgency -> 1.0).
+        order = self._order(self._three(),
+                            {"400 W 23 ST": self.BASE - timedelta(minutes=15)})
+        assert order[0] == "400 W 23 ST", f"passed cutoff not first: {order}"
+
+    def test_a_stop_becomes_urgent_as_the_clock_advances(self):
+        # This is the property the STATIC version cannot express. The deadline is 150
+        # min out -- outside the window at route start, so it is NOT promoted up front.
+        # It is served by proximity, not by promotion, so it is not first.
+        pkgs = self._three()
+        order = self._order(pkgs, {"400 W 23 ST": self.BASE + timedelta(minutes=150)})
+        assert order[0] != "400 W 23 ST", \
+            f"stop outside the window at t=0 was promoted anyway: {order}"
+        assert set(order) == {"100 W 23 ST", "102 W 23 ST", "400 W 23 ST"}
+
+    def test_no_cutoffs_is_identical_to_geometric_ordering(self):
+        pkgs = self._three()
+        assert self._order(pkgs, None) == self._order(pkgs, {}), \
+            "None and {} must both reproduce ADR-239 geometry"
+
+    def test_no_stop_is_lost_when_promoting(self):
+        pkgs = [self._pkg("W_23_St_100", f"{100 + i} W 23 ST", 40.74 + i / 1000, -73.99)
+                for i in range(8)]
+        cutoffs = {"105 W 23 ST": self.BASE + timedelta(minutes=10),
+                   "107 W 23 ST": self.BASE + timedelta(minutes=45)}
+        order = self._order(pkgs, cutoffs)
+        assert len(order) == 8 and len(set(order)) == 8, f"stop lost/duped: {order}"
+
+    def test_deterministic(self):
+        pkgs = self._three()
+        cutoffs = {"400 W 23 ST": self.BASE + timedelta(minutes=30)}
+        assert self._order(pkgs, cutoffs) == self._order(pkgs, cutoffs)

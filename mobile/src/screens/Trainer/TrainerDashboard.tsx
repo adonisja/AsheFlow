@@ -7,14 +7,14 @@ import { useAuth } from '@contexts/AuthContext';
 import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 import TrainerTodayScreen       from './TrainerTodayScreen';
 import TrainerHistoryScreen     from './TrainerHistoryScreen';
 import TrainerPerformanceScreen from './TrainerPerformanceScreen';
 import Phase4Screen             from './Phase4Screen';
-import RouteSortScreen          from './RouteSortScreen';
 
-type Tab = 'today' | 'history' | 'performance' | 'phase4' | 'routesort';
+type Tab = 'today' | 'history' | 'performance' | 'phase4';
 
 export default function TrainerDashboard() {
   const c = useColors();
@@ -35,21 +35,28 @@ export default function TrainerDashboard() {
   }, [user?.id]);
 
   const tabs: { key: Tab; label: string; icon: string }[] = [
+    // My Route and Route Sort are TOP-LEVEL tabs now (field actions, not
+    // training) — this dashboard is training-only.
     { key: 'today',       label: "Today",       icon: '📋' },
     { key: 'history',     label: 'History',     icon: '📂' },
     { key: 'performance', label: 'Performance', icon: '📊' },
-    { key: 'routesort',   label: 'Route Sort',  icon: '🗺️' },
     ...(isPhase4 ? [{ key: 'phase4' as Tab, label: 'Phase 4', icon: '🎯' }] : []),
   ];
 
   const s = styles(c);
 
+  // Header title transitions with the active tab (ADR-207) — the tab's own
+  // in-content title was removed, so this is the single page title.
+  const HEADER_TITLE: Record<Tab, string> = {
+    today:       "Today's Session",
+    history:     'Training History',
+    performance: 'My Performance',
+    phase4:      'Phase 4',
+  };
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      {/* Header */}
-      <View style={s.header}>
-        <Text style={s.title}>Trainer Dashboard</Text>
-      </View>
+      <PageHeader title={HEADER_TITLE[activeTab] ?? 'Trainer Dashboard'} />
 
       {/* Tab bar */}
       <View style={s.tabBarWrap}>
@@ -83,7 +90,6 @@ export default function TrainerDashboard() {
         {activeTab === 'today'       && <TrainerTodayScreen />}
         {activeTab === 'history'     && <TrainerHistoryScreen />}
         {activeTab === 'performance' && <TrainerPerformanceScreen />}
-        {activeTab === 'routesort'   && <RouteSortScreen />}
         {activeTab === 'phase4'      && <Phase4Screen />}
       </View>
     </SafeAreaView>
@@ -117,7 +123,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   tabActive:     {},
   tabIcon:       { fontSize: 14 },
-  tabLabel:      { fontSize: fontSize.sm, color: '#9CA3AF', fontWeight: fontWeight.medium },
+  tabLabel:      { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
   tabIndicator:  {
     position: 'absolute',
     bottom: 0,

@@ -67,5 +67,9 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>AsheFlow uses the camera to read the tracking number and address from a package label, so you do not have to type them.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>AsheFlow can read a package label from a photo you have already taken.</string>
 </dict>
 </plist>

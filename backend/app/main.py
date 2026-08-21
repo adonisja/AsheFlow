@@ -11,7 +11,7 @@ from app.models.base import Base
 from app.core.config import settings
 from app.api.deps import require_configured
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, location_profiles, location_profile_library, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -85,6 +85,10 @@ api_v1_router.include_router(schedule.router,                 dependencies=_conf
 api_v1_router.include_router(time_off_requests.router,        dependencies=_configured)
 api_v1_router.include_router(feedback.router,                 dependencies=_configured)
 api_v1_router.include_router(notifications.router,            dependencies=_configured)
+# SSE stream router: NO _configured gate — that dependency reads the
+# Authorization header, which EventSource cannot send. The stream auths via
+# ?token= and enforces the configured-company check inline (see notifications.py).
+api_v1_router.include_router(notifications.stream_router)
 api_v1_router.include_router(continuation_requests.router,    dependencies=_configured)
 api_v1_router.include_router(assignment_change_requests.router, dependencies=_configured)
 api_v1_router.include_router(incidents.router,                dependencies=_configured)
@@ -94,20 +98,31 @@ api_v1_router.include_router(trainer_marks.router,            dependencies=_conf
 api_v1_router.include_router(trainer_coverage.router,         dependencies=_configured)
 api_v1_router.include_router(anchor_points.router,            dependencies=_configured)
 api_v1_router.include_router(analytics.router,                dependencies=_configured)
+api_v1_router.include_router(assignment_history.router,        dependencies=_configured)
 api_v1_router.include_router(shift_ops.router,                dependencies=_configured)
 api_v1_router.include_router(shift_sessions.router,           dependencies=_configured)
 if _register_proprietary:
     _register_proprietary(api_v1_router, _configured)
 api_v1_router.include_router(sort.router,                     dependencies=_configured)
-api_v1_router.include_router(location_profiles.router,        dependencies=_configured)
-api_v1_router.include_router(location_profile_library.router, dependencies=_configured)
 api_v1_router.include_router(graduation_quiz.router,          dependencies=_configured)
 api_v1_router.include_router(gear_requests.router,            dependencies=_configured)
 api_v1_router.include_router(trainee_credentials.router,      dependencies=_configured)
 api_v1_router.include_router(truck_transfers.router,          dependencies=_configured)
 api_v1_router.include_router(driver_surveys.router,           dependencies=_configured)
-api_v1_router.include_router(adp.router,                      dependencies=_configured)
-api_v1_router.include_router(companies.router,                dependencies=_configured)
+api_v1_router.include_router(adp.router,                            dependencies=_configured)
+api_v1_router.include_router(building_profiles.router,              dependencies=_configured)
+api_v1_router.include_router(building_profile_library.router,       dependencies=_configured)
+api_v1_router.include_router(walker_routes.router,                  dependencies=_configured)
+api_v1_router.include_router(rts.router,                            dependencies=_configured)
+api_v1_router.include_router(roll_call.router,                      dependencies=_configured)
+api_v1_router.include_router(crew_status.router,                    dependencies=_configured)
+api_v1_router.include_router(scorecards.router,                     dependencies=_configured)
+api_v1_router.include_router(scorecard_appeals.router,              dependencies=_configured)
+api_v1_router.include_router(package_lookup.router,                 dependencies=_configured)
+api_v1_router.include_router(package_intake.router,                 dependencies=_configured)
+api_v1_router.include_router(dashboards.router,                     dependencies=_configured)
+api_v1_router.include_router(sort_metrics.router,                    dependencies=_configured)
+api_v1_router.include_router(companies.router,                      dependencies=_configured)
 # Exempt — must be reachable before and during setup
 api_v1_router.include_router(registration.router)
 api_v1_router.include_router(companies.company_admin_router)

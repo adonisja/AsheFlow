@@ -10,14 +10,17 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee, assert_owns_or_privileged
 from app.models.employee import Employee
 from app.models.field_ops import Departure
+from app.models.shift_roll_call import ShiftRollCall
 from app.models.notification import Notification
 from app.models.assignment_member import AssignmentMember
 from app.models.truck_assignment import TruckAssignment
 from app.models.crew_compliance import CrewCompliance
 from app.models.driver_check_in import DriverCheckIn
 from app.models.rts_clearance import RTSReport, StationHandoff, RTS_REPORT_STATUSES
+from app.models.rts import MissingPackage
+from app.services.audit import write_audit
 from app.schemas.shift_ops import (
-    CrewComplianceCreate, CrewComplianceResponse,
+    CrewComplianceCreate, CrewComplianceResponse, CrewComplianceDraftUpsert,
     DriverCheckInCreate, DriverCheckInResponse,
     RTSReportCreate, RTSReportReview, RTSReportResponse,
     StationHandoffCreate, StationHandoffResponse,
@@ -26,6 +29,10 @@ from app.schemas.shift_ops import (
 router = APIRouter(prefix="/shift-ops", tags=["shift-ops"])
 
 allow_driver      = RoleChecker(["driver"])
+# Captains on a truck who share the Crew Roster (ADR-228): the driver + trainers.
+# ADR-256: the on-truck leadership pair. Trainer removed (D5) — a trainer no longer
+# holds truck-level authority; the captain does.
+allow_truck_lead  = RoleChecker(["driver", "captain"])
 allow_management  = RoleChecker(["dispatch", "management", "admin"])
 
 
@@ -55,7 +62,9 @@ def submit_crew_compliance(
         .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
         .filter(
             AssignmentMember.employee_id == payload.driver_id,
+            AssignmentMember.company_id == caller.company_id,
             TruckAssignment.date == payload.date,
+            TruckAssignment.company_id == caller.company_id,
         )
         .first()
     )
@@ -65,7 +74,10 @@ def submit_crew_compliance(
     crew_member_ids = {
         str(am.employee_id)
         for am in db.query(AssignmentMember)
-        .filter(AssignmentMember.assignment_id == member_row.assignment_id)
+        .filter(
+            AssignmentMember.assignment_id == member_row.assignment_id,
+            AssignmentMember.company_id == caller.company_id,
+        )
         .all()
     }
 
@@ -81,6 +93,7 @@ def submit_crew_compliance(
             CrewCompliance.driver_id == payload.driver_id,
             CrewCompliance.employee_id == entry.employee_id,
             CrewCompliance.date == payload.date,
+            CrewCompliance.company_id == caller.company_id,
         ).first()
         if existing:
             raise HTTPException(
@@ -89,6 +102,7 @@ def submit_crew_compliance(
             )
 
         row = CrewCompliance(
+            company_id=caller.company_id,   # NOT NULL — was omitted (IntegrityError 500)
             driver_id=payload.driver_id,
             employee_id=entry.employee_id,
             date=payload.date,
@@ -103,6 +117,221 @@ def submit_crew_compliance(
     for row in created:
         db.refresh(row)
     return created
+
+
+def _driver_crew_ids(db: Session, driver_id: UUID, target_date: date, company_id: UUID) -> set[str]:
+    """employee_ids on the driver's truck for the date (raises 400 if the driver
+    has no assignment). Shared by the batch submit + the draft upsert."""
+    member_row = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == driver_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if not member_row:
+        raise HTTPException(status_code=400, detail="No truck assignment found for this driver on this date.")
+    return {
+        str(am.employee_id)
+        for am in db.query(AssignmentMember).filter(
+            AssignmentMember.assignment_id == member_row.assignment_id,
+            AssignmentMember.company_id == company_id,
+        ).all()
+    }
+
+
+def _caller_truck_crew(db: Session, caller_id: UUID, target_date: date, company_id: UUID):
+    """Resolve the truck the CALLER is on for the date → (driver_id, member_ids).
+
+    ADR-228: the Crew Roster is shared by the truck's captains (driver + trainers),
+    so ANY of them may record compliance — but the record is keyed to the truck's
+    DRIVER (it's the driver's Check-In #1 submission). We resolve the driver from
+    the assignment rather than trusting a client-supplied driver_id. Raises 400 if
+    the caller isn't on a truck that day, 409 if the truck has no driver.
+    """
+    my_row = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == caller_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if not my_row:
+        raise HTTPException(status_code=400, detail="You are not on a truck assignment for this date.")
+    members = (
+        db.query(AssignmentMember)
+        .filter(
+            AssignmentMember.assignment_id == my_row.assignment_id,
+            AssignmentMember.company_id == company_id,
+        )
+        .all()
+    )
+    driver = next((m for m in members if m.role == "driver"), None)
+    if driver is None:
+        raise HTTPException(status_code=409, detail="This truck has no driver assigned — compliance is keyed to the driver.")
+    return driver.employee_id, {str(m.employee_id) for m in members}
+
+
+_PRESENT_STATUSES = ("early", "present", "late")
+
+
+def _assert_roster_complete_and_finalize(db: Session, driver_id: UUID, target_date: date, company_id: UUID) -> dict:
+    """Check-In #1 gate + handoff (ADR-228).
+
+    The completed Crew Roster rides Check-In #1 to Dispatch, so #1 is only accepted
+    when the roster is COMPLETE:
+      - every non-driver crew member has a roll-call status (nobody 'pending'), and
+      - every PRESENT member (early/present/late) has a uniform + cart-cover record.
+    NCNS members are accounted-for and need no compliance. On success, the draft
+    CrewCompliance rows are FINALIZED (draft → submitted). Raises 422 (listing what's
+    missing) when incomplete. Returns a small summary for the dispatch notification.
+    """
+    # Crew on the driver's truck (exclude the driver — not rolled on their own roster).
+    my_row = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == driver_id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .first()
+    )
+    if not my_row:
+        raise HTTPException(status_code=400, detail="No truck assignment found for you on this date.")
+    members = (
+        db.query(AssignmentMember, Employee)
+        .join(Employee, AssignmentMember.employee_id == Employee.id)
+        .filter(
+            AssignmentMember.assignment_id == my_row.assignment_id,
+            AssignmentMember.company_id == company_id,
+        )
+        .all()
+    )
+    crew = [(am, emp) for am, emp in members if am.role != "driver"]
+
+    roll = {
+        rc.employee_id: rc.status
+        for rc in db.query(ShiftRollCall).filter(
+            ShiftRollCall.company_id == company_id,
+            ShiftRollCall.date == target_date,
+        ).all()
+    }
+    comp = {
+        cc.employee_id: cc
+        for cc in db.query(CrewCompliance).filter(
+            CrewCompliance.company_id == company_id,
+            CrewCompliance.driver_id == driver_id,
+            CrewCompliance.date == target_date,
+        ).all()
+    }
+
+    not_rolled: list[str] = []
+    missing_compliance: list[str] = []
+    present_ids: list[UUID] = []
+    for am, emp in crew:
+        st = roll.get(am.employee_id)
+        if st is None:
+            not_rolled.append(emp.name)
+            continue
+        if st in _PRESENT_STATUSES:
+            present_ids.append(am.employee_id)
+            if am.employee_id not in comp:
+                missing_compliance.append(emp.name)
+
+    if not_rolled or missing_compliance:
+        problems = []
+        if not_rolled:
+            problems.append(f"not rolled: {', '.join(not_rolled)}")
+        if missing_compliance:
+            problems.append(f"no uniform/cart-cover check: {', '.join(missing_compliance)}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": "Complete the Crew Roster before Check-In #1 — every member must be rolled and every present member checked.",
+                "problems": problems,
+            },
+        )
+
+    # Finalize the drafts (draft → submitted). Already-submitted rows are left as is.
+    finalized = 0
+    for eid in present_ids:
+        row = comp.get(eid)
+        if row is not None and row.status == "draft":
+            row.status = "submitted"
+            finalized += 1
+
+    present = len(present_ids)
+    ncns = sum(1 for am, _ in crew if roll.get(am.employee_id) == "ncns")
+    fails = sum(
+        1 for eid in present_ids
+        if (r := comp.get(eid)) is not None and (not r.uniform_pass or not r.cart_cover_pass)
+    )
+    return {"present": present, "ncns": ncns, "compliance_fails": fails, "finalized": finalized}
+
+
+@router.put("/crew-compliance/draft", response_model=CrewComplianceResponse)
+def upsert_crew_compliance_draft(
+    payload: CrewComplianceDraftUpsert,
+    db: Session = Depends(get_db),
+    _: dict = Depends(allow_truck_lead),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """Save ONE crew member's uniform/cart-cover as a DRAFT, live on the shared
+    Crew Roster (ADR-228). ANY captain on the truck (driver or trainer) may record
+    it — the roster is shared context — but the record is keyed to the truck's
+    DRIVER (it's the driver's Check-In #1 submission). The driver is resolved from
+    the caller's own assignment, so a client-supplied driver_id can't be spoofed.
+    Compliance applies to every present crew member, trainers included.
+
+    Upserts by (driver, employee, date); Check-In #1 later finalizes all drafts
+    (draft → submitted). A row already 'submitted' is not downgraded.
+    """
+    driver_id, crew_ids = _caller_truck_crew(db, caller.id, payload.date, caller.company_id)
+    if str(payload.employee_id) not in crew_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="That employee is not on your truck assignment for this date.",
+        )
+
+    row = db.query(CrewCompliance).filter(
+        CrewCompliance.driver_id == driver_id,
+        CrewCompliance.employee_id == payload.employee_id,
+        CrewCompliance.date == payload.date,
+        CrewCompliance.company_id == caller.company_id,
+    ).first()
+
+    if row is None:
+        row = CrewCompliance(
+            company_id=caller.company_id,
+            driver_id=driver_id,
+            employee_id=payload.employee_id,
+            date=payload.date,
+            arrival_time=payload.arrival_time,
+            uniform_pass=payload.uniform_pass,
+            cart_cover_pass=payload.cart_cover_pass,
+            status="draft",
+        )
+        db.add(row)
+    elif row.status == "draft":
+        row.uniform_pass = payload.uniform_pass
+        row.cart_cover_pass = payload.cart_cover_pass
+        if payload.arrival_time is not None:
+            row.arrival_time = payload.arrival_time
+    # status == 'submitted' → already finalized; leave as-is (return current state).
+
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get("/crew-compliance/summary/{target_date}")
@@ -180,6 +409,7 @@ def submit_driver_check_in(
     departure = db.query(Departure).filter(
         Departure.employee_id == payload.driver_id,
         Departure.date == payload.date,
+        Departure.company_id == caller.company_id,
     ).first()
     if not departure:
         raise HTTPException(status_code=400, detail="Mid-shift check-ins require a departure record for today.")
@@ -188,6 +418,7 @@ def submit_driver_check_in(
         DriverCheckIn.driver_id == payload.driver_id,
         DriverCheckIn.date == payload.date,
         DriverCheckIn.check_in_number == payload.check_in_number,
+        DriverCheckIn.company_id == caller.company_id,
     ).first()
     if existing:
         raise HTTPException(
@@ -195,8 +426,64 @@ def submit_driver_check_in(
             detail=f"Check-in #{payload.check_in_number} already submitted for today.",
         )
 
-    row = DriverCheckIn(**payload.model_dump())
+    # ADR-228: Check-In #1 carries the completed Crew Roster + compliance. Gate on
+    # roster completeness and finalize the draft compliance rows (draft → submitted)
+    # before recording the check-in. Runs first so an incomplete roster 422s without
+    # a partial write. Later check-ins (2–4) skip this.
+    roster_summary = None
+    if payload.check_in_number == 1:
+        roster_summary = _assert_roster_complete_and_finalize(
+            db, payload.driver_id, payload.date, caller.company_id
+        )
+
+    # company_id is NOT NULL on DriverCheckIn but absent from the payload — set it
+    # from the caller (was an IntegrityError 500 on every check-in submit).
+    row = DriverCheckIn(**payload.model_dump(), company_id=caller.company_id)
     db.add(row)
+
+    # ADR-228: hand the finalized roster + compliance summary to Dispatch on #1.
+    if roster_summary is not None:
+        for recipient in db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(["dispatch", "management", "admin"]),
+            Employee.is_active == True,
+        ).all():
+            fails = roster_summary["compliance_fails"]
+            db.add(Notification(
+                company_id=caller.company_id,
+                employee_id=recipient.id,
+                type="crew_roster_submitted",
+                message=(
+                    f"📋 {caller.name}'s crew roster is in — {roster_summary['present']} present, "
+                    f"{roster_summary['ncns']} NCNS"
+                    + (f", ⚠ {fails} uniform/cart-cover fail(s)" if fails else ", all compliant")
+                    + f" ({payload.date})."
+                ),
+                dispatch_date=payload.date,
+            ))
+
+    # ADR-215: push a "Request help" to dispatch on submit (the badge on the
+    # dashboard only surfaced if someone was looking). Fire on every submitted
+    # check-in with help_requested=true — each is a genuine ask. Same recipient
+    # pattern as the RTS-report notification.
+    if payload.help_requested:
+        dispatch_recipients = db.query(Employee).filter(
+            Employee.company_id == caller.company_id,
+            Employee.role.in_(["dispatch", "management", "admin"]),
+            Employee.is_active == True,
+        ).all()
+        for recipient in dispatch_recipients:
+            db.add(Notification(
+                company_id=caller.company_id,
+                employee_id=recipient.id,
+                type="driver_help_requested",
+                message=(
+                    f"🆘 {caller.name} requested help at check-in #{payload.check_in_number} "
+                    f"for {payload.date} — {payload.routes_remaining} route(s) remaining."
+                ),
+                dispatch_date=payload.date,
+            ))
+
     db.commit()
     db.refresh(row)
     return row
@@ -289,6 +576,7 @@ def submit_rts_report(
         raise HTTPException(status_code=403, detail="You can only submit your own RTS report.")
 
     existing = db.query(RTSReport).filter(
+        RTSReport.company_id == caller.company_id,
         RTSReport.driver_id == payload.driver_id,
         RTSReport.date == payload.date,
     ).first()
@@ -299,6 +587,7 @@ def submit_rts_report(
     total_rts = sum(e.count for e in payload.rts_packages)
 
     row = RTSReport(
+        company_id=caller.company_id,
         driver_id=payload.driver_id,
         date=payload.date,
         crew_confirmed=payload.crew_confirmed,
@@ -307,6 +596,16 @@ def submit_rts_report(
         status="pending",
     )
     db.add(row)
+    db.flush()
+    write_audit(
+        db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="rts_report.submit",
+        target_table="rts_reports",
+        target_id=str(row.id),
+        detail={"date": str(payload.date), "total_rts": total_rts, "crew_confirmed": payload.crew_confirmed},
+    )
 
     dispatch_recipients = db.query(Employee).filter(
         Employee.company_id == caller.company_id,
@@ -365,7 +664,17 @@ def review_rts_report(
     row.status = payload.status
     row.dispatch_notes = payload.dispatch_notes
     row.reviewed_by = caller.id
+    row.reviewed_by_name = caller.name
     row.reviewed_at = datetime.now(timezone.utc)
+    write_audit(
+        db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type=f"rts_report.{payload.status}",
+        target_table="rts_reports",
+        target_id=str(row.id),
+        detail={"date": str(target_date), "driver_id": str(driver_id)},
+    )
 
     driver = db.query(Employee).filter(
         Employee.id == driver_id,
@@ -389,6 +698,42 @@ def review_rts_report(
             type=f"rts_{payload.status}",
             message=driver_message,
         ))
+
+    # On approval (return confirmed), auto-close the day for any crew still on the
+    # truck who were never marked off — the run is over, so still-active members
+    # are done for the day. Scoped to the driver's own assignment for the date,
+    # company-scoped, driver excluded. Idempotent: only flips status='active' rows.
+    if payload.status == "approved":
+        driver_member = db.query(AssignmentMember).join(
+            TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id,
+        ).filter(
+            AssignmentMember.employee_id == driver_id,
+            AssignmentMember.company_id == caller.company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == caller.company_id,
+        ).first()
+        if driver_member:
+            now = datetime.now(timezone.utc)
+            unmarked = db.query(AssignmentMember).filter(
+                AssignmentMember.assignment_id == driver_member.assignment_id,
+                AssignmentMember.company_id == caller.company_id,
+                AssignmentMember.employee_id != driver_id,
+                AssignmentMember.status == "active",
+            ).all()
+            for am in unmarked:
+                am.status = "departed"
+                am.departed_at = now
+            if unmarked:
+                write_audit(
+                    db,
+                    company_id=str(caller.company_id),
+                    actor_id=str(caller.id),
+                    action_type="crew.auto_departed_on_return",
+                    target_table="assignment_members",
+                    target_id=str(driver_member.assignment_id),
+                    detail={"date": str(target_date), "count": len(unmarked),
+                            "trigger": "rts_report.approved"},
+                )
 
     db.commit()
     db.refresh(row)
@@ -483,6 +828,7 @@ def submit_station_handoff(
         raise HTTPException(status_code=403, detail="You can only submit your own station handoff.")
 
     rts_report = db.query(RTSReport).filter(
+        RTSReport.company_id == caller.company_id,
         RTSReport.driver_id == payload.driver_id,
         RTSReport.date == payload.date,
     ).first()
@@ -498,20 +844,62 @@ def submit_station_handoff(
         )
 
     existing = db.query(StationHandoff).filter(
+        StationHandoff.company_id == caller.company_id,
         StationHandoff.driver_id == payload.driver_id,
         StationHandoff.date == payload.date,
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Station handoff already recorded for today.")
 
+    # missing_count is computed, not typed: unresolved MissingPackage rows across
+    # the driver's truck assignment for the date (ADR-193 D5).
+    ta = (
+        db.query(TruckAssignment)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == payload.date,
+            AssignmentMember.employee_id == caller.id,
+        )
+        .first()
+    )
+    missing_count = 0
+    if ta is not None:
+        missing_count = (
+            db.query(MissingPackage)
+            .filter(
+                MissingPackage.company_id == caller.company_id,
+                MissingPackage.truck_assignment_id == ta.id,
+                MissingPackage.resolution_status == "unresolved",
+            )
+            .count()
+        )
+
     row = StationHandoff(
+        company_id=caller.company_id,
         driver_id=payload.driver_id,
         date=payload.date,
         totes_returned=payload.totes_returned,
         rts_count=payload.rts_count,
+        missing_count=missing_count,
         notes=payload.notes,
     )
     db.add(row)
+    db.flush()
+    write_audit(
+        db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="station_handoff.submit",
+        target_table="station_handoffs",
+        target_id=str(row.id),
+        detail={
+            "date": str(payload.date),
+            "totes_returned": payload.totes_returned,
+            "rts_count": payload.rts_count,
+            "missing_count": missing_count,
+        },
+    )
     db.commit()
     db.refresh(row)
     return row

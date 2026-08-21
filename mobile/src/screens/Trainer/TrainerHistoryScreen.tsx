@@ -68,7 +68,7 @@ export default function TrainerHistoryScreen() {
 
   if (!loading && groups.length === 0) {
     return (
-      <ScreenShell edges={[]} noHeader title="My History" subtitle="All past training sessions">
+      <ScreenShell noHeader>
         <View style={s.empty}>
           <Text style={{ fontSize: 44 }}>📋</Text>
           <Text style={[s.emptyTitle, { color: c.foreground }]}>No history yet</Text>
@@ -80,10 +80,7 @@ export default function TrainerHistoryScreen() {
 
   return (
     <ScreenShell
-      edges={[]}
       noHeader
-      title="My History"
-      subtitle={groups.length > 0 ? `${groups.length} trainee${groups.length !== 1 ? 's' : ''} trained` : undefined}
       loading={loading}
       refreshing={refreshing}
       onRefresh={() => { setRefreshing(true); load(); }}

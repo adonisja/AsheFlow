@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { errorText } from '@api/errorText';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, ScrollView,
@@ -113,9 +114,8 @@ export default function GraduationQuizScreen() {
                 })),
               });
               setSubmitted(true);
-            } catch (err: any) {
-              const detail = err?.response?.data?.detail;
-              Alert.alert('Error', detail ?? 'Could not submit quiz. Try again.');
+            } catch (err: unknown) {
+              Alert.alert('Error', errorText(err, 'Could not submit quiz. Try again.'));
             } finally {
               setSubmitting(false);
             }
@@ -149,7 +149,7 @@ export default function GraduationQuizScreen() {
 
   if (!quiz) {
     return (
-      <ScreenShell edges={[]} noHeader title="Graduation Quiz" subtitle="">
+      <ScreenShell noHeader>
         <View style={s.center}>
           <Text style={{ fontSize: 48 }}>📝</Text>
           <Text style={s.doneTitle}>No quiz available</Text>
@@ -229,7 +229,7 @@ function QuestionBlock({
       <View style={s.questionHeader}>
         <Text style={[s.questionNum, { color: c.mutedForeground }]}>Q{index + 1}</Text>
         {question.is_mandatory && (
-          <Text style={{ color: '#EF4444', fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>Required</Text>
+          <Text style={{ color: c.danger, fontSize: fontSize.xs, fontWeight: fontWeight.semibold }}>Required</Text>
         )}
       </View>
       <Text style={[s.questionText, { color: c.foreground }]}>{question.question_text}</Text>
@@ -279,7 +279,7 @@ function QuestionBlock({
             activeOpacity={0.7}
           >
             <View style={[s.checkBox, { borderColor: selected ? c.primary : c.border, backgroundColor: selected ? c.primary : 'transparent' }]}>
-              {selected && <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>✓</Text>}
+              {selected && <Text style={{ color: c.primaryForeground, fontSize: 11, fontWeight: '700' }}>✓</Text>}
             </View>
             <Text style={[s.choiceText, { color: c.foreground }]}>{choice}</Text>
           </TouchableOpacity>
@@ -316,5 +316,5 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   choiceText:    { fontSize: fontSize.sm, flex: 1 },
 
   submitBtn:     { borderRadius: radius.md, padding: spacing.md, alignItems: 'center', marginTop: spacing.sm },
-  submitBtnText: { color: '#fff', fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  submitBtnText: { color: c.primaryForeground, fontSize: fontSize.base, fontWeight: fontWeight.bold },
 });

@@ -1,0 +1,237 @@
+"""Tests for the Crew Status page endpoint (ADR-197 Phase B).
+
+crew_status is public (no proprietary imports). These exercise the branch logic
+that the endpoint adds on top of the availability derivation: role scoping,
+trip_count pass-through, pairing maps, and the orphaned-trainee flag.
+"""
+import uuid
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from app.routers.crew_status import get_crew_status
+
+
+_CID = uuid.uuid4()
+_DATE = date(2026, 7, 13)
+_TA = uuid.uuid4()
+_TRUCK = uuid.uuid4()
+
+_TRAINER = uuid.uuid4()
+_TRAINEE = uuid.uuid4()
+_WALKER = uuid.uuid4()
+
+_NOW = datetime.now(timezone.utc)
+
+
+def _caller(role="dispatch", emp_id=None):
+    c = MagicMock()
+    c.id = emp_id or uuid.uuid4()
+    c.company_id = _CID
+    c.role = role
+    return c
+
+
+def _member(employee_id, role, paired_trainer_id=None, status="active",
+            ap_arrived_at=None, trip_count=0):
+    return SimpleNamespace(
+        id=uuid.uuid4(), employee_id=employee_id, role=role,
+        assignment_id=_TA, company_id=_CID, status=status,
+        paired_trainer_id=paired_trainer_id, ap_arrived_at=ap_arrived_at,
+        trip_count=trip_count,
+    )
+
+
+def _ta():
+    return SimpleNamespace(id=_TA, truck_id=_TRUCK, company_id=_CID, date=_DATE)
+
+
+def _rc(employee_id, status):
+    return SimpleNamespace(employee_id=employee_id, status=status, date=_DATE, company_id=_CID)
+
+
+def _db(members, *, own_member=None, route_first=None, roll_calls=None, delivery_stops=None):
+    """Mock Session. TruckAssignment list → [_ta()]; AssignmentMember list →
+    members; Employee names → simple objects; Route/DeliveryStop → none/empty;
+    ShiftRollCall list → roll_calls (default none → everyone 'not_arrived')."""
+    db = MagicMock()
+
+    def _query(*models):
+        from app.models.truck_assignment import TruckAssignment
+        from app.models.assignment_member import AssignmentMember
+        from app.models.employee import Employee
+        from app.models.truck import Truck
+        from app.models.walker_route import Route
+        from app.models.delivery_stop import DeliveryStop
+        from app.models.shift_roll_call import ShiftRollCall
+        model = models[0]
+        q = MagicMock()
+
+        def _chain(*a, **k):
+            f = MagicMock()
+            # allow .filter().filter()… to keep returning the chain
+            f.filter.return_value = f
+            if model is TruckAssignment:
+                f.all.return_value = [_ta()]
+                f.first.return_value = _ta()
+            elif model is AssignmentMember:
+                f.all.return_value = members
+                f.first.return_value = own_member
+            elif model is ShiftRollCall:
+                f.all.return_value = roll_calls or []
+            elif model is Employee:
+                f.all.return_value = [
+                    SimpleNamespace(id=m.employee_id, name=f"emp-{str(m.employee_id)[:4]}")
+                    for m in members
+                ]
+                f.first.return_value = None
+            elif model is Truck:
+                f.first.return_value = SimpleNamespace(id=_TRUCK, name="Truck 12", company_id=_CID)
+            elif model is Route:
+                f.first.return_value = route_first
+                f.all.return_value = []
+            elif model is DeliveryStop:
+                f.count.return_value = 0
+                f.all.return_value = delivery_stops or []
+                f.order_by.return_value = f   # .order_by(...).all() → same chain
+            else:
+                f.first.return_value = None
+                f.all.return_value = []
+            return f
+
+        q.filter = _chain
+        q.join.return_value.filter = _chain
+        return q
+
+    db.query = _query
+    return db
+
+
+class TestCrewStatusScope:
+    def test_field_caller_without_assignment_404(self):
+        from fastapi import HTTPException
+        db = _db([_member(_WALKER, "walker")], own_member=None)
+        with pytest.raises(HTTPException) as exc:
+            get_crew_status(target_date=_DATE, caller=_caller("driver"), _=None, db=db)
+        assert exc.value.status_code == 404
+
+
+class TestCrewStatusEnrichment:
+    def _run(self, members, **kw):
+        db = _db(members, **kw)
+        return get_crew_status(target_date=_DATE, caller=_caller("dispatch"), _=None, db=db)
+
+    def test_trip_count_passed_through(self):
+        m = _member(_WALKER, "walker", trip_count=3)
+        resp = self._run([m])
+        walker = resp.trucks[0].members[0]
+        assert walker.trip_count == 3
+
+    def test_current_stop_populated_from_delivery_stops(self):
+        # ADR (Route-Sort hang fix): crew-status returns the member's current stop
+        # (in_progress, else first not-completed) so the AP-Sort screen needn't
+        # fan out an /rts/stops call per route.
+        import uuid as _uuid
+        m = _member(_WALKER, "walker")
+        route = SimpleNamespace(id=_uuid.uuid4())
+        stops = [
+            SimpleNamespace(stop_sequence=1, normalised_address="100 W 30 St", status="completed"),
+            SimpleNamespace(stop_sequence=2, normalised_address="120 W 30 St", status="in_progress"),
+            SimpleNamespace(stop_sequence=3, normalised_address="140 W 30 St", status="planned"),
+        ]
+        resp = self._run([m], route_first=route, delivery_stops=stops)
+        walker = resp.trucks[0].members[0]
+        assert walker.current_stop_sequence == 2               # the in_progress one
+        assert walker.current_stop_address == "120 W 30 St"
+        assert walker.current_stop_total == 3
+
+    def test_current_stop_falls_back_to_first_incomplete(self):
+        import uuid as _uuid
+        m = _member(_WALKER, "walker")
+        route = SimpleNamespace(id=_uuid.uuid4())
+        stops = [
+            SimpleNamespace(stop_sequence=1, normalised_address="A", status="completed"),
+            SimpleNamespace(stop_sequence=2, normalised_address="B", status="planned"),
+        ]
+        resp = self._run([m], route_first=route, delivery_stops=stops)
+        walker = resp.trucks[0].members[0]
+        assert walker.current_stop_sequence == 2               # first not-completed
+        assert walker.current_stop_address == "B"
+
+    def test_no_route_means_no_current_stop(self):
+        resp = self._run([_member(_WALKER, "walker")])         # route_first=None
+        walker = resp.trucks[0].members[0]
+        assert walker.current_stop_sequence is None
+
+    def test_pairing_populated_both_directions(self):
+        trainer = _member(_TRAINER, "trainer", ap_arrived_at=_NOW)
+        trainee = _member(_TRAINEE, "trainee", paired_trainer_id=_TRAINER, ap_arrived_at=_NOW)
+        resp = self._run([trainer, trainee])
+        by_role = {mm.role: mm for mm in resp.trucks[0].members}
+        assert by_role["trainee"].paired_trainer_id == _TRAINER
+        assert by_role["trainer"].paired_trainee_id == _TRAINEE
+
+    def test_orphaned_when_trainer_not_arrived_but_trainee_has(self):
+        # Trainer active but NOT arrived; trainee arrived → orphaned.
+        trainer = _member(_TRAINER, "trainer", ap_arrived_at=None)
+        trainee = _member(_TRAINEE, "trainee", paired_trainer_id=_TRAINER, ap_arrived_at=_NOW)
+        resp = self._run([trainer, trainee])
+        trainee_out = next(mm for mm in resp.trucks[0].members if mm.role == "trainee")
+        assert trainee_out.orphaned is True
+
+    def test_not_orphaned_when_both_arrived(self):
+        trainer = _member(_TRAINER, "trainer", ap_arrived_at=_NOW)
+        trainee = _member(_TRAINEE, "trainee", paired_trainer_id=_TRAINER, ap_arrived_at=_NOW)
+        resp = self._run([trainer, trainee])
+        trainee_out = next(mm for mm in resp.trucks[0].members if mm.role == "trainee")
+        assert trainee_out.orphaned is False
+
+    def test_not_orphaned_before_trainee_arrives(self):
+        # Trainer not arrived, trainee ALSO not arrived → pre-shift, not an emergency.
+        trainer = _member(_TRAINER, "trainer", ap_arrived_at=None)
+        trainee = _member(_TRAINEE, "trainee", paired_trainer_id=_TRAINER, ap_arrived_at=None)
+        resp = self._run([trainer, trainee])
+        trainee_out = next(mm for mm in resp.trucks[0].members if mm.role == "trainee")
+        assert trainee_out.orphaned is False
+
+    def test_orphaned_when_trainer_departed(self):
+        trainer = _member(_TRAINER, "trainer", status="departed", ap_arrived_at=_NOW)
+        trainee = _member(_TRAINEE, "trainee", paired_trainer_id=_TRAINER, ap_arrived_at=_NOW)
+        resp = self._run([trainer, trainee])
+        trainee_out = next(mm for mm in resp.trucks[0].members if mm.role == "trainee")
+        assert trainee_out.orphaned is True
+
+
+class TestCrewStatusPresenceGate:
+    """Roll-call presence gates availability (crew-roster requirement)."""
+
+    def _run(self, members, **kw):
+        return get_crew_status(target_date=_DATE, caller=_caller("dispatch"), _=None, db=_db(members, **kw))
+
+    def test_no_roll_call_is_not_arrived(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m])                      # no roll_calls → not_arrived
+        walker = resp.trucks[0].members[0]
+        assert walker.availability == "not_arrived"
+        assert resp.trucks[0].available_for_route == 0
+
+    def test_present_roll_call_becomes_available(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m], roll_calls=[_rc(_WALKER, "present")])
+        walker = resp.trucks[0].members[0]
+        assert walker.availability == "available"
+        assert resp.trucks[0].available_for_route == 1
+
+    def test_late_roll_call_counts_present(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m], roll_calls=[_rc(_WALKER, "late")])
+        assert resp.trucks[0].members[0].availability == "available"
+
+    def test_ncns_is_off_crew(self):
+        m = _member(_WALKER, "walker")
+        resp = self._run([m], roll_calls=[_rc(_WALKER, "ncns")])
+        walker = resp.trucks[0].members[0]
+        assert walker.availability == "off_crew"
+        assert resp.trucks[0].available_for_route == 0

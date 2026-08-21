@@ -41,8 +41,10 @@ from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.models.training import TrainingCurriculum, TrainingRecord, TrainingTask
 from app.models.notification import Notification
 from app.models.time_off_request import TimeOffRequest
+from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.company import Company, CompanyConfig
 from app.models.shift_session import ShiftSession
+from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
 from app.models.graduation_quiz import GraduationQuiz
 
 # graduation_quizzes uses JSONB (PostgreSQL-specific) in the ORM model so we
@@ -93,6 +95,8 @@ DISPATCH_TABLES = [
     TimeOffRequest.__table__,
     CompanyConfig.__table__,
     ShiftSession.__table__,
+    CaptainTruckFamiliarity.__table__,   # ADR-256
+    DispatchConfirmation.__table__,      # ADR-267 — the emergency pool reads declines
     _graduation_quizzes_sqlite,
 ]
 
@@ -282,17 +286,23 @@ def make_time_off_request(db, employee: Employee, target_date: date, status: str
 
 
 def make_curriculum(db, day_number: int, topic_title: str, is_mandatory: bool = True,
-                    category: str = "app_setup", record_type: str = "coverage") -> TrainingCurriculum:
-    """Insert a curriculum item for a given phase (day_number)."""
+                    category: str = "app_setup", record_type: str = "coverage",
+                    company_id=None, roles: list[str] | None = None) -> TrainingCurriculum:
+    """Insert a curriculum item for a given phase (day_number).
+
+    roles defaults to ["walker"] (ADR-263) so existing tests, which predate role
+    scoping and all exercise the walker track, keep working unchanged.
+    """
     item = TrainingCurriculum(
         id=uuid.uuid4(),
-        company_id=SEED_COMPANY_ID,
+        company_id=company_id or SEED_COMPANY_ID,
         day_number=day_number,
         topic_title=topic_title,
         description=f"Description for {topic_title}",
         is_mandatory=is_mandatory,
         category=category,
         record_type=record_type,
+        roles=list(roles) if roles is not None else ["walker"],
     )
     db.add(item)
     db.commit()

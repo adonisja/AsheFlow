@@ -1,9 +1,26 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, Integer, Float, Date, Text, ForeignKey, DateTime
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.sql import func
 from app.models.base import Base
+
+# Valid values for TrainingCurriculum.roles (ADR-263). A subset of
+# employee.VALID_ROLES — only roles that actually have a training track.
+#
+# "walker" covers trainees and the trainers who supervise them
+# (walker_routes.py::_WALKER_ROLES). Note that `trainer` means WALKER trainer
+# specifically — it is not a general supervision role, and a trainer never
+# trains a driver. Drivers train drivers: ADR-264 pairs a driver_trainee with a
+# supervising DRIVER on the same truck via AssignmentMember.paired_trainer_id —
+# no new role, since the supervisor stays a driver. ADR-264 is proposed and
+# unimplemented; the `driver_trainee` enum value exists (ADR-256) but nothing
+# trains or promotes it yet.
+#
+# "driver" is the vehicle / load-custody / crew-custody track.
+CURRICULUM_ROLES: frozenset[str] = frozenset({"walker", "driver"})
+
 
 class TrainingCurriculum(Base):
     """
@@ -28,8 +45,29 @@ class TrainingCurriculum(Base):
     topic_title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     is_mandatory = Column(Boolean, nullable=False, default=True)
-    category    = Column(String(50), nullable=True)             # app_setup|policy|delivery_standards|delivery_types|scorecard|observation
+    category    = Column(String(50), nullable=True)             # app_setup|policy|delivery_standards|delivery_types|scorecard|vehicle_safety|crew_ops|observation
     record_type = Column(String(20), nullable=False, default="coverage")  # coverage|demonstration
+
+    # Which training track(s) this item belongs to (ADR-263). Multi-valued so a
+    # shared item — ADP, Discord, attendance, the whole scorecard-literacy block —
+    # is ONE row carrying {"walker", "driver"} rather than two rows that drift
+    # apart the first time someone edits one and not the other.
+    #
+    # Assignment: a trainee receives rows where their role is in `roles`.
+    # Trainer/trainee -> "walker" (walker_routes.py::_WALKER_ROLES); drivers ->
+    # "driver". Query with .roles.any("walker") — NOT `== ["walker"]`, which
+    # would miss every shared item.
+    # Dialect variant: Postgres gets a real text[] (so `.any()` compiles to a
+    # native array containment check); SQLite — which the test suite runs on —
+    # has no array type and gets JSON. Without the variant, model creation fails
+    # under SQLite with "can't render element of type ARRAY" and every test that
+    # touches this table errors at table-create time.
+    roles = Column(
+        ARRAY(String(20)).with_variant(SQLiteJSON(), "sqlite"),
+        nullable=False,
+        server_default="{walker}",
+        default=lambda: ["walker"],
+    )
 
 
 class TrainingRecord(Base):
@@ -55,15 +93,51 @@ class TrainingRecord(Base):
     trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
 
     record_date        = Column(Date, nullable=False, index=True)
-    current_day_number = Column(Integer, nullable=False)  # phase: 1–4 normal, 5 = quiz day, 6+ = remediation
+    # phase: 0 = ORE day, 1–4 normal, 5 = quiz day, 6+ = remediation
+    #
+    # ADR-281: phase 0 is the ORE day. ORE itself is self-serve e-learning on
+    # Amazon's platform, but the DAY is supervised — a trainer walks the new
+    # hire through app install, website access and the procedures on the page.
+    # So phase 0 uses the same coverage-task model as 1–3 and closes the same
+    # way; nothing here is special-cased for it.
+    current_day_number = Column(Integer, nullable=False)
 
     trainer_comments  = Column(Text, nullable=True)
     manager_comments  = Column(Text, nullable=True)
+
+    # Trainee's review of the trainer (submitted via /record/{id}/review).
+    # RESTORED 2026-07-10: dropped as "orphaned" by migration j1k2l3m4n5o6
+    # after being removed from the ORM — but the review endpoint, schemas, and
+    # both rating UIs still used them, so assigning the unmapped attribute
+    # silently persisted NOTHING (200 OK, no write). A column referenced by an
+    # endpoint is not an orphan.
+    trainee_comments  = Column(Text, nullable=True)
+    trainer_rating    = Column(Integer, nullable=True)   # 1–5 stars
 
     # Phase gate tracking
     submitted_at    = Column(DateTime(timezone=True), nullable=True)
     phase_closed    = Column(Boolean, nullable=False, default=False)
     phase_closed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # ── ADR-281: Phase 0 (ORE day) ──────────────────────────────────────────
+    # The ATTESTATION is permanent; the FILE is not. Retention for the
+    # certificate is 48h (it carries the trainee's name and an Amazon training
+    # id), so if the file were the completion signal, the signal would evaporate
+    # on day three. These two columns are the durable record that ORE was done.
+    ore_completed_at             = Column(DateTime(timezone=True), nullable=True)
+    ore_certificate_uploaded_by  = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    # S3 object key, nulled by the nightly sweep once the object is deleted.
+    # A NULL key with a non-null ore_completed_at means "certificate expired",
+    # which is a different answer to a manager than "never uploaded".
+    ore_certificate_key          = Column(String(300), nullable=True)
+    ore_certificate_expires_at   = Column(DateTime(timezone=True), nullable=True)
+
+    # Early departure after ORE — a PERMITTED choice (ADR-281 D5), recorded
+    # because it affects pay for that date. Deliberately NOT fed to the
+    # scorecard, and deliberately NOT counted across the programme: a tally is
+    # a judgement waiting for a threshold.
+    left_early     = Column(Boolean, nullable=False, server_default="false")
+    left_early_at  = Column(DateTime(timezone=True), nullable=True)
 
     # Phase 4 outcome
     passed            = Column(Boolean, nullable=True)   # null until Phase 4 submitted

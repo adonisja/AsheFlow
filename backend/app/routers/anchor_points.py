@@ -26,7 +26,7 @@ import os
 from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 
-from app.services.local_date import company_today
+from app.services.local_date import company_today, company_tz
 from uuid import UUID
 
 import aiohttp
@@ -37,12 +37,18 @@ from app.database import get_db
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.anchor_point import AnchorPoint
 from app.models.anchor_point_late_flag import AnchorPointLateFlag
+from app.models.building_profile import BuildingProfile
 from app.models.employee import Employee
 from app.services.company_config import get_discord_config
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.notification import Notification
+from app.models.field_ops import Departure
+from app.models.company import CompanyConfig
+from app.models.dispatch_confirmation import DispatchConfirmation
+from app.models.truck_zone import TruckZone
+from app.services.audit import write_audit
 from app.schemas.anchor_point import (
     AnchorPointCreate,
     AnchorPointArriveUpdate,
@@ -148,10 +154,13 @@ def _maybe_flag_late(db: Session, ap: AnchorPoint, truck_name: str, driver_name:
 
     now = datetime.now(timezone.utc)
     try:
-        # ETA is a local time string e.g. "10:30 AM". Parse against the AP's date.
-        eta_naive = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p")
-        # Treat as UTC for comparison purposes (no timezone config on AP yet)
-        eta_dt = eta_naive.replace(tzinfo=timezone.utc)
+        # ETA is a LOCAL time string e.g. "9:00 AM" — the driver means their own
+        # (company) timezone, not UTC. Parse against the AP date in the company tz
+        # and convert to UTC for comparison. (The old code stamped it as UTC, so a
+        # 9:00 AM EDT ETA was read as 9:00 UTC = 5:00 AM EDT and flagged late hours
+        # early.)
+        tz = company_tz(db, ap.company_id)
+        eta_dt = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p").replace(tzinfo=tz)
     except ValueError:
         return False
 
@@ -196,6 +205,35 @@ async def submit_anchor_point(
     """
     _get_assignment(db, payload.truck_id, payload.date, caller.id, caller.company_id)
 
+    # Gate (ADR-206): the AP can only be posted once the driver has left the
+    # station — i.e. after check-in, pre-trip, odometer, station arrival and load
+    # (the start-of-day sequence), which is what a Departure record marks. The
+    # mobile wizard already gates the AP step on `departed`; this enforces the
+    # same order server-side so a stale/direct client cannot post out of sequence.
+    departure = db.query(Departure).filter(
+        Departure.employee_id == caller.id,
+        Departure.date == payload.date,
+        Departure.company_id == caller.company_id,
+    ).first()
+    if not departure:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Post your Anchor Point after leaving the station — complete check-in, "
+                "pre-trip, starting odometer, station arrival and load first."
+            ),
+        )
+
+    # Geocode the driver's cross street / address into a canonical point (ADR-206,
+    # shared with the truck-anchor path). Borough: payload override → company
+    # config → manhattan. Failure raises 422 from the helper; the AP is not created.
+    from app.routers.trucks import _resolve_anchor_location
+    borough = payload.borough
+    if not borough:
+        cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+        borough = (cfg.geoclient_borough if cfg and cfg.geoclient_borough else None) or "manhattan"
+    canonical_location, ap_lat, ap_lng = _resolve_anchor_location(payload.location, borough)
+
     todays = (
         db.query(AnchorPoint)
         .filter(
@@ -211,7 +249,7 @@ async def submit_anchor_point(
 
     if is_first:
         existing_preliminary = next(
-            (a for a in todays if a.status == "preliminary" and a.location == payload.location),
+            (a for a in todays if a.status == "preliminary" and a.location == canonical_location),
             None,
         )
         if existing_preliminary:
@@ -234,7 +272,9 @@ async def submit_anchor_point(
         sequence              = sequence,
         is_initial            = is_first,
         status                = "preliminary",
-        location              = payload.location,
+        location              = canonical_location,
+        lat                   = ap_lat,
+        lng                   = ap_lng,
         eta                   = payload.eta,
         notes                 = payload.notes,
         expected_departure_at = payload.expected_departure_at if not is_first else None,
@@ -249,8 +289,8 @@ async def submit_anchor_point(
         color       = 0xF59E0B  # amber
         footer_text = "Awaiting arrival confirmation"
         notif_message = (
-            f"📍 {truck_name} — {caller.name} set preliminary AP: {payload.location}"
-            + (f" ETA {payload.eta}" if payload.eta else "")
+            f"📍 {truck_name} — {caller.name} set preliminary AP: {canonical_location}"
+            + f" ETA {payload.eta}"
         )
     else:
         title       = f"🔀 Anchor Point Relocating — {truck_name} (AP #{sequence})"
@@ -263,17 +303,16 @@ async def submit_anchor_point(
 
         notif_message = (
             f"🔀 {truck_name} — {caller.name} relocating to AP #{sequence}: "
-            f"{payload.location}"
+            f"{canonical_location}"
             + dep_str
-            + (f" ETA {payload.eta}" if payload.eta else "")
+            + f" ETA {payload.eta}"
         )
 
     fields = [{"name": "Driver", "value": caller.name, "inline": True},
-              {"name": "Location", "value": payload.location, "inline": True}]
+              {"name": "Location", "value": canonical_location, "inline": True}]
     if not is_first and payload.expected_departure_at:
         fields.append({"name": "Expected Departure", "value": payload.expected_departure_at.strftime("%I:%M %p"), "inline": True})
-    if payload.eta:
-        fields.append({"name": "ETA", "value": payload.eta, "inline": True})
+    fields.append({"name": "ETA", "value": payload.eta, "inline": True})
     if payload.notes:
         fields.append({"name": "Notes", "value": payload.notes, "inline": False})
 
@@ -286,6 +325,16 @@ async def submit_anchor_point(
     all_notify = list({*crew_ids, *(e.id for e in dispatch_emps)})
     _notify(db, all_notify, "anchor_point_submitted", notif_message, caller.company_id)
 
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="anchor_point.submitted",
+        target_table="anchor_points",
+        target_id=str(new_ap.id),
+        after={"sequence": sequence, "is_initial": is_first, "location": canonical_location},
+    )
     db.commit()
     db.refresh(new_ap)
 
@@ -561,6 +610,26 @@ async def get_active_anchor_point_for_truck(
     """
     today = company_today(db, caller.company_id)
 
+    # Gate: field staff (walker/trainer/trainee) see the AP only once THEY are
+    # confirmed onto the crew. The AP is posted the moment the driver submits,
+    # which can precede dispatch finalizing the crew — showing it to an
+    # unconfirmed member on their AP page implies they're locked onto this truck
+    # before that's true. Driver/dispatch/management/admin are unaffected (the
+    # driver reads their own AP via /driver/today; oversight always sees it).
+    if caller.role in ("walker", "trainer", "trainee"):
+        confirmed = (
+            db.query(DispatchConfirmation)
+            .filter(
+                DispatchConfirmation.employee_id == caller.id,
+                DispatchConfirmation.company_id == caller.company_id,
+                DispatchConfirmation.date == today,
+                DispatchConfirmation.status == "confirmed",
+            )
+            .first()
+        )
+        if confirmed is None:
+            return None
+
     ap = (
         db.query(AnchorPoint)
         .filter(
@@ -584,9 +653,10 @@ async def get_active_anchor_point_for_truck(
         driver = db.query(Employee).filter(Employee.id == ap.driver_id).first()
         driver_name = driver.name if driver else str(ap.driver_id)
 
-        minutes_late = int((datetime.now(timezone.utc) - datetime.strptime(
-            f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p"
-        ).replace(tzinfo=timezone.utc)).total_seconds() / 60)
+        # ETA is local (company tz) — same fix as _maybe_flag_late.
+        _eta_dt = datetime.strptime(f"{ap.date} {ap.eta}", "%Y-%m-%d %I:%M %p").replace(
+            tzinfo=company_tz(db, caller.company_id))
+        minutes_late = int((datetime.now(timezone.utc) - _eta_dt).total_seconds() / 60)
 
         notif_message = (
             f"⏰ {truck_name} — {driver_name} is running late "
@@ -659,3 +729,190 @@ def get_anchor_points_for_truck(
         .limit(limit)
         .all()
     )
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in METRES. Local copy (route_sort's _haversine_km is
+    proprietary; keeping this router importable in public CI)."""
+    from math import radians, cos, sin, sqrt, atan2
+    R = 6_371_000.0
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
+@router.get("/truck/{truck_id}/location-hints")
+def get_location_hints_for_truck(
+    truck_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_truck_read),
+):
+    """Ranked, scored starting-location suggestions for a truck's AP form (ADR-225).
+
+    The ideal AP is closest to where today's packages cluster — but a *usable* AP
+    also has to satisfy parking/access/legality, which the system can't compute.
+    A driver already solved that on past days, so historical APs encode it. So we
+    rank HISTORICAL initial APs by proximity to TODAY's package cluster (the
+    assigned TruckZone centroid): a past spot that is near today's work AND was
+    actually used is both close and proven-parkable. We surface both scores
+    (distance + use count) so the driver judges the tradeoff — the tool suggests,
+    the driver confirms.
+
+    Tiers:
+      1. history near today's cluster (centroid known) — proximity + use_count
+      2. history by frequency (no zone yet)
+      3. truck anchor intersection (stable dispatch-set corner)
+      4. building-profile institutional anchors (cold start)
+
+    Returns [{label, sublabel, source, use_count?, distance_m?, reason?}].
+    source ∈ history | truck_anchor | building_profile.
+    """
+    hints: list[dict] = []
+
+    # Today's package cluster centre for this truck (persisted at sort time).
+    today = company_today(db, caller.company_id)
+    zone = (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.truck_id == truck_id,
+            TruckZone.company_id == caller.company_id,
+            TruckZone.zone_date == today,
+            TruckZone.is_active.is_(True),
+        )
+        .first()
+    )
+    centroid = (zone.centroid_lat, zone.centroid_lng) if zone and zone.centroid_lat is not None else None
+
+    # Historical initial APs, grouped by canonical location → use_count + latest coords.
+    historical = (
+        db.query(AnchorPoint)
+        .join(Truck, AnchorPoint.truck_id == Truck.id)
+        .filter(
+            AnchorPoint.truck_id == truck_id,
+            AnchorPoint.is_initial == True,
+            Truck.company_id == caller.company_id,
+        )
+        .order_by(AnchorPoint.date.desc())
+        .all()
+    )
+    groups: dict[str, dict] = {}
+    for h in historical:
+        g = groups.get(h.location)
+        if g is None:
+            groups[h.location] = {
+                "location": h.location, "use_count": 1,
+                "lat": h.lat, "lng": h.lng, "last_date": h.date,
+                # rows sharing this location that still lack coords — backfilled below
+                "rows_missing_coords": [] if h.lat is not None else [h],
+            }
+        else:
+            g["use_count"] += 1
+            if h.lat is not None and g["lat"] is None:
+                g["lat"], g["lng"] = h.lat, h.lng   # adopt the most recent real coords
+            elif h.lat is None:
+                g["rows_missing_coords"].append(h)
+
+    # ADR-225 backfill: a pre-geocode history row has no lat/lng, so it can't be
+    # ranked by distance and floats as "unknown" (misleading — a stale far spot
+    # looks the same as a close one). Geocode the location string once, use it for
+    # ranking, AND persist it back so the row self-heals. Best-effort: a geocode
+    # failure just leaves the group unmeasured (prior behaviour).
+    groups_needing_geocode = [g for g in groups.values() if g["lat"] is None]
+    if groups_needing_geocode:
+        from app.routers.trucks import _resolve_anchor_location
+        _cfg = db.query(CompanyConfig).filter(CompanyConfig.company_id == caller.company_id).first()
+        _borough = (_cfg.geoclient_borough if _cfg and _cfg.geoclient_borough else None) or "manhattan"
+        _backfilled = False
+        for g in groups_needing_geocode:
+            try:
+                _canon, glat, glng = _resolve_anchor_location(g["location"], _borough)
+            except Exception:
+                continue   # unresolvable → stays unmeasured, ranked as unknown
+            g["lat"], g["lng"] = glat, glng
+            for row in g["rows_missing_coords"]:
+                row.lat, row.lng = glat, glng   # persist the self-heal
+                _backfilled = True
+        if _backfilled:
+            db.commit()
+
+    def _distance(g) -> Optional[float]:
+        if centroid is None or g["lat"] is None:
+            return None
+        return _haversine_m(g["lat"], g["lng"], centroid[0], centroid[1])
+
+    scored = []
+    for g in groups.values():
+        d = _distance(g)
+        scored.append({**g, "distance_m": d})
+
+    # Rank: when the cluster is known, proximity primary + use_count secondary;
+    # otherwise most-used then most-recent. Rows with no measurable distance sink
+    # below measurable ones (but stay ahead of non-history tiers).
+    if centroid is not None:
+        scored.sort(key=lambda g: (
+            g["distance_m"] is None,                                   # measurable first
+            g["distance_m"] if g["distance_m"] is not None else 0.0,   # nearer first
+            -g["use_count"],                                            # then more-used
+        ))
+    else:
+        scored.sort(key=lambda g: (-g["use_count"], g["last_date"].toordinal() * -1))
+
+    for g in scored[:5]:
+        d = g["distance_m"]
+        used = f"used {g['use_count']}×"
+        if d is not None:
+            reason = f"{used} · ~{round(d)} m from today's cluster"
+        elif centroid is not None:
+            reason = f"{used} · distance unknown (older record)"
+        else:
+            reason = used
+        hints.append({
+            "label":      g["location"],
+            "sublabel":   g["last_date"].isoformat(),
+            "source":     "history",
+            "use_count":  g["use_count"],
+            "distance_m": round(d) if d is not None else None,
+            "reason":     reason,
+        })
+
+    # Truck anchor intersection — stable dispatch-set corner, always offered when set.
+    truck = db.query(Truck).filter(Truck.id == truck_id, Truck.company_id == caller.company_id).first()
+    if truck and truck.initial_anchor_lat is not None:
+        label = truck.initial_anchor_display_address or truck.initial_anchor_address
+        if label:
+            d = _haversine_m(truck.initial_anchor_lat, truck.initial_anchor_lng, *centroid) if centroid else None
+            hints.append({
+                "label":      label,
+                "sublabel":   "Truck anchor",
+                "source":     "truck_anchor",
+                "use_count":  None,
+                "distance_m": round(d) if d is not None else None,
+                "reason":     (f"territory anchor · ~{round(d)} m from today's cluster" if d is not None
+                               else "dispatch territory anchor"),
+            })
+
+    # Cold start: building-profile institutional anchors (only if we have nothing else).
+    if not hints:
+        bp_anchors = (
+            db.query(BuildingProfile)
+            .filter(
+                BuildingProfile.company_id == caller.company_id,
+                BuildingProfile.initial_anchor_lat.isnot(None),
+                BuildingProfile.initial_anchor_lng.isnot(None),
+            )
+            .limit(5)
+            .all()
+        )
+        for bp in bp_anchors:
+            hints.append({
+                "label":      bp.initial_anchor_note or f"{bp.initial_anchor_lat:.5f}, {bp.initial_anchor_lng:.5f}",
+                "sublabel":   "Station anchor",
+                "source":     "building_profile",
+                "use_count":  None,
+                "distance_m": None,
+                "reason":     "institutional anchor",
+            })
+
+    return hints

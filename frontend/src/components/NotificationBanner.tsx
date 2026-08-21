@@ -1,21 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X, Bell, MapPin, ChevronDown } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
-
-interface Notification {
-  id: string;
-  employee_id: string;
-  type: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-  dispatch_date: string | null;
-}
-
-interface Props {
-  employeeId: string;
-  onNotification?: (type: string) => void;
-}
+import { useNotificationContext } from '../contexts/NotificationContext';
+import type { Notification } from '../contexts/NotificationContext';
+import { partitionNotifications } from './notifications/classify';
 
 function styleForType(type: string): { bg: string; border: string; icon: React.ReactNode } {
   if (type === 'dispatch_assignment' || type === 'dispatch_assignment_info') {
@@ -53,6 +42,13 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
       icon: <MapPin className="w-4 h-4 text-info shrink-0 mt-0.5" />,
     };
   }
+  if (type === 'timecard_adjustment' && import.meta.env.VITE_ADP_ENABLED === 'true') {
+    return {
+      bg: 'bg-warning/10',
+      border: 'border-warning/30',
+      icon: <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />,
+    };
+  }
   if (type.includes('critical') || type.includes('warning')) {
     return {
       bg: 'bg-warning/10',
@@ -67,93 +63,87 @@ function styleForType(type: string): { bg: string; border: string; icon: React.R
   };
 }
 
-// Tracks which dispatch_assignment notifications have been responded to in this session.
-// Maps notification id → 'confirmed' | 'declined'
-type ResponseMap = Record<string, 'confirmed' | 'declined'>;
+/** Notification messages carry Discord-flavoured markdown (**bold**) because the
+ *  same string is posted to a channel. Rendered as plain text the asterisks leak
+ *  through — "**Falcon**" was visible on screen. */
+function stripMarkdown(text: string): string {
+  return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1');
+}
 
-// Maps dispatch_date → confirmation status fetched from the backend.
-// 'pending' or null means the window is still open; 'confirmed'/'declined' means already responded.
+/** RENDER the bold rather than strip it. The bolded span is always the thing
+ *  that matters — the truck name, the date — so flattening it throws away the
+ *  one bit of emphasis the message author encoded. Split on the delimiters and
+ *  emit <strong>; no markdown library for one rule.
+ *
+ *  Used for full message text. The collapsed preview still STRIPS, because a
+ *  one-line truncated summary should not carry weight changes. */
+function renderMessage(text: string): React.ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
+      <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    ),
+  );
+}
+
+type ResponseMap = Record<string, 'confirmed' | 'declined'>;
 type ConfirmationStatusMap = Record<string, 'pending' | 'confirmed' | 'declined' | null>;
 
-const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => {
-  const [notifications, setNotifications]         = useState<Notification[]>([]);
-  const [responses, setResponses]                 = useState<ResponseMap>({});
-  const [responding, setResponding]               = useState<string | null>(null);
+const NotificationBanner: React.FC = () => {
+  const { notifications, employeeId, markRead, markAllRead, refresh } = useNotificationContext();
+  const [responses, setResponses] = useState<ResponseMap>({});
+  const [responding, setResponding] = useState<string | null>(null);
   const [confirmationStatus, setConfirmationStatus] = useState<ConfirmationStatusMap>({});
-  const seenIds = useRef<Set<string>>(new Set());
+  const [infoOpen, setInfoOpen] = useState(false);
+  const fetchedDates = useRef<Set<string>>(new Set());
 
+  // Fetch confirmation window status for any new dispatch_assignment notifications
   useEffect(() => {
-    if (!employeeId) return;
-    axiosClient
-      .get<Notification[]>(`/notifications/${employeeId}`)
-      .then(async (res) => {
-        const unread = res.data.filter((n) => !n.is_read);
-        setNotifications(unread);
-        if (onNotification) {
-          for (const n of unread) {
-            if (!seenIds.current.has(n.id)) {
-              seenIds.current.add(n.id);
-              onNotification(n.type);
-            }
-          }
-        }
+    const dates = [
+      ...new Set(
+        notifications
+          .filter(n => n.type === 'dispatch_assignment' && n.dispatch_date)
+          .map(n => n.dispatch_date as string)
+          .filter(d => !fetchedDates.current.has(d)),
+      ),
+    ];
+    if (dates.length === 0) return;
 
-        // For every unique dispatch_date on a dispatch_assignment notification, fetch
-        // the employee's current confirmation status. This tells us whether the
-        // confirmation window is still open so we can show or suppress the buttons.
-        const dates = [
-          ...new Set(
-            unread
-              .filter((n) => n.type === 'dispatch_assignment' && n.dispatch_date)
-              .map((n) => n.dispatch_date as string),
-          ),
-        ];
-        if (dates.length === 0) return;
-        const results = await Promise.allSettled(
-          dates.map((d) =>
-            axiosClient
-              .get<{ date: string; status: 'pending' | 'confirmed' | 'declined' | null }>(
-                `/dispatch/${d}/my-confirmation`,
-              )
-              .then((r) => ({ date: d, status: r.data.status })),
-          ),
-        );
-        const statusMap: ConfirmationStatusMap = {};
-        for (const r of results) {
-          if (r.status === 'fulfilled') statusMap[r.value.date] = r.value.status;
-        }
-        setConfirmationStatus(statusMap);
-      })
-      .catch(() => {});
-  }, [employeeId, onNotification]);
+    dates.forEach(d => fetchedDates.current.add(d));
 
-  const dismiss = async (id: string) => {
-    await axiosClient.patch(`/notifications/${id}/read`).catch(() => {});
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-  };
+    Promise.allSettled(
+      dates.map(d =>
+        axiosClient
+          .get<{ date: string; status: 'pending' | 'confirmed' | 'declined' | null }>(
+            `/dispatch/${d}/my-confirmation`,
+          )
+          .then(r => ({ date: d, status: r.data.status })),
+      ),
+    ).then(results => {
+      const statusMap: ConfirmationStatusMap = {};
+      for (const r of results) {
+        if (r.status === 'fulfilled') statusMap[r.value.date] = r.value.status;
+      }
+      setConfirmationStatus(prev => ({ ...prev, ...statusMap }));
+    });
+  }, [notifications]);
+
+  const dismiss = (id: string) => markRead(id);
 
   const dismissAll = async () => {
-    // dispatch_assignment cards with an open window require an explicit response.
-    // All others (including dispatch_assignment_info and already-responded cards) can be bulk-dismissed.
-    const requiresResponse = (n: Notification) =>
-      n.type === 'dispatch_assignment' &&
-      !responses[n.id] &&
-      n.dispatch_date &&
-      confirmationStatus[n.dispatch_date] === 'pending';
-
-    const toRemove = notifications.filter((n) => !requiresResponse(n));
-    const ids = new Set(toRemove.map((n) => n.id));
-
-    if (toRemove.some((n) => n.type !== 'dispatch_assignment')) {
-      await axiosClient.patch(`/notifications/employee/${employeeId}/read-all`).catch(() => {});
+    // Never bulk-dismiss something awaiting an answer (ADR-275 D1). Uses the
+    // SAME classifier as the render split — this used to be a second, subtly
+    // different copy of the rule inline.
+    const toRemove = info;
+    if (toRemove.some(n => n.type !== 'dispatch_assignment')) {
+      await markAllRead();
+    } else {
+      await Promise.all(toRemove.map(n => markRead(n.id)));
     }
-    setNotifications((prev) => prev.filter((n) => !ids.has(n.id)));
   };
 
-  const respondToDispatch = async (
-    notif: Notification,
-    status: 'confirmed' | 'declined',
-  ) => {
+  const respondToDispatch = async (notif: Notification, status: 'confirmed' | 'declined') => {
     if (!notif.dispatch_date || responding) return;
     setResponding(notif.id);
     try {
@@ -161,8 +151,11 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
         employee_id: employeeId,
         status,
       });
-      setResponses((prev) => ({ ...prev, [notif.id]: status }));
-      setTimeout(() => dismiss(notif.id), 1800);
+      setResponses(prev => ({ ...prev, [notif.id]: status }));
+      setTimeout(() => {
+        dismiss(notif.id);
+        refresh();
+      }, 1800);
     } catch (e) {
       console.error('Failed to record confirmation:', e);
     } finally {
@@ -170,33 +163,51 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
     }
   };
 
+  // ADR-275 D1 — what needs an answer vs what is only news.
+  const { action, info } = partitionNotifications(notifications, {
+    answeredInSession: responses,
+    confirmationStatus,
+  });
+
   if (notifications.length === 0) return null;
 
   return (
-    <div className="w-full space-y-2 animate-slide-up">
+    /* HEIGHT CAP (ADR-275 D3) — a safety net, not the mechanism. D1 bounds the
+       informational side; the action side is deliberately uncapped because
+       hiding an unanswered assignment can strand a truck. This guarantees page
+       content stays visible even on a genuine multi-truck day. If this cap is
+       ever doing real work, the classification is wrong. */
+    <div className="w-full space-y-2 animate-slide-up max-h-[40vh] overflow-y-auto pr-1">
       <div className="flex items-center justify-between mb-1">
         <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           <Bell className="w-3.5 h-3.5" />
           Notifications
         </span>
-        {notifications.length > 1 && (
-          <button
-            onClick={dismissAll}
+        <span className="flex items-center gap-3">
+          {/* Dismissing only clears the banner — full history stays at /notifications */}
+          <Link
+            to="/notifications"
             className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
           >
-            Dismiss all
-          </button>
-        )}
+            View all
+          </Link>
+          {notifications.length > 1 && (
+            <button
+              onClick={dismissAll}
+              className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
+            >
+              Dismiss all
+            </button>
+          )}
+        </span>
       </div>
 
-      {notifications.map((n) => {
+      {action.map(n => {
         const style = styleForType(n.type);
 
         if (n.type === 'dispatch_assignment') {
           const response = responses[n.id];
           const isSubmitting = responding === n.id;
-          // Window is open only when the backend status is 'pending' (or not yet loaded).
-          // 'confirmed' / 'declined' means the employee already responded — suppress buttons.
           const backendStatus = n.dispatch_date ? confirmationStatus[n.dispatch_date] : undefined;
           const windowOpen = backendStatus === undefined || backendStatus === 'pending';
 
@@ -207,7 +218,7 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
             >
               <div className="flex items-start gap-3">
                 {style.icon}
-                <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
+                <p className="flex-1 text-sm text-foreground">{renderMessage(n.message)}</p>
               </div>
 
               {response ? (
@@ -221,7 +232,6 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
                   {response === 'confirmed' ? 'Confirmed' : 'Declined'} — response recorded.
                 </div>
               ) : !windowOpen ? (
-                // Confirmation window closed — show recorded status, no action needed
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   {backendStatus === 'confirmed' && (
                     <>
@@ -269,42 +279,77 @@ const NotificationBanner: React.FC<Props> = ({ employeeId, onNotification }) => 
           );
         }
 
-        // dispatch_assignment_info — informational dispatch card, dismissible, no action buttons
-        if (n.type === 'dispatch_assignment_info') {
-          return (
-            <div
-              key={n.id}
-              className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
-            >
-              {style.icon}
-              <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
-              <button
-                onClick={() => dismiss(n.id)}
-                className="text-muted-foreground hover:text-foreground transition-colors ml-2"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          );
-        }
-
-        // Default render for all other notification types
-        return (
-          <div
-            key={n.id}
-            className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
-          >
-            {style.icon}
-            <p className="flex-1 text-sm font-medium text-foreground">{n.message}</p>
-            <button
-              onClick={() => dismiss(n.id)}
-              className="text-muted-foreground hover:text-foreground transition-colors ml-2"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        );
+        // UNREACHABLE BY CONSTRUCTION. `action` only ever contains
+        // dispatch_assignment (isActionRequired returns false for every other
+        // type, verified), so the old dispatch_assignment_info and generic
+        // branches that lived here were dead once the partition landed. Every
+        // other type now renders through InfoCard below.
+        return null;
       })}
+
+      {/* INFORMATIONAL GROUP (ADR-275 D2). One row when there is more than one;
+          a lone update renders as a normal card, because collapsing a single
+          item hides it behind a click for no saving. */}
+      {info.length === 1 && <InfoCard n={info[0]} onDismiss={dismiss} />}
+
+      {info.length > 1 && (
+        <div className="rounded-xl border border-border bg-accent/20 overflow-hidden">
+          <button
+            onClick={() => setInfoOpen(o => !o)}
+            aria-expanded={infoOpen}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-left
+                       hover:bg-accent/30 transition-colors"
+          >
+            <ChevronDown
+              className={`w-4 h-4 text-muted-foreground shrink-0 transition-transform
+                          ${infoOpen ? '' : '-rotate-90'}`}
+            />
+            <span className="flex-1 text-sm font-medium text-foreground">
+              {info.length} more update{info.length === 1 ? '' : 's'}
+            </span>
+            {/* A preview of the most recent, so the row says something even
+                closed — "12 more updates" alone gives no reason to open it. */}
+            <span className="hidden sm:block max-w-[45%] truncate text-xs text-muted-foreground">
+              {stripMarkdown(info[0].message)}
+            </span>
+          </button>
+
+          {/* Inset and separated, so the expanded items read as CONTENTS of the
+              group rather than siblings that escaped it. Without the divider
+              and the left inset the cards looked like they had broken out of
+              the container they belong to. */}
+          {infoOpen && (
+            <div className="border-t border-border/60 bg-background/40 px-2 py-2 space-y-1.5">
+              {info.map(n => (
+                <InfoCard key={n.id} n={n} onDismiss={dismiss} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** One informational row. Extracted because the collapsed group and the
+ *  single-item case render the same thing — two copies would drift. */
+const InfoCard: React.FC<{ n: Notification; onDismiss: (id: string) => void }> = ({
+  n,
+  onDismiss,
+}) => {
+  const style = styleForType(n.type);
+  return (
+    <div
+      className={`flex items-start gap-3 px-4 py-3 rounded-xl border ${style.bg} ${style.border} shadow-sm`}
+    >
+      {style.icon}
+      <p className="flex-1 text-sm text-foreground">{renderMessage(n.message)}</p>
+      <button
+        onClick={() => onDismiss(n.id)}
+        className="text-muted-foreground hover:text-foreground transition-colors ml-2"
+      >
+        <X className="w-4 h-4" />
+      </button>
     </div>
   );
 };

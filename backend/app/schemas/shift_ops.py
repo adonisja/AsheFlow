@@ -29,8 +29,21 @@ class CrewComplianceResponse(BaseModel):
     arrival_time: Optional[time] = None
     uniform_pass: bool
     cart_cover_pass: bool
+    status: str = "submitted"   # draft | submitted (ADR-228)
     submitted_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class CrewComplianceDraftUpsert(BaseModel):
+    """One member's uniform/cart-cover, saved live on the shared Crew Roster page
+    as a DRAFT (ADR-228). The record is keyed to the truck's DRIVER, but that is
+    resolved server-side from the caller's own assignment (any captain may record
+    it) — no driver_id is accepted from the client (anti-spoof)."""
+    date: date
+    employee_id: UUID
+    uniform_pass: bool
+    cart_cover_pass: bool
+    arrival_time: Optional[time] = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +104,7 @@ class RTSReportResponse(BaseModel):
     status: str
     dispatch_notes: Optional[str] = None
     reviewed_by: Optional[UUID] = None
+    reviewed_by_name: Optional[str] = None
     submitted_at: datetime
     reviewed_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
@@ -114,6 +128,7 @@ class StationHandoffResponse(BaseModel):
     date: date
     totes_returned: int
     rts_count: int
+    missing_count: int = 0
     notes: Optional[str] = None
     submitted_at: datetime
     model_config = ConfigDict(from_attributes=True)

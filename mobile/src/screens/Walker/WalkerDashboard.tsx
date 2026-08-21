@@ -5,14 +5,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import PageHeader from '@components/ui/PageHeader';
 
 import MyRouteScreen          from '@screens/Trainee/MyRouteScreen';
 import WalkerPerformanceScreen from './WalkerPerformanceScreen';
+import FoundPackageScreen     from './FoundPackageScreen';
 
-type Tab = 'myroute' | 'performance';
+type Tab = 'myroute' | 'found' | 'performance';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: 'myroute',     label: 'My Route',    icon: '🗺️' },
+  // A walker finds an unregistered package WHILE working the route, so this
+  // sits beside My Route rather than in a separate tab (ADR-246).
+  { key: 'found',       label: 'Found',       icon: '📦' },
   { key: 'performance', label: 'Performance', icon: '📊' },
 ];
 
@@ -23,9 +28,7 @@ export default function WalkerDashboard() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.header}>
-        <Text style={s.title}>Walker</Text>
-      </View>
+      <PageHeader title="Walker" />
 
       <View style={s.tabBarWrap}>
         <ScrollView
@@ -55,6 +58,7 @@ export default function WalkerDashboard() {
 
       <View style={{ flex: 1 }}>
         {activeTab === 'myroute'     && <MyRouteScreen />}
+        {activeTab === 'found'       && <FoundPackageScreen />}
         {activeTab === 'performance' && <WalkerPerformanceScreen />}
       </View>
     </SafeAreaView>
@@ -70,6 +74,6 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   tab:          { alignItems: 'center', flexDirection: 'row', gap: 5, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, position: 'relative' },
   tabActive:    {},
   tabIcon:      { fontSize: 14 },
-  tabLabel:     { fontSize: fontSize.sm, color: '#9CA3AF', fontWeight: fontWeight.medium },
+  tabLabel:     { fontSize: fontSize.sm, color: c.mutedForeground, fontWeight: fontWeight.medium },
   tabIndicator: { position: 'absolute', bottom: 0, left: spacing.md, right: spacing.md, height: 2, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
 });

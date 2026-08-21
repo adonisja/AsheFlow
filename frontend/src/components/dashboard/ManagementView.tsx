@@ -1,31 +1,42 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import axiosClient from '../../api/axiosClient';
+import { getLocalYMD } from '../../utils/date';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   AlertTriangle, BarChart2, ClipboardCheck, Star, Truck, Users, ShieldAlert, CheckCircle2,
-  LayoutDashboard, RefreshCw, Package, MapPin, LogIn, ShoppingBag,
+  LayoutDashboard, RefreshCw, Package, MapPin, LogIn,
 } from 'lucide-react';
-import GearManagerInbox from '../gear/GearManagerInbox';
+import GearRequestSummary from '../gear/GearRequestSummary';
+import type { NoShowRow, InspectionSummaryRow, ManagementDashboardSummary } from '../../api/types';
+import { pct, metric, count, hours } from '../../utils/metric';
+import CompanyStandingCard from '../CompanyStandingCard';
+import DeclinePatterns from './DeclinePatterns';
 
 export default function ManagementView() {
   const { user } = useAuth();
   const greeting = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
   const [incidentSummary, setIncidentSummary] = useState<any>(null);
   const [walkerStats, setWalkerStats] = useState<any[]>([]);
-  const [noShows, setNoShows] = useState<any[]>([]);
+  const [noShows, setNoShows] = useState<NoShowRow[]>([]);
   const [trainingPipeline, setTrainingPipeline] = useState<any>(null);
   const [inspectionFailures, setInspectionFailures] = useState<any>(null);
-  const [todayInspections, setTodayInspections]     = useState<any[]>([]);
+  const [todayInspections, setTodayInspections]     = useState<InspectionSummaryRow[]>([]);
   const [truckStatuses, setTruckStatuses] = useState<{ truck_id: string; status: string }[]>([]);
   const [checkInSummary, setCheckInSummary]   = useState<any>(null);
   const [handoffSummary, setHandoffSummary]   = useState<any>(null);
   const [pendingRTS, setPendingRTS]           = useState<any[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [companyTimezone, setCompanyTimezone] = useState<string | null>(null);
+  // ADR-241: efficiency + routing quality. This is the only source of
+  // packages/hour, success/rework rates, on-time and misroutes — the other
+  // panels here are all point-in-time counts. Nullable throughout: the backend
+  // returns null when a metric cannot be computed, never a misleading 0.
+  const [efficiency, setEfficiency] = useState<ManagementDashboardSummary | null>(null);
+  const [effPeriod, setEffPeriod]   = useState<'today' | 'week' | 'month'>('week');
 
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getLocalYMD();
     await Promise.allSettled([
       axiosClient.get('/incidents/summary?days=7').then(r => setIncidentSummary(r.data)),
       axiosClient.get('/field-ops/walker-stats').then(r => setWalkerStats(r.data)),
@@ -38,9 +49,11 @@ export default function ManagementView() {
       axiosClient.get('/shift-ops/station-handoffs/summary').then(r => setHandoffSummary(r.data)).catch(() => {}),
       axiosClient.get('/shift-ops/rts-reports/pending').then(r => setPendingRTS(r.data)).catch(() => {}),
       axiosClient.get('/companies/my-info').then(r => setCompanyTimezone(r.data.timezone)).catch(() => {}),
+      axiosClient.get(`/dashboards/management/summary?period=${effPeriod}`)
+        .then(r => setEfficiency(r.data)).catch(() => setEfficiency(null)),
     ]);
     setIsRefreshing(false);
-  }, []);
+  }, [effPeriod]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -120,6 +133,251 @@ export default function ManagementView() {
           </div>
         ))}
       </div>
+
+      {/* Tier 1 — company standing, visible to every role */}
+      <CompanyStandingCard />
+
+      {/* Operational efficiency + routing quality (ADR-241).
+          Deliberately NOT cost-per-delivery: clients do not share wage rates,
+          so cost is not computable. These are the operational facts a manager
+          can act on, and against which they can apply their own costs. */}
+      <div className="card">
+        <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+          <BarChart2 className="w-5 h-5 text-info" />
+          <h2 className="text-base font-semibold text-foreground">Operational Efficiency</h2>
+          <select
+            value={effPeriod}
+            onChange={(e) => setEffPeriod(e.target.value as 'today' | 'week' | 'month')}
+            className="ml-auto px-2 py-1 rounded-lg border border-border bg-accent/20 text-xs"
+            aria-label="Efficiency period"
+          >
+            <option value="today">Today</option>
+            <option value="week">This week</option>
+            <option value="month">This month</option>
+          </select>
+        </div>
+
+        {!efficiency ? (
+          <p className="text-sm text-subtle text-center py-6">
+            Efficiency data unavailable.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {[
+                {
+                  label: 'Packages/Hour',
+                  value: metric(efficiency.operational.packages_per_hour),
+                  sub: efficiency.operational.prior_packages_per_hour != null
+                    ? `prior ${metric(efficiency.operational.prior_packages_per_hour)}`
+                    : efficiency.operational.paid_hours_source === 'none'
+                      ? 'no payroll hours'
+                      : 'no prior period',
+                  trend: efficiency.operational.trend_packages_per_hour,
+                },
+                {
+                  label: 'Success Rate',
+                  value: pct(efficiency.operational.delivery_success_rate_pct),
+                  sub: `${count(efficiency.operational.total_packages_delivered)} delivered`,
+                  trend: efficiency.operational.trend_success_rate,
+                },
+                {
+                  label: 'Rework Rate',
+                  value: pct(efficiency.operational.rework_rate_pct, 1),
+                  sub: `${count(efficiency.operational.total_rework_count)} RTS + missing`,
+                },
+                {
+                  // Distinct from route completion: needs CompanyConfig.shift_end.
+                  label: 'On-Time',
+                  value: pct(efficiency.operational.on_time_rate_pct),
+                  sub: efficiency.operational.on_time_reference
+                    ? `vs ${efficiency.operational.on_time_reference}`
+                    : 'shift end not set',
+                },
+                {
+                  label: 'Crew Utilization',
+                  value: pct(efficiency.operational.crew_utilization_pct),
+                  sub: `${count(efficiency.operational.crews_deployed)}/${count(efficiency.operational.crews_total)} deployed`,
+                },
+              ].map(k => (
+                <div key={k.label} className="p-3 rounded-lg bg-accent/20">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider truncate">{k.label}</p>
+                  <p className="text-xl font-bold text-foreground mt-0.5 tabular-nums">{k.value}</p>
+                  <p className="text-xs text-subtle truncate">
+                    {k.trend === 'up' ? '↑ ' : k.trend === 'down' ? '↓ ' : ''}{k.sub}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Coverage depth (ADR-268) — sits under Crew Utilization because the
+                two answer adjacent questions: how many are out, and how many
+                could still be called. A TODAY number regardless of the period
+                selector above, which the label states rather than leaving the
+                reader to assume it follows the dropdown. */}
+            {efficiency.crew.coverage_depth && (
+              <div className="mt-4 p-3 rounded-lg bg-accent/10 border border-border/60">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <LogIn className="w-4 h-4 text-info shrink-0" />
+                  <span className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                    Coverage Depth
+                  </span>
+                  <span className="text-xs text-subtle">still callable · today</span>
+                  {efficiency.crew.coverage_depth.at_capacity_risk && (
+                    <span className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded-full
+                                     bg-danger/10 text-danger text-xs font-semibold">
+                      <AlertTriangle className="w-3 h-3" /> No spare cover
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                  {([
+                    { label: 'Drivers',  spare: efficiency.crew.coverage_depth.spare_drivers,  assigned: efficiency.crew.coverage_depth.assigned_drivers,  critical: true },
+                    { label: 'Captains', spare: efficiency.crew.coverage_depth.spare_captains, assigned: efficiency.crew.coverage_depth.assigned_captains, critical: true },
+                    { label: 'Walkers',  spare: efficiency.crew.coverage_depth.spare_walkers,  assigned: efficiency.crew.coverage_depth.assigned_walkers,  critical: false },
+                    { label: 'Trainers', spare: efficiency.crew.coverage_depth.spare_trainers, assigned: efficiency.crew.coverage_depth.assigned_trainers, critical: false },
+                  ]).map(r => {
+                    // Only driver/captain turn red: a truck with no spare driver
+                    // strands on the next decline, where a walker short is a
+                    // slower route. Same rule as the backend's at_capacity_risk,
+                    // and it must stay in step with it.
+                    const short = r.critical && r.assigned > 0 && r.spare === 0;
+                    return (
+                      <div key={r.label} className="p-2 rounded-lg bg-accent/20">
+                        <p className="text-xs text-muted-foreground truncate">{r.label}</p>
+                        <p className={`text-lg font-bold tabular-nums mt-0.5 ${
+                          short ? 'text-danger' : r.spare > 0 ? 'text-success' : 'text-muted-foreground'
+                        }`}>
+                          {count(r.spare)}
+                        </p>
+                        <p className="text-xs text-subtle truncate">{count(r.assigned)} assigned</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Routing quality — nothing else on this page surfaces misroutes */}
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+              <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
+                <span className="text-subtle">Avg route time</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {hours(efficiency.fleet.route_avg_duration_hours)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
+                <span className="text-subtle">Misroutes</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {count(efficiency.fleet.misrouted_count)}
+                  <span className="text-subtle ml-1">
+                    ({count(efficiency.fleet.misrouted_unresolved)} open)
+                  </span>
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 rounded-lg bg-accent/10">
+                <span className="text-subtle">Avg min/stop</span>
+                <span className="font-semibold text-foreground tabular-nums">
+                  {metric(efficiency.operational.avg_minutes_per_stop)}
+                </span>
+              </div>
+            </div>
+
+            {efficiency.fleet.misrouted_hotspots.length > 0 && (
+              <div className="mt-4 space-y-1.5">
+                <p className="text-xs text-subtle uppercase tracking-wider flex items-center gap-1">
+                  <MapPin className="w-3 h-3" /> Misroute hotspots
+                </p>
+                {efficiency.fleet.misrouted_hotspots.map(h => (
+                  <div key={h.block_key} className="flex items-center justify-between">
+                    {/* block_key, never normalised_address — Dimension 7, and
+                        ADR-219 nulls addresses 48h post-route anyway. */}
+                    <span className="text-sm text-foreground font-mono truncate">{h.block_key}</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums">{count(h.count)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Decline patterns (ADR-268). Sits above Training Oversight because it
+          is the same subject as the coverage-depth block just rendered — where
+          capacity is being lost, then who is left to call. Loads independently
+          of `efficiency`: it has its own endpoint and its own lookback, and a
+          failure on one must not blank the other. */}
+      <DeclinePatterns />
+
+      {/* Training oversight (ADR-241). Roster-wide comparison is a MANAGEMENT
+          judgement — a trainer's own view is scoped to their session, on mobile.
+          The Training Pipeline panel below shows counts; this shows distribution
+          and who is falling behind. */}
+      {efficiency && (efficiency.crew.stuck_trainees.length > 0
+        || efficiency.crew.trainee_phases.length > 0
+        || efficiency.crew.training_problem_areas.length > 0) && (
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <ClipboardCheck className="w-5 h-5 text-info" />
+            <h2 className="text-base font-semibold text-foreground">Training Oversight</h2>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Phase distribution — rows, not a 1..4 map: current_day_number
+                reaches 5 (quiz) and 6+ (remediation). */}
+            <div>
+              <p className="text-xs text-subtle uppercase tracking-wider mb-2">Phase distribution</p>
+              {efficiency.crew.trainee_phases.length === 0 ? (
+                <p className="text-sm text-subtle">No active trainees.</p>
+              ) : efficiency.crew.trainee_phases.map(p => (
+                <div key={p.phase} className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm text-foreground w-32 truncate">{p.label}</span>
+                  <div className="flex-1 bg-accent/20 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-info h-full"
+                      style={{ width: `${(p.trainee_count / Math.max(efficiency.crew.active_trainees, 1)) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-sm font-semibold text-foreground w-6 text-right tabular-nums">
+                    {count(p.trainee_count)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Stuck trainees */}
+            <div>
+              <p className="text-xs text-subtle uppercase tracking-wider mb-2">Stuck &gt;21 days</p>
+              {efficiency.crew.stuck_trainees.length === 0 ? (
+                <p className="text-sm text-subtle">None — all trainees progressing.</p>
+              ) : efficiency.crew.stuck_trainees.map(s => (
+                <div key={`${s.trainee_name}-${s.phase}`}
+                     className="flex items-center justify-between p-2 mb-1.5 rounded-lg bg-warning/10 border border-warning/20">
+                  <span className="text-sm text-foreground truncate">{s.trainee_name}</span>
+                  <span className="text-xs text-warning font-semibold shrink-0 tabular-nums">
+                    P{s.phase} · {count(s.days_in_phase)}d
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Failing topics — real TrainingTask signals */}
+            <div>
+              <p className="text-xs text-subtle uppercase tracking-wider mb-2">Failing topics</p>
+              {efficiency.crew.training_problem_areas.length === 0 ? (
+                <p className="text-sm text-subtle">No escalated or late tasks.</p>
+              ) : efficiency.crew.training_problem_areas.slice(0, 5).map(a => (
+                <div key={a.topic_title} className="flex items-center justify-between mb-1.5">
+                  <span className="text-sm text-foreground truncate">{a.topic_title}</span>
+                  <span className="text-xs text-subtle shrink-0 tabular-nums ml-2">
+                    {count(a.escalated_count)} esc · {count(a.late_count)} late
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3-column reporting panels */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -224,10 +482,17 @@ export default function ManagementView() {
                 </div>
               )}
               {trainingPipeline.trainer_loads.length === 0 ? (
-                <p className="text-sm text-subtle text-center py-4">No training sessions today.</p>
+                <p className="text-sm text-subtle text-center py-4">No active trainer assignments.</p>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-xs text-subtle uppercase tracking-wider font-medium">Trainer Load Today</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-subtle uppercase tracking-wider font-medium">
+                      {truckStatuses.length > 0 ? 'Trainer Load Today' : 'Standing Assignments'}
+                    </p>
+                    {truckStatuses.length === 0 && (
+                      <span className="text-xs text-subtle italic">no dispatch yet</span>
+                    )}
+                  </div>
                   {trainingPipeline.trainer_loads.map((t: any) => (
                     <div key={t.trainer_id} className="flex items-center justify-between">
                       <span className="text-sm text-foreground truncate">{t.trainer_name}</span>
@@ -251,8 +516,8 @@ export default function ManagementView() {
           <h2 className="text-base font-semibold text-foreground">Vehicle Inspections — Today</h2>
           {todayInspections.length > 0 && (
             <span className="ml-auto text-xs text-subtle">
-              {todayInspections.filter((i: any) => i.has_failures).length} failed ·{' '}
-              {todayInspections.filter((i: any) => !i.has_failures).length} passed
+              {todayInspections.filter((i) => i.has_failures).length} failed ·{' '}
+              {todayInspections.filter((i) => !i.has_failures).length} passed
             </span>
           )}
         </div>
@@ -273,7 +538,7 @@ export default function ManagementView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {todayInspections.map((insp: any) => (
+                {todayInspections.map((insp) => (
                   <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
                     <td className="py-2 pr-4 font-medium text-foreground whitespace-nowrap">{insp.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{insp.truck_name ?? '—'}</td>
@@ -302,12 +567,21 @@ export default function ManagementView() {
                         </span>
                       )}
                     </td>
-                    <td className="py-2 text-xs text-danger">
-                      {insp.has_failures && insp.failed_items?.length > 0
-                        ? insp.failed_items.map((item: string) =>
+                    <td className="py-2 text-xs">
+                      {insp.has_failures && insp.failed_items?.length > 0 ? (
+                        <span className="text-danger">
+                          {insp.failed_items.map((item: string) =>
                             item.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
-                          ).join(', ')
-                        : <span className="text-subtle">—</span>}
+                          ).join(', ')}
+                        </span>
+                      ) : (
+                        !insp.notes && <span className="text-subtle">—</span>
+                      )}
+                      {insp.notes && (
+                        <p className="mt-0.5 text-muted-foreground italic whitespace-normal">
+                          “{insp.notes}”
+                        </p>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -439,14 +713,11 @@ export default function ManagementView() {
         )}
       </div>
 
-      {/* Gear Requests */}
-      <div className="card border-border/60">
-        <div className="flex items-center gap-2 border-b border-border/50 pb-3 mb-4">
-          <ShoppingBag className="w-5 h-5 text-primary" />
-          <h2 className="text-base font-semibold text-foreground">Gear Requests</h2>
-        </div>
-        <GearManagerInbox />
-      </div>
+      {/* Gear requests — SUMMARY only. The full interactive queue (per-item
+          approve/deny/fulfil) lives on /gear; embedding it here duplicated the
+          same actions in two places. This answers "does the queue need me?" and
+          links onward. */}
+      <GearRequestSummary />
     </div>
   );
 }

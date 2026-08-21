@@ -4,7 +4,14 @@ from app.models.base import Base
 import uuid
 from datetime import datetime, timezone
 
-VALID_ROLES = ("driver", "walker", "trainer", "trainee", "dispatch", "management", "admin")
+# ADR-256: captain (route lead, one per truck) and field_supervisor (road-facing
+# oversight, parallel to dispatch). ADR-264: driver_trainee — the enum value only;
+# its training behaviour is ADR-264's to build.
+# Mirrored in app/schemas/employee.py — the two copies must stay in sync.
+VALID_ROLES = (
+    "driver", "walker", "trainer", "trainee", "dispatch", "management", "admin",
+    "captain", "field_supervisor", "driver_trainee",
+)
 VALID_ACCOUNT_STATUSES = ("pending_verification", "active", "deactivated")
 
 
@@ -15,7 +22,7 @@ class Employee(Base):
         id: Primary key UUID.
         name: Full display name.
         discord_id: Unique Discord user ID used for notifications.
-        role: Job role — one of ``driver``, ``trainer``, or ``walker``.
+        role: Job role — one of ``VALID_ROLES``.
         is_active: Whether the employee is currently active and eligible for dispatch.
         account_status: Lifecycle state — pending_verification (invited, not yet logged in),
             active (logged in at least once), or deactivated (manually disabled).
@@ -54,6 +61,9 @@ class Employee(Base):
     phone_number         = Column(String(20),         nullable=True)
     account_status       = Column(String(30),         nullable=False, default="pending_verification", index=True)
     invited_at           = Column(DateTime(timezone=True), nullable=True)
+    # ADR-221: stamped on deactivation. The tombstone survives so the 6-month
+    # name-redaction clock has a departure time to measure against.
+    deactivated_at       = Column(DateTime(timezone=True), nullable=True)
     reset_on_graduation  = Column(Boolean,            nullable=False, default=False)
 
     # ── External HR system IDs ────────────────────────────────────────────────
@@ -66,3 +76,15 @@ class Employee(Base):
     # Timecard sync only runs for employees where this flag is true.
     hr_system_id_adp          = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     hr_system_id_adp_verified = Column(Boolean, nullable=False, default=False)
+    # hr_system_work_assignment_id_adp: ADP's Position Fulfillment Identifier (PFID),
+    # from workAssignments[].itemID on GET /hr/v2/workers. Required in the
+    # eventContext of every timeEntries.modify write — a correction cannot be
+    # submitted without it. Nullable: populated by adp_sync, absent until the
+    # employee's first roster sync (ADR-233).
+    hr_system_work_assignment_id_adp = Column(String(64), nullable=True)
+
+    # ── Modified duty / injury status ─────────────────────────────────────────
+    # null = no restriction; "injured" = temporary light duty; "disabled" = permanent light duty.
+    # Both non-null values hard-block assignment to heavy routes (ADR-139).
+    injury_status       = Column(String(20), nullable=True)
+    injury_status_since = Column(DateTime(timezone=True), nullable=True)

@@ -6,232 +6,36 @@
 
 // ─── Raw palette ─────────────────────────────────────────────────────────────
 
-export const palette = {
-  // Brand — electric indigo (web is 225 70% 55%; mobile is lifted for saturation)
-  indigo500:  '#4F6BF4',   // primary action, interactive
-  indigo400:  '#7B8FF7',   // primary lifted (dark mode)
-  indigo100:  '#E8ECFE',   // primary tint fill (light)
-  indigo900:  '#1A2060',   // primary deep (dark mode tint fill)
-
-  // Accent — vivid amber (web gold is muted #D4A832; mobile is punchy)
-  amber500:   '#F59E0B',   // trainer role, gold accent
-  amber400:   '#FBB830',   // amber lifted (dark mode)
-  amber100:   '#FEF3C7',   // amber tint (light)
-  amber900:   '#3D2500',   // amber tint (dark)
-
-  // Role — teal (walker)
-  teal500:    '#0EA5A0',   // more saturated than web #0FA870
-  teal400:    '#2DD4BF',   // teal lifted (dark)
-  teal100:    '#CCFBF1',   // tint (light)
-  teal900:    '#062E2C',   // tint (dark)
-
-  // Role — slate (driver) — brighter than web's desaturated slate
-  slate500:   '#3B82F6',   // vibrant blue-slate
-  slate400:   '#60A5FA',
-  slate100:   '#DBEAFE',
-  slate900:   '#1E2D50',
-
-  // Role — neutral (admin/management)
-  neutral500: '#6B7280',
-  neutral400: '#9CA3AF',
-  neutral100: '#F3F4F6',
-  neutral900: '#1F2937',
-
-  // Semantic — calibrated for small-screen readability in sunlight
-  green500:   '#10B981',   // success (confirmed)
-  green400:   '#34D399',
-  green100:   '#D1FAE5',
-  green900:   '#064E3B',
-
-  orange500:  '#F97316',   // warning (pending) — distinct from amber
-  orange400:  '#FB923C',
-  orange100:  '#FFEDD5',
-  orange900:  '#431407',
-
-  red500:     '#EF4444',   // danger
-  red400:     '#F87171',
-  red100:     '#FEE2E2',
-  red900:     '#450A0A',
-
-  cyan500:    '#06B6D4',   // info (assigned)
-  cyan400:    '#22D3EE',
-  cyan100:    '#CFFAFE',
-  cyan900:    '#0C2A3A',
-
-  // Surfaces — light (Frost White, same family as web)
-  gray50:     '#F8FAFC',
-  gray100:    '#F1F5F9',
-  gray200:    '#E2E8F0',
-  gray400:    '#94A3B8',
-  gray500:    '#64748B',
-  gray700:    '#334155',
-  gray900:    '#0F172A',
-
-  // Surfaces — dark (Deep Space — darker/richer than web charcoal)
-  dark50:     '#0B0D14',
-  dark100:    '#111320',
-  dark200:    '#181B2E',
-  dark300:    '#1F2340',
-  dark400:    '#272C4A',
-  dark500:    '#343A5C',
-
-  white:      '#FFFFFF',
-  black:      '#000000',
-};
+// The legacy hardcoded `palette` export lived here — 51 raw values including
+// #4F6BF4, the exact mobile primary that task 0.2 was meant to eliminate. It
+// was a SECOND source of truth sitting directly above the generated tokens, so
+// "reconciled to one value" was only half true while it existed (plan §2.6).
+//
+// Colour now comes from design/palette.json via generated-colors.ts. Gradient
+// anchors that are not semantic tokens live in that file's `ramp` export.
 
 // ─── Semantic color maps ──────────────────────────────────────────────────────
 
-export type ThemeColors = {
-  // Surfaces
-  background:       string;
-  surface:          string;
-  surfaceMuted:     string;
-  surfaceElevated:  string;
-  card:             string;
+import type { GeneratedColors } from './generated-colors';
+import { generatedLight, generatedDark } from './generated-colors';
 
-  // Text
-  foreground:       string;
-  mutedForeground:  string;
-  subtleForeground: string;
+/**
+ * Colour is GENERATED from design/palette.json (plan §0.1) — see
+ * design/build_tokens.py. Web and mobile drifted when both were hand-written
+ * (web primary #3C64DD vs mobile #4F6BF4); one source makes that impossible.
+ *
+ * To change a colour: edit design/palette.json, run the generator, commit the
+ * output. Contrast is verified before anything is written, so a failing value
+ * cannot reach this file.
+ *
+ * Spacing, radius, type and motion below stay hand-owned — they never drifted,
+ * and the generator has no opinion about layout.
+ */
+export type ThemeColors = GeneratedColors;
 
-  // Brand
-  primary:          string;
-  primaryLight:     string;
-  primaryForeground:string;
+export const lightColors: ThemeColors = generatedLight;
 
-  // Accent
-  gold:             string;
-  goldLight:        string;
-
-  // Semantic
-  success:          string;
-  successLight:     string;
-  warning:          string;
-  warningLight:     string;
-  danger:           string;
-  dangerLight:      string;
-  info:             string;
-  infoLight:        string;
-
-  // Role palette
-  driver:           string;
-  driverLight:      string;
-  walker:           string;
-  walkerLight:      string;
-  trainer:          string;
-  trainerLight:     string;
-  trainee:          string;
-  traineeLight:     string;
-  neutral:          string;
-  neutralLight:     string;
-
-  // Structure
-  border:           string;
-  borderStrong:     string;
-  ring:             string;
-
-  // Misc
-  tabBar:           string;
-  tabBarBorder:     string;
-  skeleton:         string;
-  skeletonShimmer:  string;
-};
-
-export const lightColors: ThemeColors = {
-  background:         palette.gray50,
-  surface:            palette.white,
-  surfaceMuted:       palette.gray100,
-  surfaceElevated:    palette.white,
-  card:               palette.white,
-
-  foreground:         palette.gray900,
-  mutedForeground:    palette.gray500,
-  subtleForeground:   palette.gray400,
-
-  primary:            palette.indigo500,
-  primaryLight:       palette.indigo100,
-  primaryForeground:  palette.white,
-
-  gold:               palette.amber500,
-  goldLight:          palette.amber100,
-
-  success:            palette.green500,
-  successLight:       palette.green100,
-  warning:            palette.orange500,
-  warningLight:       palette.orange100,
-  danger:             palette.red500,
-  dangerLight:        palette.red100,
-  info:               palette.cyan500,
-  infoLight:          palette.cyan100,
-
-  driver:             palette.slate500,
-  driverLight:        palette.slate100,
-  walker:             palette.teal500,
-  walkerLight:        palette.teal100,
-  trainer:            palette.amber500,
-  trainerLight:       palette.amber100,
-  trainee:            palette.cyan500,
-  traineeLight:       palette.cyan100,
-  neutral:            palette.neutral500,
-  neutralLight:       palette.neutral100,
-
-  border:             palette.gray200,
-  borderStrong:       '#CBD5E1',
-  ring:               palette.indigo500,
-
-  tabBar:             palette.white,
-  tabBarBorder:       palette.gray200,
-  skeleton:           palette.gray100,
-  skeletonShimmer:    'rgba(255,255,255,0.7)',
-};
-
-export const darkColors: ThemeColors = {
-  background:         palette.dark50,
-  surface:            palette.dark100,
-  surfaceMuted:       palette.dark200,
-  surfaceElevated:    palette.dark300,
-  card:               palette.dark100,
-
-  foreground:         '#EDF0F8',
-  mutedForeground:    '#8892B0',
-  subtleForeground:   '#5A6480',
-
-  primary:            palette.indigo400,
-  primaryLight:       palette.indigo900,
-  primaryForeground:  palette.white,
-
-  gold:               palette.amber400,
-  goldLight:          palette.amber900,
-
-  success:            palette.green400,
-  successLight:       palette.green900,
-  warning:            palette.orange400,
-  warningLight:       palette.orange900,
-  danger:             palette.red400,
-  dangerLight:        palette.red900,
-  info:               palette.cyan400,
-  infoLight:          palette.cyan900,
-
-  driver:             palette.slate400,
-  driverLight:        palette.slate900,
-  walker:             palette.teal400,
-  walkerLight:        palette.teal900,
-  trainer:            palette.amber400,
-  trainerLight:       palette.amber900,
-  trainee:            palette.cyan400,
-  traineeLight:       palette.cyan900,
-  neutral:            palette.neutral400,
-  neutralLight:       palette.neutral900,
-
-  border:             palette.dark400,
-  borderStrong:       palette.dark500,
-  ring:               palette.indigo400,
-
-  tabBar:             palette.dark100,
-  tabBarBorder:       palette.dark400,
-  skeleton:           palette.dark200,
-  skeletonShimmer:    'rgba(255,255,255,0.04)',
-};
+export const darkColors: ThemeColors = generatedDark;
 
 // ─── Spacing ─────────────────────────────────────────────────────────────────
 
@@ -260,6 +64,27 @@ export const radius = {
 // ─── Type scale ───────────────────────────────────────────────────────────────
 // Slightly larger than web — thumb-friendly tap targets, outdoor legibility
 
+/**
+ * Type scale (plan 1.4).
+ *
+ * These are UNSCALED point sizes. React Native multiplies them by the OS font
+ * scale automatically, and `allowFontScaling` is left at its default `true`
+ * everywhere — verified: the codebase sets it to false in zero places, so
+ * accessibility font settings already work.
+ *
+ * THE RISK IS LAYOUT, NOT TYPE. At the largest accessibility sizes text grows
+ * ~2x, and anything in a container with a fixed `height` clips silently. The
+ * rule:
+ *
+ *   height: 44      <- clips scaled text
+ *   minHeight: 44   <- grows with it
+ *
+ * Fixed `height` is correct for icons and avatars, which do not contain text
+ * (verified: 60 of the 66 width+height pairs in the app are square, i.e.
+ * icon/avatar dimensions). Reserve it for those.
+ *
+ * Not yet tested at large sizes on a device — plan §5.3.
+ */
 export const fontSize = {
   xs:   11,
   sm:   13,
@@ -268,6 +93,7 @@ export const fontSize = {
   lg:   20,
   xl:   24,
   '2xl':28,
+  xxl:  28,   // dot-access alias for '2xl' — several screens use fontSize.xxl
   '3xl':34,
 } as const;
 
@@ -287,7 +113,20 @@ export const fontWeight = {
 };
 
 // ─── Shadows ─────────────────────────────────────────────────────────────────
-// Elevation levels for React Native shadow props
+// ─── Elevation ────────────────────────────────────────────────────────────────
+//
+// Two mechanisms, because they work on opposite surfaces (plan 0.6):
+//
+//   LIGHT theme — a cast shadow. Something above a white page occludes light.
+//   DARK  theme — a lighter SURFACE. A black shadow on a #0E132F background is
+//                 the background; it contributes nothing. Physical light models
+//                 break down on dark UI, so material that is "closer" is
+//                 lighter instead.
+//
+// `shadow` below is the light-theme ladder. `elevate(level, colors)` picks the
+// right mechanism for the active theme, and is what components should call —
+// reaching for `shadow.md` directly is correct only if you know the surface is
+// light.
 
 export const shadow = {
   sm: {
@@ -311,7 +150,7 @@ export const shadow = {
     shadowRadius: 20,
     elevation: 10,
   },
-  // Colored glow — pass shadowColor separately
+  // Coloured glow — pass shadowColor separately.
   glow: {
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.30,
@@ -320,13 +159,98 @@ export const shadow = {
   },
 } as const;
 
+export type ElevationLevel = 0 | 1 | 2 | 3;
+
+/**
+ * Elevation for the ACTIVE theme.
+ *
+ *   0  flush with the page      1  card        2  raised / menu      3  modal
+ *
+ * Returns a style object to spread. On light surfaces that is a cast shadow;
+ * on dark surfaces it is a lighter background plus a hairline border, because
+ * a shadow the colour of the background is not an effect.
+ *
+ *   <View style={[s.card, elevate(1, c, isDark)]} />
+ *
+ * `isDark` is passed rather than inferred so this stays a pure function — the
+ * caller already has it from useColors()/useTheme().
+ */
+export function elevate(
+  level: ElevationLevel,
+  colors: { card: string; surfaceElevated: string; border: string; borderStrong: string },
+  isDark: boolean,
+) {
+  if (level === 0) return {};
+
+  if (isDark) {
+    // Lightness carries the depth. The steps are deliberately small (~1.06:1
+    // between rungs): elevation should read as the same material lifted, not
+    // as a different component.
+    return {
+      backgroundColor: level >= 2 ? colors.surfaceElevated : colors.card,
+      borderWidth: 1,
+      borderColor: level >= 3 ? colors.borderStrong : colors.border,
+    };
+  }
+
+  return level === 1 ? shadow.sm : level === 2 ? shadow.md : shadow.lg;
+}
+
 // ─── Animation durations ──────────────────────────────────────────────────────
 
+/**
+ * Motion vocabulary (plan 1.1).
+ *
+ * `duration` existed before with three values and ZERO consumers, while six
+ * hardcoded timings and six spring values sat across three files — the same
+ * shape as `surfaceElevated` and `brand`: a token nobody reached for. The
+ * values below are the ones ACTUALLY in use, named, so adopting them is not a
+ * redesign.
+ *
+ * Spring vs timing is a real distinction, not a preference:
+ *   - `spring` for anything the finger drives (press, drag). Physical response
+ *     to a physical input.
+ *   - `timing` for state changes the user did not physically cause (fade,
+ *     shimmer). A spring there reads as a bounce nobody asked for.
+ *
+ * ALL of these must be skipped under reduce-motion — `usePressScale` and
+ * `Skeleton` do this centrally so components do not have to remember
+ * (plan §4 rule 5).
+ */
 export const duration = {
+  /** Tap feedback, cross-fades between adjacent states. */
   fast:   150,
+  /** The default for entering/leaving content. */
   normal: 220,
+  /** Larger surfaces — sheets, expanding cards. */
   slow:   350,
+  /** Looping ambient motion (skeleton shimmer). Deliberately unhurried: a
+   *  fast pulse reads as an error state rather than "loading". */
+  ambient: 900,
 } as const;
+
+/**
+ * Spring configs for React Native's Animated.spring.
+ *
+ * Higher `speed` = snappier. Higher `bounciness` = more overshoot.
+ * Press-IN is faster than press-OUT on purpose: the response to touch should
+ * feel immediate, the release more relaxed.
+ */
+export const spring = {
+  /** Finger goes down — snappy, minimal overshoot. */
+  pressIn:  { speed: 40, bounciness: 4 },
+  /** Finger lifts — softer return. */
+  pressOut: { speed: 30, bounciness: 6 },
+  /** Chevrons, disclosure indicators — visible but not springy. */
+  subtle:   { speed: 20, bounciness: 6 },
+} as const;
+
+/**
+ * LayoutAnimation damping for height/position changes.
+ * iOS gets spring physics, Android material easing — matching each platform's
+ * own idiom is what makes a transition read as native rather than generic.
+ */
+export const layoutSpring = { springDamping: 0.85 } as const;
 
 // ─── Hit slop (WCAG 2.5.5 minimum 44×44pt touch target) ─────────────────────
 
@@ -338,6 +262,25 @@ export const hitSlop = {
 
 export type FieldRole = 'driver' | 'walker' | 'trainer' | 'trainee' | 'admin' | 'management' | 'dispatch';
 
+/**
+ * Role colours deliberately reuse status/brand values (ADR-254). They are NOT
+ * free to re-hue: the palette has no room left. Measured 2026-08-03 — with
+ * five statuses, brand, primary and the focus ring already placed, the only
+ * values clearing every reserved token under deuteranopic and protanopic
+ * vision are a near-black maroon, two indistinguishable indigos, and
+ * highlighter yellow. `trainer` sits 4.8 Lab from `danger` even after moving
+ * it off `gold`, so warm-band role colour is ambiguous no matter what value
+ * it takes.
+ *
+ * The constraint that keeps this safe is therefore about USE, not value:
+ *
+ *   Role colour must never be the ONLY carrier of meaning, and must never
+ *   appear as a status on the same surface as a role.
+ *
+ * Every call site pairs it with a text label or a role initial. Enforced for
+ * palette values by `design/check_contrast.py` (ALLOWED_ALIASES documents each
+ * deliberate alias); enforced for usage by review of this rule.
+ */
 export function getRoleColor(role: FieldRole, colors: ThemeColors): string {
   switch (role) {
     case 'driver':     return colors.driver;

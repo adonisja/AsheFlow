@@ -1,3 +1,4 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useMemo } from 'react';
 import Select from 'react-select';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,7 +12,6 @@ import {
   RefreshCw, ArrowUpDown, Filter,
 } from 'lucide-react';
 import { MiniCalendar } from '../components/MiniCalendar';
-import NotificationBanner from '../components/NotificationBanner';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
@@ -221,11 +221,20 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
 
   const heatCell = (count: number) => {
     const intensity = count / heatmapMax;
-    if (intensity === 0) return 'bg-accent/30 text-muted-foreground';
-    if (intensity < 0.33) return 'bg-success/10 text-success';
-    if (intensity < 0.66) return 'bg-success/25 text-success font-semibold';
-    return 'bg-success/45 text-success font-bold';
+    if (intensity === 0) return 'bg-accent/30 text-muted-foreground/60';
+    if (intensity < 0.33) return 'bg-success/10 text-success/80';
+    if (intensity < 0.66) return 'bg-success/25 text-success';
+    return 'bg-success/45 text-success font-semibold';
   };
+
+  // Group 28 dates into 4 weeks of 7
+  const heatmapWeeks: string[][] = useMemo(() => {
+    const weeks: string[][] = [];
+    for (let i = 0; i < heatmapDates.length; i += 7) {
+      weeks.push(heatmapDates.slice(i, i + 7));
+    }
+    return weeks;
+  }, [heatmapDates]);
 
   // Analytics (admin)
   const reworkApproved = allReworks.filter(r => r.status === 'approved').length;
@@ -458,66 +467,58 @@ function ScheduleManagementView({ isAdmin }: { isAdmin: boolean }) {
             <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr>
-                  <th className="pb-2 pr-3 text-left text-muted-foreground uppercase tracking-wider w-16 shrink-0">Role</th>
-                  {heatmapDates.map(dt => {
-                    const d = new Date(dt + 'T00:00:00');
-                    const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
-                    const dayNum  = d.getDate();
-                    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                    return (
-                      <th
-                        key={dt}
-                        className={`pb-2 px-0.5 text-center font-medium ${isWeekend ? 'text-muted-foreground/40' : 'text-muted-foreground'}`}
-                        style={{ minWidth: '2.25rem' }}
-                      >
-                        <div>{dayName}</div>
-                        <div>{dayNum}</div>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/30">
-                {(['driver', 'trainer', 'walker'] as const).map(role => (
-                  <tr key={role}>
-                    <td className="py-1.5 pr-3 text-xs font-semibold text-foreground capitalize">{role}</td>
-                    {heatmapDates.map(dt => {
-                      const count = heatmapData[dt]?.[role] ?? 0;
-                      const d = new Date(dt + 'T00:00:00');
-                      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                      return (
-                        <td key={dt} className="py-1.5 px-0.5 text-center">
-                          <span
-                            className={`inline-flex items-center justify-center w-8 h-7 rounded text-xs ${isWeekend ? 'opacity-40' : ''} ${heatCell(count)}`}
+          <div className="space-y-3">
+            {/* Day-of-week header */}
+            <div className="grid grid-cols-7 gap-1 pl-0">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <div key={d} className="text-center text-xs font-medium text-muted-foreground/70 pb-1">{d}</div>
+              ))}
+            </div>
+
+            {/* 4 calendar weeks */}
+            {heatmapWeeks.map((week, wi) => (
+              <div key={wi} className="grid grid-cols-7 gap-1">
+                {week.map(dt => {
+                  const d = new Date(dt + 'T00:00:00');
+                  const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                  const isToday = dt === fmtDate(new Date());
+                  const day = heatmapData[dt];
+                  return (
+                    <div
+                      key={dt}
+                      className={`rounded-lg border p-1.5 space-y-1 ${
+                        isToday ? 'border-primary/50 bg-primary/5' : 'border-border/50 bg-card'
+                      } ${isWeekend ? 'opacity-50' : ''}`}
+                    >
+                      <div className={`text-center text-xs font-semibold ${isToday ? 'text-primary' : 'text-foreground'}`}>
+                        {d.getDate()}
+                        {isToday && <span className="ml-1 text-[10px] text-primary/70">today</span>}
+                      </div>
+                      {(['driver', 'trainer', 'walker'] as const).map(role => {
+                        const count = day?.[role] ?? 0;
+                        return (
+                          <div
+                            key={role}
+                            className={`flex items-center justify-between px-1 py-0.5 rounded text-[10px] ${heatCell(count)}`}
                             title={`${dt} — ${count} ${role}s available`}
                           >
-                            {count}
-                          </span>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="flex items-center gap-4 mt-4 text-xs text-subtle flex-wrap">
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 h-4 rounded bg-success/45" /> High availability
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 h-4 rounded bg-success/25" /> Moderate
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 h-4 rounded bg-success/10" /> Low
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block w-5 h-4 rounded bg-accent/30" /> None
-              </span>
-              <span className="flex items-center gap-1.5 ml-auto opacity-60">Weekends faded (typically off-days)</span>
+                            <span className="capitalize opacity-70">{role[0].toUpperCase()}</span>
+                            <span className="font-semibold">{count}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+
+            <div className="flex items-center gap-4 pt-1 text-xs text-subtle flex-wrap">
+              <span className="flex items-center gap-1.5"><span className="inline-block w-5 h-4 rounded bg-success/45" /> High</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block w-5 h-4 rounded bg-success/25" /> Moderate</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block w-5 h-4 rounded bg-success/10" /> Low</span>
+              <span className="flex items-center gap-1.5"><span className="inline-block w-5 h-4 rounded bg-accent/30" /> None</span>
+              <span className="ml-auto opacity-60 text-[11px]">D = Driver · T = Trainer · W = Walker</span>
             </div>
           </div>
         )}
@@ -571,8 +572,8 @@ const Schedule = () => {
       const data = await getSchedule(employeeId, fmtDate(startDate), fmtDate(endDate));
       setScheduleData(data);
       setLoadError(null);
-    } catch (err: any) {
-      setLoadError(err?.response?.data?.detail || 'Failed to load schedule.');
+    } catch (err: unknown) {
+      setLoadError(errorText(err, 'Failed to load schedule.'));
     }
   };
 
@@ -617,8 +618,8 @@ const Schedule = () => {
     try {
       await createTimeOffRequest(myId, dateStr);
       await fetchSchedule(myId, currentMonth);
-    } catch (err: any) {
-      if (err.response?.data?.detail) alert(err.response.data.detail);
+    } catch (err: unknown) {
+      const alertText = errorText(err, ''); if (alertText) alert(alertText);
     }
   };
 
@@ -651,7 +652,6 @@ const Schedule = () => {
         <div className="card border-danger/30 bg-danger/5 text-danger text-sm px-4 py-3 rounded-xl">{loadError}</div>
       )}
 
-      {myId && <NotificationBanner employeeId={myId} />}
 
       {myId ? (
         <div className="flex flex-col gap-8 items-center max-w-2xl mx-auto w-full">

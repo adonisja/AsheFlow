@@ -1,9 +1,11 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Camera, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
+import type { Incident } from '../api/types';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -131,8 +133,8 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
       setIncidentTime(''); setPackagesTba(''); setIncidentLocation(''); setWitnessName('');
       setBodyPart(''); setMedicalAttention(null);
       onSubmitted();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit incident.');
+    } catch (err: unknown) {
+      setError(errorText(err, 'Failed to submit incident.'));
     } finally {
       setLoading(false);
     }
@@ -305,7 +307,7 @@ function IncidentForm({ employeeId, reporterName, onSubmitted }: {
 // ---------------------------------------------------------------------------
 
 function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKey: number }) {
-  const [incidents, setIncidents] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
@@ -371,7 +373,7 @@ function MyIncidents({ employeeId, refreshKey }: { employeeId: string; refreshKe
 
 function ManagementView() {
   const { confirmState, confirm, cancelConfirm } = useConfirm();
-  const [incidents, setIncidents] = useState<any[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [filterSeverity, setFilterSeverity] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterResolved, setFilterResolved] = useState('');
@@ -379,7 +381,7 @@ function ManagementView() {
   const [resolving, setResolving] = useState<string | null>(null);
 
   const load = () => {
-    const params: any = {};
+    const params: Record<string, string | boolean> = {};
     if (filterSeverity) params.severity = filterSeverity;
     if (filterCategory) params.category = filterCategory;
     if (filterResolved !== '') params.resolved = filterResolved === 'true';
@@ -402,8 +404,8 @@ function ManagementView() {
     try {
       await axiosClient.patch(`/incidents/${id}/resolve`);
       load();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to resolve.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Failed to resolve.'));
     } finally {
       setResolving(null);
     }
@@ -504,7 +506,7 @@ function ManagementView() {
 // ---------------------------------------------------------------------------
 
 export default function Incidents() {
-  const { groups, user } = useAuth();
+  const { groups } = useAuth();
   const isManagement = groups.some(r => ['dispatch', 'management', 'admin'].includes(r));
   const isFieldStaff = groups.some(r => ['driver', 'walker', 'trainer', 'trainee'].includes(r));
 
@@ -525,7 +527,7 @@ export default function Incidents() {
   ] as { key: 'submit' | 'management'; label: string }[];
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <div>
         <h1 className="page-title">Incidents</h1>
         <p className="text-subtle mt-1">Report and track field incidents across your team.</p>

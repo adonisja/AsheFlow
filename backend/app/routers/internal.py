@@ -45,6 +45,7 @@ class GuildConfigResponse(BaseModel):
     guild_id:            int | None
     drivers_channel_id:  int | None
     trainers_channel_id: int | None
+    captains_channel_id: int | None
     general_channel_id:  int | None
     invite_channel_id:   int | None
     role_admin:          int | None
@@ -53,6 +54,7 @@ class GuildConfigResponse(BaseModel):
     role_bot:            int | None
     role_dispatch:       int | None
     role_driver:         int | None
+    role_trainer:        int | None
     role_captain:        int | None
     role_walker:         int | None
     is_configured:       bool
@@ -78,6 +80,7 @@ def get_guild_config(
         guild_id            = cfg.guild_id,
         drivers_channel_id  = cfg.drivers_channel_id,
         trainers_channel_id = cfg.trainers_channel_id,
+        captains_channel_id = cfg.captains_channel_id,
         general_channel_id  = cfg.general_channel_id,
         invite_channel_id   = cfg.invite_channel_id,
         role_admin          = cfg.role_admin,
@@ -86,6 +89,7 @@ def get_guild_config(
         role_bot            = cfg.role_bot,
         role_dispatch       = cfg.role_dispatch,
         role_driver         = cfg.role_driver,
+        role_trainer        = cfg.role_trainer,
         role_captain        = cfg.role_captain,
         role_walker         = cfg.role_walker,
         is_configured       = cfg.is_configured,

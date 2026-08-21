@@ -23,6 +23,70 @@ on:
     branches: [master, staging]
 
 jobs:
+  # ── 0. DESIGN TOKENS ───────────────────────────────────────────────────────
+  # Pure stdlib, ~60ms, no services and no pip install — so it has no `needs`
+  # and fails in seconds rather than after the dependency audit.
+  #
+  # Guards three failures that all shipped before this existed:
+  #   * five WCAG contrast failures nobody had measured (plan §2.2)
+  #   * web/mobile palettes drifting apart (#3C64DD vs #4F6BF4, plan §2.7)
+  #   * a token whose ROLE changed under 305 call sites, repainting the whole
+  #     admin UI while every other check stayed green (plan §2.9)
+  design-tokens:
+    name: Design tokens
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Contrast + CVD separation for every pairing, both themes.
+      - name: Palette meets its contrast targets
+        run: python design/check_contrast.py
+
+      # Regenerates in memory and diffs the committed output. Catches a stale
+      # build AND someone hand-editing a generated file, which is the failure
+      # mode that let the two platforms drift in the first place.
+      - name: Generated tokens are in sync
+        run: python design/build_tokens.py --check
+
+      # The repo carried two conflicting identities: the real mark on the OLD
+      # indigo/amber, plus an unrelated purple lightning bolt wired into the
+      # browser tab. Generating the SVGs keeps them from drifting from the
+      # palette the way the two theme files did.
+      - name: Brand assets match the palette
+        run: python design/build_brand_assets.py --check
+
+      # Fails on NEW raw colour literals only. ~390 already exist (plan §2.6),
+      # so the baseline is per-file and ratchets DOWN during the Phase 4 sweep —
+      # the count can never grow. A literal does not follow a palette change and
+      # is invisible to the contrast gate above, which is exactly how a 2.82:1
+      # button label shipped.
+      - name: No new raw colour literals
+        run: python design/check_colour_literals.py
+
+      # The palette gate above checks pairs DECLARED in palette.json. It cannot
+      # see a screen that ignores the palette — which shipped 13 times on mobile
+      # (all invisible in light theme, because dark-theme fills are the LIGHT
+      # ones) and once on web. Covers BOTH platforms: mobile `color:'#fff'` on a c.<token> fill, and
+      # web `text-white` on a raw Tailwind palette utility. A bg-emerald-600
+      # roll-call button shipped at 3.77:1 on 12px text.
+      - name: Text on button fills meets AA (mobile + web)
+        run: python design/check_text_on_fill.py
+
+      # ADR-271 B and ADR-275 D1 put client-side logic on BOTH surfaces, so it
+      # exists twice on purpose. Both files say "a change lands on both in the
+      # same commit" — and both were kept in step by a diff someone had to
+      # remember to run. That failed once already: porting the notification
+      # classifier, the per-date confirmation fetch was simplified to a single
+      # date, and "NEEDS YOUR RESPONSE" rendered above "No assignment today".
+      - name: Shared web/mobile copies are identical
+        run: python scripts/check_shared_copies.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
@@ -42,6 +106,35 @@ jobs:
       - name: Audit backend dependencies
         working-directory: backend
         run: pip-audit -r requirements.txt
+
+  # ── 1b. PROPRIETARY EXPOSURE GATE ──────────────────────────────────────────
+  # Fails the build if anything in PROPRIETARY.txt is tracked in the public repo.
+  # This is the check that would have caught run_sort.py, persist_zones.py and
+  # sort_analysis.py — all three were being synced to AsheFlow-private while
+  # simultaneously sitting in the public tree, for months, silently.
+  #
+  # Runs on the PUBLIC checkout only, before the private-repo pull, so it sees
+  # exactly what the world sees. Deliberately NOT a dependency of deploy: the
+  # point is to fail fast and loudly on a PR, not to gate a release.
+  proprietary:
+    name: Proprietary exposure
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # history check needs the full log
+
+      # Strict since the ADR-265 purge landed (verified 2026-08-09 against a
+      # fresh public clone: 0 commits for run_sort/persist_zones/tier1_verify/
+      # assign_clusters). Both findings now fail the build:
+      #   TRACKED — in the index; every future push publishes it.
+      #   HISTORY — gitignoring does not retract a push; `git log -- <path>`
+      #             still serves the content, so a regression must fail here
+      #             rather than be discovered months later.
+      - name: Check for proprietary exposure
+        run: bash scripts/check_proprietary_exposure.sh
 
   # ── 2. BACKEND TESTS ───────────────────────────────────────────────────────
   test:
@@ -63,6 +156,60 @@ jobs:
         working-directory: backend
         run: pip install -r requirements.txt
 
+      # Pull proprietary source + tests from AsheFlow-private so the FULL suite runs
+      # in CI (public checkout has neither — proprietary tests otherwise never run and
+      # skip-guarded tests silently skip). The deploy job reads the deploy key from SSM
+      # via the EC2 instance role (SendCommand), so the CI IAM user never needs SSM read;
+      # here the runner needs the key on-box, so it comes from a GitHub Actions secret
+      # (PRIVATE_REPO_DEPLOY_KEY) — GitHub's native way to hand a runner a private key,
+      # keeping the AWS user's least-privilege intact. The key never enters a log or arg.
+      - name: Pull proprietary source + tests from AsheFlow-private
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+        run: |
+          # Private branch mirrors the public branch 1:1 (must match the rule in
+          # scripts/setup_private_repo.sh): master→main, else→same name. This keeps a
+          # feature branch's proprietary code isolated from staging's, so a feature
+          # push can't poison staging CI. Fall back to staging if the branch's private
+          # counterpart doesn't exist yet (never synced).
+          PUB_BRANCH="${GITHUB_REF##*/}"
+          if [ "$PUB_BRANCH" = "master" ]; then PRIV_BRANCH=main; else PRIV_BRANCH="$PUB_BRANCH"; fi
+          mkdir -p ~/.ssh
+          # Write the key verbatim (preserving its internal newlines) and ensure a
+          # trailing newline — OpenSSH/libcrypto rejects a key that lacks the final LF.
+          KEY_FILE=~/.ssh/asheflow_private_deploy
+          printf '%s\n' "$PRIVATE_REPO_DEPLOY_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          # Fail fast with a clear message if the secret is malformed (bad newlines
+          # produce "error in libcrypto"), instead of a cryptic Permission-denied later.
+          if ! ssh-keygen -y -f "$KEY_FILE" > /dev/null 2>&1; then
+            echo "::error::PRIVATE_REPO_DEPLOY_KEY is not a valid OpenSSH private key."
+            echo "Re-set the secret from the exact key file, preserving line breaks:"
+            echo "  gh secret set PRIVATE_REPO_DEPLOY_KEY < path/to/ci_readonly_deploy"
+            exit 1
+          fi
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+          # Pull the matching private branch; if it was never synced, fall back to
+          # staging so CI still has proprietary code to run against.
+          if ! git clone -b "$PRIV_BRANCH" git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private 2>/dev/null; then
+            echo "Private branch '$PRIV_BRANCH' not found — falling back to staging."
+            PRIV_BRANCH=staging
+            git clone -b "$PRIV_BRANCH" git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private
+          fi
+          cp /tmp/asheflow-private/backend/app/routers/*.py backend/app/routers/
+          cp /tmp/asheflow-private/backend/app/services/*.py backend/app/services/
+          cp -r /tmp/asheflow-private/asheflow_private backend/asheflow_private
+          # Proprietary tests (present only in the private repo).
+          if [ -d /tmp/asheflow-private/backend/tests/routers ]; then
+            cp /tmp/asheflow-private/backend/tests/routers/*.py backend/tests/routers/ 2>/dev/null || true
+          fi
+          if [ -d /tmp/asheflow-private/backend/tests/services ]; then
+            cp /tmp/asheflow-private/backend/tests/services/*.py backend/tests/services/ 2>/dev/null || true
+          fi
+          rm -rf /tmp/asheflow-private ~/.ssh/asheflow_private_deploy
+          echo "Proprietary source + tests pulled from AsheFlow-private ($PRIV_BRANCH)."
+
       - name: Run tests
         working-directory: backend
         run: python -m pytest tests/ -v --tb=short
@@ -76,14 +223,113 @@ jobs:
           INTERNAL_SECRET: ci-test-secret-not-real
           CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
 
-  # ── 3. DEPLOY TO STAGING ───────────────────────────────────────────────────
+  # ── 3. FRESH-DATABASE MIGRATIONS ───────────────────────────────────────────
+  # `alembic upgrade head` had NEVER worked from an empty database (ADR-248):
+  # six revisions altered or FK-referenced tables that a later revision created,
+  # which staging and prod never hit because those tables predated the
+  # migrations touching them. Only a from-scratch run walks the chain in
+  # declaration order, and nothing in CI did that — so it regressed silently for
+  # months.
+  #
+  # This job is that missing run. It gates deploys because a chain that cannot
+  # build a database from scratch blocks every new environment, CI included, and
+  # disaster recovery.
+  migrations:
+    name: Fresh-database migrations
+    runs-on: ubuntu-latest
+    needs: audit
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # alembic/env.py imports app.core.config, which instantiates Settings() at
+      # module load — so every step here needs the full config, not just a
+      # DATABASE_URL. The first CI run failed on exactly this: four required
+      # fields with no defaults (aws_region, the two cognito ids, and
+      # credential_encryption_key). It passed locally only because the dev
+      # container already had them exported.
+      #
+      # Job-level rather than per-step: all four steps run alembic and need the
+      # identical config.
+      #
+      # These are placeholders. This job never authenticates and never encrypts
+      # anything — it builds a schema and throws it away — so the real secret is
+      # deliberately NOT used, keeping it out of a job that does not need it.
+      APP_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/asheflow_fresh
+      AWS_REGION: us-east-1
+      AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+      AWS_COGNITO_APP_CLIENT_ID: test-client-id
+      INTERNAL_SECRET: ci-migrations-not-real
+      # Valid Fernet key shape (32 url-safe base64 bytes) so anything that
+      # constructs a Fernet at import does not choke on a malformed value.
+      CREDENTIAL_ENCRYPTION_KEY: dGVzdC1rZXktZm9yLWNpLW1pZ3JhdGlvbnMtb25seS0xMg=
+    services:
+      postgres:
+        # Match staging/prod. SQLite would not exercise any of this — the faults
+        # were UndefinedTable and UndefinedObject from real DDL ordering.
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: asheflow_fresh
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      # The whole point: an EMPTY database, walked in declaration order.
+      - name: alembic upgrade head (from empty)
+        working-directory: backend
+        run: alembic upgrade head
+
+      # A green migration is not a correct schema. Guarding a premature ALTER
+      # fixed the crash and left those columns absent on the fresh path, with
+      # `upgrade head` green on BOTH paths — only the model diff caught it.
+      - name: Schema matches the ORM models
+        working-directory: backend
+        run: python scripts/check_schema_matches_models.py
+
+      # A redeploy re-runs the chain against an already-migrated database. This
+      # must be a clean no-op, which is a different code path from the first run
+      # (every existence guard flips).
+      - name: Re-run is idempotent
+        working-directory: backend
+        run: alembic upgrade head
+
+      # Multiple heads make stamping fragile and are how the chain forks
+      # unnoticed (CLAUDE.md alembic rules).
+      - name: Exactly one head
+        working-directory: backend
+        run: |
+          HEADS=$(python -c "
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          print(' '.join(ScriptDirectory.from_config(Config('alembic.ini')).get_heads()))
+          ")
+          echo "heads: $HEADS"
+          [ "$(echo $HEADS | wc -w)" -eq 1 ] || { echo "ERROR: expected exactly one head"; exit 1; }
+
+
+  # ── 4. DEPLOY TO STAGING ───────────────────────────────────────────────────
   # Triggers on staging branch pushes only, after audit + test pass.
   # Starts the staging EC2 (stopped by default), deploys backend via SSM,
   # builds frontend with staging secrets, syncs to staging S3, invalidates CDN.
   deploy-staging:
     name: Deploy → STAGING
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, migrations, design-tokens]
     if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
     environment: staging
     env:
@@ -135,7 +381,13 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+              "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "cp /home/ubuntu/AsheFlow/.env /home/ubuntu/AsheFlow/backend/.env",
+              "grep -q GEOCLIENT_APP_KEY /home/ubuntu/AsheFlow/backend/.env && echo GEOCLIENT_APP_KEY_OK || (echo GEOCLIENT_APP_KEY_MISSING && exit 1)",
+              "grep -q ^ORE_CERTIFICATE_BUCKET= /home/ubuntu/AsheFlow/backend/.env && echo ORE_CERTIFICATE_BUCKET_OK || (echo ORE_CERTIFICATE_BUCKET_MISSING_IN_PARAM_STORE && exit 1)",
+              "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
+              "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
+              "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
@@ -172,6 +424,7 @@ jobs:
               "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); ps=c.get_parameters_by_path(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]; keep={chr(68)+chr(73)+chr(83)+chr(67)+chr(79)+chr(82)+chr(68)+chr(95)+chr(66)+chr(79)+chr(84)+chr(95)+chr(84)+chr(79)+chr(75)+chr(69)+chr(78),chr(66)+chr(79)+chr(84)+chr(95)+chr(85)+chr(83)+chr(69)+chr(82)+chr(78)+chr(65)+chr(77)+chr(69),chr(66)+chr(79)+chr(84)+chr(95)+chr(80)+chr(65)+chr(83)+chr(83)+chr(87)+chr(79)+chr(82)+chr(68),chr(73)+chr(78)+chr(84)+chr(69)+chr(82)+chr(78)+chr(65)+chr(76)+chr(95)+chr(83)+chr(69)+chr(67)+chr(82)+chr(69)+chr(84)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] in keep]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(98)+chr(111)+chr(116)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
               "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/bot/.env",
               "echo AWS_COGNITO_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/bot/.env",
+              "echo AWS_REGION=us-east-2 >> /home/ubuntu/AsheFlow/bot/.env",
               "echo API_BASE_URL=http://backend:8000/api/v1 >> /home/ubuntu/AsheFlow/bot/.env"
             ]' \
             --query "Command.CommandId" \
@@ -244,19 +497,38 @@ jobs:
               "cp -r /tmp/asheflow-private/asheflow_private /home/ubuntu/AsheFlow/backend/asheflow_private",
               "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
               "touch /home/ubuntu/AsheFlow/bot/.env",
-              "cd /home/ubuntu/AsheFlow && docker compose build --progress=plain backend",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy bot"
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans",
+              "if docker ps -a --format {{.Names}} | grep -qx asheflow_postgres; then docker inspect asheflow_postgres | grep -q asheflow_postgres_data || { echo ABORT - existing asheflow_postgres does not mount volume asheflow_postgres_data so recreating it would attach an empty database. Migrate the volume manually before redeploying.; exit 1; }; fi",
+              "for c in asheflow_postgres asheflow_redis asheflow_backend asheflow_celery_worker asheflow_celery_beat asheflow_caddy asheflow_bot; do docker rm -f $c >/dev/null 2>&1 || true; done",
+              "docker network rm asheflow_default >/dev/null 2>&1 || true",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml --progress plain build --no-cache backend celery_worker celery_beat bot",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy bot"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 1 SSM: $CID"
           sleep 15
           poll "$CID" "$INSTANCE" 36 || exit 1
 
+          # Step 1b: dump backend logs so startup crashes are visible in CI
+          CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --parameters 'commands=[
+              "export HOME=/home/ubuntu",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml ps -a",
+              "docker logs asheflow_backend --tail=100 2>&1 || echo no-backend-logs",
+              "docker inspect asheflow_backend --format=\\"Status: {{.State.Status}} | ExitCode: {{.State.ExitCode}} | Error: {{.State.Error}}\\" 2>/dev/null || echo no-container"
+            ]' \
+            --query "Command.CommandId" --output text)
+          echo "Step 1b SSM (backend logs): $CID"
+          sleep 10
+          poll "$CID" "$INSTANCE" 6 || true
+
           # Step 2: run migrations (separate command — longer polling window for first-run backfills)
           CID=$(aws ssm send-command --region us-east-2 --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
-              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
+              "export HOME=/home/ubuntu",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend alembic upgrade heads"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 2 SSM (migrations): $CID"
@@ -298,14 +570,14 @@ jobs:
             --distribution-id ${{ secrets.STAGING_CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
 
-  # ── 4. DEPLOY TO PROD ──────────────────────────────────────────────────────
+  # ── 5. DEPLOY TO PROD ──────────────────────────────────────────────────────
   # Triggers on master pushes only, after audit + test pass.
   # Deploys backend via SSM, builds frontend with prod secrets,
   # syncs to prod S3, invalidates CDN.
   deploy-prod:
     name: Deploy → PROD
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, migrations, design-tokens]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     environment: prod
     env:
@@ -340,7 +612,13 @@ jobs:
               "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env",
-              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env"
+              "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env",
+              "cp /home/ubuntu/AsheFlow/.env /home/ubuntu/AsheFlow/backend/.env",
+              "grep -q GEOCLIENT_APP_KEY /home/ubuntu/AsheFlow/backend/.env && echo GEOCLIENT_APP_KEY_OK || (echo GEOCLIENT_APP_KEY_MISSING && exit 1)",
+              "grep -q ^ORE_CERTIFICATE_BUCKET= /home/ubuntu/AsheFlow/backend/.env && echo ORE_CERTIFICATE_BUCKET_OK || (echo ORE_CERTIFICATE_BUCKET_MISSING_IN_PARAM_STORE && exit 1)",
+              "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
+              "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/backend/.env",
+              "echo CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE >> /home/ubuntu/AsheFlow/backend/.env"
             ]' \
             --query "Command.CommandId" \
             --output text)
@@ -397,7 +675,11 @@ jobs:
               "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
               "touch /home/ubuntu/AsheFlow/bot/.env",
               "sudo fuser -k 80/tcp 443/tcp || true",
-              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans",
+              "if docker ps -a --format {{.Names}} | grep -qx asheflow_postgres; then docker inspect asheflow_postgres | grep -q asheflow_postgres_data || { echo ABORT - existing asheflow_postgres does not mount volume asheflow_postgres_data so recreating it would attach an empty database. Migrate the volume manually before redeploying.; exit 1; }; fi",
+              "for c in asheflow_postgres asheflow_redis asheflow_backend asheflow_celery_worker asheflow_celery_beat asheflow_caddy asheflow_bot; do docker rm -f $c >/dev/null 2>&1 || true; done",
+              "docker network rm asheflow_default >/dev/null 2>&1 || true",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend celery_worker",
               "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy"
             ]' \
             --query "Command.CommandId" --output text)

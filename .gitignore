@@ -42,6 +42,7 @@ env/
 frontend/.env
 frontend/.env.staging
 frontend/.env.production
+frontend/.env.mobile
 
 # Database
 *.db
@@ -94,10 +95,8 @@ Thumbs.db
 .DS_Store
 
 
-# Proprietary design documentation — lives in AsheFlow-private only
-docs/decisions/
-docs/journals/
-docs/LEARNING_GUIDE.md
+# All documentation — lives in AsheFlow-private only
+docs/
 
 # Claude working protocol — contains internal infrastructure details
 # Will move to private repo (AsheFlow-private)
@@ -106,6 +105,14 @@ CLAUDE.md
 # Personal records and scratch files
 .claude/
 discussion.md
+routesmart_application.md
+pricing_analysis_*.md
+datatest.py
+datatest.ipynb
+memory/
+# Operational data exports — never commit manifest CSVs
+enriched_manifest_*.csv
+*.manifest.csv
 dispatch.md
 Soul.md
 fix_walkers.py
@@ -120,26 +127,6 @@ rectification_report.md
 celerybeat-schedule
 celerybeat.pid
 
-# Proprietary business logic — not included in public repository
-# Black-box registration package (lives in AsheFlow-private, injected at deploy time)
-backend/asheflow_private/
-# Individual proprietary modules
-backend/app/services/calculate_weights.py
-backend/app/services/run_dispatch.py
-backend/app/services/assign_drivers.py
-backend/app/services/assign_trainers.py
-backend/app/services/assign_trainees.py
-backend/app/services/assign_walkers.py
-backend/app/services/rebalance_crews.py
-backend/app/services/resolve_conflict.py
-backend/app/services/ban_override.py
-backend/app/services/route_sort.py
-backend/app/services/score_phase4.py
-backend/app/routers/dispatch.py
-backend/app/routers/training.py
-backend/app/routers/field_ops.py
-backend/app/routers/walker_routes.py
-
 # Auth tokens and credentials (never commit these)
 .claude/token.json
 backend/token.json
@@ -150,3 +137,66 @@ cognito_keys.json
 *.p12
 *.pfx
 
+backend/app/services/wave_distribution.py
+backend/app/services/stop_cutoff.py
+
+# Local browser-automation debug artifacts (Playwright MCP)
+.playwright-mcp/
+
+# Scraped ADP API catalogue — local research artifact, not source
+adp_api_list.json
+
+# Route-sort measurement/prototype scripts — import proprietary
+# seed_manifest/route_sort; synced to AsheFlow-private by the pre-push hook.
+backend/scripts/gen_clean_manifest.py
+backend/scripts/measure_clean.py
+backend/scripts/proto_clean.py
+backend/scripts/proto_segment_graph.py
+
+# >>> PROPRIETARY (generated from PROPRIETARY.txt — do not edit by hand) >>>
+backend/app/routers/dispatch.py
+backend/app/routers/training.py
+backend/app/routers/field_ops.py
+backend/app/routers/walker_routes.py
+backend/app/routers/rts.py
+backend/app/routers/building_profiles.py
+backend/app/routers/building_profile_library.py
+backend/app/services/run_dispatch.py
+backend/app/services/calculate_weights.py
+backend/app/services/assign_drivers.py
+backend/app/services/assign_trainers.py
+backend/app/services/assign_trainees.py
+backend/app/services/assign_walkers.py
+backend/app/services/assign_captains.py
+backend/app/services/rebalance_crews.py
+backend/app/services/resolve_conflict.py
+backend/app/services/ban_override.py
+backend/app/services/score_phase4.py
+backend/app/services/run_sort.py
+backend/app/services/route_sort.py
+backend/app/services/assign_clusters.py
+backend/app/services/assign_totes.py
+backend/app/services/cluster_packages.py
+backend/app/services/persist_zones.py
+backend/app/services/tote_roster.py
+backend/app/services/sort_analysis.py
+backend/app/services/derive_block_key.py
+backend/app/services/seed_manifest.py
+backend/app/services/wave_distribution.py
+backend/app/services/stop_cutoff.py
+backend/tests/routers/test_arrival_confirm.py
+backend/tests/routers/test_back_at_truck.py
+backend/tests/routers/test_reassign_trainee.py
+backend/tests/routers/test_finalize_gate.py
+backend/tests/routers/test_peer_ratings.py
+backend/tests/routers/test_my_performance.py
+backend/tests/routers/test_confirmation_gate.py
+backend/tests/routers/test_dispatch_move_pairing.py
+backend/tests/routers/test_clear_dispatch.py
+backend/tests/routers/test_pair_split.py
+backend/tests/routers/test_cover_remaining.py
+backend/tests/routers/test_route_detail.py
+backend/tests/routers/test_route_reassign_unassign.py
+backend/tests/services/test_stop_cutoff.py
+backend/asheflow_private/
+# <<< PROPRIETARY <<<

@@ -15,6 +15,21 @@ logger = logging.getLogger(__name__)
 # Phase 6+ is remediation after a failed quiz. Never injected by score_phase4 path here.
 MAX_CURRICULUM_PHASE = 4
 
+# Which curriculum track dispatch-time injection assigns (ADR-263). Trainees are
+# walkers — walker_routes.py::_WALKER_ROLES is {"walker", "trainee"} — and this
+# service only ever processes crew members with role == "trainee".
+#
+# A constant rather than a lookup because the driver training track (ADR-264,
+# proposed) is not implemented. ADR-256 added `driver_trainee` to VALID_ROLES and
+# to ck_assignment_members_role, so the slot is INSERTABLE — but nothing trains
+# or promotes it yet. The elif in the crew loop below counts and logs those
+# members rather than injecting them; injecting here would hand a driver trainee
+# walker material.
+#
+# ADR-264 §1 replaces this constant with a per-trainee lookup on the trainee's
+# own role, and makes the phase count config-driven (driver_training_days).
+TRAINEE_CURRICULUM_ROLE = "walker"
+
 
 def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, List[Dict]], cfg: ResolvedConfig = None, company_id: Optional[UUID] = None) -> None:
     """
@@ -38,10 +53,28 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
     # passed through in the crew dict — use it directly rather than inferring from
     # truck position, which breaks when a truck has multiple trainers.
     trainees_in_crews = []
+    skipped_driver_trainees = 0
     for truck_id, crew in assigned_crews.items():
         for member in crew:
             if member["role"] == "trainee":
                 trainees_in_crews.append((member["id"], member.get("paired_trainer_id")))
+            elif member["role"] == "driver_trainee":
+                # ADR-256 added 'driver_trainee' to ck_assignment_members_role so the
+                # slot is now INSERTABLE, but no track trains it: ADR-264 (proposed)
+                # owns that and is unimplemented. Injecting TRAINEE_CURRICULUM_ROLE
+                # here would hand a driver trainee walker material — the exact failure
+                # the role scoping above exists to prevent.
+                # Counted and logged, never silent: an invisible skip is how a trainee
+                # goes a whole program with no records and nobody finds out.
+                skipped_driver_trainees += 1
+
+    if skipped_driver_trainees:
+        logger.warning(
+            "inject_curriculum: date=%s skipped %d driver_trainee crew member(s) — "
+            "the driver training track (ADR-264) is not implemented; no training "
+            "records were created for them",
+            target_date, skipped_driver_trainees,
+        )
 
     logger.info("inject_curriculum: date=%s trainees=%d", target_date, len(trainees_in_crews))
     if not trainees_in_crews:
@@ -50,6 +83,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
 
     # 2. Lock past records that are still open (past date, not yet locked)
     unlocked_past = db.query(TrainingRecord).filter(
+        TrainingRecord.company_id == company_id,
         TrainingRecord.record_date < target_date,
         TrainingRecord.is_locked == False,
     ).all()
@@ -58,8 +92,35 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
     if unlocked_past:
         db.flush()
 
-    # 3. Fetch full curriculum, grouped by phase
-    curriculum = db.query(TrainingCurriculum).order_by(TrainingCurriculum.day_number).all()
+    # 3. Fetch full curriculum, grouped by phase.
+    #
+    # Scoped by company_id AND by role (ADR-263). Both filters matter:
+    #   - company_id: without it this reads every tenant's curriculum and injects
+    #     Company B's topics into Company A's trainee records (Dimension 1).
+    #   - roles: without it a walker trainee receives driver vehicle-safety items,
+    #     and the Phase 4 mirroring below promotes them to MANDATORY demonstration
+    #     tasks that block graduation — a walker trainer asked to observe a
+    #     walker, who has no vehicle, performing a pre-trip vehicle inspection.
+    #
+    # Trainees are walkers (walker_routes.py::_WALKER_ROLES), so this service —
+    # which only ever injects role == "trainee" crew members — always wants the
+    # walker track. Driver curriculum reaches drivers through the curriculum read
+    # endpoints, not through dispatch-time injection: `trainer` is a WALKER
+    # trainer and never supervises a driver. Under ADR-264 a driver trainee is
+    # supervised by a DRIVER paired on the same truck, and this filter becomes a
+    # per-trainee lookup rather than a constant.
+    curriculum = [
+        item
+        for item in db.query(TrainingCurriculum)
+        .filter(TrainingCurriculum.company_id == company_id)
+        .order_by(TrainingCurriculum.day_number)
+        .all()
+        # Role filter applied in Python, not SQL: `roles` is a Postgres text[] in
+        # production but JSON under the SQLite test engine, and `.any()` compiles
+        # on neither uniformly. The curriculum is a small per-tenant table (tens
+        # of rows), so the filter is free here and stays dialect-agnostic.
+        if TRAINEE_CURRICULUM_ROLE in (item.roles or [])
+    ]
     curriculum_by_phase: Dict[int, List[TrainingCurriculum]] = {}
     for item in curriculum:
         curriculum_by_phase.setdefault(item.day_number, []).append(item)
@@ -69,6 +130,16 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
         item for item in curriculum
         if item.day_number in (1, 2, 3) and item.is_mandatory
     ]
+
+    # An empty curriculum must not silently produce empty phases that auto-close
+    # as complete (Dimension 5 — no silent drops). Log loudly; the caller cannot
+    # meaningfully train anyone in this state.
+    if not curriculum:
+        logger.error(
+            "inject_curriculum: NO curriculum rows for company_id=%s role=%s — "
+            "trainees will receive empty phases. Seed the curriculum.",
+            company_id, TRAINEE_CURRICULUM_ROLE,
+        )
 
     for trainee_id, trainer_id in trainees_in_crews:
         # --- Continuation request resolution ---
@@ -122,8 +193,19 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
         ).order_by(TrainingRecord.record_date.desc()).all()
 
         if not prev_records:
-            # First ever dispatch day for this trainee
-            current_phase = 1
+            # ADR-281: phase 0 is the ORE day — Amazon's self-serve e-learning,
+            # on a day a trainer walks the new hire through app install, website
+            # access and the procedures on the page. It closes on coverage tasks
+            # like any other phase, so the `phase_closed` branch below advances
+            # 0 -> 1 exactly as it advances 1 -> 2. No other change is needed.
+            # ...but only if phase-0 curriculum EXISTS. Without it the record
+            # would carry no mandatory tasks, auto-close as complete, and give
+            # the trainee an ORE day that trained nothing — the silent-empty-
+            # phase failure this module already warns about below. A company
+            # that has not seeded phase 0 keeps the old behaviour and starts at
+            # phase 1, so adopting ADR-281 is seeding the curriculum, not
+            # deploying this code.
+            current_phase = 0 if curriculum_by_phase.get(0) else 1
         else:
             last_record = prev_records[0]
 

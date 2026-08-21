@@ -234,7 +234,15 @@ def get_available_employees(
         .all()
     )
 
-    pool = {"driver": [], "trainer": [], "walker": [], "trainee": []}
+    # CAPTAIN IS DISPATCHABLE CREW (ADR-256). It was missing from this dict, and
+    # the `if role in pool` guard then discarded every captain SILENTLY — no
+    # error, no log, they simply never appeared in the available pool. The
+    # visible symptom was that removing a captain from a truck deleted them from
+    # the dispatch page: nothing put them back in the unassigned list to drag.
+    #
+    # `available_pool.get_available_pool` already had captain in its role filter,
+    # so this endpoint disagreed with the service it mirrors.
+    pool: dict = {"driver": [], "captain": [], "trainer": [], "walker": [], "trainee": []}
     for e in available_employees:
         role = str(e.role).lower()
         if role in pool:

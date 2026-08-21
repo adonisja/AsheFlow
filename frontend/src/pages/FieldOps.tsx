@@ -1,10 +1,14 @@
+import { errorText } from '../utils/errorText';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Award, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
+import { Camera, LogIn, LogOut, Star, Home, ClipboardCheck, CheckCircle2, XCircle, Gauge, MapPin, AlertTriangle, Fuel, BarChart2, TrendingUp, Clock, Navigation, Truck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
-import NotificationBanner from '../components/NotificationBanner';
+import { useNotificationContext } from '../contexts/NotificationContext';
 import { getLocalYMD as todayStr } from '../utils/date';
 import { fileToDataUrl } from '../utils/file';
+import type {
+  CheckInSummaryRow, ReturnSummaryRow, InspectionSummaryRow, FuelLogSummaryRow, NoShowRow,
+} from '../api/types';
 
 // Human-readable labels for inspection items
 const ITEM_LABELS: Record<string, string> = {
@@ -75,8 +79,8 @@ function InspectionPanel({ employeeId, onComplete }: { employeeId: string; onCom
       setSubmitted(true);
       setSubmittedData({ has_failures, items: results as Record<string, boolean>, notes: notes.trim() || undefined });
       onComplete?.();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Inspection submission failed.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Inspection submission failed.'));
     } finally {
       setLoading(false);
     }
@@ -212,8 +216,8 @@ function CheckInPanel({ employeeId, onComplete }: { employeeId: string; onComple
         const t = new Date(res.data.checked_in_at);
         setCheckedInAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Check-in failed.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Check-in failed.'));
     } finally {
       setLoading(false);
     }
@@ -304,8 +308,8 @@ function DeparturePanel({ employeeId, onComplete }: { employeeId: string; onComp
       });
       setDeparted(true);
       onComplete?.();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Departure record failed.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Departure record failed.'));
     } finally {
       setLoading(false);
     }
@@ -394,8 +398,8 @@ function ReturnPanel({ employeeId, onComplete }: { employeeId: string; onComplet
         const t = new Date(res.data.returned_at);
         setReturnedAt(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       }
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to record return.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Failed to record return.'));
     } finally {
       setLoading(false);
     }
@@ -536,8 +540,8 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
       });
       setLog(res.data);
       onStartComplete?.();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to save fuel log.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Failed to save fuel log.'));
     } finally {
       setLoading(false);
     }
@@ -558,8 +562,8 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
       });
       setLog(res.data);
       onEndComplete?.();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to update fuel log.');
+    } catch (err: unknown) {
+      alert(errorText(err, 'Failed to update fuel log.'));
     } finally {
       setLoading(false);
     }
@@ -674,185 +678,6 @@ function FuelMileagePanel({ employeeId, onStartComplete, onEndComplete }: { empl
           >
             {loading ? 'Saving…' : 'Log End Odometer'}
           </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Walker Rating Panel — drivers only, walkers fetched from today's crew
-// ---------------------------------------------------------------------------
-interface CrewMember { id: string; name: string; role: string; }
-
-type WalkerEntry = {
-  stars: number;
-  comment: string;
-  // null = attendance not yet marked; true = present; false = no-show
-  present: boolean | null;
-  submitted: boolean;
-};
-
-function WalkerRatingPanel({ employeeId }: { employeeId: string }) {
-  const [walkers, setWalkers] = useState<CrewMember[]>([]);
-  const [entries, setEntries] = useState<Record<string, WalkerEntry>>({});
-  const [crewLoading, setCrewLoading] = useState(true);
-
-  useEffect(() => {
-    if (!employeeId) return;
-
-    Promise.all([
-      axiosClient.get(`/field-ops/crew/${employeeId}`),
-      axiosClient.get(`/field-ops/rating/driver/${employeeId}`, { params: { target_date: todayStr() } }),
-    ])
-      .then(([crewRes, ratingsRes]) => {
-        const crew: CrewMember[] = crewRes.data.crew ?? [];
-        setWalkers(crew.filter(m => m.role === 'walker'));
-
-        // Pre-populate from already-submitted records
-        const pre: Record<string, WalkerEntry> = {};
-        for (const r of ratingsRes.data) {
-          pre[r.walker_id] = {
-            stars: r.stars ?? 0,
-            comment: r.comment ?? '',
-            present: r.present,
-            submitted: true,
-          };
-        }
-        setEntries(pre);
-      })
-      .catch((e) => { console.error('Failed to load walker ratings:', e); })
-      .finally(() => setCrewLoading(false));
-  }, [employeeId]);
-
-  const ENTRY_DEFAULTS: WalkerEntry = { stars: 0, comment: '', present: null, submitted: false };
-
-  const markAttendance = (id: string, present: boolean) => {
-    setEntries(prev => ({
-      ...prev,
-      [id]: { ...ENTRY_DEFAULTS, ...prev[id], present },
-    }));
-  };
-
-  const update = (id: string, field: 'stars' | 'comment', value: any) => {
-    setEntries(prev => ({
-      ...prev,
-      [id]: { ...ENTRY_DEFAULTS, ...prev[id], [field]: value },
-    }));
-  };
-
-  const submit = async (walker: CrewMember) => {
-    const e = entries[walker.id];
-    // Fix #10: guard against undefined entry or attendance not yet marked
-    if (!e || e.present === null) return;
-    if (e.present && !e.stars) return alert('Please select a star rating.');
-    try {
-      const payload: any = {
-        driver_id: employeeId,
-        walker_id: walker.id,
-        date: todayStr(),
-        present: e?.present ?? true,
-      };
-      if (e?.present) {
-        payload.stars = e.stars;
-        payload.comment = e.comment || null;
-      }
-      await axiosClient.post('/field-ops/rating', payload);
-      setEntries(prev => ({ ...prev, [walker.id]: { ...prev[walker.id], submitted: true } }));
-    } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to submit.');
-    }
-  };
-
-  return (
-    <div className="card space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent">
-          <Star className="w-4 h-4 text-warning" />
-        </div>
-        <h2 className="section-title">Walker Attendance & Rating</h2>
-      </div>
-      <p className="text-sm text-subtle">Mark attendance first, then rate walkers who were present. Visible to management only.</p>
-
-      {crewLoading ? (
-        <p className="text-sm text-subtle text-center py-4">Loading today's crew…</p>
-      ) : walkers.length === 0 ? (
-        <div className="py-6 text-center text-sm text-subtle bg-accent/20 rounded-xl border border-border/50">
-          No walkers assigned to your truck today.
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {walkers.map(walker => {
-            const e = entries[walker.id] ?? { stars: 0, comment: '', present: null, submitted: false };
-            return (
-              <div key={walker.id} className="p-4 rounded-xl border border-border bg-background space-y-3">
-                <p className="font-semibold text-sm text-foreground">{walker.name}</p>
-
-                {e.submitted ? (
-                  e.present ? (
-                    <p className="text-xs text-success font-medium">
-                      Rating submitted — {e.stars}★
-                    </p>
-                  ) : (
-                    <p className="text-xs text-warning font-medium">Marked as no-show.</p>
-                  )
-                ) : (
-                  <>
-                    {/* Step 1: attendance */}
-                    <div className="flex gap-2 items-center">
-                      <span className="text-xs text-subtle">Attendance:</span>
-                      <button
-                        onClick={() => markAttendance(walker.id, true)}
-                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${e.present === true ? 'bg-success text-white border-success' : 'border-border text-subtle hover:border-success hover:text-success'}`}
-                      >
-                        Present
-                      </button>
-                      <button
-                        onClick={() => markAttendance(walker.id, false)}
-                        className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${e.present === false ? 'bg-warning text-white border-warning' : 'border-border text-subtle hover:border-warning hover:text-warning'}`}
-                      >
-                        No-Show
-                      </button>
-                    </div>
-
-                    {/* Step 2: rating (only if present) */}
-                    {e.present === true && (
-                      <>
-                        <div className="flex gap-1">
-                          {[1, 2, 3, 4, 5].map(star => (
-                            <button
-                              key={star}
-                              onClick={() => update(walker.id, 'stars', star)}
-                              className={`text-2xl leading-none transition-colors ${star <= e.stars ? 'text-warning' : 'text-border hover:text-warning/50'}`}
-                            >
-                              ★
-                            </button>
-                          ))}
-                        </div>
-                        <textarea
-                          value={e.comment}
-                          onChange={ev => update(walker.id, 'comment', ev.target.value)}
-                          placeholder="Add a comment (optional)…"
-                          rows={2}
-                          className="w-full p-2.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
-                        />
-                      </>
-                    )}
-
-                    {e.present !== null && (
-                      <button
-                        onClick={() => submit(walker)}
-                        disabled={e.present === true && !e.stars}
-                        className="btn-primary text-xs w-full disabled:opacity-50"
-                      >
-                        {e.present ? 'Submit Rating' : 'Confirm No-Show'}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
     </div>
@@ -1064,15 +889,17 @@ function TruckAPCard({ employeeId, refreshTrigger = 0 }: { employeeId: string; r
 // ---------------------------------------------------------------------------
 function FieldStaffView({ employeeId }: { employeeId: string }) {
   const [apRefreshTrigger, setApRefreshTrigger] = useState(0);
+  const { setOnNotification } = useNotificationContext();
 
-  // Called by NotificationBanner when an anchor_point_* notification arrives
-  const handleNotification = useCallback((type: string) => {
-    if (type.startsWith('anchor_point')) setApRefreshTrigger(n => n + 1);
-  }, []);
+  useEffect(() => {
+    setOnNotification((type: string) => {
+      if (type.startsWith('anchor_point')) setApRefreshTrigger(n => n + 1);
+    });
+    return () => setOnNotification(null);
+  }, [setOnNotification]);
 
   return (
     <div className="space-y-4">
-      <NotificationBanner employeeId={employeeId} onNotification={handleNotification} />
       <TruckAPCard employeeId={employeeId} refreshTrigger={apRefreshTrigger} />
     </div>
   );
@@ -1095,11 +922,12 @@ function AdminFieldOpsView() {
   const { groups } = useAuth();
   const isAdmin = groups.includes('admin');
 
-  const [checkIns, setCheckIns]         = useState<any[]>([]);
-  const [departures, setDepartures]     = useState<any[]>([]);
-  const [inspections, setInspections]   = useState<any[]>([]);
-  const [fuelLogs, setFuelLogs]         = useState<any[]>([]);
-  const [noShows, setNoShows]           = useState<any[]>([]);
+  const [checkIns, setCheckIns]         = useState<CheckInSummaryRow[]>([]);
+  const [departures, setDepartures]     = useState<ReturnSummaryRow[]>([]);
+  const [inspections, setInspections]   = useState<InspectionSummaryRow[]>([]);
+  const [fuelLogs, setFuelLogs]         = useState<FuelLogSummaryRow[]>([]);
+  const [noShows, setNoShows]           = useState<NoShowRow[]>([]);
+  const [midShiftCheckIns, setMidShiftCheckIns] = useState<any[]>([]);   // ADR-215
   const [loading, setLoading]           = useState(true);
   const [sessions, setSessions]         = useState<ActiveSession[]>([]);
   const [wipingId, setWipingId]         = useState<string | null>(null);
@@ -1113,6 +941,10 @@ function AdminFieldOpsView() {
       axiosClient.get('/field-ops/fuel-logs/summary').then(r => setFuelLogs(r.data)),
       axiosClient.get('/field-ops/no-shows').then(r => setNoShows(r.data)),
       axiosClient.get<ActiveSession[]>('/shift-sessions/active').then(r => setSessions(r.data)),
+      // ADR-215: mid-shift check-ins carry the "Request help" flag (DriverCheckIn).
+      // This is the ops page a dispatcher watches — surface help here, not just on
+      // the compact dashboard widget.
+      axiosClient.get('/shift-ops/check-ins/summary').then(r => setMidShiftCheckIns(r.data)),
     ]).finally(() => setLoading(false));
   };
 
@@ -1121,8 +953,8 @@ function AdminFieldOpsView() {
     try {
       await axiosClient.delete(`/shift-sessions/driver/${driverId}/active/wipe`);
       setSessions(prev => prev.filter(s => s.driver_id !== driverId));
-    } catch (e: any) {
-      alert(e?.response?.data?.detail ?? 'Failed to wipe session.');
+    } catch (e: unknown) {
+      alert(errorText(e, 'Failed to wipe session.'));
     } finally {
       setWipingId(null);
     }
@@ -1183,6 +1015,44 @@ function AdminFieldOpsView() {
         ))}
       </div>
 
+      {/* Mid-shift check-ins (ADR-215) — help requests surface here, help-first. */}
+      {midShiftCheckIns.length > 0 && (
+        <div className="card">
+          <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
+            <AlertTriangle className="w-5 h-5 text-primary" />
+            <h2 className="text-base font-semibold text-foreground">Mid-shift check-ins</h2>
+            {midShiftCheckIns.some((c: any) => c.help_requested) && (
+              <span className="text-xs font-semibold text-danger bg-danger/10 rounded-full px-2 py-0.5">
+                {midShiftCheckIns.filter((c: any) => c.help_requested).length} need help
+              </span>
+            )}
+            <span className="ml-auto text-xs text-subtle">{midShiftCheckIns.length} driver{midShiftCheckIns.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="space-y-2">
+            {midShiftCheckIns.map((ci: any) => (
+              <div
+                key={ci.driver_id}
+                className={`flex items-center justify-between gap-2 p-2.5 rounded-lg border ${
+                  ci.help_requested ? 'border-danger/40 bg-danger/5' : 'border-border'
+                }`}
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{ci.driver_name}</p>
+                  <p className="text-xs text-subtle">
+                    Check-in #{ci.latest_check_in} · {ci.routes_remaining} routes left · {ci.working_crew_count} working
+                  </p>
+                </div>
+                {ci.help_requested && (
+                  <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-danger">
+                    🆘 Needs help
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Departures & Returns */}
       <div className="card">
         <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
@@ -1205,7 +1075,7 @@ function AdminFieldOpsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {departures.map((d: any) => (
+                {departures.map((d) => (
                   <tr key={d.employee_id}>
                     <td className="py-2 pr-4 font-medium text-foreground">{d.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{fmt(d.departed_at)}</td>
@@ -1256,7 +1126,7 @@ function AdminFieldOpsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {inspections.map((insp: any) => (
+                {inspections.map((insp) => (
                   <tr key={insp.inspection_id} className={insp.has_failures ? 'bg-danger/5' : ''}>
                     <td className="py-2 pr-4 font-medium text-foreground">{insp.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{insp.truck_name ?? '—'}</td>
@@ -1308,7 +1178,7 @@ function AdminFieldOpsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {fuelLogs.map((log: any) => (
+                {fuelLogs.map((log) => (
                   <tr key={log.log_id}>
                     <td className="py-2 pr-4 font-medium text-foreground">{log.driver_name}</td>
                     <td className="py-2 pr-4 text-muted-foreground">{log.truck_name ?? '—'}</td>
@@ -1340,7 +1210,7 @@ function AdminFieldOpsView() {
           </div>
         ) : (
           <div className="divide-y divide-border">
-            {noShows.map((ns: any) => (
+            {noShows.map((ns) => (
               <div key={ns.walker_id} className="py-2 flex items-center justify-between">
                 <span className="text-sm font-medium text-foreground">{ns.walker_name}</span>
                 <span className="text-xs text-muted-foreground">Driver: {ns.driver_name}</span>
@@ -1426,8 +1296,8 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
     try {
       await axiosClient.patch(`/anchor-points/${activeAP.id}/arrive`, {});
       loadAPs();
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to confirm arrival.');
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to confirm arrival.'));
     } finally {
       setArriving(false);
     }
@@ -1440,8 +1310,8 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
     try {
       await axiosClient.patch(`/anchor-points/${activeAP.id}/depart`);
       loadAPs();
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to record departure.');
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to record departure.'));
     } finally {
       setDeparting(false);
     }
@@ -1470,8 +1340,8 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
       setRelocEta('');
       setRelocDeptTime('');
       loadAPs();
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to submit relocation.');
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to submit relocation.'));
     } finally {
       setRelocLoading(false);
     }
@@ -1907,8 +1777,8 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
     try {
       const res = await axiosClient.post<ShiftSession>('/shift-sessions/');
       setSession(res.data);
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to start shift.');
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to start shift.'));
     } finally {
       setAdvancing(false);
     }
@@ -1921,8 +1791,8 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
     try {
       const res = await axiosClient.patch<ShiftSession>('/shift-sessions/me/active/advance');
       setSession(res.data);
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to advance gate.');
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to advance gate.'));
     } finally {
       setAdvancing(false);
     }
@@ -1935,8 +1805,8 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
       const res = await axiosClient.patch<ShiftSession>(`/shift-sessions/me/active/skip-to/${gate}`);
       setSession(res.data);
       setSkipOpen(false);
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to skip gate.');
+    } catch (e: unknown) {
+      setError(errorText(e, 'Failed to skip gate.'));
     } finally {
       setAdvancing(false);
     }
@@ -2064,7 +1934,8 @@ function DriverFieldOpsView({ employeeId }: { employeeId: string }) {
         <div className="space-y-4">
           <AnchorPointPanel employeeId={employeeId} />
           <CheckInPanel employeeId={employeeId} />
-          <WalkerRatingPanel employeeId={employeeId} />
+          {/* Walker attendance+rating removed (ADR-201): attendance is roll call
+              now; peer ratings moved to Preferences → Rate Team. */}
           {completeGateButton('RTS Approved — Returning to Station →', true)}
           {skipButton()}
         </div>
@@ -2117,7 +1988,7 @@ export default function FieldOps() {
 
   if (!employeeId) {
     return (
-      <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+      <div className="space-y-6 animate-slide-up">
         <h1 className="page-title">Field Operations</h1>
         <div className="card text-center py-10 text-subtle text-sm">Loading your profile…</div>
       </div>
@@ -2125,20 +1996,10 @@ export default function FieldOps() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-slide-up">
+    <div className="space-y-6 animate-slide-up">
       <h1 className="page-title">Field Operations</h1>
-      {isDriver    && (
-        <>
-          <NotificationBanner employeeId={employeeId} />
-          <DriverFieldOpsView employeeId={employeeId} />
-        </>
-      )}
-      {isWalker    && (
-        <>
-          <NotificationBanner employeeId={employeeId} />
-          <WalkerSelfPerformancePanel employeeId={employeeId} />
-        </>
-      )}
+      {isDriver    && <DriverFieldOpsView employeeId={employeeId} />}
+      {isWalker    && <WalkerSelfPerformancePanel employeeId={employeeId} />}
       {isFieldStaff && <FieldStaffView employeeId={employeeId} />}
     </div>
   );

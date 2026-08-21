@@ -1,0 +1,270 @@
+{
+  "$comment": [
+    "AsheFlow palette — THE source of truth (UI_UX_OVERHAUL_PLAN.md §3.1, §5 phase 0.1).",
+    "",
+    "Web (frontend/src/index.css) and mobile (mobile/src/theme/index.ts) are both",
+    "GENERATED from this file by design/build_tokens.py. Do not hand-edit either.",
+    "They drifted before — web primary was #3C64DD, mobile #4F6BF4 — which is what",
+    "this file exists to prevent.",
+    "",
+    "Every value carries its measured contrast in `_check`. design/check_contrast.py",
+    "re-measures and fails CI if any pairing regresses.",
+    "",
+    "Colours are HSL triples because web CSS vars need that form; the generator",
+    "converts to hex for mobile."
+  ],
+
+  "meta": {
+    "version": 1,
+    "updated": "2026-08-03",
+    "targets": {
+      "text": 4.5,
+      "ui": 3.0,
+      "outdoor": 7.0
+    }
+  },
+
+  "light": {
+    "$comment": "Light theme. This is where every shipped WCAG failure lived (plan §2.2).",
+
+    "background":        { "hsl": [220, 25, 98], "_note": "frost white" },
+    "surface":           { "hsl": [0, 0, 100] },
+    "surfaceMuted":      { "hsl": [220, 20, 96], "_note": "receding fill — inputs, disabled. Never a card bg." },
+    "surfaceElevated":   { "hsl": [0, 0, 100] },
+    "card":              { "hsl": [0, 0, 100] },
+
+    "foreground":        { "hsl": [224, 35, 10], "_check": { "on": "background", "min": 4.5 } },
+    "mutedForeground":   { "hsl": [222, 10, 44], "_check": { "on": "card", "min": 4.5 } },
+    "subtleForeground":  { "hsl": [222, 10, 38], "_check": { "on": "card", "min": 4.5 },
+                           "_was": "2.56:1 FAIL — darkened from gray400 (plan §2.2)" },
+
+    "brandText":         { "hsl": [275, 80, 46], "_check": { "on": "surfaceMuted", "min": 4.5 },
+                           "_note": "brand violet for TEXT/BORDERS on a surface. Identical to `brand` in this theme — light-theme brand already clears 4.5:1 on every surface (6.24-6.86), so no lift is needed. The token exists so call sites express INTENT (text vs fill) on both platforms rather than branching per theme; the dark theme is where the two values diverge. See the dark-theme note.",
+                           "_alias_of": "brand" },
+
+    "primary":           { "hsl": [229, 60, 26], "_check": { "on": "background", "min": 4.5 },
+                           "_note": "navy #1B2A6B — brand, headings, body. 13.2:1 on white.",
+                           "_was": "web #3C64DD / mobile #4F6BF4 — reconciled (plan §2.7)" },
+    "primaryForeground": { "hsl": [0, 0, 100], "_check": { "on": "primary", "min": 4.5 } },
+    "primaryLight":      { "hsl": [229, 60, 95], "_note": "tint fill" },
+    "primaryStrong":     { "hsl": [229, 60, 18], "_note": "active / press" },
+
+    "accent":            { "hsl": [243, 100, 97], "_note": "SURFACE tint — hover states, chips, muted fills. 305 usages depend on this being near-invisible. NOT the brand colour; see `brand`." },
+    "accentForeground":  { "hsl": [225, 70, 42] },
+
+    "brandSurface":      { "hsl": [229, 60, 22], "_note": "Deep navy brand furniture — sign-in hero, marketing headers. CONSTANT across themes: it is brand identity, not a themed surface, so it must not lighten in dark mode the way primaryStrong does." },
+    "brandSurfaceForeground": { "hsl": [0, 0, 100], "_check": { "on": "brandSurface", "min": 4.5 } },
+    "brand":            { "hsl": [275, 80, 46], "_check": { "on": "card", "min": 4.5 },
+                           "_note": "violet #8517D3 — brand/interactive accent. 46° from navy, 46° from every status hue.",
+                           "_why": "amber sat 0° from gold and 13° from warning (plan §2.4)" },
+    "brandForeground":  { "hsl": [0, 0, 100], "_check": { "on": "brand", "min": 4.5 } },
+    "brandLight":       { "hsl": [275, 80, 96] },
+    "brandOutdoor":     { "hsl": [275, 85, 40], "_check": { "on": "card", "min": 7.0 },
+                           "_note": "#740FBD — for anything read in sunlight (plan §4 rule 2)" },
+
+    "gold":              { "hsl": [35, 100, 32], "_check": { "on": "card", "min": 4.5 },
+                           "_note": "amber #A55F00 — STATUS ONLY now, no longer brand",
+                           "_was": "4.17:1 large-only" },
+    "goldLight":         { "hsl": [35, 100, 95] },
+
+    "success":           { "hsl": [162, 90, 22], "_check": { "on": "card", "min": 4.5 },
+                           "_was": "mobile 2.54:1 FAIL / web 4.48:1 — and 1.05:1 vs danger under deuteranopia",
+                           "_pairs_with": "an icon, ALWAYS — plan §4 rule 1" },
+    "successLight":      { "hsl": [162, 70, 94] },
+    "warning":           { "hsl": [22, 95, 34], "_check": { "on": "card", "min": 4.5 },
+                           "_was": "3.24:1 large-only" },
+    "warningLight":      { "hsl": [22, 90, 94] },
+    "danger":            { "hsl": [4, 75, 42], "_check": { "on": "card", "min": 4.5 } },
+    "dangerLight":       { "hsl": [4, 80, 95] },
+    "info":              { "hsl": [205, 85, 32], "_check": { "on": "card", "min": 4.5 } },
+    "infoLight":         { "hsl": [205, 80, 94] },
+
+    "driver":            { "hsl": [205, 85, 32] },
+    "driverLight":       { "hsl": [205, 80, 94] },
+    "walker":            { "hsl": [162, 90, 22] },
+    "walkerLight":       { "hsl": [162, 70, 94] },
+    "trainer":           { "hsl": [35, 100, 32] },
+    "trainerLight":      { "hsl": [35, 100, 95] },
+    "trainee":           { "hsl": [275, 80, 46] },
+    "traineeLight":      { "hsl": [275, 80, 96] },
+    "neutral":           { "hsl": [222, 10, 44] },
+    "neutralLight":      { "hsl": [220, 20, 96] },
+
+    "border":            { "hsl": [220, 16, 88] },
+    "borderStrong":      { "hsl": [220, 14, 76] },
+    "ring":              { "hsl": [185, 75, 36],
+                           "_was": [275, 80, 46],
+                           "_note": "cyan #1795A1 — dedicated focus indicator, used for NOTHING else. Was byte-identical to brand AND trainee, so on a trainee's screen a focused control was the same colour as role chrome. Focus must never be ambiguous (WCAG 2.4.11). Lab distance >=31 from every role, status and brand token under normal, deuteranopic and protanopic vision.",
+                           "_check": { "on": "background", "min": 3.0 } },
+
+    "tabBar":            { "hsl": [0, 0, 100] },
+    "tabBarBorder":      { "hsl": [220, 16, 88] },
+    "skeleton":          { "hsl": [220, 20, 93] },
+    "skeletonShimmer":   { "hsl": [220, 20, 97] }
+  },
+
+  "dark": {
+    "$comment": "Dark theme. Web dark already passed everything; mobile had one failure.",
+
+    "background":        { "hsl": [231, 55, 12], "_note": "#0E1330 — navy-tinted, same family as brand" },
+    "surface":           { "hsl": [231, 40, 16] },
+    "surfaceMuted":      { "hsl": [231, 32, 20] },
+    "surfaceElevated":   { "hsl": [231, 38, 18] },
+    "card":              { "hsl": [231, 40, 16] },
+
+    "foreground":        { "hsl": [210, 25, 96], "_check": { "on": "background", "min": 4.5 } },
+    "mutedForeground":   { "hsl": [220, 14, 71], "_check": { "on": "card", "min": 4.5 } },
+    "subtleForeground":  { "hsl": [220, 12, 60], "_check": { "on": "card", "min": 4.5 } },
+
+    "brandText":         { "hsl": [272, 75, 69], "_check": { "on": "surfaceMuted", "min": 4.5 },
+                           "_note": "brand violet for TEXT/BORDERS on a surface. `brand` itself is L63, which clears 4.5:1 only on `background` (4.52) and fails on every card: card/surface 4.10, surfaceElevated 3.86, surfaceMuted 3.58. Found on device 2026-08-03 — the outline Button renders 13-17px semibold, below WCAG's large-text threshold, so it needs the full 4.5. `brand` is NOT lifted to this value because at L69 it collapses toward `primary` (Lab 12.9 -> 2.2) and `info` (19.0 -> 6.1); a fill colour and a text colour have different jobs. Use `brand` for fills, `brandText` for text and borders on any surface.",
+                           "_was": "outline/ghost Button used `brand` directly" },
+
+    "primary":           { "hsl": [228, 80, 72], "_check": { "on": "background", "min": 4.5 },
+                           "_note": "navy is too dark to read on a dark surface — lifted, same hue family" },
+    "primaryForeground": { "hsl": [231, 55, 10], "_check": { "on": "primary", "min": 4.5 },
+                           "_was": "2.95:1 FAIL — was white on a mid-tone primary (plan §2.2)" },
+    "primaryLight":      { "hsl": [228, 45, 22] },
+    "primaryStrong":     { "hsl": [228, 85, 80] },
+
+    "accent":            { "hsl": [225, 35, 18], "_note": "SURFACE tint — hover states, chips, muted fills. 305 usages depend on this being near-invisible. NOT the brand colour; see `brand`." },
+    "accentForeground":  { "hsl": [225, 80, 75] },
+
+    "brandSurface":      { "hsl": [229, 60, 22] },
+    "brandSurfaceForeground": { "hsl": [0, 0, 100], "_check": { "on": "brandSurface", "min": 4.5 } },
+    "brand":            { "hsl": [272, 75, 63], "_check": { "on": "background", "min": 4.5 },
+                           "_note": "violet #A55AE7" },
+    "brandForeground":  { "hsl": [231, 55, 10], "_check": { "on": "brand", "min": 4.5 } },
+    "brandLight":       { "hsl": [272, 40, 24] },
+    "brandOutdoor":     { "hsl": [272, 85, 78], "_check": { "on": "background", "min": 7.0 },
+                           "_note": "lifted to clear 7:1 for sunlight reads on dark" },
+
+    "gold":              { "hsl": [37, 91, 55], "_check": { "on": "card", "min": 4.5 },
+                           "_note": "#F5A524 — 8.91:1, verified good" },
+    "goldLight":         { "hsl": [37, 45, 24] },
+
+    "success":           { "hsl": [162, 55, 58], "_check": { "on": "card", "min": 4.5 },
+                           "_pairs_with": "an icon, ALWAYS" },
+    "successLight":      { "hsl": [162, 35, 22] },
+    "warning":           { "hsl": [22, 92, 60], "_check": { "on": "card", "min": 4.5 } },
+    "warningLight":      { "hsl": [22, 45, 24] },
+    "danger":            { "hsl": [4, 78, 65], "_check": { "on": "card", "min": 4.5 } },
+    "dangerLight":       { "hsl": [4, 40, 26] },
+    "info":              { "hsl": [205, 85, 62], "_check": { "on": "card", "min": 4.5 } },
+    "infoLight":         { "hsl": [205, 40, 24] },
+
+    "driver":            { "hsl": [205, 85, 62] },
+    "driverLight":       { "hsl": [205, 40, 24] },
+    "walker":            { "hsl": [162, 55, 58] },
+    "walkerLight":       { "hsl": [162, 35, 22] },
+    "trainer":           { "hsl": [37, 91, 55] },
+    "trainerLight":      { "hsl": [37, 45, 24] },
+    "trainee":           { "hsl": [272, 75, 63] },
+    "traineeLight":      { "hsl": [272, 40, 24] },
+    "neutral":           { "hsl": [220, 14, 71] },
+    "neutralLight":      { "hsl": [231, 32, 20] },
+
+    "border":            { "hsl": [231, 25, 26] },
+    "borderStrong":      { "hsl": [231, 20, 38] },
+    "ring":              { "hsl": [195, 90, 78],
+                           "_was": [272, 75, 63],
+                           "_note": "cyan #94E0F9 — dedicated focus indicator, used for NOTHING else. See light theme. Lab distance >=29 from every role, status and brand token under normal, deuteranopic and protanopic vision.",
+                           "_check": { "on": "background", "min": 3.0 } },
+
+    "tabBar":            { "hsl": [231, 40, 14] },
+    "tabBarBorder":      { "hsl": [231, 25, 26] },
+    "skeleton":          { "hsl": [231, 30, 22] },
+    "skeletonShimmer":   { "hsl": [231, 30, 28] }
+  },
+
+  "ramp": {
+    "$comment": [
+      "Continuous gradient anchors for stop urgency (mobile stopUrgency.ts).",
+      "",
+      "NOT semantic tokens. success/warning/danger are single values; this is a",
+      "SCALE that gets interpolated between, so it needs its own named anchors.",
+      "These were the last consumers of the legacy hardcoded `palette` export in",
+      "mobile/src/theme/index.ts, which shipped a second competing source of",
+      "truth (including #4F6BF4, the very value task 0.2 was meant to remove).",
+      "",
+      "Theme-constant on purpose: the ramp encodes TIME PRESSURE, and a walker",
+      "reading it must get the same meaning from the same colour in either",
+      "theme. Contrast is not checked here because these are large fills behind",
+      "their own foreground, not text pairings.",
+      "",
+      "Stored as HEX, not HSL: these are exact values carried over from the",
+      "legacy palette, and a hex->integer-HSL->hex round-trip shifted every one",
+      "of them by 1-2 per channel. Imperceptible, but it is silent corruption of",
+      "deliberate values. Theme-constant anchors gain nothing from HSL, which",
+      "exists so Tailwind can compose alpha.",
+      "their own foreground, not text pairings."
+    ],
+    "urgencyNone": { "hex": "#3B82F6" },
+    "urgencyFarDeep": { "hex": "#10B981" },
+    "urgencyFarPale": { "hex": "#34D399" },
+    "urgencyCautionPale": { "hex": "#FBB830" },
+    "urgencyCautionDeep": { "hex": "#F97316" },
+    "urgencyUrgent": { "hex": "#EF4444" },
+    "urgencyClosed": { "hex": "#450A0A" }
+  },
+
+  "cvd": {
+    "$comment": [
+      "Colour-vision deficiency. success vs danger measured 1.05:1 under",
+      "deuteranopia (plan §2.3) — a walker could not tell delivered from failed.",
+      "",
+      "MEASURED FINDING (2026-08-03): red / amber / green CANNOT be separated by",
+      "colour choice under deuteranopia. All three collapse toward yellow, so only",
+      "LIGHTNESS separates them, and reaching even 1.6:1 needs ~25-30 lightness",
+      "points — at which point success is a pale mint or danger a washed pink and",
+      "neither reads as its own semantic colour. Degrading the palette to chase a",
+      "threshold that still would not make colour safe is the wrong trade.",
+      "",
+      "So: the red/amber/green cluster is ADVISORY (reported, never fails). Its",
+      "real mitigation is plan §4 rule 1 — every status carries an icon or label,",
+      "enforced by the primitive API in phase 2, not by the palette.",
+      "",
+      "ENFORCED pairs are those where separation IS achievable: the interactive",
+      "accent must never be mistaken for a status colour, which is the whole",
+      "reason brand moved off amber (plan §2.4)."
+    ],
+    "enforced": {
+      "$metric": "Perceptual distance in Lab under simulated CVD, NOT contrast ratio. Contrast is luminance-only and cannot see hue: it scores violet (#4D4DD2 under deuteranopia) against olive (#6F6F01) at 1.09:1 despite them being obviously different colours. 25 = comfortably distinguishable.",
+      "min": 25,
+      "pairs": [
+        ["brand", "success"],
+        ["brand", "danger"]
+      ],
+      "$excluded": {
+        "brand-vs-primary-dark": [
+          "ACCEPTED 2026-08-03 at 12.9 (threshold 25), dark theme only.",
+          "Light theme measures 39.3 and passes.",
+          "",
+          "Cause: on a dark navy background BOTH must be lifted to stay readable,",
+          "and lifting pushes them together. Full hue-space search found the only",
+          "way to clear 25 is a pink/magenta accent (#F42A6D, distance 50.4),",
+          "which abandons violet and desynchronises light from dark.",
+          "",
+          "Accepted because the collision is accent-vs-BRAND, not accent-vs-STATUS.",
+          "A CVD user in dark mode may find an interactive highlight and a heading",
+          "similar; they will NOT mistake an interactive element for a warning,",
+          "which is the confusion that costs something operationally and which",
+          "the enforced pairs still cover.",
+          "",
+          "Revisit if dark mode ever leans on colour alone to mark interactivity.",
+          "Underline/weight/icon affordances make this moot and are required by",
+          "plan §4 rule 1 regardless."
+        ]
+      }
+    },
+    "advisory": {
+      "$note": "Reported by --report. Unfixable by colour; mitigated by icons.",
+      "pairs": [
+        ["success", "danger"],
+        ["success", "warning"],
+        ["danger", "warning"],
+        ["brand", "warning"]
+      ]
+    }
+  }
+}

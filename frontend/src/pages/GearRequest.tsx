@@ -1,9 +1,12 @@
+import { errorText } from '../utils/errorText';
 import React, { useEffect, useState } from 'react';
-import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2, HelpCircle } from 'lucide-react';
+import { ShoppingCart, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axiosClient from '../api/axiosClient';
 import SectionHeader from '../components/ui/SectionHeader';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import GearManagerInbox from '../components/gear/GearManagerInbox';
+import { useAuth } from '../contexts/AuthContext';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,6 +106,14 @@ interface CartEntry {
 // ---------------------------------------------------------------------------
 
 export default function GearRequest() {
+  const { groups } = useAuth();
+  // Management and admin do not requisition their own uniform — their role here
+  // is approving the team's requests. Showing them the ordering form was wrong:
+  // /gear-requests/pending and /all are already management-gated on the backend,
+  // so the oversight view was reachable from the dashboard widget but not from
+  // the page itself.
+  const isOversight = groups.includes('management') || groups.includes('admin');
+
   const [catalogue, setCatalogue] = useState<CatalogueResponse | null>(null);
   const [orders, setOrders]       = useState<GearOrderResponse[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -115,6 +126,12 @@ export default function GearRequest() {
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
   const load = async () => {
+    // Oversight roles render the approval inbox, which loads its own data —
+    // skip the catalogue and personal-order fetches entirely.
+    if (isOversight) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -164,13 +181,28 @@ export default function GearRequest() {
       const ordersRes = await axiosClient.get<GearOrderResponse[]>('/gear-requests/my-orders');
       setOrders(ordersRes.data);
       setTimeout(() => setSubmitSuccess(false), 4000);
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
+    } catch (err: unknown) {
+      const detail = errorText(err, '') || undefined;
       setSubmitError(Array.isArray(detail) ? detail : (detail ?? 'Failed to submit order.'));
     } finally {
       setSubmitting(false);
     }
   };
+
+  // Managers get the team's approval queue, not an order form. Must precede the
+  // !catalogue guard below — oversight never fetches a catalogue.
+  if (isOversight) {
+    return (
+      <div className="space-y-6">
+        <SectionHeader
+          eyebrow="Gear"
+          title="Gear Requests"
+          description="Review and action the team's uniform and gear requests."
+        />
+        <GearManagerInbox />
+      </div>
+    );
+  }
 
   if (loading) {
     return (

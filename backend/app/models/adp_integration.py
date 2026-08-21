@@ -42,6 +42,18 @@ class ADPIntegration(Base):
     # 'sandbox' during development/staging; 'production' for live payroll data.
     adp_environment = Column(String(20), nullable=False, default="sandbox")
 
+    # ADP payroll group whose pay period schedule drives correction deadlines.
+    # NULL until an admin configures it — pay period sync no-ops without it,
+    # which in turn leaves mismatch detection gated (see ADR-233).
+    adp_payroll_group_id = Column(String(100), nullable=True)
+
+    # Mismatch detection stays off until an operator has reviewed the dry-run
+    # count for this company. Populating adp_pay_periods takes detection from
+    # zero adjustments/day to real volume, and the first pass over the historical
+    # window can open a large batch — each one notifying an employee. Flipping
+    # this per company keeps that blast radius reviewable (ADR-233).
+    mismatch_detection_enabled = Column(Boolean, nullable=False, default=False)
+
     # Cursors for Celery tasks. NULL = never synced (first-run case).
     last_employee_sync_at  = Column(DateTime(timezone=True), nullable=True)
     last_timecard_sync_at  = Column(DateTime(timezone=True), nullable=True)

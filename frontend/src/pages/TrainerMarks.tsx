@@ -121,8 +121,11 @@ export default function TrainerMarks() {
           >
             <div className="flex items-center justify-between mb-2">
               <span className="font-medium text-sm">{s.trainer?.name ?? 'Unknown'}</span>
+              {/* badge-danger, not badge-error — the latter is undefined in
+                  index.css, so this badge rendered unstyled. Same defect fixed
+                  in TrainingCurriculum (02aba51); this was the last occurrence. */}
               {s.underperforming && (
-                <span className="badge badge-error text-[10px]">
+                <span className="badge badge-danger text-[10px]">
                   <TrendingDown className="w-3 h-3 mr-1" /> Underperforming
                 </span>
               )}
