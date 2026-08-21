@@ -496,12 +496,12 @@ jobs:
               "cp -r /tmp/asheflow-private/asheflow_private /home/ubuntu/AsheFlow/backend/asheflow_private",
               "rm -rf /tmp/asheflow-private && rm -f /home/ubuntu/.ssh/asheflow_private_deploy",
               "touch /home/ubuntu/AsheFlow/bot/.env",
-              "cd /home/ubuntu/AsheFlow && docker compose down --remove-orphans",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml down --remove-orphans",
               "if docker ps -a --format {{.Names}} | grep -qx asheflow_postgres; then docker inspect asheflow_postgres | grep -q asheflow_postgres_data || { echo ABORT - existing asheflow_postgres does not mount volume asheflow_postgres_data so recreating it would attach an empty database. Migrate the volume manually before redeploying.; exit 1; }; fi",
               "for c in asheflow_postgres asheflow_redis asheflow_backend asheflow_celery_worker asheflow_celery_beat asheflow_caddy asheflow_bot; do docker rm -f $c >/dev/null 2>&1 || true; done",
               "docker network rm asheflow_default >/dev/null 2>&1 || true",
-              "cd /home/ubuntu/AsheFlow && docker compose --progress plain build --no-cache backend celery_worker bot",
-              "cd /home/ubuntu/AsheFlow && docker compose up -d postgres redis backend celery_worker caddy bot"
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml --progress plain build --no-cache backend celery_worker celery_beat bot",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d postgres redis backend celery_worker celery_beat caddy bot"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 1 SSM: $CID"
@@ -513,7 +513,7 @@ jobs:
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
               "export HOME=/home/ubuntu",
-              "cd /home/ubuntu/AsheFlow && docker compose ps -a",
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml ps -a",
               "docker logs asheflow_backend --tail=100 2>&1 || echo no-backend-logs",
               "docker inspect asheflow_backend --format=\\"Status: {{.State.Status}} | ExitCode: {{.State.ExitCode}} | Error: {{.State.Error}}\\" 2>/dev/null || echo no-container"
             ]' \
@@ -527,7 +527,7 @@ jobs:
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
               "export HOME=/home/ubuntu",
-              "cd /home/ubuntu/AsheFlow && docker compose exec -T backend alembic upgrade heads"
+              "cd /home/ubuntu/AsheFlow && docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend alembic upgrade heads"
             ]' \
             --query "Command.CommandId" --output text)
           echo "Step 2 SSM (migrations): $CID"
