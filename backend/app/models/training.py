@@ -90,7 +90,24 @@ class TrainingRecord(Base):
     id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     company_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     trainee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    # The WALKER trainer. Read by graduation_quiz, continuation_requests,
+    # analytics and the training router, all of which are walker-shaped.
     trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
+    # ADR-264 D5 (revised 2026-08-22) — the supervising DRIVER, deliberately a
+    # SEPARATE column rather than reusing trainer_id.
+    #
+    # The ADR originally reused trainer_id and called the name "misleading".
+    # It is worse than misleading: ~192 references read trainer_id, and the ones
+    # above are walker-specific. analytics.py:109 counts records with
+    # `trainer_id IS NOT NULL` — a shared column would silently fold driver
+    # supervision into walker-trainer statistics, and every "who trains whom"
+    # surface would report a driver as a walker trainer. A separate column makes
+    # that class of mistake unavailable instead of merely discouraged.
+    #
+    # Exactly one of these is set on any record: trainer_id for a `trainee`,
+    # driver_trainer_id for a `driver_trainee`. A solo day (supervised=False)
+    # sets neither.
+    driver_trainer_id = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True, index=True)
 
     record_date        = Column(Date, nullable=False, index=True)
     # phase: 0 = ORE day, 1–4 normal, 5 = quiz day, 6+ = remediation

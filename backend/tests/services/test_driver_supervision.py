@@ -103,3 +103,62 @@ class TestEligibleSupervisors:
 
     def test_an_empty_pool_is_empty_not_an_error(self):
         assert eligible_supervisors([]) == []
+
+
+class TestTheDriverSupervisorIsASeparateColumn:
+    """ADR-264 D5, revised 2026-08-22.
+
+    The ADR originally reused TrainingRecord.trainer_id and called the name
+    "misleading". It is worse than misleading: ~192 references read trainer_id,
+    and the walker-shaped ones — graduation_quiz, continuation_requests,
+    analytics, the training router — would silently treat a supervising driver
+    as a walker trainer. analytics.py counts records with `trainer_id IS NOT
+    NULL`, so a shared column folds driver supervision into walker-trainer
+    statistics.
+    """
+
+    def test_the_column_exists_and_is_nullable(self):
+        from app.models.training import TrainingRecord
+
+        col = TrainingRecord.__table__.columns.get("driver_trainer_id")
+        assert col is not None, "ADR-264 D5 requires a separate driver supervisor column"
+        assert col.nullable is True, "a solo day (D8) sets no supervisor"
+
+    def test_it_is_distinct_from_the_walker_trainer_column(self):
+        from app.models.training import TrainingRecord
+
+        cols = {c.name for c in TrainingRecord.__table__.columns}
+        assert {"trainer_id", "driver_trainer_id"} <= cols, (
+            "both must exist — reusing one column is the mistake this guards"
+        )
+
+    def test_the_continuity_lookup_reads_the_driver_column(self):
+        """If this ever reads trainer_id, a driver trainee inherits whichever
+        walker trainer last supervised someone — a silent cross-track pairing."""
+        import inspect
+
+        from app.services import driver_supervision
+
+        src = inspect.getsource(driver_supervision.previous_supervisor_id)
+        assert "TrainingRecord.driver_trainer_id" in src
+        assert "TrainingRecord.trainer_id" not in src
+
+
+class TestContinuityIsTheRule:
+    """D5 addendum. Continuity, not eligibility: the same supervisor carries
+    across days, and the system never substitutes on its own."""
+
+    def test_no_prior_record_is_first_day_not_an_auto_pick(self):
+        from app.services.driver_supervision import resolve_supervisor
+
+        class _DB:
+            def query(self, *a, **k): return self
+            def filter(self, *a, **k): return self
+            def order_by(self, *a, **k): return self
+            def first(self): return None
+
+        sup, reason = resolve_supervisor(_DB(), "t1", "c1", "2026-08-22", [_Emp("driver")])
+        assert sup is None and reason == "first_day", (
+            "an eligible driver was standing right there — the system must NOT "
+            "pick one; a new supervising relationship is a human decision"
+        )

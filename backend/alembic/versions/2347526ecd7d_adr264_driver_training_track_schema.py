@@ -9,6 +9,9 @@ correct with no backfill:
 
 - company_configs.driver_training_days — nullable, resolved via PLATFORM_DEFAULTS
   (5). Phases, not calendar days.
+- training_records.driver_trainer_id — the supervising DRIVER, separate from
+  trainer_id (the walker trainer). ~192 references read trainer_id and the
+  walker-shaped ones would silently count a driver as a walker trainer.
 - training_records.supervised — server_default true. Every historical walker
   record WAS supervised, so the default is the truth rather than a placeholder.
 - graduation_quiz_templates.roles — server_default '{walker}'. Every question
@@ -35,6 +38,17 @@ def upgrade():
         sa.Column("supervised", sa.Boolean(), nullable=False, server_default=sa.text("true")),
     )
     op.add_column(
+        "training_records",
+        sa.Column("driver_trainer_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_training_records_driver_trainer_id", "training_records", "employees",
+        ["driver_trainer_id"], ["id"], ondelete="SET NULL",
+    )
+    op.create_index(
+        "ix_training_records_driver_trainer_id", "training_records", ["driver_trainer_id"],
+    )
+    op.add_column(
         "graduation_quiz_templates",
         sa.Column(
             "roles",
@@ -47,5 +61,8 @@ def upgrade():
 
 def downgrade():
     op.drop_column("graduation_quiz_templates", "roles")
+    op.drop_index("ix_training_records_driver_trainer_id", table_name="training_records")
+    op.drop_constraint("fk_training_records_driver_trainer_id", "training_records", type_="foreignkey")
+    op.drop_column("training_records", "driver_trainer_id")
     op.drop_column("training_records", "supervised")
     op.drop_column("company_configs", "driver_training_days")
