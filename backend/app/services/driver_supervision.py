@@ -83,21 +83,26 @@ def eligible_supervisors(employees: Iterable) -> list:
 # principle as D7's "solo is an explicit dispatch approval, never a fallback".
 
 
-def previous_supervisor_id(db, trainee_id, company_id, before_date) -> Optional[UUID]:
-    """The driver who supervised this trainee most recently, or None.
+def prior_supervisor_ids(db, trainee_id, company_id, before_date) -> list:
+    """Every driver who has supervised this trainee, most recent first.
 
-    Reads `TrainingRecord.driver_trainer_id` — already one row per trainee per
-    day, so there is no new state to keep in sync. Deliberately NOT `trainer_id`,
-    which is the walker trainer (D5, revised 2026-08-22).
+    A LIST, not a single id (operator, 2026-08-22). Continuity spans the whole
+    supervisor history: if yesterday's driver is out, the trainee is re-paired
+    with an EARLIER supervising driver who is here today, before dispatch is
+    asked. Each of them has already watched this trainee work, which is the
+    thing continuity is protecting.
 
-    Solo days (`supervised=False`) carry a NULL supervisor and are skipped by the
-    NOT NULL filter rather than ending the lookup: a trainee whose supervisor was
-    absent yesterday is still re-paired with the driver from the day before.
+    Reads `TrainingRecord.driver_trainer_id` — one row per trainee per day, so
+    no new state. Deliberately NOT `trainer_id`, which is the walker trainer
+    (D5, revised 2026-08-22).
+
+    Solo days carry a NULL supervisor and drop out via the NOT NULL filter
+    rather than ending the walk.
     """
     from app.models.training import TrainingRecord
 
-    row = (
-        db.query(TrainingRecord.driver_trainer_id)
+    rows = (
+        db.query(TrainingRecord.driver_trainer_id, TrainingRecord.record_date)
         .filter(
             TrainingRecord.trainee_id == trainee_id,
             TrainingRecord.company_id == company_id,
@@ -105,34 +110,50 @@ def previous_supervisor_id(db, trainee_id, company_id, before_date) -> Optional[
             TrainingRecord.driver_trainer_id.isnot(None),
         )
         .order_by(TrainingRecord.record_date.desc())
-        .first()
+        .all()
     )
-    return row[0] if row else None
+    # Deduplicate while preserving recency order: a driver who supervised on
+    # three separate days is one candidate, ranked by their most recent day.
+    seen, out = set(), []
+    for supervisor_id, _ in rows:
+        if supervisor_id not in seen:
+            seen.add(supervisor_id)
+            out.append(supervisor_id)
+    return out
 
 
-def resolve_supervisor(db, trainee_id, company_id, target_date, todays_candidates) -> tuple[Optional[UUID], str]:
+def resolve_supervisor(db, trainee_id, company_id, target_date, todays_candidates) -> tuple:
     """Pick today's supervisor for a driver trainee.
 
-    Returns `(supervisor_id, reason)` where reason is one of:
+    Returns `(supervisor_id, reason)`:
 
-        "continuity"    — the previous supervisor is here and eligible
-        "first_day"     — no prior record; dispatch assigns by hand
-        "unavailable"   — previous supervisor is not on today's dispatch
+        "continuity"   — their most recent supervisor is here and eligible
+        "prior"        — an EARLIER supervising driver is here instead
+        "first_day"    — no supervisor has ever been recorded
+        "unavailable"  — every prior supervisor is off today
 
-    Both `None` outcomes are the SAME instruction to the caller: leave the
-    trainee unpaired and notify dispatch. They are distinguished only so the
-    notification can say which it is — "assign a supervisor for their first day"
-    reads differently from "yesterday's supervisor is out".
+    The two `None` outcomes mean the same thing to the caller: do NOT place this
+    trainee on a truck, and alert dispatch (operator, 2026-08-22). They are
+    distinguished only so the alert can say which — "assign a supervisor for
+    their first day" reads differently from "none of their supervisors are in".
 
-    `todays_candidates` is the pool of employees on today's dispatch; the caller
-    supplies it because who counts as "on dispatch" differs between run_dispatch
-    (building crews in memory) and the manual assign path (reading rows).
+    The system never pairs a trainee with a driver who has not supervised them
+    before. A new supervising relationship is always a human decision, the same
+    principle as D7's "solo is an explicit dispatch approval, never a fallback".
     """
-    prev_id = previous_supervisor_id(db, trainee_id, company_id, target_date)
-    if prev_id is None:
+    priors = prior_supervisor_ids(db, trainee_id, company_id, target_date)
+    if not priors:
         return None, "first_day"
 
-    for c in todays_candidates:
-        if getattr(c, "id", None) == prev_id and can_supervise_driver_trainee(c):
-            return prev_id, "continuity"
+    by_id = {
+        getattr(c, "id", None): c
+        for c in todays_candidates
+        if can_supervise_driver_trainee(c)
+    }
+    for rank, supervisor_id in enumerate(priors):
+        if supervisor_id in by_id:
+            # rank 0 is the most recent supervisor; anything later is a
+            # fallback to an earlier one, which is still continuity but worth
+            # distinguishing in the audit trail and the crew view.
+            return supervisor_id, "continuity" if rank == 0 else "prior"
     return None, "unavailable"

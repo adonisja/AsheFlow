@@ -19,8 +19,20 @@ from app.services.driver_supervision import (
 
 
 class _Emp:
-    def __init__(self, role, is_active=True):
-        self.role, self.is_active = role, is_active
+    def __init__(self, role, is_active=True, eid=None):
+        self.role, self.is_active, self.id = role, is_active, eid
+
+
+class _DB:
+    """Stands in for a Session: returns the given (supervisor_id, date) rows."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def query(self, *a, **k): return self
+    def filter(self, *a, **k): return self
+    def order_by(self, *a, **k): return self
+    def all(self): return self.rows
 
 
 class TestThePredicate:
@@ -139,7 +151,7 @@ class TestTheDriverSupervisorIsASeparateColumn:
 
         from app.services import driver_supervision
 
-        src = inspect.getsource(driver_supervision.previous_supervisor_id)
+        src = inspect.getsource(driver_supervision.prior_supervisor_ids)
         assert "TrainingRecord.driver_trainer_id" in src
         assert "TrainingRecord.trainer_id" not in src
 
@@ -151,17 +163,52 @@ class TestContinuityIsTheRule:
     def test_no_prior_record_is_first_day_not_an_auto_pick(self):
         from app.services.driver_supervision import resolve_supervisor
 
-        class _DB:
-            def query(self, *a, **k): return self
-            def filter(self, *a, **k): return self
-            def order_by(self, *a, **k): return self
-            def first(self): return None
-
-        sup, reason = resolve_supervisor(_DB(), "t1", "c1", "2026-08-22", [_Emp("driver")])
+        sup, reason = resolve_supervisor(_DB([]), "t1", "c1", "2026-08-22", [_Emp("driver", eid="d1")])
         assert sup is None and reason == "first_day", (
             "an eligible driver was standing right there — the system must NOT "
             "pick one; a new supervising relationship is a human decision"
         )
+
+    def test_the_most_recent_supervisor_is_reused_when_present(self):
+        from app.services.driver_supervision import resolve_supervisor
+
+        db = _DB([("d1", "2026-08-21"), ("d2", "2026-08-20")])
+        sup, reason = resolve_supervisor(db, "t1", "c1", "2026-08-22", [_Emp("driver", eid="d1")])
+        assert (sup, reason) == ("d1", "continuity")
+
+    def test_an_earlier_supervisor_is_used_when_the_latest_is_out(self):
+        """Operator, 2026-08-22: continuity spans the WHOLE history, not just
+        yesterday. An earlier supervising driver has also watched this trainee
+        work, so they are preferred over asking dispatch."""
+        db = _DB([("d1", "2026-08-21"), ("d2", "2026-08-20")])
+        from app.services.driver_supervision import resolve_supervisor
+
+        sup, reason = resolve_supervisor(db, "t1", "c1", "2026-08-22", [_Emp("driver", eid="d2")])
+        assert (sup, reason) == ("d2", "prior"), (
+            "an earlier supervisor was available and should have been reused"
+        )
+
+    def test_dispatch_is_asked_only_when_no_prior_supervisor_is_in(self):
+        from app.services.driver_supervision import resolve_supervisor
+
+        db = _DB([("d1", "2026-08-21"), ("d2", "2026-08-20")])
+        sup, reason = resolve_supervisor(db, "t1", "c1", "2026-08-22", [_Emp("driver", eid="d9")])
+        assert (sup, reason) == (None, "unavailable")
+
+    def test_a_prior_supervisor_who_is_no_longer_a_driver_is_not_reused(self):
+        """They supervised before, but eligibility is checked TODAY."""
+        from app.services.driver_supervision import resolve_supervisor
+
+        db = _DB([("d1", "2026-08-21")])
+        sup, reason = resolve_supervisor(db, "t1", "c1", "2026-08-22", [_Emp("walker", eid="d1")])
+        assert (sup, reason) == (None, "unavailable")
+
+    def test_a_repeat_supervisor_is_one_candidate_ranked_by_recency(self):
+        """d1 on three days is one candidate, not three."""
+        from app.services.driver_supervision import prior_supervisor_ids
+
+        db = _DB([("d1", "2026-08-21"), ("d1", "2026-08-20"), ("d2", "2026-08-19")])
+        assert prior_supervisor_ids(db, "t1", "c1", "2026-08-22") == ["d1", "d2"]
 
 
 class TestNothingIsRecordedAboutTheSupervisingDriver:
@@ -207,5 +254,5 @@ class TestNothingIsRecordedAboutTheSupervisingDriver:
         from app.services import driver_supervision
 
         src = inspect.getsource(driver_supervision)
-        assert "db.query(TrainingRecord.driver_trainer_id)" in src
+        assert "TrainingRecord.driver_trainer_id" in src
         assert "driver_trainer_id =" not in src, "this module must not write the column"
