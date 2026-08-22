@@ -165,10 +165,28 @@ class TestWarningShape:
         assert [w["type"] for w in emitted] == ["driver_trainee_unpaired"]
 
     def test_the_reason_distinguishes_first_day_from_unavailable(self):
-        """Same instruction to the caller, different sentence to the human."""
-        assert '"reason": reason' in SRC
-        assert "first supervised day" in SRC
-        assert "none of the drivers who have supervised" in SRC
+        """Same instruction to the caller, different sentence to the human.
+
+        Asserted on the emitted warnings: the message is built by a shared
+        helper now, so a source-level check would only prove the call exists."""
+        from app.services.assign_driver_trainees import unpaired_warning
+
+        first = unpaired_warning("t1", "Newbie", "first_day")
+        gone = unpaired_warning("t2", "Vet", "unavailable")
+        assert "first supervised day" in first["message"]
+        assert "none of the drivers who have supervised" in gone["message"]
+        assert first["reason"] == "first_day" and gone["reason"] == "unavailable"
+
+    def test_both_emission_paths_use_the_same_wording(self):
+        """The dispatch RUN and the dispatch READ both report this condition.
+        Different wording for the same problem reads as two problems."""
+        import inspect
+
+        from app.routers import dispatch as dispatch_router
+        from app.services import assign_driver_trainees as svc
+
+        assert "unpaired_warning(" in inspect.getsource(svc.assign_driver_trainees)
+        assert "unpaired_warning(" in inspect.getsource(dispatch_router.get_daily_dispatch)
 
 
 class TestDegenerateInputs:
@@ -189,3 +207,74 @@ class TestDegenerateInputs:
 class TestTenancy:
     def test_the_candidate_query_is_company_scoped(self):
         assert "Employee.company_id == company_id" in SRC
+
+
+class TestUnpairedTraineesSurviveARefresh:
+    """ADR-264 — held out is only safe if VISIBLE.
+
+    The run-time warning lives in the POST response only; GET /dispatch/{date}
+    returned `"warnings": []`. So a held-out trainee vanished from the day on
+    the first page refresh — present in neither the crew view (no
+    AssignmentMember row) nor the warnings panel.
+    """
+
+    def test_the_read_path_derives_rather_than_stores(self):
+        """A stored warning would have to be revoked when dispatch pairs them,
+        and a warning nobody revoked is worse than none."""
+        import inspect
+
+        from app.services.assign_driver_trainees import unpaired_driver_trainees
+
+        src = inspect.getsource(unpaired_driver_trainees)
+        assert "get_available_pool" in src
+        assert "AssignmentMember.employee_id" in src
+
+    def test_a_placed_trainee_is_not_reported(self):
+        """The moment an AssignmentMember row exists they drop out, with
+        nothing to clean up."""
+        import inspect
+
+        from app.services.assign_driver_trainees import unpaired_driver_trainees
+
+        src = inspect.getsource(unpaired_driver_trainees)
+        assert "if trainee.id in placed_ids:" in src
+        assert "continue" in src
+
+    def test_the_dispatch_get_returns_them(self):
+        import inspect
+
+        from app.routers import dispatch
+
+        src = inspect.getsource(dispatch.get_daily_dispatch)
+        assert "unpaired_driver_trainees(" in src
+        assert '"unpaired_driver_trainees": unpaired' in src
+
+    def test_the_get_no_longer_hardcodes_empty_warnings(self):
+        """THE bug: `"warnings": []` discarded everything the run reported."""
+        import inspect
+
+        from app.routers import dispatch
+
+        # Comments in this function QUOTE the old literal while explaining the
+        # bug, so a raw substring check fails on the documentation. Strip
+        # comments first — the same trap that has bitten three source-scanning
+        # tests in this codebase.
+        src = inspect.getsource(dispatch.get_daily_dispatch)
+        code = "\n".join(
+            ln.split("#")[0] for ln in src.splitlines()
+            if not ln.lstrip().startswith("#")
+        )
+        assert '"warnings": []' not in code, (
+            "an early-return path still discards warnings"
+        )
+        assert '"warnings": read_warnings' in code
+
+    def test_the_derivation_is_company_scoped(self):
+        """ADR-115 dim 1 — both the pool read and the placed-row lookup."""
+        import inspect
+
+        from app.services.assign_driver_trainees import unpaired_driver_trainees
+
+        src = inspect.getsource(unpaired_driver_trainees)
+        assert "company_id=company_id" in src
+        assert src.count("company_id == company_id") == 2

@@ -242,7 +242,21 @@ def get_available_employees(
     #
     # `available_pool.get_available_pool` already had captain in its role filter,
     # so this endpoint disagreed with the service it mirrors.
-    pool: dict = {"driver": [], "captain": [], "trainer": [], "walker": [], "trainee": []}
+    # DRIVER_TRAINEE IS DISPATCHABLE CREW (ADR-264) — the same omission as
+    # captain above, one role later. Missing from this dict, the `if role in
+    # pool` guard discarded every driver trainee silently, so a held-out trainee
+    # could not be dragged onto a truck: the drop handler's
+    # `emp?.role || 'walker'` fallback would have assigned them as a WALKER, and
+    # curriculum injection keys on the driver_trainee slot, so nobody would have
+    # been trained.
+    #
+    # THREE places had to agree and did not: this endpoint, available_pool's SQL
+    # role filter, and the frontend's role list. That is what a role list
+    # duplicated across call sites costs.
+    pool: dict = {
+        "driver": [], "captain": [], "trainer": [], "walker": [], "trainee": [],
+        "driver_trainee": [],
+    }
     for e in available_employees:
         role = str(e.role).lower()
         if role in pool:

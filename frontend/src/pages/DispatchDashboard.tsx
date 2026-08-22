@@ -530,7 +530,12 @@ function CurrentAssignments() {
       // response. CAPTAIN belongs here (ADR-256): omitting it meant a captain
       // removed from a truck never reappeared in the unassigned list, so they
       // looked deleted rather than unassigned.
-      ['driver', 'captain', 'trainer', 'walker', 'trainee'].forEach(role => {
+      // ADR-264: driver_trainee belongs here for the same reason captain does.
+      // Omitted, a held-out driver trainee is absent from availablePool, and the
+      // drop handler's `emp?.role || 'walker'` fallback would silently assign
+      // them as a WALKER — the backend then trains nobody, because injection
+      // keys on the driver_trainee slot.
+      ['driver', 'captain', 'trainer', 'walker', 'trainee', 'driver_trainee'].forEach(role => {
         (res.data[role] || []).forEach((e: any) => { pool[e.id] = allEmpMap[e.id] || e; });
       });
 
@@ -1275,6 +1280,51 @@ function CurrentAssignments() {
             ))}
           </ul>
 
+        </div>
+      )}
+
+      {/* ADR-264 — driver trainees held out of crews.
+
+          Its OWN block, not nested in the warnings card, for the same reason
+          the emergency pool below is not: this must render whether or not a
+          warning fired. A held-out trainee has no AssignmentMember row, so they
+          appear on no truck — if this block is gated on something else, they
+          are simply absent from the day and nobody can tell they were
+          scheduled.
+
+          The dispatcher acts from HERE: drag them onto a truck to pair them
+          with that truck's driver, or approve a solo day. */}
+      {(dispatchData?.unpaired_driver_trainees?.length ?? 0) > 0 && (
+        <div className="card space-y-3 border-warning border mb-4 bg-warning/5">
+          <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
+            <AlertCircle className="w-4 h-4" />
+            Driver trainees needing a supervisor ({dispatchData!.unpaired_driver_trainees!.length})
+          </h3>
+          {/* No sourceTruckId on drag: they are on no truck, so a drop is an
+              ASSIGN rather than a swap. */}
+          <ul className="space-y-2">
+            {dispatchData!.unpaired_driver_trainees!.map(t => (
+              <li
+                key={t.employee_id}
+                draggable={!isLoading}
+                onDragStart={(e) => handleDragStart(e, t.employee_id)}
+                className="flex items-center justify-between gap-3 bg-background border border-border rounded p-2 cursor-grab active:cursor-grabbing"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium text-sm truncate">{t.employee_name}</p>
+                  <p className="text-[10px] text-subtle uppercase tracking-wider">
+                    driver trainee &middot;{' '}
+                    {t.reason === 'first_day'
+                      ? 'first supervised day'
+                      : 'usual supervisor is out'}
+                  </p>
+                </div>
+                <span className="text-[10px] text-subtle shrink-0">
+                  drag to a truck to pair
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

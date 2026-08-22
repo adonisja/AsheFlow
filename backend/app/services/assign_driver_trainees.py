@@ -30,9 +30,39 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
-from app.services.driver_supervision import resolve_supervisor
+from app.services.driver_supervision import prior_supervisor_ids, resolve_supervisor
 
 logger = logging.getLogger(__name__)
+
+
+def unpaired_warning(employee_id, employee_name: str, reason: str) -> dict:
+    """The single shape for an unpaired-trainee warning.
+
+    Built here rather than at each call site because two paths emit it — the
+    dispatch RUN (assign_driver_trainees) and the READ
+    (GET /dispatch/{date} via unpaired_driver_trainees) — and a dispatcher
+    seeing different wording for the same condition would reasonably assume
+    they are different problems.
+
+    `type` is load-bearing: run_dispatch rewrites any warning carrying
+    employee_id but NO type into a ban_conflict, message and all.
+    """
+    detail = (
+        "on dispatch today — none of the drivers who have supervised them are working. "
+        if reason == "unavailable"
+        else "yet — this is their first supervised day. "
+    )
+    return {
+        "type": "driver_trainee_unpaired",
+        "employee_id": str(employee_id),
+        "employee_name": employee_name,
+        "reason": reason,
+        "message": (
+            f"{employee_name} is a driver trainee with no supervising driver {detail}"
+            "They are not assigned to a truck. Pair them with a driver, or approve "
+            "a solo day."
+        ),
+    }
 
 
 def assign_driver_trainees(
@@ -89,23 +119,7 @@ def assign_driver_trainees(
             # first_day | unavailable — both mean the same thing here: do not
             # place, and make it visible. The trainee is NOT dropped silently;
             # the warning is what puts them in front of dispatch.
-            warnings.append({
-                "type": "driver_trainee_unpaired",
-                "employee_id": str(trainee.id),
-                "employee_name": trainee.name,
-                "reason": reason,
-                "message": (
-                    f"{trainee.name} is a driver trainee with no supervising driver "
-                    + (
-                        "on dispatch today — none of the drivers who have supervised "
-                        "them are working. "
-                        if reason == "unavailable"
-                        else "yet — this is their first supervised day. "
-                    )
-                    + "They are not assigned to a truck. Pair them with a driver, "
-                    "or approve a solo day."
-                ),
-            })
+            warnings.append(unpaired_warning(trainee.id, trainee.name, reason))
             logger.info(
                 "assign_driver_trainees: unpaired trainee=%s reason=%s date=%s company=%s",
                 trainee.id, reason, target_date, company_id,
@@ -144,3 +158,54 @@ def assign_driver_trainees(
         )
 
     return warnings
+
+
+def unpaired_driver_trainees(db: Session, target_date: date, company_id: UUID) -> List[dict]:
+    """Scheduled driver trainees with no crew row today — DERIVED, not stored.
+
+    ADR-264: an unpaired trainee is HELD OUT of crews rather than placed beside
+    an unfamiliar driver. Held out is only safe if it is VISIBLE, and the
+    dispatch warnings that flag it live in the run response only — `GET
+    /dispatch/{date}` returns `"warnings": []`, so a page refresh made the
+    trainee vanish from the day entirely.
+
+    Deriving on read rather than persisting the warning keeps one source of
+    truth: the moment dispatch pairs the trainee by hand, an AssignmentMember
+    row exists and they drop out of this list with nothing to clean up. A stored
+    warning would have to be revoked, and a warning nobody revoked is worse than
+    none.
+    """
+    from app.models.assignment_member import AssignmentMember
+    from app.models.truck_assignment import TruckAssignment
+    from app.services.available_pool import get_available_pool
+
+    pool = get_available_pool(db, target_date, company_id=company_id)
+    scheduled = pool.get("driver_trainees", [])
+    if not scheduled:
+        return []
+
+    placed_ids = {
+        row[0]
+        for row in db.query(AssignmentMember.employee_id)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+            AssignmentMember.company_id == company_id,
+        )
+        .all()
+    }
+
+    out = []
+    for trainee in scheduled:
+        if trainee.id in placed_ids:
+            continue
+        priors = prior_supervisor_ids(db, trainee.id, company_id, target_date)
+        out.append({
+            "employee_id": str(trainee.id),
+            "employee_name": trainee.name,
+            # Distinguishes "never had one" from "theirs is out today", which
+            # are different asks of the dispatcher.
+            "reason": "first_day" if not priors else "unavailable",
+        })
+    return out
