@@ -90,10 +90,24 @@ class TestTheSeamIsTheOnlyDefinition:
                 if "driver_trainee" not in code and (
                     'role == "driver"' in code or "role == 'driver'" in code
                 ):
-                    # Only flag when the surrounding function also mentions
-                    # supervision — a plain driver lookup is not a supervision check.
-                    window = "\n".join(text.splitlines()[max(0, n - 25): n + 5])
-                    if "supervis" in window.lower() or "paired_trainer_id" in window:
+                    # Only flag a genuine supervision DECISION. The first
+                    # version keyed on the word "supervis" appearing within 25
+                    # lines, which false-positived on available_pool.py's
+                    # role-bucketing loop the moment a nearby comment mentioned
+                    # supervising drivers. Bucketing by role is not a
+                    # supervision check.
+                    #
+                    # A real one pairs a trainee: it assigns paired_trainer_id
+                    # or driver_trainer_id, or picks from a candidate pool for
+                    # a driver_trainee, on the SAME line or its immediate
+                    # neighbours.
+                    window = "\n".join(text.splitlines()[max(0, n - 4): n + 4])
+                    decides_pairing = (
+                        "paired_trainer_id" in window
+                        or "driver_trainer_id" in window
+                        or "supervisor_id" in window
+                    )
+                    if decides_pairing:
                         offenders.append(f"{f.relative_to(app)}:{n}")
         assert not offenders, (
             "these supervision checks inline the role comparison instead of "
