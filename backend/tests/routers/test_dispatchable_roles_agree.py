@@ -67,3 +67,33 @@ def test_the_frontend_role_list_matches():
         f"frontend role list disagrees: missing {DISPATCHABLE - listed}, "
         f"extra {listed - DISPATCHABLE}"
     )
+
+
+def test_the_assign_endpoints_literal_accepts_every_dispatchable_role():
+    """The FOURTH place this list is duplicated, and the only one that is a
+    trust boundary: constants.ASSIGNABLE_ROLES has no importers, so this
+    Literal is what POST /dispatch/assign actually enforces.
+
+    Missing driver_trainee here 422s the drag that pairs a held-out trainee —
+    the feature would have shipped with a UI that could not complete its own
+    action."""
+    from app.schemas.dispatch import ManualAssignmentCreate, ManualAssignmentUpdate
+
+    role_field = ManualAssignmentCreate.model_fields["role"].annotation
+    allowed = set(getattr(role_field, "__args__", ()))
+    assert DISPATCHABLE <= allowed, f"assign Literal rejects: {DISPATCHABLE - allowed}"
+
+    new_role = ManualAssignmentUpdate.model_fields["new_role"].annotation
+    # Optional[Literal[...]] — unwrap the union.
+    inner = [a for a in getattr(new_role, "__args__", ()) if a is not type(None)]
+    allowed_update = set(getattr(inner[0], "__args__", ())) if inner else set()
+    assert DISPATCHABLE <= allowed_update, (
+        f"reassign Literal rejects: {DISPATCHABLE - allowed_update}"
+    )
+
+
+def test_assignable_roles_constant_matches_even_though_nothing_imports_it():
+    """It documents the contract; a stale list teaches the next reader wrong."""
+    from app.services.constants import ASSIGNABLE_ROLES
+
+    assert set(ASSIGNABLE_ROLES) == DISPATCHABLE
