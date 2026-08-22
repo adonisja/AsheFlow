@@ -41,16 +41,23 @@ def graduate_eligible_trainees(db: Session, target_date, company_id, cfg=None):
         Employee.company_id == company_id,
     ).all()
 
-    pending_driver_trainees = db.query(Employee).filter(
-        Employee.role == "driver_trainee",
-        Employee.is_active == True,
-        Employee.company_id == company_id,
-    ).count()
-    if pending_driver_trainees:
-        logger.warning(
-            "graduate_trainees: %d active driver_trainee(s) for company=%s were not "
-            "evaluated — the driver promotion path (ADR-264) is not implemented",
-            pending_driver_trainees, company_id,
+    # ADR-264 D10 (revised 2026-08-22) — driver trainees are NOT promoted here.
+    # There is no driver quiz, and promotion is an explicit dispatch/management
+    # approval rather than an automatic consequence of a score. This surfaces
+    # who is waiting on that decision; the role change happens on the employee
+    # page.
+    #
+    # Repeated every dispatch run until someone acts, which is the "repeated on
+    # the next assignment if it is not settled" rule.
+    from app.services.driver_promotion import (
+        driver_trainees_awaiting_promotion, promotion_warning,
+    )
+
+    for entry in driver_trainees_awaiting_promotion(db, target_date, company_id, cfg=cfg):
+        warnings.append(promotion_warning(entry))
+        logger.info(
+            "graduate_trainees: driver_trainee=%s awaiting promotion verdict=%s date=%s",
+            entry["employee_id"], entry["verdict"], target_date,
         )
 
     recipients = db.query(Employee).filter(

@@ -716,11 +716,25 @@ ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "walker":  ("trainer", "captain"),
     "trainer": ("captain", "walker"),
     "captain": ("trainer", "walker"),
+    # ADR-264 D10 (revised 2026-08-22) — the driver track's only promotion.
+    # There is no driver graduation quiz: a driver trainee completes their
+    # phases and dispatch/management approves the promotion explicitly.
+    #
+    # ONE-WAY on this page. A driver is not demoted back to driver_trainee
+    # here: an unsuccessful observation keeps the driver role and gets a
+    # supervising driver assigned to observe again, which is a dispatch action,
+    # not a role change.
+    "driver_trainee": ("driver",),
 }
 
 # Which direction the change is, for the audit trail and the wording of the notice.
 # Captain outranks trainer outranks walker (ADR-256 hierarchy).
-_ROLE_RANK: dict[str, int] = {"walker": 0, "trainer": 1, "captain": 2}
+# driver_trainee -> driver is a promotion; the driver track is parallel to the
+# walker ladder (ADR-264 D2), so the ranks do not interleave with it.
+_ROLE_RANK: dict[str, int] = {
+    "walker": 0, "trainer": 1, "captain": 2,
+    "driver_trainee": 0, "driver": 1,
+}
 
 
 def _clear_captain_pins(db: Session, employee_id: UUID, company_id: UUID) -> int:
