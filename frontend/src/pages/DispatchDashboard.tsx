@@ -631,9 +631,34 @@ function CurrentAssignments() {
           new_truck_id: targetTruckId
         });
       } else {
-        // ASSIGN: from unassigned to truck — use the employee's actual role
+        // ASSIGN: from unassigned to truck. The employee's job title is the
+        // DEFAULT slot, not the slot itself — AssignmentMember.role is the job
+        // for the day (ADR-256 D2).
         const emp = availablePool[employeeId] || employees[employeeId];
-        const role = emp?.role || 'walker';
+        let role = emp?.role || 'walker';
+
+        // ADR-284 — a hub crew is walkers. A hub runs no route, so a captain
+        // leads nothing and a trainer supervises nobody. The backend coerces
+        // this too and is the real guarantee; sending the right slot here just
+        // keeps the request honest and avoids a pointless round trip.
+        const targetIsHub = !!trucks[targetTruckId]?.is_hub;
+        if (targetIsHub) {
+          if (role === 'trainee') {
+            // D2 — refused, not coerced: a trainee on a hub is unsupervised,
+            // and a silent relabel makes the day look like work while their
+            // phase progression does not advance.
+            setError(
+              `${emp?.name || 'That employee'} is a trainee and cannot be assigned to a hub — ` +
+              `there is no route to run and no trainer to supervise them.`
+            );
+            return;
+          }
+          if (role === 'captain' || role === 'trainer') role = 'walker';
+        }
+
+        // The server is authoritative on the effective slot; the refetch below
+        // pulls it into assigned_crews, and the card renders that slot rather
+        // than the job title — so a coercion reads as "Captain Test — WALKER".
         await axiosClient.post('/dispatch/assign', {
           employee_id: employeeId,
           truck_id: targetTruckId,
@@ -862,9 +887,13 @@ function CurrentAssignments() {
   };
 
   const sortCrewMembers = (a: any, b: any) => {
-    // Get true core role from employees map if available
-    const roleA = (employees[a.employee_id || a.id]?.role || a.role || 'walker').toLowerCase();
-    const roleB = (employees[b.employee_id || b.id]?.role || b.role || 'walker').toLowerCase();
+    /* The SLOT held on this truck today wins over the job title (ADR-256 D2,
+       ADR-284). `a.role` comes from assigned_crews and IS the slot; the
+       employees map only fills in when a member arrives without one. Reading
+       the title first put a hub's coerced captain in the CAPTAINS group while
+       the database said walker. */
+    const roleA = (a.role || employees[a.employee_id || a.id]?.role || 'walker').toLowerCase();
+    const roleB = (b.role || employees[b.employee_id || b.id]?.role || 'walker').toLowerCase();
     
     // CAPTAIN SITS DIRECTLY UNDER DRIVER (ADR-256): the two run the truck and
     // belong together above the people who carry. Missing from this map, a
@@ -1642,13 +1671,18 @@ function CurrentAssignments() {
                      {(() => {
                        const sortedCrew = [...crew].sort(sortCrewMembers);
                        // Trainers on THIS truck — the candidate list for a trainee's pairing picker (ADR-210).
+                       /* Slot first (ADR-284): a trainer-titled employee
+                          slotted as a walker on a hub supervises nobody. */
                        const truckTrainers = sortedCrew.filter(
-                         (m: any) => (employees[m.employee_id]?.role || m.role || '').toLowerCase() === 'trainer',
+                         (m: any) => (m.role || employees[m.employee_id]?.role || '').toLowerCase() === 'trainer',
                        );
                        return sortedCrew.map((member: any, index: number) => {
-                         const currentRole = (employees[member.employee_id]?.role || member.role || 'walker').toLowerCase();
+                         /* ADR-284 — the card shows the SLOT, so a captain
+                            coerced on a hub reads under WALKERS, matching the
+                            row the database actually holds. */
+                         const currentRole = (member.role || employees[member.employee_id]?.role || 'walker').toLowerCase();
                          const prevMember = index > 0 ? sortedCrew[index - 1] : null;
-                         const prevRole = prevMember ? (employees[prevMember.employee_id]?.role || prevMember.role || 'walker').toLowerCase() : '';
+                         const prevRole = prevMember ? (prevMember.role || employees[prevMember.employee_id]?.role || 'walker').toLowerCase() : '';
                          const showHeader = currentRole !== prevRole;
 
                          return (
@@ -1689,7 +1723,13 @@ function CurrentAssignments() {
                                  <div>
                                    <p className="text-sm font-medium text-foreground leading-tight">{member.name || member.employee_id}</p>
                                    <div className="flex items-center gap-1.5">
-                                     <p className="text-[10px] text-subtle uppercase tracking-wider">{employees[member.employee_id]?.role || member.role}</p>
+                                     {/* The SLOT, not the job title (ADR-284):
+                                         this line answers "what are they doing
+                                         today", so a captain on a hub reads
+                                         WALKER. ContactPopover below keeps the
+                                         job title — it answers "who is this
+                                         person", a different question. */}
+                                     <p className="text-[10px] text-subtle uppercase tracking-wider">{member.role || employees[member.employee_id]?.role}</p>
                                      {currentRole === 'trainee' ? (() => {
                                        // Trainee pairing control (ADR-210): click to pick/switch/clear the trainer.
                                        const pairedName = member.paired_trainer_id
