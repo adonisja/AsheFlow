@@ -65,6 +65,19 @@ def eligible_supervisors(employees: Iterable) -> list:
 # impressions instead of one accumulating relationship, and the supervisor who
 # signs the observation phase should be someone who watched the earlier ones.
 #
+# NOTHING IS RECORDED ABOUT THE SUPERVISING DRIVER (operator, 2026-08-22).
+# `driver_trainer_id` is written on the TRAINEE's record and read only to answer
+# "who supervised last time". The supervising driver is a driver doing their
+# normal job who happens to have a trainee with them — they are not in a
+# training program, so no TrainerMark, no phase, no debt, no attribution
+# accrues to them.
+#
+# This is why record_trainer_mark's `if not record.trainer_id: return None`
+# gate is CORRECT rather than a gap: a driver trainee's record leaves
+# trainer_id NULL, so no mark is issued. Do not "fix" that by falling back to
+# driver_trainer_id — the walker TrainerMark machinery measures a walker
+# trainer's performance and has no counterpart here.
+#
 # The system NEVER picks a substitute on its own. When the previous supervisor
 # is unavailable the trainee stays unpaired and dispatch is asked — the same
 # principle as D7's "solo is an explicit dispatch approval, never a fallback".

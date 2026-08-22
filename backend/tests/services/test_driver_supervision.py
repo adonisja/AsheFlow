@@ -162,3 +162,50 @@ class TestContinuityIsTheRule:
             "an eligible driver was standing right there — the system must NOT "
             "pick one; a new supervising relationship is a human decision"
         )
+
+
+class TestNothingIsRecordedAboutTheSupervisingDriver:
+    """Operator, 2026-08-22.
+
+    A driver trainee is trained by another driver. Records are kept about the
+    TRAINEE only — the supervising driver is doing their normal job with a
+    trainee along, not participating in a training program. No TrainerMark, no
+    phase, no debt, no attribution.
+
+    I initially read record_trainer_mark's NULL-trainer_id gate as a gap the
+    driver track needed to fill. It is the correct behaviour.
+    """
+
+    def test_a_record_without_a_walker_trainer_issues_no_mark(self):
+        """A driver trainee's record has trainer_id NULL and
+        driver_trainer_id set. record_trainer_mark must return None."""
+        import inspect
+
+        from app.services.record_trainer_mark import record_trainer_mark
+
+        src = inspect.getsource(record_trainer_mark)
+        assert "if not record or not record.trainer_id:" in src
+        assert "return None" in src
+
+    def test_the_mark_writer_never_falls_back_to_the_driver_column(self):
+        """The tempting 'fix': `record.trainer_id or record.driver_trainer_id`.
+        That would start marking drivers for a program they are not in."""
+        import inspect
+
+        from app.services import record_trainer_mark as mod
+
+        assert "driver_trainer_id" not in inspect.getsource(mod), (
+            "the walker TrainerMark machinery must not reach into the driver "
+            "track — nothing is recorded about a supervising driver"
+        )
+
+    def test_the_driver_column_is_only_ever_read(self):
+        """driver_trainer_id lives on the TRAINEE's record. Nothing writes a
+        record ABOUT the supervising driver."""
+        import inspect
+
+        from app.services import driver_supervision
+
+        src = inspect.getsource(driver_supervision)
+        assert "db.query(TrainingRecord.driver_trainer_id)" in src
+        assert "driver_trainer_id =" not in src, "this module must not write the column"
