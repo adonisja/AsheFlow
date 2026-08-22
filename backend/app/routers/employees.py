@@ -124,23 +124,35 @@ def create_employee(
     No Cognito user is created here — the employee sets their own username and
     password by following the link in the invite email (POST /registration/complete).
     """
-    # Walker and trainer roles cannot be directly assigned — walkers start as trainees,
-    # trainers are promoted from walkers via POST /employees/{id}/promote
-    if employee.role in ("walker", "trainer"):
+    # Roles that are EARNED, never assigned at hire. Each has an entry path:
+    # walker <- trainee, trainer <- walker (promotion), driver <- driver_trainee.
+    #
+    # ADR-264 adds `driver`. Before it there was no driver training track, so a
+    # direct driver hire was the only option; now it would silently skip the
+    # program this codebase just built, and the skip is invisible — the employee
+    # simply never appears in any training view.
+    _EARNED_ROLES = {
+        "walker": "Walkers must start as trainees and be assigned the walker role by dispatch.",
+        "trainer": "Trainers can only be promoted from existing walkers by a manager or admin.",
+        "driver": (
+            "Drivers must start as driver trainees (ADR-264) and be promoted after "
+            "completing the training program. Create them as driver_trainee."
+        ),
+    }
+    if employee.role in _EARNED_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Walkers must start as trainees and be assigned the walker role by dispatch. "
-                if employee.role == "walker"
-                else "Trainers can only be promoted from existing walkers by a manager or admin."
-            ),
+            detail=_EARNED_ROLES[employee.role],
         )
 
-    # Management callers may only create field-entry roles (driver or trainee)
-    if caller.role == "management" and employee.role not in ("driver", "trainee"):
+    # Management callers may only create field-ENTRY roles: the two starting
+    # points of the two parallel tracks (ADR-264 D2). `driver` is no longer one
+    # of them — it is now earned, so driver_trainee takes its place rather than
+    # being added beside it.
+    if caller.role == "management" and employee.role not in ("driver_trainee", "trainee"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Management users can only create driver or trainee accounts.",
+            detail="Management users can only create driver trainee or trainee accounts.",
         )
 
     if employee.email and db.query(Employee).filter(
