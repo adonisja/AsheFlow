@@ -116,6 +116,14 @@ class TrainingRecord(Base):
 
     # Phase gate tracking
     submitted_at    = Column(DateTime(timezone=True), nullable=True)
+    # ADR-264 D8 — False marks a dispatch-approved SOLO day: the driver trainee
+    # drove without a supervisor. The record is REAL (a solo day is a real
+    # workday and belongs in attendance), but it can never close a phase — see
+    # the guard in the phase-close path. Without that rule a trainee could
+    # accumulate solo days and reach observation never having been observed.
+    # server_default="true" keeps every historical walker record correct with
+    # no backfill: all prior training was supervised.
+    supervised      = Column(Boolean, nullable=False, server_default="true")
     phase_closed    = Column(Boolean, nullable=False, default=False)
     phase_closed_at = Column(DateTime(timezone=True), nullable=True)
 
