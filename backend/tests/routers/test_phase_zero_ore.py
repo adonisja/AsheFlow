@@ -418,7 +418,11 @@ class TestDriverTrackHasNoPhaseZero:
         from app.services import training_injection
 
         src = _code_only(training_injection)
-        filter_at = src.index("TRAINEE_CURRICULUM_ROLE in (item.roles")
+        # ADR-264 replaced TRAINEE_CURRICULUM_ROLE with TRACK_WALKER from
+        # training_phases — one spelling shared with the curriculum `roles`
+        # values. The PROPERTY under test is unchanged: filter, then build, then
+        # decide the phase.
+        filter_at = src.index("TRACK_WALKER in (i.roles")
         build_at = src.index("curriculum_by_phase.setdefault")
         decide_at = src.index("current_phase = 0 if curriculum_by_phase.get(0)")
         assert filter_at < build_at < decide_at, (

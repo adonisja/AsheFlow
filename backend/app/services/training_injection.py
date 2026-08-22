@@ -7,6 +7,9 @@ from app.models.training import TrainingRecord, TrainingTask, TrainingCurriculum
 from app.models.employee import Employee
 from app.models.trainer_continuation_request import TrainerContinuationRequest
 from app.services.company_config import ResolvedConfig
+from app.services.training_phases import (
+    TRACK_DRIVER, TRACK_WALKER, compress_phase_map, phase_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,20 +18,6 @@ logger = logging.getLogger(__name__)
 # Phase 6+ is remediation after a failed quiz. Never injected by score_phase4 path here.
 MAX_CURRICULUM_PHASE = 4
 
-# Which curriculum track dispatch-time injection assigns (ADR-263). Trainees are
-# walkers — walker_routes.py::_WALKER_ROLES is {"walker", "trainee"} — and this
-# service only ever processes crew members with role == "trainee".
-#
-# A constant rather than a lookup because the driver training track (ADR-264,
-# proposed) is not implemented. ADR-256 added `driver_trainee` to VALID_ROLES and
-# to ck_assignment_members_role, so the slot is INSERTABLE — but nothing trains
-# or promotes it yet. The elif in the crew loop below counts and logs those
-# members rather than injecting them; injecting here would hand a driver trainee
-# walker material.
-#
-# ADR-264 §1 replaces this constant with a per-trainee lookup on the trainee's
-# own role, and makes the phase count config-driven (driver_training_days).
-TRAINEE_CURRICULUM_ROLE = "walker"
 
 
 def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, List[Dict]], cfg: ResolvedConfig = None, company_id: Optional[UUID] = None) -> None:
@@ -53,31 +42,24 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
     # passed through in the crew dict — use it directly rather than inferring from
     # truck position, which breaks when a truck has multiple trainers.
     trainees_in_crews = []
-    skipped_driver_trainees = 0
+    driver_trainees_in_crews = []
     for truck_id, crew in assigned_crews.items():
         for member in crew:
             if member["role"] == "trainee":
                 trainees_in_crews.append((member["id"], member.get("paired_trainer_id")))
             elif member["role"] == "driver_trainee":
-                # ADR-256 added 'driver_trainee' to ck_assignment_members_role so the
-                # slot is now INSERTABLE, but no track trains it: ADR-264 (proposed)
-                # owns that and is unimplemented. Injecting TRAINEE_CURRICULUM_ROLE
-                # here would hand a driver trainee walker material — the exact failure
-                # the role scoping above exists to prevent.
-                # Counted and logged, never silent: an invisible skip is how a trainee
-                # goes a whole program with no records and nobody finds out.
-                skipped_driver_trainees += 1
+                # ADR-264 — injected below with DRIVER curriculum and a phase
+                # count from driver_training_days. `paired_trainer_id` may be
+                # None (D5 addendum: an unpaired trainee waits on dispatch);
+                # they still get a record, so no crew member is silently
+                # dropped.
+                driver_trainees_in_crews.append((member["id"], member.get("paired_trainer_id")))
 
-    if skipped_driver_trainees:
-        logger.warning(
-            "inject_curriculum: date=%s skipped %d driver_trainee crew member(s) — "
-            "the driver training track (ADR-264) is not implemented; no training "
-            "records were created for them",
-            target_date, skipped_driver_trainees,
-        )
-
-    logger.info("inject_curriculum: date=%s trainees=%d", target_date, len(trainees_in_crews))
-    if not trainees_in_crews:
+    logger.info(
+        "inject_curriculum: date=%s trainees=%d driver_trainees=%d",
+        target_date, len(trainees_in_crews), len(driver_trainees_in_crews),
+    )
+    if not trainees_in_crews and not driver_trainees_in_crews:
         logger.debug("inject_curriculum: no trainees in crews for date=%s — skipping", target_date)
         return
 
@@ -109,18 +91,20 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
     # trainer and never supervises a driver. Under ADR-264 a driver trainee is
     # supervised by a DRIVER paired on the same truck, and this filter becomes a
     # per-trainee lookup rather than a constant.
-    curriculum = [
-        item
-        for item in db.query(TrainingCurriculum)
+    # One query, split per track (ADR-264). The role filter is applied in Python,
+    # not SQL: `roles` is a Postgres text[] in production but JSON under the
+    # SQLite test engine, and `.any()` compiles on neither uniformly. The
+    # curriculum is a small per-tenant table (tens of rows), so filtering here is
+    # free and stays dialect-agnostic.
+    all_items = (
+        db.query(TrainingCurriculum)
         .filter(TrainingCurriculum.company_id == company_id)
         .order_by(TrainingCurriculum.day_number)
         .all()
-        # Role filter applied in Python, not SQL: `roles` is a Postgres text[] in
-        # production but JSON under the SQLite test engine, and `.any()` compiles
-        # on neither uniformly. The curriculum is a small per-tenant table (tens
-        # of rows), so the filter is free here and stays dialect-agnostic.
-        if TRAINEE_CURRICULUM_ROLE in (item.roles or [])
-    ]
+    )
+    curriculum = [i for i in all_items if TRACK_WALKER in (i.roles or [])]
+    driver_curriculum = [i for i in all_items if TRACK_DRIVER in (i.roles or [])]
+
     curriculum_by_phase: Dict[int, List[TrainingCurriculum]] = {}
     for item in curriculum:
         curriculum_by_phase.setdefault(item.day_number, []).append(item)
@@ -138,7 +122,7 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
         logger.error(
             "inject_curriculum: NO curriculum rows for company_id=%s role=%s — "
             "trainees will receive empty phases. Seed the curriculum.",
-            company_id, TRAINEE_CURRICULUM_ROLE,
+            company_id, TRACK_WALKER,
         )
 
     for trainee_id, trainer_id in trainees_in_crews:
@@ -334,4 +318,172 @@ def inject_curriculum(db: Session, target_date: date, assigned_crews: Dict[str, 
                 )
                 db.add(new_task)
 
+    # --- ADR-264: the driver track -----------------------------------------
+    # Deliberately a separate pass rather than a flag threaded through the loop
+    # above. That loop carries walker-specific behaviour — continuation
+    # requests, trainer pairing, the phase-4 observation mirror — none of which
+    # applies to a driver trainee, and threading a track flag through it would
+    # put two programs in one control flow where every future edit has to be
+    # checked against both.
+    _inject_driver_track(
+        db=db,
+        target_date=target_date,
+        driver_trainees=driver_trainees_in_crews,
+        curriculum=driver_curriculum,
+        cfg=cfg,
+        company_id=company_id,
+    )
+
     db.commit()
+
+
+def _inject_driver_track(
+    db: Session,
+    target_date: date,
+    driver_trainees: List[tuple],
+    curriculum: List[TrainingCurriculum],
+    cfg: ResolvedConfig,
+    company_id: Optional[UUID],
+) -> None:
+    """Create today's TrainingRecord for each driver trainee on the crew.
+
+    Mirrors the walker path's phase mechanics — a phase advances only when the
+    previous record closed — but with the driver curriculum, a config-driven
+    phase count, and no walker apparatus.
+
+    The caller owns the commit, so this participates in the same transaction as
+    the walker injection above.
+    """
+    if not driver_trainees:
+        return
+
+    plan = phase_plan(cfg, TRACK_DRIVER)
+
+    # ADR-264 D4 — authored curriculum phases map onto the plan's teaching
+    # slots. Merging when there are more authored phases than slots, 1:1 with
+    # empty trailing slots when there are fewer (the real case today: 3 authored
+    # phases, N=5). No authored phase is ever dropped.
+    authored = sorted({i.day_number for i in curriculum})
+    slot_of = compress_phase_map(authored, plan.teaching_slots)
+    by_slot: Dict[int, List[TrainingCurriculum]] = {}
+    for item in curriculum:
+        slot = slot_of.get(item.day_number)
+        if slot is not None:
+            by_slot.setdefault(slot, []).append(item)
+
+    if not curriculum:
+        # Same treatment the walker path gives an empty curriculum: loud, not
+        # silent. A driver trainee with no material still gets records — the
+        # program simply cannot teach anything, which management must see.
+        logger.error(
+            "inject_curriculum: NO driver curriculum for company_id=%s — driver "
+            "trainees will receive empty phases. Seed the driver curriculum.",
+            company_id,
+        )
+
+    for trainee_id, supervisor_id in driver_trainees:
+        # Recreate today's record if one exists, for the same reason the walker
+        # path does: updating in place would leave tasks generated for the old
+        # pairing or phase intact.
+        existing = db.query(TrainingRecord).filter(
+            TrainingRecord.trainee_id == trainee_id,
+            TrainingRecord.company_id == company_id,
+            TrainingRecord.record_date == target_date,
+        ).first()
+        if existing:
+            db.query(TrainingTask).filter(
+                TrainingTask.training_record_id == existing.id,
+                TrainingTask.company_id == company_id,
+            ).delete()
+            db.delete(existing)
+            db.flush()
+
+        prev = (
+            db.query(TrainingRecord)
+            .filter(
+                TrainingRecord.trainee_id == trainee_id,
+                TrainingRecord.company_id == company_id,
+                TrainingRecord.record_date < target_date,
+            )
+            .order_by(TrainingRecord.record_date.desc())
+            .all()
+        )
+
+        if not prev:
+            current_phase = 1
+        else:
+            last = prev[0]
+            if last.current_day_number >= plan.quiz and last.phase_closed:
+                # Quiz day closed — promotion is handled separately. Nothing
+                # further to inject for this trainee.
+                continue
+            if last.current_day_number == plan.observation and last.phase_closed:
+                current_phase = plan.quiz
+            elif last.phase_closed:
+                current_phase = last.current_day_number + 1
+            else:
+                # ADR-046: a phase that did not close carries to the next
+                # dispatched day. Missed days cost nothing.
+                current_phase = last.current_day_number
+
+        # ADR-264 D8 — a solo day is a REAL record with supervised=False and no
+        # supervisor. The phase-close path refuses to close an unsupervised
+        # record, so solo days cannot carry a trainee to observation unobserved.
+        record = TrainingRecord(
+            trainee_id=trainee_id,
+            driver_trainer_id=supervisor_id,
+            supervised=supervisor_id is not None,
+            record_date=target_date,
+            current_day_number=current_phase,
+            phase_closed=False,
+            extended=False,
+            company_id=company_id,
+        )
+        db.add(record)
+        db.flush()
+
+        if plan.is_quiz(current_phase):
+            # The quiz itself lives in GraduationQuiz and is issued separately.
+            # One walk-along task so the supervising driver has a record for the
+            # day, mirroring the walker quiz-day treatment.
+            db.add(TrainingTask(
+                training_record_id=record.id,
+                topic_title="Quiz Day Walk-Along",
+                description="Supervised driving day while the graduation quiz is issued.",
+                record_type="coverage",
+                is_mandatory=True,
+                is_training_debt=False,
+                company_id=company_id,
+            ))
+            continue
+
+        if plan.is_observation(current_phase):
+            # D3 — observation is always the LAST phase, derived from the plan
+            # rather than a hardcoded number. Every mandatory teaching item
+            # becomes a demonstration task: the trainee performs, the
+            # supervising driver observes.
+            for item in [i for i in curriculum if i.is_mandatory]:
+                db.add(TrainingTask(
+                    training_record_id=record.id,
+                    topic_title=item.topic_title,
+                    description=item.description,
+                    record_type="demonstration",
+                    is_mandatory=True,
+                    is_training_debt=False,
+                    company_id=company_id,
+                ))
+            continue
+
+        # Teaching phase. A slot with no authored items is a practice /
+        # consolidation day (D4 addendum) — no tasks, and the phase gate passes
+        # a record with no mandatory coverage tasks, so it cannot stall.
+        for item in by_slot.get(current_phase, []):
+            db.add(TrainingTask(
+                training_record_id=record.id,
+                topic_title=item.topic_title,
+                description=item.description,
+                record_type=item.record_type or "coverage",
+                is_mandatory=item.is_mandatory,
+                is_training_debt=False,
+                company_id=company_id,
+            ))
