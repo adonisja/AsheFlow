@@ -221,6 +221,19 @@ jobs:
       # step names the actual cause before the suite runs.
       - name: Proprietary code must match the public models
         working-directory: backend
+        # Same env as `Run tests`. Without it `Settings()` fails validation and
+        # EVERY router "fails to import" — which looks exactly like total branch
+        # drift and is actually a missing env var. That is how the first version
+        # of this step broke its own build.
+        env:
+          APP_ENV: test
+          DATABASE_URL: "sqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+          AWS_REGION: us-east-1
+          AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+          AWS_COGNITO_APP_CLIENT_ID: test-client-id
+          INTERNAL_SECRET: ci-test-secret-not-real
+          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
         run: |
           python - <<'EOF'
           import importlib, sys, traceback
@@ -237,8 +250,19 @@ jobs:
           for m in mods:
               try:
                   importlib.import_module(m)
-              except Exception:
-                  failed.append((m, traceback.format_exc().strip().splitlines()[-1]))
+              except Exception as exc:
+                  # Name the exception TYPE and message. The last traceback line
+                  # is often a docs URL, which identifies nothing.
+                  failed.append((m, f"{type(exc).__name__}: {exc}".splitlines()[0][:200]))
+
+          # Drift breaks the routers that touch the renamed symbol, not all of
+          # them. A uniform failure across every module is an environment
+          # problem — say so instead of blaming the private branch.
+          if failed and len(failed) == len(mods) and len({e for _, e in failed}) == 1:
+              print("::error::Every router failed to import with the same error.")
+              print("That is an ENVIRONMENT problem in this step, not private-branch drift.")
+              print(f"  {failed[0][1]}")
+              sys.exit(1)
 
           if failed:
               print("::error::Proprietary code does not match the public models.")
