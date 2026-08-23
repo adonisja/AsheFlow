@@ -131,6 +131,14 @@ function CurrentAssignments() {
   // hub state
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
+
+  /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
+     D1) minus any already assigned. Derived once and shared by the "+ Add Hub"
+     trigger and the modal, so the two cannot disagree about what is on offer. */
+  const availableHubs = Object.entries(trucks)
+    .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
+    .map(([id, t]: [string, any]) => ({ id, name: t.name as string }));
+  const anyHubsConfigured = Object.values(trucks).some((t: any) => t.is_hub);
   const [isCreatingHub, setIsCreatingHub] = useState(false);
   const [publishingHubTruckId, setPublishingHubTruckId] = useState<string | null>(null);
 
@@ -1551,7 +1559,15 @@ function CurrentAssignments() {
                 for creating one was invisible. A hub day should be creatable
                 before, during or after the main dispatch. */}
             <button
-              onClick={() => { setShowHubModal(true); setHubModalTruckId(''); }}
+              onClick={() => {
+                setShowHubModal(true);
+                /* A company has ONE hub in practice (7 delivery trucks to 1 hub
+                   on staging). Preselect it: picking from a list of one is a
+                   step whose answer is forced, and it left Create Hub disabled
+                   on open. The name is shown in the modal, so nothing is
+                   chosen invisibly. */
+                setHubModalTruckId(availableHubs.length === 1 ? availableHubs[0].id : '');
+              }}
               disabled={isLoading}
               className="flex items-center gap-1.5 text-sm font-medium bg-muted text-foreground hover:bg-muted/80 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-border"
               title="Create a hub truck assignment for this date"
@@ -2085,44 +2101,72 @@ function CurrentAssignments() {
                 ✕
               </button>
             </div>
-            <p className="text-xs text-subtle">
-              Create today's assignment for a hub truck. Hub crew is never assigned
-              automatically — drag staff from the unassigned panel onto the hub, then
-              click <strong>Publish Hub</strong> to notify them.
+            {/* Two sentences, one idea each: what this does, then what YOU do
+                next. The single paragraph ran the two together and buried the
+                part the dispatcher acts on. */}
+            <p className="text-xs text-subtle leading-relaxed">
+              Creates a hub assignment for <strong>{selectedDate}</strong>.
+              <br />
+              Hub crew is never assigned automatically — drag staff onto the hub,
+              then <strong>Publish Hub</strong> to notify them.
             </p>
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Select Hub</label>
-              <select
-                value={hubModalTruckId}
-                onChange={e => setHubModalTruckId(e.target.value)}
-                className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
-              >
-                <option value="">Choose a hub…</option>
-                {/* HUB TRUCKS ONLY (ADR-274). This offered every truck, so a hub
-                    could be created on a delivery truck — which is what made
-                    "hub" a state rather than a thing. */}
-                {Object.entries(trucks)
-                  .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
-                  .map(([id, t]: [string, any]) => (
-                    <option key={id} value={id}>{t.name}</option>
-                  ))
-                }
-              </select>
-              {/* Three distinct states, because "no options" has three causes and
-                  a silently empty dropdown explains none of them. */}
-              {Object.values(trucks).every((t: any) => !t.is_hub) ? (
-                <p className="text-xs text-warning mt-1">
-                  No hub trucks configured. Create one on the Trucks page with
-                  “Hub truck” ticked, and set its Discord channel there.
+            {/* Selectable cards, not a native <select>. A company has one hub
+                in practice, so the dropdown was a picker over a single item —
+                it covered the Create button when open, showed "Choose a hub…"
+                with a checkmark as though it were a real choice, and left the
+                primary action disabled until you interacted with it.
+
+                The three empty states below are unchanged in meaning: "no
+                options" has three causes and a silently empty control explains
+                none of them. */}
+            {availableHubs.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">
+                  {availableHubs.length === 1 ? 'Hub' : 'Select a hub'}
                 </p>
-              ) : Object.entries(trucks)
-                    .filter(([, t]: [string, any]) => t.is_hub)
-                    .every(([id]) => assignedTruckIds.has(id)) ? (
-                <p className="text-xs text-warning mt-1">
-                  Every hub already has an assignment for this date.
-                </p>
-              ) : null}
-            </div>
+                <div className="space-y-2">
+                  {availableHubs.map(h => {
+                    const selected = hubModalTruckId === h.id;
+                    return (
+                      <button
+                        key={h.id}
+                        type="button"
+                        onClick={() => setHubModalTruckId(h.id)}
+                        aria-pressed={selected}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left
+                          transition-colors focus:outline-none focus:ring-2 focus:ring-ring
+                          ${selected
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border bg-background hover:bg-muted/50'}`}
+                      >
+                        <span className={`w-8 h-8 shrink-0 rounded flex items-center justify-center
+                          ${selected ? 'bg-primary/20' : 'bg-muted'}`}>
+                          <Truck className={`w-4 h-4 ${selected ? 'text-primary' : 'text-muted-foreground'}`} />
+                        </span>
+                        <span className="font-semibold text-sm uppercase tracking-wide truncate">
+                          {h.name}
+                        </span>
+                        {selected && (
+                          <CheckCircle2 className="w-4 h-4 text-primary ml-auto shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {!anyHubsConfigured ? (
+              <p className="text-xs text-warning">
+                No hub trucks configured. Create one on the Trucks page with
+                &ldquo;Hub truck&rdquo; ticked, and set its Discord channel there.
+              </p>
+            ) : availableHubs.length === 0 ? (
+              <p className="text-xs text-warning">
+                Every hub already has an assignment for this date.
+              </p>
+            ) : null}
+
             <div className="flex gap-2 pt-1">
               <button onClick={() => setShowHubModal(false)} className="btn-ghost flex-1 text-sm py-2">Cancel</button>
               <button
