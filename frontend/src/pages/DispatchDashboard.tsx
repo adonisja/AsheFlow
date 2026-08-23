@@ -1640,17 +1640,37 @@ function CurrentAssignments() {
                        <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
                          <Truck className={`w-4 h-4 ${isHub ? 'text-primary' : 'text-primary'}`} />
                        </div>
-                       <div className="min-w-0">
+                       {/* Name and HUB badge on ONE line. The badge used to sit
+                           on its own line beneath the name, which made every hub
+                           card a row taller than its neighbours before any crew
+                           appeared. */}
+                       <div className="flex items-baseline gap-1.5 min-w-0">
                          <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
                            {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
                          </h3>
                          {isHub && (
-                           <span className="text-[9px] font-bold uppercase tracking-widest text-primary">Hub</span>
+                           <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                             Hub
+                           </span>
                          )}
                        </div>
                      </div>
                      <div className="flex items-center gap-2 shrink-0 ml-auto">
-                       {isHub && (
+                       {/* whitespace-nowrap + shrink-0: at the 1-column
+                           breakpoint this collapsed to a vertical "0 / 3"
+                           stack, which reads as three separate values. */}
+                       <div className={`shrink-0 whitespace-nowrap px-2 py-1 text-xs font-semibold rounded-full tabular-nums ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
+                         {(crew as any[]).length} / {maxCrewSize}
+                       </div>
+                     </div>
+                   </div>
+
+                   {/* Hub actions get their OWN row, so every card's header is
+                       the same shape: name + count. Sharing the header with the
+                       count pill made a hub card visibly denser than the regular
+                       trucks beside it — three rows of chrome before any crew. */}
+                   {isHub && (
+                     <div className="flex items-center gap-2 mb-3">
                          <button
                            onClick={() => handlePublishHub(truckId)}
                            disabled={publishingHubTruckId === truckId || (crew as any[]).length === 0}
@@ -1662,13 +1682,11 @@ function CurrentAssignments() {
                              : <Send className="w-3 h-3" />}
                            Publish Hub
                          </button>
-                       )}
                        {/* REMOVE — hubs only (ADR-274 D8). A hub is created one
                            at a time by hand, so it must be removable one at a
                            time; a mistake should not cost the whole day via
                            Clear Dispatch. Regular trucks have no equivalent:
                            they arrive as a balanced SET from Run Dispatch. */}
-                       {isHub && (
                          <button
                            onClick={() => handleRemoveHub(
                              truckId,
@@ -1685,15 +1703,8 @@ function CurrentAssignments() {
                              : <Trash2 className="w-3 h-3" />}
                            Remove
                          </button>
-                       )}
-                       {/* whitespace-nowrap + shrink-0: at the 1-column
-                           breakpoint this collapsed to a vertical "0 / 3"
-                           stack, which reads as three separate values. */}
-                       <div className={`shrink-0 whitespace-nowrap px-2 py-1 text-xs font-semibold rounded-full tabular-nums ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
-                         {(crew as any[]).length} / {maxCrewSize}
-                       </div>
                      </div>
-                   </div>
+                   )}
 
                    {/* Dock zone (ADR-274 D17) — the bay this truck collects
                        from. Its OWN row, not wedged into the identity block:
