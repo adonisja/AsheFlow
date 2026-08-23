@@ -1653,7 +1653,10 @@ function CurrentAssignments() {
                        narrow. Previously one non-wrapping row — at the 1- and
                        2-column breakpoints "Publish Hub" broke mid-phrase and
                        the count pill collapsed to a vertical "0 / 3". */}
-                   <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 mb-3 pb-2 border-b border-border">
+                   <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2 mb-3 pb-2 border-b border-border">
+                     {/* items-end on the row: the right column stacks count over
+                         badge, and the truck name should sit on the BADGE's line
+                         — the lower one — not float up beside the count. */}
                      <div className="flex items-center gap-2 min-w-0">
                        <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
                          <Truck className={`w-4 h-4 ${isHub ? 'text-primary' : 'text-primary'}`} />
@@ -1662,12 +1665,12 @@ function CurrentAssignments() {
                          {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
                        </h3>
                      </div>
-                     {/* Right-hand group: crew count, then the HUB badge.
-                         The badge sat next to the name, but the name is
-                         left-justified in the row and the badge belongs with
-                         the other card-level metadata rather than trailing the
-                         title. */}
-                     <div className="flex items-center gap-2 shrink-0 ml-auto">
+                     {/* Right-hand column, STACKED: crew count on top, HUB
+                         badge beneath it, both right-aligned. The name is
+                         left-justified in the row, so metadata belongs in its
+                         own column rather than trailing the title or sitting
+                         beside the count on one line. */}
+                     <div className="flex flex-col items-end gap-1 shrink-0 ml-auto">
                        {/* Crew COUNT, not a ratio — see the maxCrewSize note
                            above. Colour still carries the one fact that is
                            real: an empty crew needs attention.
@@ -1696,17 +1699,19 @@ function CurrentAssignments() {
                        count pill made a hub card visibly denser than the regular
                        trucks beside it — three rows of chrome before any crew. */}
                    {isHub && (
-                     <div className="flex items-center gap-2 mb-3">
+                     <div className="flex items-center gap-2 mb-3 flex-wrap">
                          <button
                            onClick={() => handlePublishHub(truckId)}
                            disabled={publishingHubTruckId === truckId || (crew as any[]).length === 0}
                            className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                           title={crew.length === 0 ? 'Add staff before publishing' : 'Publish hub — notify all assigned staff'}
+                           title={crew.length === 0
+                             ? 'Add staff before publishing'
+                             : `Notify everyone assigned to ${trucks[truckId]?.name || 'this hub'}`}
                          >
                            {publishingHubTruckId === truckId
                              ? <div className="w-3 h-3 border border-success border-t-transparent rounded-full animate-spin" />
                              : <Send className="w-3 h-3" />}
-                           Publish Hub
+                           Publish {trucks[truckId]?.name || 'Hub'} to Discord
                          </button>
                        {/* REMOVE — hubs only (ADR-274 D8). A hub is created one
                            at a time by hand, so it must be removable one at a
@@ -1721,7 +1726,7 @@ function CurrentAssignments() {
                                .find((a: any) => a.truck_id === truckId)?.status !== 'planned',
                            )}
                            disabled={removingHubTruckId === truckId}
-                           className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap ml-auto text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                            title="Remove this hub assignment"
                          >
                            {removingHubTruckId === truckId
