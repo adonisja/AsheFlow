@@ -105,3 +105,74 @@ class TestTheOpenEndpointIsGuarded:
         block = self.SRC[i : i + 600]
         assert "AssignmentMember.company_id == caller.company_id" in block
         assert "TruckAssignment.company_id == caller.company_id" in block
+
+
+class TestPublishHandlesTheConstraintViolation:
+    """ADR-287 — the failure mode the operator actually saw.
+
+    Nothing caught the IntegrityError. It escaped to the ASGI layer and killed
+    the response mid-flight, so with Caddy in front the browser saw a DROPPED
+    CONNECTION and the UI reported "Couldn't reach the server" — an accurate
+    description of what the client observed, and a completely misleading
+    account of what went wrong.
+
+    The traceback existed only in the server log. That is a bad place for the
+    single copy of the truth: the operator had no way to reach it.
+    """
+
+    @staticmethod
+    def _src():
+        import inspect
+
+        from app.routers import dispatch
+
+        return inspect.getsource(dispatch.publish_dispatch)
+
+    def test_the_confirmation_commit_is_guarded(self):
+        src = self._src()
+        assert "except IntegrityError:" in src
+
+    def test_it_rolls_back(self):
+        """Without a rollback the session stays poisoned and every later query
+        in the request fails with InFailedSqlTransaction."""
+        src = self._src()
+        i = src.index("except IntegrityError:")
+        assert "db.rollback()" in src[i : i + 200]
+
+    def test_it_raises_409_not_500(self):
+        """A 500 that kills the connection is indistinguishable from a network
+        failure AT THE CLIENT. A 409 arrives intact and says what happened."""
+        src = self._src()
+        i = src.index("except IntegrityError:")
+        assert "HTTP_409_CONFLICT" in src[i : i + 1600]
+
+    def test_the_message_names_who_is_double_assigned(self):
+        """'Cannot publish' alone sends the dispatcher hunting across every
+        truck. The whole point is to name the person."""
+        src = self._src()
+        assert "is assigned to more than one truck on" in src
+        assert "Remove the extra assignment and publish again." in src
+
+    def test_it_falls_back_when_no_duplicate_is_found(self):
+        """The constraint can also fire on a genuine race — two publishes at
+        once. Then there is no duplicate assignment to name, and a message
+        claiming one would be wrong."""
+        src = self._src()
+        assert "a confirmation already exists for" in src
+
+    def test_the_duplicate_lookup_is_company_scoped(self):
+        """ADR-115 dim 1 — three joined tables, three tenant terms."""
+        src = self._src()
+        i = src.index("except IntegrityError:")
+        block = src[i : i + 1400]
+        assert block.count("company_id == caller.company_id") == 3
+
+    def test_it_logs_without_naming_anyone(self):
+        """ADR-221 — the log records the COUNT; the name goes to the caller who
+        is already authorised to see their own crew."""
+        src = self._src()
+        i = src.index("except IntegrityError:")
+        block = src[i : i + 1400]
+        assert "logger.warning" in block
+        assert "duplicates=%d" in block
+        assert "%s" not in block.split("logger.warning")[1][:200].replace("date=%s", "").replace("company=%s", "")
