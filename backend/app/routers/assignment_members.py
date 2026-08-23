@@ -53,6 +53,38 @@ def create_assignment_member(
     if not assignment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
 
+    # Step 1b — ADR-287: one assignment per person per day.
+    #
+    # This endpoint checked yesterday's truck and ban conflicts but never
+    # whether the employee is already assigned THAT DATE — Step 3 below filters
+    # by assignment_id alone, so an employee on Falcon could be added to the Hub
+    # freely. That is the state that 500'd publish on the unique constraint over
+    # (employee_id, date), rolling back the entire publish.
+    #
+    # No client calls this today (the web UI uses /dispatch/assign, which has
+    # the guard; mobile only reads and patches status). "No caller today" is not
+    # a guarantee about tomorrow, and the endpoint is open and authenticated.
+    already_assigned = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == assignment_member.employee_id,
+            AssignmentMember.company_id == caller.company_id,
+            TruckAssignment.date == assignment.date,
+            TruckAssignment.company_id == caller.company_id,
+        )
+        .first()
+    )
+    if already_assigned:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Employee is already assigned to a truck on {assignment.date}. "
+                "Remove them from that truck first — one assignment per person "
+                "per day."
+            ),
+        )
+
     # Step 2 — consecutive truck check
     if check_consecutive_assignment(assignment_member.employee_id, assignment.truck_id, db):
         raise HTTPException(

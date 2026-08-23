@@ -34,7 +34,8 @@ interface DispatchData {
   date: string;
   assigned_crews: Record<string, CrewMember[]>;
   truck_assignments?: { truck_id: string; status: 'planned' | 'active' | 'completed' }[];
-  workflow_status?: 'dispatched' | 'published' | 'finalized';
+  // ADR-286: 'none' means dispatch has NOT run (a hub-only day reports it).
+  workflow_status?: 'none' | 'dispatched' | 'published' | 'finalized';
   warnings: { type?: string; message?: string }[];
 }
 
@@ -97,7 +98,7 @@ export default function DispatchHome() {
     ? Object.values(confirmations).filter(s => s === 'pending').length
     : totalAssigned - confirmed - declined;
 
-  const workflowStatus = dispatch?.workflow_status ?? 'dispatched';
+  const workflowStatus = dispatch?.workflow_status ?? 'none';
   const isPublished  = workflowStatus === 'published' || workflowStatus === 'finalized';
   const isFinalized  = workflowStatus === 'finalized';
 
