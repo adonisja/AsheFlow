@@ -24,6 +24,7 @@ from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
 from app.services.audit import write_audit
+from app.services.company_onboarding import is_onboarding, onboarding_note
 from app.services.email import send_invite_email
 
 logger = logging.getLogger(__name__)
@@ -124,32 +125,26 @@ def create_employee(
     No Cognito user is created here — the employee sets their own username and
     password by following the link in the invite email (POST /registration/complete).
     """
-    # Roles that are EARNED, never assigned at hire. Each has an entry path:
-    # walker <- trainee, trainer <- walker (promotion), driver <- driver_trainee.
+    # ADR-285 — the rule above is for HIRING. A company migrating its existing
+    # staff is not hiring: their drivers have driven for years, and
+    # `trainee -> walker` is not even a promotion (it happens only by passing the
+    # graduation quiz), so experienced walkers would sit through a five-phase
+    # program before they could work.
     #
-    # ADR-264 adds `driver`. Before it there was no driver training track, so a
-    # direct driver hire was the only option; now it would silently skip the
-    # program this codebase just built, and the skip is invisible — the employee
-    # simply never appears in any training view.
-    _EARNED_ROLES = {
-        "walker": "Walkers must start as trainees and be assigned the walker role by dispatch.",
-        "trainer": "Trainers can only be promoted from existing walkers by a manager or admin.",
-        "driver": (
-            "Drivers must start as driver trainees (ADR-264) and be promoted after "
-            "completing the training program. Create them as driver_trainee."
-        ),
-    }
-    if employee.role in _EARNED_ROLES:
+    # While a company has no active field staff, real roles are accepted. The
+    # first import is what closes the window.
+    onboarding = is_onboarding(db, caller.company_id)
+    if employee.role in EARNED_ROLES and not onboarding:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_EARNED_ROLES[employee.role],
+            detail=EARNED_ROLES[employee.role],
         )
 
     # Management callers may only create field-ENTRY roles: the two starting
     # points of the two parallel tracks (ADR-264 D2). `driver` is no longer one
     # of them — it is now earned, so driver_trainee takes its place rather than
     # being added beside it.
-    if caller.role == "management" and employee.role not in ("driver_trainee", "trainee"):
+    if caller.role == "management" and not onboarding and employee.role not in ("driver_trainee", "trainee"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Management users can only create driver trainee or trainee accounts.",
@@ -203,7 +198,12 @@ def create_employee(
         action_type="employee.create",
         target_table="employees",
         target_id=str(db_employee.id),
-        detail={"name": db_employee.name, "role": db_employee.role, "email": db_employee.email},
+        detail={
+            "name": db_employee.name, "role": db_employee.role, "email": db_employee.email,
+            # ADR-285: without this, a later reader sees a captain who never
+            # earned it and no record of why they were allowed.
+            **({"onboarding_window": True} if onboarding and db_employee.role in EARNED_ROLES else {}),
+        },
     )
     return db_employee
 
@@ -231,6 +231,12 @@ def bulk_import_employees(
         )
 
     now = datetime.now(timezone.utc)
+
+    # ADR-285 — evaluated ONCE, before the loop. Per-row it would close mid-import
+    # the moment the first row landed, so a 40-person migration would import one
+    # employee and reject the other 39. The rows are one migration, not forty
+    # independent hires.
+    onboarding = is_onboarding(db, caller.company_id)
     results: List[BulkImportResult] = []
 
     for i, row in enumerate(rows, start=1):
@@ -251,6 +257,21 @@ def bulk_import_employees(
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
                 reason="Discord ID already exists.",
+            ))
+            continue
+
+        # The SAME earned-role rule create_employee enforces. Without it this
+        # endpoint was a bypass: BulkImportRow.role accepts every value in
+        # RoleStr, so a CSV could create the driver, walker, trainer and captain
+        # accounts the single-create path refuses — silently, one row at a time.
+        #
+        # Skipped rather than failing the whole import: one bad row in a
+        # hundred-row CSV should not discard the ninety-nine good ones, and the
+        # result row names the reason.
+        if row.role in EARNED_ROLES and not onboarding:
+            results.append(BulkImportResult(
+                row=i, status="skipped", name=row.name, email=row.email,
+                reason=EARNED_ROLES[row.role],
             ))
             continue
 
@@ -311,7 +332,12 @@ def bulk_import_employees(
             action_type="employee.bulk_create",
             target_table="employees",
             target_id=str(db_employee.id),
-            detail={"name": row.name, "role": row.role, "email": str(row.email), "row": i},
+            detail={
+                "name": row.name, "role": row.role, "email": str(row.email), "row": i,
+                # ADR-285 — same trace as the single-create path. A migrated
+                # captain and a wrongly-created one look identical without it.
+                **({"onboarding_window": True} if onboarding and row.role in EARNED_ROLES else {}),
+            },
         )
         results.append(BulkImportResult(
             row=i, status="created", name=row.name, email=row.email,
@@ -724,6 +750,36 @@ def delete_employee(
 # dispatch / management / admin / field_supervisor are deliberately absent — those
 # are hiring decisions, not field promotions, and are set at creation or by an admin
 # editing the employee directly.
+# Roles that are EARNED, never assigned at hire. Each has an entry path:
+# walker <- trainee, trainer <- walker (promotion), driver <- driver_trainee.
+#
+# ADR-264 adds `driver`. Before it there was no driver training track, so a
+# direct driver hire was the only option; now it would silently skip the
+# program this codebase just built, and the skip is invisible — the employee
+# simply never appears in any training view.
+EARNED_ROLES: dict[str, str] = {
+    "walker": "Walkers must start as trainees and be assigned the walker role by dispatch.",
+    "trainer": "Trainers can only be promoted from existing walkers by a manager or admin.",
+    "driver": (
+        "Drivers must start as driver trainees (ADR-264) and be promoted after "
+        "completing the training program. Create them as driver_trainee."
+    ),
+    # ADR-256 treats captaincy as EARNED THROUGH EVIDENCE — "this trainer has
+    # run a truck 14 times" beats a manager's judgement, and familiarisation
+    # history is kept precisely as promotion evidence. Captain being
+    # creatable at hire was an omission, not a decision: it let a new hire
+    # hold a truck's route lead with no record of having run one.
+    #
+    # field_supervisor is deliberately NOT here. Nothing promotes into it,
+    # so making it earned would leave it unreachable.
+    "captain": (
+        "Captains are promoted from walkers or trainers once they have run a "
+        "truck (ADR-256). Create them as a trainee, or promote an existing "
+        "walker or trainer."
+    ),
+}
+
+
 ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "walker":  ("trainer", "captain"),
     "trainer": ("captain", "walker"),
