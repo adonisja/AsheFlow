@@ -36,6 +36,11 @@ def record_trainer_mark(
     Returns:
         The created TrainerMark, or None if no mark was warranted.
     """
+    # Lookup by primary key: this query ESTABLISHES the tenant rather than
+    # reading across it, so there is no company_id to filter by yet. Every
+    # secondary lookup below is scoped to record.company_id. Callers pass a
+    # record id they already own (training_deadlines iterates records it
+    # selected per company).
     record = db.query(TrainingRecord).filter(
         TrainingRecord.id == training_record_id
     ).first()
@@ -43,9 +48,16 @@ def record_trainer_mark(
     if not record or not record.trainer_id:
         return None
 
+    # ADR-115 dim 1. Every secondary lookup below scopes to the record's company.
+    # The threshold count is the one that matters: a trainer who exists in two
+    # tenants had their marks POOLED across both, so one company's records could
+    # trip the other company's underperforming alert.
+    company_id = record.company_id
+
     # If any inherited debt tasks exist, this trainer is not at fault.
     has_inherited_debt = db.query(TrainingTask).filter(
         TrainingTask.training_record_id == training_record_id,
+        TrainingTask.company_id == company_id,
         TrainingTask.is_training_debt == True,
     ).first() is not None
 
@@ -53,6 +65,7 @@ def record_trainer_mark(
         return None
 
     mark = TrainerMark(
+        company_id=company_id,
         trainer_id=record.trainer_id,
         training_record_id=record.id,
         trainee_id=record.trainee_id,
@@ -65,13 +78,19 @@ def record_trainer_mark(
     # Check underperforming threshold: distinct trainees this trainer has marks for.
     distinct_trainees = (
         db.query(TrainerMark.trainee_id)
-        .filter(TrainerMark.trainer_id == record.trainer_id)
+        .filter(
+            TrainerMark.trainer_id == record.trainer_id,
+            TrainerMark.company_id == company_id,
+        )
         .distinct()
         .count()
     )
 
     if distinct_trainees >= underperforming_threshold:
-        trainer = db.query(Employee).filter(Employee.id == record.trainer_id).first()
+        trainer = db.query(Employee).filter(
+            Employee.id == record.trainer_id,
+            Employee.company_id == company_id,
+        ).first()
         trainer_name = trainer.name if trainer else "Unknown trainer"
 
         notif_message = (
@@ -99,16 +118,29 @@ def record_exemplary_note(
         db: Database session. Caller is responsible for commit.
         training_record_id: The record being closed.
     """
+    # Lookup by primary key: this query ESTABLISHES the tenant rather than
+    # reading across it, so there is no company_id to filter by yet. Every
+    # secondary lookup below is scoped to record.company_id. Callers pass a
+    # record id they already own (training_deadlines iterates records it
+    # selected per company).
     record = db.query(TrainingRecord).filter(
         TrainingRecord.id == training_record_id
     ).first()
     if not record or not record.trainer_id:
         return
 
-    trainer = db.query(Employee).filter(Employee.id == record.trainer_id).first()
+    # ADR-115 dim 1 — these resolve NAMES into a management notification, so an
+    # unscoped read is a cross-tenant name disclosure, not just a wrong count.
+    trainer = db.query(Employee).filter(
+        Employee.id == record.trainer_id,
+        Employee.company_id == record.company_id,
+    ).first()
     trainer_name = trainer.name if trainer else "Unknown trainer"
 
-    trainee = db.query(Employee).filter(Employee.id == record.trainee_id).first()
+    trainee = db.query(Employee).filter(
+        Employee.id == record.trainee_id,
+        Employee.company_id == record.company_id,
+    ).first()
     trainee_name = trainee.name if trainee else "Unknown trainee"
 
     notif_message = (

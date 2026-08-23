@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, Integer, Float, Text, ForeignKey, DateTime
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.sql import func
 from app.models.base import Base
 
@@ -30,6 +31,23 @@ class GraduationQuizTemplate(Base):
     choices       = Column(JSONB, nullable=True)           # list[str] for MC
     correct_answer = Column(Text, nullable=True)           # exact MC answer; null for short_answer
     is_mandatory  = Column(Boolean, nullable=False, default=True)
+    # ADR-264 D10 — which TRACK this question belongs to, same treatment
+    # ADR-263 gave TrainingCurriculum.roles. A driver trainee must never be
+    # issued the walker bank.
+    #
+    # Query with .roles.any("driver") — NOT `== ["driver"]`, which would miss
+    # every shared question. Dialect variant for the same reason as
+    # TrainingCurriculum.roles: SQLite (the test engine) has no array type and
+    # model creation fails at table-create without it.
+    #
+    # server_default="{walker}" is what keeps the 17 existing staging rows
+    # correct with no backfill — every authored question today is walker.
+    roles         = Column(
+        ARRAY(String(20)).with_variant(SQLiteJSON(), "sqlite"),
+        nullable=False,
+        server_default="{walker}",
+        default=lambda: ["walker"],
+    )
     auto_scoreable = Column(Boolean, nullable=False, default=False)
     keywords      = Column(JSONB, nullable=True)           # list[str] for short_answer preliminary
     display_order = Column(Integer, nullable=False, default=0)

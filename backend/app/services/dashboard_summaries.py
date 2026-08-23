@@ -327,6 +327,16 @@ def _graduation_pct(db: Session, company_id: UUID) -> Optional[float]:
     """Graduated = has training records but role is no longer 'trainee'.
 
     There is no graduation timestamp; role transition is the actual end state.
+
+    WALKER TRACK ONLY (ADR-264). Driver trainees have TrainingRecord rows too,
+    and their role is not "trainee" — so before this filter they counted as
+    ALREADY GRADUATED from the day their first record was written, inflating
+    the rate, while also sitting in the denominator. Two parallel tracks with
+    different promotion targets cannot share one percentage.
+
+    The exclusion is by the trainee's CURRENT role rather than by the record,
+    because a walker trainee who graduated is exactly the case being counted —
+    filtering records by track would drop the graduates this measures.
     """
     # Coerce to UUID: SQLite round-trips these as plain strings, which then
     # fail to bind against a UUID-typed IN clause. Postgres returns UUID
@@ -341,16 +351,30 @@ def _graduation_pct(db: Session, company_id: UUID) -> Optional[float]:
         trainee_ids.append(tid if isinstance(tid, UUID) else UUID(str(tid)))
     if not trainee_ids:
         return None
+    # Drop anyone currently on the driver track from BOTH sides of the ratio.
+    walker_track_ids = [
+        eid
+        for (eid,) in db.query(Employee.id)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.id.in_(trainee_ids),
+            Employee.role != "driver_trainee",
+        )
+        .all()
+    ]
+    if not walker_track_ids:
+        return None
+
     graduated = (
         db.query(func.count(Employee.id))
         .filter(
             Employee.company_id == company_id,
-            Employee.id.in_(trainee_ids),
+            Employee.id.in_(walker_track_ids),
             Employee.role != "trainee",
         )
         .scalar()
     ) or 0
-    return _pct(graduated, len(trainee_ids))
+    return _pct(graduated, len(walker_track_ids))
 
 
 def _escalated_trainee_ids(db: Session, company_id: UUID) -> set:

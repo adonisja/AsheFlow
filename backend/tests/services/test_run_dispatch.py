@@ -129,7 +129,10 @@ class TestDriverShortage:
 
         shortage = [w for w in warnings if w.get("type") == "understaffed_drivers"]
         assert len(shortage) == 1, "Exactly one understaffed_drivers warning expected"
-        assert "1 available for 2 trucks" in shortage[0]["message"]
+        # Wording changed with ADR-264 D6: the message now states drivers
+        # NEEDED as well as trucks, because a driver trainee makes those two
+        # numbers differ.
+        assert "1 available, 2 needed for 2 truck(s)" in shortage[0]["message"]
 
     def test_no_warning_when_drivers_match_trucks(self, db):
         """

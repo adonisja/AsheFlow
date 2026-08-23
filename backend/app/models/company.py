@@ -81,6 +81,10 @@ class CompanyConfig(Base):
     phase4_pass_score               = Column(Float,   nullable=True)   # default 90.0
     underperforming_trainer_threshold = Column(Integer, nullable=True) # default 3
     max_training_phase              = Column(Integer, nullable=True)   # default 4
+    # ADR-264 — number of PHASES in the driver track, not calendar days. Floor of
+    # 2: one teaching phase plus the observation phase is the minimum coherent
+    # program. The last phase is always observation (D3).
+    driver_training_days            = Column(Integer, nullable=True)   # default 5
 
     # ── Dispatch algorithm weights ────────────────────────────────────────────
     dispatch_weight_driver          = Column(Float, nullable=True)   # default 0.70

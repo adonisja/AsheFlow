@@ -34,6 +34,7 @@ PLATFORM_DEFAULTS: dict = {
     "phase4_pass_score":                90.0,
     "underperforming_trainer_threshold": 3,
     "max_training_phase":               4,
+    "driver_training_days":             5,   # ADR-264 — phases, not days
     "dispatch_weight_driver":           0.70,
     # ADR-256: captain between driver and trainer; trainer and walker drop because a
     # trainer no longer holds operational context on the truck. Existing tenants with

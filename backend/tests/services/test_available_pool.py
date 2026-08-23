@@ -102,11 +102,13 @@ class TestPoolConstruction:
 
     def test_empty_pool_when_no_employees(self, db):
         pool = get_available_pool(db, target_date=date.today(), company_id=SEED_COMPANY_ID)
-        # "captains" added by ADR-256. Asserted as an exact dict on purpose: a
-        # bucket appearing or vanishing changes the headcount-cap arithmetic in
-        # run_dispatch, which sums these keys by name.
+        # "captains" added by ADR-256, "driver_trainees" by ADR-264. Asserted as
+        # an exact dict on purpose: a bucket appearing or vanishing changes the
+        # headcount-cap arithmetic in run_dispatch, which sums these keys by
+        # name — this test failing on a new bucket is the guard working.
         assert pool == {
-            "drivers": [], "trainers": [], "trainees": [], "walkers": [], "captains": [],
+            "drivers": [], "trainers": [], "trainees": [], "walkers": [],
+            "captains": [], "driver_trainees": [],
         }
 
 

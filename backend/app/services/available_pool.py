@@ -54,14 +54,29 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
             Employee.company_id == company_id,
             # ADR-256: captain is dispatchable crew. field_supervisor is NOT — they
             # oversee the road rather than filling a seat on one truck.
-            Employee.role.in_(["driver", "trainer", "trainee", "walker", "captain"]),
+            #
+            # ADR-264: driver_trainee is dispatchable — they DRIVE and are the
+            # main worker for the day, with a supervising driver assisting.
+            # Omitting them here dropped them before the bucketing below ever
+            # ran: an active, scheduled driver trainee was invisible to dispatch
+            # with no warning, which is how someone works a whole program with
+            # no training records and nobody finds out.
+            Employee.role.in_([
+                "driver", "trainer", "trainee", "walker", "captain", "driver_trainee",
+            ]),
             Employee.is_active == True,
             ~or_(has_off_day_today, has_pto_today),
         )
         .all()
     )
 
-    available_pool = {"drivers": [], "trainers": [], "trainees": [], "walkers": [], "captains": []}
+    # `driver_trainees` is its own bucket, never folded into "drivers" (ADR-264
+    # D2/D6): they consume a truck seat AND require a second driver, so a caller
+    # counting drivers against trucks must be able to tell them apart.
+    available_pool = {
+        "drivers": [], "trainers": [], "trainees": [], "walkers": [],
+        "captains": [], "driver_trainees": [],
+    }
     for employee in available_employees:
         if employee.role == "driver":
             available_pool["drivers"].append(employee)
@@ -73,6 +88,8 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
             available_pool["walkers"].append(employee)
         elif employee.role == "captain":
             available_pool["captains"].append(employee)
+        elif employee.role == "driver_trainee":
+            available_pool["driver_trainees"].append(employee)
 
     return available_pool
 

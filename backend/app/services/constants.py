@@ -27,7 +27,9 @@ OVERSIGHT_ROLES: tuple[str, ...] = ("management", "admin", "dispatch", "field_su
 # NOTE: no importers — see FIELD_ROLES above. The list actually enforced at the
 # trust boundary is the Literal in `schemas/dispatch.py`, which must be widened
 # with captain separately; this tuple alone grants nothing.
-ASSIGNABLE_ROLES: tuple[str, ...] = ("captain", "driver", "trainer", "trainee", "walker")
+ASSIGNABLE_ROLES: tuple[str, ...] = (
+    "captain", "driver", "trainer", "trainee", "walker", "driver_trainee",
+)
 
 # Shortcuts for individual roles
 ROLE_DRIVER    = "driver"
@@ -39,6 +41,7 @@ ROLE_MANAGEMENT = "management"
 ROLE_ADMIN     = "admin"
 ROLE_CAPTAIN   = "captain"
 ROLE_FIELD_SUPERVISOR = "field_supervisor"
+ROLE_DRIVER_TRAINEE = "driver_trainee"   # ADR-264
 
 # ---------------------------------------------------------------------------
 # Authority sets (ADR-256)

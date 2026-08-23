@@ -197,6 +197,22 @@ export interface DispatchResult {
     dock_zone?: string | null;
   }[];
   workflow_status?: 'dispatched' | 'published' | 'finalized';
+  /** ADR-264 — scheduled driver trainees with no crew row today.
+   *
+   *  A driver trainee is HELD OUT of crews rather than paired with a driver who
+   *  has never supervised them. Held out is only safe if it is visible: they
+   *  have no AssignmentMember row, so they appear in no truck, and the run-time
+   *  warning used to be discarded by this endpoint on every refresh.
+   *
+   *  Derived on read, so pairing them by hand makes the entry disappear with
+   *  nothing to dismiss. */
+  unpaired_driver_trainees?: {
+    employee_id: string;
+    employee_name: string;
+    /** 'first_day' — never had a supervisor.
+     *  'unavailable' — every driver who has supervised them is off today. */
+    reason: 'first_day' | 'unavailable';
+  }[];
   warnings: DispatchWarning[];
 }
 

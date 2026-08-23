@@ -210,6 +210,77 @@ jobs:
           rm -rf /tmp/asheflow-private ~/.ssh/asheflow_private_deploy
           echo "Proprietary source + tests pulled from AsheFlow-private ($PRIV_BRANCH)."
 
+      # The proprietary code and the public models are versioned separately, so
+      # a private branch can drift until its imports no longer resolve. That is
+      # what happened on 2026-08-21: private `main` had frozen at 2026-06-06,
+      # so every push to public master pulled June-era routers and died on
+      # `cannot import name 'WalkerRoute'` — a rename from months earlier.
+      #
+      # pytest reports that as a collection ERROR across whole directories,
+      # which reads like a broken test suite rather than a stale branch. This
+      # step names the actual cause before the suite runs.
+      - name: Proprietary code must match the public models
+        working-directory: backend
+        # Same env as `Run tests`. Without it `Settings()` fails validation and
+        # EVERY router "fails to import" — which looks exactly like total branch
+        # drift and is actually a missing env var. That is how the first version
+        # of this step broke its own build.
+        env:
+          APP_ENV: test
+          DATABASE_URL: "sqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+          AWS_REGION: us-east-1
+          AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+          AWS_COGNITO_APP_CLIENT_ID: test-client-id
+          INTERNAL_SECRET: ci-test-secret-not-real
+          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
+        run: |
+          python - <<'EOF'
+          import importlib, sys, traceback
+
+          # Import every proprietary router. An ImportError here is branch drift,
+          # not a test failure.
+          import pathlib
+          mods = sorted(
+              "app.routers." + f.stem
+              for f in pathlib.Path("app/routers").glob("*.py")
+              if f.stem != "__init__"
+          )
+          failed = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+              except Exception as exc:
+                  # Name the exception TYPE and message. The last traceback line
+                  # is often a docs URL, which identifies nothing.
+                  failed.append((m, f"{type(exc).__name__}: {exc}".splitlines()[0][:200]))
+
+          # Drift breaks the routers that touch the renamed symbol, not all of
+          # them. A uniform failure across every module is an environment
+          # problem — say so instead of blaming the private branch.
+          if failed and len(failed) == len(mods) and len({e for _, e in failed}) == 1:
+              print("::error::Every router failed to import with the same error.")
+              print("That is an ENVIRONMENT problem in this step, not private-branch drift.")
+              print(f"  {failed[0][1]}")
+              sys.exit(1)
+
+          if failed:
+              print("::error::Proprietary code does not match the public models.")
+              print("")
+              print("The private branch pulled for this build is out of date with")
+              print("the models/schemas in this repo. Sync it, then re-run:")
+              print("")
+              print("    git clone -b <private-branch> git@github.com:adonisja/AsheFlow-private.git")
+              print("    # take the current tree, then push")
+              print("")
+              print("Modules that failed to import:")
+              for m, err in failed:
+                  print(f"  {m}: {err}")
+              sys.exit(1)
+
+          print(f"All {len(mods)} routers import cleanly against the public models.")
+          EOF
+
       - name: Run tests
         working-directory: backend
         run: python -m pytest tests/ -v --tb=short
