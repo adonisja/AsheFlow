@@ -3,7 +3,9 @@ from uuid import UUID
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
+from app.models.truck_assignment import TruckAssignment
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.time_off_request import TimeOffRequest
 from app.services.local_date import company_today
@@ -48,10 +50,32 @@ def get_available_pool(db: Session, target_date: date = None, company_id: UUID =
         .exists()
     )
 
+    # ADR-287 — one assignment per person per day. Someone already placed on a
+    # truck for this date is NOT available: run_dispatch must not consider them.
+    #
+    # This mirrors the exclusion `/schedule/available` has had all along — the
+    # pool the UI offers for dragging. The two pools express the same rule and
+    # only one enforced it, so a hub staffed BEFORE the run (possible since
+    # ADR-286) put its driver back in the pool and run_dispatch placed them on a
+    # second truck. Publish then 500'd on the unique constraint over
+    # (employee_id, date) and the whole transaction rolled back.
+    is_already_assigned = (
+        db.query(AssignmentMember)
+        .join(TruckAssignment, AssignmentMember.assignment_id == TruckAssignment.id)
+        .filter(
+            AssignmentMember.employee_id == Employee.id,
+            AssignmentMember.company_id == company_id,
+            TruckAssignment.date == target_date,
+            TruckAssignment.company_id == company_id,
+        )
+        .exists()
+    )
+
     available_employees = (
         db.query(Employee)
         .filter(
             Employee.company_id == company_id,
+            ~is_already_assigned,
             # ADR-256: captain is dispatchable crew. field_supervisor is NOT — they
             # oversee the road rather than filling a seat on one truck.
             #

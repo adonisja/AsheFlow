@@ -196,7 +196,9 @@ export interface DispatchResult {
      *  reads this same payload, so the DM and this board cannot disagree. */
     dock_zone?: string | null;
   }[];
-  workflow_status?: 'dispatched' | 'published' | 'finalized';
+  /** ADR-286: 'none' means dispatch has NOT run — a day with only a hub
+   *  assignment reports this, where it previously claimed 'dispatched'. */
+  workflow_status?: 'none' | 'dispatched' | 'published' | 'finalized';
   /** ADR-264 — scheduled driver trainees with no crew row today.
    *
    *  A driver trainee is HELD OUT of crews rather than paired with a driver who

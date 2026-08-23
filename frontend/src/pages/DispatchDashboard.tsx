@@ -131,6 +131,7 @@ function CurrentAssignments() {
   // hub state
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
+
   const [isCreatingHub, setIsCreatingHub] = useState(false);
   const [publishingHubTruckId, setPublishingHubTruckId] = useState<string | null>(null);
 
@@ -237,7 +238,9 @@ function CurrentAssignments() {
         })
         .catch(() => {/* no history yet — dispatch types the bay */});
       const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
-      const hasStatus = !!res.data.workflow_status;
+      // ADR-286: "none" is TRUTHY, and it means dispatch has NOT run. A bare
+      // `!!workflow_status` would read a hub-only day as "dispatch ran".
+      const hasStatus = !!res.data.workflow_status && res.data.workflow_status !== 'none';
       setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
       return res.data.workflow_status === 'finalized';
     } catch {
@@ -569,8 +572,13 @@ function CurrentAssignments() {
       // Only null out dispatchData if there are genuinely no assignments AND no
       // workflow_status — an empty crew dict with a status means dispatch ran
       // and the button must stay disabled.
+      //
+      // ADR-286: except "none", which is truthy and means the opposite. A day
+      // holding only a hub reports "none", and treating that as "dispatch ran"
+      // is the bug this ADR removed on the backend arriving by a second route.
       const hasCrews = Object.keys(response.data.assigned_crews).length > 0;
-      const hasStatus = !!response.data.workflow_status;
+      const hasStatus =
+        !!response.data.workflow_status && response.data.workflow_status !== 'none';
       if (!hasCrews && !hasStatus) {
         setDispatchData(null);
       } else {
@@ -1010,13 +1018,21 @@ function CurrentAssignments() {
     (criticalDecline || declinedIds.length >= 3 || understaffed) && emergencyPool.length > 0;
 
   const unassigned = getUnassignedEmployees();
-  const maxCrewSize = dispatchData?.assigned_crews
-    ? Object.values(dispatchData.assigned_crews).reduce((max: number, crew: any) => Math.max(max, crew.length), 0) || 3
-    : 3;
+  /* `maxCrewSize` is gone. It was the largest crew on ANY truck today, falling
+     back to 3 — not a capacity. There is no capacity column on Truck and no
+     crew-size config, so `20 / 20` in green meant "ties today's biggest crew",
+     not "full", and the denominator moved as crews changed. The card now shows
+     the count alone: what is known, with nothing invented. */
 
   // Workflow step derived from durable backend status — never from local flag
   type WorkflowStep = 'none' | 'dispatched' | 'published' | 'finalized';
   const workflowStep: WorkflowStep = !dispatchData
+    ? 'none'
+    // ADR-286 — the backend now says 'none' explicitly when no NON-HUB
+    // assignment exists. Without this branch the value falls through to the
+    // `: 'dispatched'` default below, which is the very bug being fixed: a day
+    // with only a hub would still disable Run Dispatch.
+    : dispatchData.workflow_status === 'none'
     ? 'none'
     : dispatchData.workflow_status === 'finalized'
     ? 'finalized'
@@ -1070,6 +1086,18 @@ function CurrentAssignments() {
   const assignedTruckIds: Set<string> = new Set(
     Object.keys(dispatchData?.assigned_crews || {})
   );
+
+  /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
+     D1) minus any already assigned. Derived once and shared by the "+ Add Hub"
+     trigger and the modal, so the two cannot disagree about what is on offer.
+
+     MUST stay below assignedTruckIds — it reads it. Declared above, `const` is
+     in its temporal dead zone and the whole component throws
+     "Cannot access 'assignedTruckIds' before initialization" on first render. */
+  const availableHubs = Object.entries(trucks)
+    .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
+    .map(([id, t]: [string, any]) => ({ id, name: t.name as string }));
+  const anyHubsConfigured = Object.values(trucks).some((t: any) => t.is_hub);
 
   return (
     <div /* No animate-slide-up here: the tab shell above already wraps this, and
@@ -1538,7 +1566,15 @@ function CurrentAssignments() {
                 for creating one was invisible. A hub day should be creatable
                 before, during or after the main dispatch. */}
             <button
-              onClick={() => { setShowHubModal(true); setHubModalTruckId(''); }}
+              onClick={() => {
+                setShowHubModal(true);
+                /* A company has ONE hub in practice (7 delivery trucks to 1 hub
+                   on staging). Preselect it: picking from a list of one is a
+                   step whose answer is forced, and it left Create Hub disabled
+                   on open. The name is shown in the modal, so nothing is
+                   chosen invisibly. */
+                setHubModalTruckId(availableHubs.length === 1 ? availableHubs[0].id : '');
+              }}
               disabled={isLoading}
               className="flex items-center gap-1.5 text-sm font-medium bg-muted text-foreground hover:bg-muted/80 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border border-border"
               title="Create a hub truck assignment for this date"
@@ -1617,83 +1653,76 @@ function CurrentAssignments() {
                    onDragOver={(e) => e.preventDefault()}
                    onDrop={(e) => handleDropToTruck(e, truckId)}
                  >
-                   <div className="flex items-center justify-between mb-3 pb-2 border-b border-border">
-                     <div className="flex items-center gap-2">
-                       <div className={`w-8 h-8 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
+                   {/* Header wraps as a unit: identity on one line, actions
+                       dropping to their own full-width line when the card is
+                       narrow. Previously one non-wrapping row — at the 1- and
+                       2-column breakpoints "Publish Hub" broke mid-phrase and
+                       the count pill collapsed to a vertical "0 / 3". */}
+                   <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2 mb-3 pb-2 border-b border-border">
+                     {/* items-end on the row: the right column stacks count over
+                         badge, and the truck name should sit on the BADGE's line
+                         — the lower one — not float up beside the count. */}
+                     <div className="flex items-center gap-2 min-w-0">
+                       <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
                          <Truck className={`w-4 h-4 ${isHub ? 'text-primary' : 'text-primary'}`} />
                        </div>
-                       <div>
-                         <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide">
-                           {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
-                         </h3>
-                         {isHub && (
-                           <span className="text-[9px] font-bold uppercase tracking-widest text-primary">Hub</span>
-                         )}
-                         {/* Dock zone (ADR-274 D17) — the bay this truck collects
-                             from. A value inherited from the truck's last run
-                             renders muted until dispatch confirms or edits it;
-                             publish applies it either way. */}
-                         {(() => {
-                           const d = dockStateFor(truckId);
-                           const listId = `dock-opts-${truckId}`;
-                           return (
-                             <div className="flex items-center gap-1 mt-0.5">
-                               <span className="text-[9px] uppercase tracking-wider text-muted-foreground">Dock</span>
-                               <input
-                                 list={listId}
-                                 value={d.value}
-                                 placeholder="set one…"
-                                 maxLength={50}
-                                 disabled={dockSaving !== null}
-                                 onChange={e => setDockDrafts(prev => ({ ...prev, [truckId]: e.target.value }))}
-                                 onBlur={e => {
-                                   const v = e.target.value.trim();
-                                   // Save an edited value, and also a suggestion the
-                                   // dispatcher tabbed through — touching the field is
-                                   // the confirmation.
-                                   if (truckId in dockDrafts || (d.suggested && v)) saveDockZone(truckId, v);
-                                 }}
-                                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                                 className={`w-20 px-1 py-0.5 text-[11px] font-mono rounded border bg-transparent
-                                   focus:outline-none focus:ring-1 focus:ring-primary
-                                   ${d.suggested && d.value
-                                     ? 'border-dashed border-border text-muted-foreground italic'
-                                     : 'border-border text-foreground'}`}
-                                 title={d.suggested && d.value
-                                   ? `Suggested from this truck's last run — confirm or change it`
-                                   : 'Bay this truck collects from'}
-                               />
-                               <datalist id={listId}>
-                                 {(dockSuggest[truckId]?.recent ?? []).map(z => <option key={z} value={z} />)}
-                               </datalist>
-                               {dockSaving === truckId && (
-                                 <div className="w-2.5 h-2.5 border border-primary border-t-transparent rounded-full animate-spin" />
-                               )}
-                             </div>
-                           );
-                         })()}
-                       </div>
+                       <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
+                         {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
+                       </h3>
                      </div>
-                     <div className="flex items-center gap-2">
+                     {/* Right-hand column, STACKED: crew count on top, HUB
+                         badge beneath it, both right-aligned. The name is
+                         left-justified in the row, so metadata belongs in its
+                         own column rather than trailing the title or sitting
+                         beside the count on one line. */}
+                     <div className="flex flex-col items-end gap-1 shrink-0 ml-auto">
+                       {/* Crew COUNT, not a ratio — see the maxCrewSize note
+                           above. Colour still carries the one fact that is
+                           real: an empty crew needs attention.
+                           whitespace-nowrap + shrink-0 because at the 1-column
+                           breakpoint this used to wrap into a vertical stack. */}
+                       <div
+                         className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-full tabular-nums ${
+                           (crew as any[]).length === 0
+                             ? 'bg-warning/20 text-warning'
+                             : 'bg-success/20 text-success'}`}
+                         title={`${(crew as any[]).length} crew member${(crew as any[]).length === 1 ? '' : 's'} on this truck`}
+                       >
+                         <Users className="w-3 h-3" />
+                         {(crew as any[]).length}
+                       </div>
                        {isHub && (
+                         <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                           Hub
+                         </span>
+                       )}
+                     </div>
+                   </div>
+
+                   {/* Hub actions get their OWN row, so every card's header is
+                       the same shape: name + count. Sharing the header with the
+                       count pill made a hub card visibly denser than the regular
+                       trucks beside it — three rows of chrome before any crew. */}
+                   {isHub && (
+                     <div className="flex items-center gap-2 mb-3 flex-wrap">
                          <button
                            onClick={() => handlePublishHub(truckId)}
                            disabled={publishingHubTruckId === truckId || (crew as any[]).length === 0}
-                           className="flex items-center gap-1 text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                           title={crew.length === 0 ? 'Add staff before publishing' : 'Publish hub — notify all assigned staff'}
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           title={crew.length === 0
+                             ? 'Add staff before publishing'
+                             : `Notify everyone assigned to ${trucks[truckId]?.name || 'this hub'}`}
                          >
                            {publishingHubTruckId === truckId
                              ? <div className="w-3 h-3 border border-success border-t-transparent rounded-full animate-spin" />
                              : <Send className="w-3 h-3" />}
-                           Publish Hub
+                           Publish {trucks[truckId]?.name || 'Hub'} to Discord
                          </button>
-                       )}
                        {/* REMOVE — hubs only (ADR-274 D8). A hub is created one
                            at a time by hand, so it must be removable one at a
                            time; a mistake should not cost the whole day via
                            Clear Dispatch. Regular trucks have no equivalent:
                            they arrive as a balanced SET from Run Dispatch. */}
-                       {isHub && (
                          <button
                            onClick={() => handleRemoveHub(
                              truckId,
@@ -1702,7 +1731,7 @@ function CurrentAssignments() {
                                .find((a: any) => a.truck_id === truckId)?.status !== 'planned',
                            )}
                            disabled={removingHubTruckId === truckId}
-                           className="flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap ml-auto text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                            title="Remove this hub assignment"
                          >
                            {removingHubTruckId === truckId
@@ -1710,12 +1739,69 @@ function CurrentAssignments() {
                              : <Trash2 className="w-3 h-3" />}
                            Remove
                          </button>
-                       )}
-                       <div className={`px-2 py-1 text-xs font-semibold rounded-full ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
-                         {(crew as any[]).length} / {maxCrewSize}
-                       </div>
                      </div>
-                   </div>
+                   )}
+
+                   {/* Dock zone (ADR-274 D17) — the bay this truck collects
+                       from. Its OWN row, not wedged into the identity block:
+                       it is an editable, savable field and was rendered at
+                       w-20 / 11px beside a 9px label, smaller than the text
+                       describing it, competing with the action buttons for the
+                       header's horizontal space.
+                       A value inherited from the truck's last run renders muted
+                       until dispatch confirms or edits it; publish applies it
+                       either way. */}
+                   {(() => {
+                     const d = dockStateFor(truckId);
+                     const listId = `dock-opts-${truckId}`;
+                     return (
+                       <div className="flex items-center gap-2 mb-3">
+                         <label
+                           htmlFor={`dock-${truckId}`}
+                           className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0"
+                         >
+                           Dock
+                         </label>
+                         <div className="relative flex-1 min-w-0">
+                           <input
+                             id={`dock-${truckId}`}
+                             list={listId}
+                             value={d.value}
+                             placeholder="set one…"
+                             maxLength={50}
+                             disabled={dockSaving !== null}
+                             onChange={e => setDockDrafts(prev => ({ ...prev, [truckId]: e.target.value }))}
+                             onBlur={e => {
+                               const v = e.target.value.trim();
+                               // Save an edited value, and also a suggestion the
+                               // dispatcher tabbed through — touching the field is
+                               // the confirmation.
+                               if (truckId in dockDrafts || (d.suggested && v)) saveDockZone(truckId, v);
+                             }}
+                             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                             className={`w-full h-8 pl-2.5 pr-7 text-xs font-mono rounded-lg border bg-background
+                               transition-colors placeholder:text-muted-foreground
+                               focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring
+                               disabled:opacity-60
+                               ${d.suggested && d.value
+                                 ? 'border-dashed border-primary/40 text-muted-foreground italic'
+                                 : 'border-border text-foreground'}`}
+                             title={d.suggested && d.value
+                               ? `Suggested from this truck's last run — confirm or change it`
+                               : 'Bay this truck collects from'}
+                           />
+                           {/* Inside the field, so it cannot be pushed onto a
+                               second line the way a sibling flex child would. */}
+                           {dockSaving === truckId && (
+                             <div className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin" />
+                           )}
+                         </div>
+                         <datalist id={listId}>
+                           {(dockSuggest[truckId]?.recent ?? []).map(z => <option key={z} value={z} />)}
+                         </datalist>
+                       </div>
+                     );
+                   })()}
 
                    <div className="space-y-2 flex-1 relative">
                      {(() => {
@@ -2035,44 +2121,72 @@ function CurrentAssignments() {
                 ✕
               </button>
             </div>
-            <p className="text-xs text-subtle">
-              Create today's assignment for a hub truck. Hub crew is never assigned
-              automatically — drag staff from the unassigned panel onto the hub, then
-              click <strong>Publish Hub</strong> to notify them.
+            {/* Two sentences, one idea each: what this does, then what YOU do
+                next. The single paragraph ran the two together and buried the
+                part the dispatcher acts on. */}
+            <p className="text-xs text-subtle leading-relaxed">
+              Creates a hub assignment for <strong>{selectedDate}</strong>.
+              <br />
+              Hub crew is never assigned automatically — drag staff onto the hub,
+              then <strong>Publish Hub</strong> to notify them.
             </p>
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Select Hub</label>
-              <select
-                value={hubModalTruckId}
-                onChange={e => setHubModalTruckId(e.target.value)}
-                className="w-full border border-input rounded-xl px-3 py-2 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
-              >
-                <option value="">Choose a hub…</option>
-                {/* HUB TRUCKS ONLY (ADR-274). This offered every truck, so a hub
-                    could be created on a delivery truck — which is what made
-                    "hub" a state rather than a thing. */}
-                {Object.entries(trucks)
-                  .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
-                  .map(([id, t]: [string, any]) => (
-                    <option key={id} value={id}>{t.name}</option>
-                  ))
-                }
-              </select>
-              {/* Three distinct states, because "no options" has three causes and
-                  a silently empty dropdown explains none of them. */}
-              {Object.values(trucks).every((t: any) => !t.is_hub) ? (
-                <p className="text-xs text-warning mt-1">
-                  No hub trucks configured. Create one on the Trucks page with
-                  “Hub truck” ticked, and set its Discord channel there.
+            {/* Selectable cards, not a native <select>. A company has one hub
+                in practice, so the dropdown was a picker over a single item —
+                it covered the Create button when open, showed "Choose a hub…"
+                with a checkmark as though it were a real choice, and left the
+                primary action disabled until you interacted with it.
+
+                The three empty states below are unchanged in meaning: "no
+                options" has three causes and a silently empty control explains
+                none of them. */}
+            {availableHubs.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">
+                  {availableHubs.length === 1 ? 'Hub' : 'Select a hub'}
                 </p>
-              ) : Object.entries(trucks)
-                    .filter(([, t]: [string, any]) => t.is_hub)
-                    .every(([id]) => assignedTruckIds.has(id)) ? (
-                <p className="text-xs text-warning mt-1">
-                  Every hub already has an assignment for this date.
-                </p>
-              ) : null}
-            </div>
+                <div className="space-y-2">
+                  {availableHubs.map(h => {
+                    const selected = hubModalTruckId === h.id;
+                    return (
+                      <button
+                        key={h.id}
+                        type="button"
+                        onClick={() => setHubModalTruckId(h.id)}
+                        aria-pressed={selected}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left
+                          transition-colors focus:outline-none focus:ring-2 focus:ring-ring
+                          ${selected
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border bg-background hover:bg-muted/50'}`}
+                      >
+                        <span className={`w-8 h-8 shrink-0 rounded flex items-center justify-center
+                          ${selected ? 'bg-primary/20' : 'bg-muted'}`}>
+                          <Truck className={`w-4 h-4 ${selected ? 'text-primary' : 'text-muted-foreground'}`} />
+                        </span>
+                        <span className="font-semibold text-sm uppercase tracking-wide truncate">
+                          {h.name}
+                        </span>
+                        {selected && (
+                          <CheckCircle2 className="w-4 h-4 text-primary ml-auto shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {!anyHubsConfigured ? (
+              <p className="text-xs text-warning">
+                No hub trucks configured. Create one on the Trucks page with
+                &ldquo;Hub truck&rdquo; ticked, and set its Discord channel there.
+              </p>
+            ) : availableHubs.length === 0 ? (
+              <p className="text-xs text-warning">
+                Every hub already has an assignment for this date.
+              </p>
+            ) : null}
+
             <div className="flex gap-2 pt-1">
               <button onClick={() => setShowHubModal(false)} className="btn-ghost flex-1 text-sm py-2">Cancel</button>
               <button

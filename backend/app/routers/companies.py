@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
 from app.services.company_config import _REQUIRED_FIELDS
+from app.services.constants import OVERSIGHT_ROLES
 from app.core.config import settings
 from app.database import get_db
 from app.services.audit import write_audit, super_admin_identity
@@ -864,15 +865,24 @@ company_admin_router = APIRouter(prefix="/companies", tags=["company-config"])
 
 allow_admin = RoleChecker(["admin"])
 allow_management = RoleChecker(["management", "admin"])
+# /my-info returns only the caller's own company name and timezone — not
+# sensitive, and DISPATCH is the role that lives on the page needing it. Gated
+# to management/admin, every dispatcher 403'd on every Dispatch Dashboard load;
+# the frontend swallows it, so the only symptom was a missing timezone label
+# beside the date, on the page where the date matters most.
+#
+# OVERSIGHT_ROLES rather than a hand-written list: the same set is already the
+# notification fan-out audience, so "who oversees operations" has one spelling.
+allow_oversight = RoleChecker(list(OVERSIGHT_ROLES))
 
 
 @company_admin_router.get("/my-info")
 def get_my_company_info(
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_management),
+    _: dict = Depends(allow_oversight),
     db: Session = Depends(get_db),
 ):
-    """Return name and timezone for the caller's company. Management and admin."""
+    """Return name and timezone for the caller's company. Oversight roles."""
     company = db.query(Company).filter(Company.id == caller.company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found.")
