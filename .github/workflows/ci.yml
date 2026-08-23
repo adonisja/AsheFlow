@@ -136,6 +136,49 @@ jobs:
       - name: Check for proprietary exposure
         run: bash scripts/check_proprietary_exposure.sh
 
+  # ── 1c. PRIVATE BRANCH READINESS (PRs only) ────────────────────────────────
+  # CI pulls proprietary code from AsheFlow-private, mapping master→main and
+  # everything else→same name. The pre-push hook syncs proprietary code to
+  # private `staging` ONLY. So a staging→master PR carries the public tests but
+  # not the proprietary source they exercise: the PR goes green, the merge is
+  # clean, and Deploy → PROD is then skipped because Backend tests fail on
+  # master against stale proprietary code.
+  #
+  # That happened twice before this job existed:
+  #   2026-08-21  ImportError: cannot import name 'WalkerRoute'
+  #   2026-08-23  AttributeError: no attribute '_handle_driver_decline'
+  #
+  # Both were found AFTER the merge landed. Deliberately a PR-only job: on a
+  # push the merge has already happened and there is nothing left to block.
+  private-branch-ready:
+    name: Private branch ready for merge
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the base's private branch is not behind
+        env:
+          PRIVATE_REPO_DEPLOY_KEY: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+        run: |
+          # Same key handling as the pull step in the test job: written verbatim
+          # with a guaranteed trailing newline, never passed as an argument.
+          mkdir -p ~/.ssh
+          KEY_FILE=~/.ssh/asheflow_private_deploy
+          printf '%s\n' "$PRIVATE_REPO_DEPLOY_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          if ! ssh-keygen -y -f "$KEY_FILE" > /dev/null 2>&1; then
+            echo "::error::PRIVATE_REPO_DEPLOY_KEY is not a valid OpenSSH private key."
+            exit 1
+          fi
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $KEY_FILE -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+          bash scripts/check_private_branch_ready.sh \
+            "${{ github.base_ref }}" "${{ github.head_ref }}"
+          rm -f "$KEY_FILE"
+
   # ── 2. BACKEND TESTS ───────────────────────────────────────────────────────
   test:
     name: Backend tests
