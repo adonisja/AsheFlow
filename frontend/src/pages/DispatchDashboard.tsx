@@ -132,13 +132,6 @@ function CurrentAssignments() {
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
 
-  /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
-     D1) minus any already assigned. Derived once and shared by the "+ Add Hub"
-     trigger and the modal, so the two cannot disagree about what is on offer. */
-  const availableHubs = Object.entries(trucks)
-    .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
-    .map(([id, t]: [string, any]) => ({ id, name: t.name as string }));
-  const anyHubsConfigured = Object.values(trucks).some((t: any) => t.is_hub);
   const [isCreatingHub, setIsCreatingHub] = useState(false);
   const [publishingHubTruckId, setPublishingHubTruckId] = useState<string | null>(null);
 
@@ -1093,6 +1086,18 @@ function CurrentAssignments() {
   const assignedTruckIds: Set<string> = new Set(
     Object.keys(dispatchData?.assigned_crews || {})
   );
+
+  /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
+     D1) minus any already assigned. Derived once and shared by the "+ Add Hub"
+     trigger and the modal, so the two cannot disagree about what is on offer.
+
+     MUST stay below assignedTruckIds — it reads it. Declared above, `const` is
+     in its temporal dead zone and the whole component throws
+     "Cannot access 'assignedTruckIds' before initialization" on first render. */
+  const availableHubs = Object.entries(trucks)
+    .filter(([id, t]: [string, any]) => t.is_hub && !assignedTruckIds.has(id))
+    .map(([id, t]: [string, any]) => ({ id, name: t.name as string }));
+  const anyHubsConfigured = Object.values(trucks).some((t: any) => t.is_hub);
 
   return (
     <div /* No animate-slide-up here: the tab shell above already wraps this, and
