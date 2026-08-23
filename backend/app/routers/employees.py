@@ -124,25 +124,10 @@ def create_employee(
     No Cognito user is created here — the employee sets their own username and
     password by following the link in the invite email (POST /registration/complete).
     """
-    # Roles that are EARNED, never assigned at hire. Each has an entry path:
-    # walker <- trainee, trainer <- walker (promotion), driver <- driver_trainee.
-    #
-    # ADR-264 adds `driver`. Before it there was no driver training track, so a
-    # direct driver hire was the only option; now it would silently skip the
-    # program this codebase just built, and the skip is invisible — the employee
-    # simply never appears in any training view.
-    _EARNED_ROLES = {
-        "walker": "Walkers must start as trainees and be assigned the walker role by dispatch.",
-        "trainer": "Trainers can only be promoted from existing walkers by a manager or admin.",
-        "driver": (
-            "Drivers must start as driver trainees (ADR-264) and be promoted after "
-            "completing the training program. Create them as driver_trainee."
-        ),
-    }
-    if employee.role in _EARNED_ROLES:
+    if employee.role in EARNED_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_EARNED_ROLES[employee.role],
+            detail=EARNED_ROLES[employee.role],
         )
 
     # Management callers may only create field-ENTRY roles: the two starting
@@ -251,6 +236,21 @@ def bulk_import_employees(
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
                 reason="Discord ID already exists.",
+            ))
+            continue
+
+        # The SAME earned-role rule create_employee enforces. Without it this
+        # endpoint was a bypass: BulkImportRow.role accepts every value in
+        # RoleStr, so a CSV could create the driver, walker, trainer and captain
+        # accounts the single-create path refuses — silently, one row at a time.
+        #
+        # Skipped rather than failing the whole import: one bad row in a
+        # hundred-row CSV should not discard the ninety-nine good ones, and the
+        # result row names the reason.
+        if row.role in EARNED_ROLES:
+            results.append(BulkImportResult(
+                row=i, status="skipped", name=row.name, email=row.email,
+                reason=EARNED_ROLES[row.role],
             ))
             continue
 
@@ -724,6 +724,36 @@ def delete_employee(
 # dispatch / management / admin / field_supervisor are deliberately absent — those
 # are hiring decisions, not field promotions, and are set at creation or by an admin
 # editing the employee directly.
+# Roles that are EARNED, never assigned at hire. Each has an entry path:
+# walker <- trainee, trainer <- walker (promotion), driver <- driver_trainee.
+#
+# ADR-264 adds `driver`. Before it there was no driver training track, so a
+# direct driver hire was the only option; now it would silently skip the
+# program this codebase just built, and the skip is invisible — the employee
+# simply never appears in any training view.
+EARNED_ROLES: dict[str, str] = {
+    "walker": "Walkers must start as trainees and be assigned the walker role by dispatch.",
+    "trainer": "Trainers can only be promoted from existing walkers by a manager or admin.",
+    "driver": (
+        "Drivers must start as driver trainees (ADR-264) and be promoted after "
+        "completing the training program. Create them as driver_trainee."
+    ),
+    # ADR-256 treats captaincy as EARNED THROUGH EVIDENCE — "this trainer has
+    # run a truck 14 times" beats a manager's judgement, and familiarisation
+    # history is kept precisely as promotion evidence. Captain being
+    # creatable at hire was an omission, not a decision: it let a new hire
+    # hold a truck's route lead with no record of having run one.
+    #
+    # field_supervisor is deliberately NOT here. Nothing promotes into it,
+    # so making it earned would leave it unreachable.
+    "captain": (
+        "Captains are promoted from walkers or trainers once they have run a "
+        "truck (ADR-256). Create them as a trainee, or promote an existing "
+        "walker or trainer."
+    ),
+}
+
+
 ROLE_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "walker":  ("trainer", "captain"),
     "trainer": ("captain", "walker"),
