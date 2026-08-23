@@ -24,6 +24,7 @@ from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
 from app.services.audit import write_audit
+from app.services.company_onboarding import is_onboarding, onboarding_note
 from app.services.email import send_invite_email
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,16 @@ def create_employee(
     No Cognito user is created here — the employee sets their own username and
     password by following the link in the invite email (POST /registration/complete).
     """
-    if employee.role in EARNED_ROLES:
+    # ADR-285 — the rule above is for HIRING. A company migrating its existing
+    # staff is not hiring: their drivers have driven for years, and
+    # `trainee -> walker` is not even a promotion (it happens only by passing the
+    # graduation quiz), so experienced walkers would sit through a five-phase
+    # program before they could work.
+    #
+    # While a company has no active field staff, real roles are accepted. The
+    # first import is what closes the window.
+    onboarding = is_onboarding(db, caller.company_id)
+    if employee.role in EARNED_ROLES and not onboarding:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=EARNED_ROLES[employee.role],
@@ -134,7 +144,7 @@ def create_employee(
     # points of the two parallel tracks (ADR-264 D2). `driver` is no longer one
     # of them — it is now earned, so driver_trainee takes its place rather than
     # being added beside it.
-    if caller.role == "management" and employee.role not in ("driver_trainee", "trainee"):
+    if caller.role == "management" and not onboarding and employee.role not in ("driver_trainee", "trainee"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Management users can only create driver trainee or trainee accounts.",
@@ -188,7 +198,12 @@ def create_employee(
         action_type="employee.create",
         target_table="employees",
         target_id=str(db_employee.id),
-        detail={"name": db_employee.name, "role": db_employee.role, "email": db_employee.email},
+        detail={
+            "name": db_employee.name, "role": db_employee.role, "email": db_employee.email,
+            # ADR-285: without this, a later reader sees a captain who never
+            # earned it and no record of why they were allowed.
+            **({"onboarding_window": True} if onboarding and db_employee.role in EARNED_ROLES else {}),
+        },
     )
     return db_employee
 
@@ -216,6 +231,12 @@ def bulk_import_employees(
         )
 
     now = datetime.now(timezone.utc)
+
+    # ADR-285 — evaluated ONCE, before the loop. Per-row it would close mid-import
+    # the moment the first row landed, so a 40-person migration would import one
+    # employee and reject the other 39. The rows are one migration, not forty
+    # independent hires.
+    onboarding = is_onboarding(db, caller.company_id)
     results: List[BulkImportResult] = []
 
     for i, row in enumerate(rows, start=1):
@@ -247,7 +268,7 @@ def bulk_import_employees(
         # Skipped rather than failing the whole import: one bad row in a
         # hundred-row CSV should not discard the ninety-nine good ones, and the
         # result row names the reason.
-        if row.role in EARNED_ROLES:
+        if row.role in EARNED_ROLES and not onboarding:
             results.append(BulkImportResult(
                 row=i, status="skipped", name=row.name, email=row.email,
                 reason=EARNED_ROLES[row.role],
@@ -311,7 +332,12 @@ def bulk_import_employees(
             action_type="employee.bulk_create",
             target_table="employees",
             target_id=str(db_employee.id),
-            detail={"name": row.name, "role": row.role, "email": str(row.email), "row": i},
+            detail={
+                "name": row.name, "role": row.role, "email": str(row.email), "row": i,
+                # ADR-285 — same trace as the single-create path. A migrated
+                # captain and a wrongly-created one look identical without it.
+                **({"onboarding_window": True} if onboarding and row.role in EARNED_ROLES else {}),
+            },
         )
         results.append(BulkImportResult(
             row=i, status="created", name=row.name, email=row.email,

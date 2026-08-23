@@ -49,7 +49,7 @@ class TestEarnedRolesCannotBeAssignedAtHire:
         assert "field_supervisor" not in employees.EARNED_ROLES
 
     def test_the_check_is_one_membership_test(self):
-        assert "if employee.role in EARNED_ROLES:" in SRC
+        assert "if employee.role in EARNED_ROLES and not onboarding:" in SRC
 
     def test_each_refusal_names_the_entry_path(self):
         """'You cannot do that' without 'do this instead' sends the manager to
@@ -110,7 +110,7 @@ class TestBulkImportEnforcesTheSameRule:
     BULK = inspect.getsource(employees.bulk_import_employees)
 
     def test_it_checks_the_earned_roles(self):
-        assert "if row.role in EARNED_ROLES:" in self.BULK
+        assert "if row.role in EARNED_ROLES and not onboarding:" in self.BULK
 
     def test_it_uses_the_shared_constant_not_a_copy(self):
         """A duplicated list drifts the first time one is edited and not the
@@ -121,18 +121,18 @@ class TestBulkImportEnforcesTheSameRule:
     def test_a_bad_row_is_skipped_not_fatal(self):
         """One bad row in a hundred-row CSV must not discard the ninety-nine
         good ones."""
-        i = self.BULK.index("if row.role in EARNED_ROLES:")
+        i = self.BULK.index("if row.role in EARNED_ROLES and not onboarding:")
         block = self.BULK[i : i + 400]
         assert 'status="skipped"' in block
         assert "continue" in block
         assert "raise" not in block
 
     def test_the_skip_reason_names_the_entry_path(self):
-        i = self.BULK.index("if row.role in EARNED_ROLES:")
+        i = self.BULK.index("if row.role in EARNED_ROLES and not onboarding:")
         assert "reason=EARNED_ROLES[row.role]" in self.BULK[i : i + 400]
 
     def test_the_check_precedes_the_insert(self):
-        assert self.BULK.index("if row.role in EARNED_ROLES:") < self.BULK.index("db_employee = Employee(")
+        assert self.BULK.index("if row.role in EARNED_ROLES and not onboarding:") < self.BULK.index("db_employee = Employee(")
 
 
 class TestEveryEarnedRoleStaysReachable:
