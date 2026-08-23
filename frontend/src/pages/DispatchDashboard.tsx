@@ -1630,69 +1630,31 @@ function CurrentAssignments() {
                    onDragOver={(e) => e.preventDefault()}
                    onDrop={(e) => handleDropToTruck(e, truckId)}
                  >
-                   <div className="flex items-center justify-between mb-3 pb-2 border-b border-border">
-                     <div className="flex items-center gap-2">
-                       <div className={`w-8 h-8 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
+                   {/* Header wraps as a unit: identity on one line, actions
+                       dropping to their own full-width line when the card is
+                       narrow. Previously one non-wrapping row — at the 1- and
+                       2-column breakpoints "Publish Hub" broke mid-phrase and
+                       the count pill collapsed to a vertical "0 / 3". */}
+                   <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 mb-3 pb-2 border-b border-border">
+                     <div className="flex items-center gap-2 min-w-0">
+                       <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
                          <Truck className={`w-4 h-4 ${isHub ? 'text-primary' : 'text-primary'}`} />
                        </div>
-                       <div>
-                         <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide">
+                       <div className="min-w-0">
+                         <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
                            {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
                          </h3>
                          {isHub && (
                            <span className="text-[9px] font-bold uppercase tracking-widest text-primary">Hub</span>
                          )}
-                         {/* Dock zone (ADR-274 D17) — the bay this truck collects
-                             from. A value inherited from the truck's last run
-                             renders muted until dispatch confirms or edits it;
-                             publish applies it either way. */}
-                         {(() => {
-                           const d = dockStateFor(truckId);
-                           const listId = `dock-opts-${truckId}`;
-                           return (
-                             <div className="flex items-center gap-1 mt-0.5">
-                               <span className="text-[9px] uppercase tracking-wider text-muted-foreground">Dock</span>
-                               <input
-                                 list={listId}
-                                 value={d.value}
-                                 placeholder="set one…"
-                                 maxLength={50}
-                                 disabled={dockSaving !== null}
-                                 onChange={e => setDockDrafts(prev => ({ ...prev, [truckId]: e.target.value }))}
-                                 onBlur={e => {
-                                   const v = e.target.value.trim();
-                                   // Save an edited value, and also a suggestion the
-                                   // dispatcher tabbed through — touching the field is
-                                   // the confirmation.
-                                   if (truckId in dockDrafts || (d.suggested && v)) saveDockZone(truckId, v);
-                                 }}
-                                 onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                                 className={`w-20 px-1 py-0.5 text-[11px] font-mono rounded border bg-transparent
-                                   focus:outline-none focus:ring-1 focus:ring-primary
-                                   ${d.suggested && d.value
-                                     ? 'border-dashed border-border text-muted-foreground italic'
-                                     : 'border-border text-foreground'}`}
-                                 title={d.suggested && d.value
-                                   ? `Suggested from this truck's last run — confirm or change it`
-                                   : 'Bay this truck collects from'}
-                               />
-                               <datalist id={listId}>
-                                 {(dockSuggest[truckId]?.recent ?? []).map(z => <option key={z} value={z} />)}
-                               </datalist>
-                               {dockSaving === truckId && (
-                                 <div className="w-2.5 h-2.5 border border-primary border-t-transparent rounded-full animate-spin" />
-                               )}
-                             </div>
-                           );
-                         })()}
                        </div>
                      </div>
-                     <div className="flex items-center gap-2">
+                     <div className="flex items-center gap-2 shrink-0 ml-auto">
                        {isHub && (
                          <button
                            onClick={() => handlePublishHub(truckId)}
                            disabled={publishingHubTruckId === truckId || (crew as any[]).length === 0}
-                           className="flex items-center gap-1 text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                            title={crew.length === 0 ? 'Add staff before publishing' : 'Publish hub — notify all assigned staff'}
                          >
                            {publishingHubTruckId === truckId
@@ -1715,7 +1677,7 @@ function CurrentAssignments() {
                                .find((a: any) => a.truck_id === truckId)?.status !== 'planned',
                            )}
                            disabled={removingHubTruckId === truckId}
-                           className="flex items-center gap-1 text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-danger/10 text-danger hover:bg-danger/25 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                            title="Remove this hub assignment"
                          >
                            {removingHubTruckId === truckId
@@ -1724,11 +1686,75 @@ function CurrentAssignments() {
                            Remove
                          </button>
                        )}
-                       <div className={`px-2 py-1 text-xs font-semibold rounded-full ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
+                       {/* whitespace-nowrap + shrink-0: at the 1-column
+                           breakpoint this collapsed to a vertical "0 / 3"
+                           stack, which reads as three separate values. */}
+                       <div className={`shrink-0 whitespace-nowrap px-2 py-1 text-xs font-semibold rounded-full tabular-nums ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
                          {(crew as any[]).length} / {maxCrewSize}
                        </div>
                      </div>
                    </div>
+
+                   {/* Dock zone (ADR-274 D17) — the bay this truck collects
+                       from. Its OWN row, not wedged into the identity block:
+                       it is an editable, savable field and was rendered at
+                       w-20 / 11px beside a 9px label, smaller than the text
+                       describing it, competing with the action buttons for the
+                       header's horizontal space.
+                       A value inherited from the truck's last run renders muted
+                       until dispatch confirms or edits it; publish applies it
+                       either way. */}
+                   {(() => {
+                     const d = dockStateFor(truckId);
+                     const listId = `dock-opts-${truckId}`;
+                     return (
+                       <div className="flex items-center gap-2 mb-3">
+                         <label
+                           htmlFor={`dock-${truckId}`}
+                           className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0"
+                         >
+                           Dock
+                         </label>
+                         <div className="relative flex-1 min-w-0">
+                           <input
+                             id={`dock-${truckId}`}
+                             list={listId}
+                             value={d.value}
+                             placeholder="set one…"
+                             maxLength={50}
+                             disabled={dockSaving !== null}
+                             onChange={e => setDockDrafts(prev => ({ ...prev, [truckId]: e.target.value }))}
+                             onBlur={e => {
+                               const v = e.target.value.trim();
+                               // Save an edited value, and also a suggestion the
+                               // dispatcher tabbed through — touching the field is
+                               // the confirmation.
+                               if (truckId in dockDrafts || (d.suggested && v)) saveDockZone(truckId, v);
+                             }}
+                             onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                             className={`w-full h-8 pl-2.5 pr-7 text-xs font-mono rounded-lg border bg-background
+                               transition-colors placeholder:text-muted-foreground
+                               focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring
+                               disabled:opacity-60
+                               ${d.suggested && d.value
+                                 ? 'border-dashed border-primary/40 text-muted-foreground italic'
+                                 : 'border-border text-foreground'}`}
+                             title={d.suggested && d.value
+                               ? `Suggested from this truck's last run — confirm or change it`
+                               : 'Bay this truck collects from'}
+                           />
+                           {/* Inside the field, so it cannot be pushed onto a
+                               second line the way a sibling flex child would. */}
+                           {dockSaving === truckId && (
+                             <div className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin" />
+                           )}
+                         </div>
+                         <datalist id={listId}>
+                           {(dockSuggest[truckId]?.recent ?? []).map(z => <option key={z} value={z} />)}
+                         </datalist>
+                       </div>
+                     );
+                   })()}
 
                    <div className="space-y-2 flex-1 relative">
                      {(() => {
