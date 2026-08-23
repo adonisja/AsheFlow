@@ -1,0 +1,280 @@
+"""ADR-264 — placing driver trainees, and refusing to place them.
+
+THE FAILURES THIS GUARDS AGAINST
+--------------------------------
+1. A trainee paired with a driver who has never supervised them — the system
+   inventing a supervising relationship (operator, 2026-08-22).
+2. A trainee placed on a truck while unpaired, which is one dispatch edit away
+   from an unapproved pairing.
+3. A trainee silently dropped when no supervisor is available. Held out is only
+   safe if it is VISIBLE; without the warning it is indistinguishable from not
+   being scheduled.
+4. A solo trainee produced automatically. Solo is a dispatch approval (D7).
+"""
+import inspect
+
+import pytest
+
+from app.services import assign_driver_trainees as mod
+from app.services.assign_driver_trainees import assign_driver_trainees
+
+SRC = inspect.getsource(assign_driver_trainees)
+
+
+class _Emp:
+    def __init__(self, eid, name="T", role="driver", is_active=True):
+        self.id, self.name, self.role, self.is_active = eid, name, role, is_active
+
+
+class _DB:
+    """Returns supervisor history rows, then placed-driver Employee rows."""
+
+    def __init__(self, history=(), employees=()):
+        self.history, self.employees = list(history), list(employees)
+        self._mode = None
+
+    def query(self, *cols):
+        # driver_supervision queries TrainingRecord columns; this module
+        # queries Employee. Distinguish by what was asked for.
+        self._mode = "emp" if any(getattr(c, "class_", None) is not None
+                                  and getattr(c, "key", "") == "id" for c in cols) else None
+        first = cols[0] if cols else None
+        self._mode = "emp" if getattr(first, "__name__", "") == "Employee" else "hist"
+        return self
+
+    def filter(self, *a, **k): return self
+    def order_by(self, *a, **k): return self
+    def all(self): return self.employees if self._mode == "emp" else self.history
+
+
+def _crews(driver_id=None):
+    crew = [{"id": driver_id, "role": "driver"}] if driver_id else []
+    return {"truck-1": crew}
+
+
+class TestPairing:
+    def test_a_prior_supervisor_on_a_truck_gets_the_trainee(self):
+        crews = _crews("d1")
+        db = _DB(history=[("d1", "2026-08-21")], employees=[_Emp("d1")])
+        warnings = assign_driver_trainees(
+            [_Emp("t1", name="Trainee")], crews, db,
+            company_id="c1", target_date="2026-08-22",
+        )
+        assert warnings == []
+        placed = [m for m in crews["truck-1"] if m["role"] == "driver_trainee"]
+        assert len(placed) == 1
+        assert placed[0]["paired_trainer_id"] == "d1"
+        assert placed[0]["id"] == "t1"
+
+    def test_the_trainee_lands_on_their_supervisors_truck(self):
+        crews = {"truck-1": [{"id": "d9", "role": "driver"}],
+                 "truck-2": [{"id": "d1", "role": "driver"}]}
+        db = _DB(history=[("d1", "2026-08-21")], employees=[_Emp("d1"), _Emp("d9")])
+        assign_driver_trainees([_Emp("t1")], crews, db,
+                               company_id="c1", target_date="2026-08-22")
+        assert any(m["role"] == "driver_trainee" for m in crews["truck-2"])
+        assert not any(m["role"] == "driver_trainee" for m in crews["truck-1"])
+
+
+class TestHeldOutNotPlaced:
+    def test_first_day_is_not_placed(self):
+        """No history — the system must not pick a driver, even with one right
+        there."""
+        crews = _crews("d1")
+        db = _DB(history=[], employees=[_Emp("d1")])
+        warnings = assign_driver_trainees([_Emp("t1", name="Newbie")], crews, db,
+                                          company_id="c1", target_date="2026-08-22")
+        assert not any(m["role"] == "driver_trainee" for m in crews["truck-1"])
+        assert len(warnings) == 1
+        assert warnings[0]["reason"] == "first_day"
+
+    def test_no_prior_supervisor_on_dispatch_is_not_placed(self):
+        crews = _crews("d9")
+        db = _DB(history=[("d1", "2026-08-21")], employees=[_Emp("d9")])
+        warnings = assign_driver_trainees([_Emp("t1")], crews, db,
+                                          company_id="c1", target_date="2026-08-22")
+        assert not any(m["role"] == "driver_trainee" for m in crews["truck-1"])
+        assert warnings[0]["reason"] == "unavailable"
+
+    def test_the_trainee_is_never_dropped_without_a_warning(self):
+        """Held out is only safe if it is visible. A silent skip is
+        indistinguishable from not being scheduled."""
+        crews = _crews("d9")
+        db = _DB(history=[], employees=[_Emp("d9")])
+        warnings = assign_driver_trainees([_Emp("t1", name="Ghost")], crews, db,
+                                          company_id="c1", target_date="2026-08-22")
+        assert len(warnings) == 1
+        assert "Ghost" in warnings[0]["message"]
+        assert warnings[0]["employee_id"] == "t1"
+
+    def test_the_message_names_the_two_ways_out(self):
+        crews = _crews("d9")
+        db = _DB(history=[], employees=[_Emp("d9")])
+        w = assign_driver_trainees([_Emp("t1")], crews, db,
+                                   company_id="c1", target_date="2026-08-22")[0]
+        assert "Pair them with a driver" in w["message"]
+        assert "solo" in w["message"]
+
+
+class TestNeverSolo:
+    def test_no_branch_places_a_trainee_without_a_supervisor(self):
+        """The pass produces paired or unpaired-and-alerting, never solo."""
+        # Ordering, not a fixed-size window: the guard sits ~2.4k chars before
+        # the placement, and a magic offset would break on any edit between
+        # them while proving nothing extra.
+        i_guard = SRC.index("if supervisor_id is None:")
+        i_place = SRC.index('"role": "driver_trainee",')
+        assert i_guard < i_place, (
+            "placement must be unreachable without a resolved supervisor"
+        )
+        assert "continue" in SRC[i_guard:i_place], "the guard must skip, not fall through"
+        assert "paired_trainer_id" in SRC[i_place : i_place + 200]
+
+    def test_it_never_calls_can_supervise_directly_to_pick(self):
+        """Picking any eligible driver is the thing continuity forbids."""
+        assert "eligible_supervisors(" not in SRC
+
+
+class TestWarningShape:
+    def test_every_emitted_warning_carries_a_type(self):
+        """run_dispatch reshapes warnings: a dict with employee_id but NO type
+        is rewritten as a ban_conflict, message and all. Asserting the string
+        appears in SOURCE is not enough — there are two warning dicts here, and
+        dropping the key from one left the other's literal in place. Assert on
+        the emitted objects instead.
+
+        Planted and confirmed: removing the key from the first dict passed the
+        source-level check and fails this one."""
+        crews = _crews("d9")
+        db = _DB(history=[], employees=[_Emp("d9")])
+        emitted = assign_driver_trainees([_Emp("t1")], crews, db,
+                                         company_id="c1", target_date="2026-08-22")
+        assert emitted, "expected an unpaired warning"
+        for w in emitted:
+            assert w.get("type") == "driver_trainee_unpaired", (
+                f"warning without a type is rewritten as a ban_conflict: {w}"
+            )
+            assert "employee_id" in w
+
+    def test_the_unavailable_warning_also_carries_a_type(self):
+        """The second emission path — a different dict literal."""
+        crews = _crews("d9")
+        db = _DB(history=[("d1", "2026-08-21")], employees=[_Emp("d9")])
+        emitted = assign_driver_trainees([_Emp("t1")], crews, db,
+                                         company_id="c1", target_date="2026-08-22")
+        assert [w["type"] for w in emitted] == ["driver_trainee_unpaired"]
+
+    def test_the_reason_distinguishes_first_day_from_unavailable(self):
+        """Same instruction to the caller, different sentence to the human.
+
+        Asserted on the emitted warnings: the message is built by a shared
+        helper now, so a source-level check would only prove the call exists."""
+        from app.services.assign_driver_trainees import unpaired_warning
+
+        first = unpaired_warning("t1", "Newbie", "first_day")
+        gone = unpaired_warning("t2", "Vet", "unavailable")
+        assert "first supervised day" in first["message"]
+        assert "none of the drivers who have supervised" in gone["message"]
+        assert first["reason"] == "first_day" and gone["reason"] == "unavailable"
+
+    def test_both_emission_paths_use_the_same_wording(self):
+        """The dispatch RUN and the dispatch READ both report this condition.
+        Different wording for the same problem reads as two problems."""
+        import inspect
+
+        from app.routers import dispatch as dispatch_router
+        from app.services import assign_driver_trainees as svc
+
+        assert "unpaired_warning(" in inspect.getsource(svc.assign_driver_trainees)
+        assert "unpaired_warning(" in inspect.getsource(dispatch_router.get_daily_dispatch)
+
+
+class TestDegenerateInputs:
+    def test_no_trainees_returns_no_warnings(self):
+        crews = _crews("d1")
+        assert assign_driver_trainees([], crews, _DB(), company_id="c1",
+                                      target_date="2026-08-22") == []
+
+    def test_no_drivers_placed_means_everyone_is_held_out(self):
+        crews = {"truck-1": []}
+        db = _DB(history=[("d1", "2026-08-21")], employees=[])
+        warnings = assign_driver_trainees([_Emp("t1")], crews, db,
+                                          company_id="c1", target_date="2026-08-22")
+        assert len(warnings) == 1
+        assert crews["truck-1"] == []
+
+
+class TestTenancy:
+    def test_the_candidate_query_is_company_scoped(self):
+        assert "Employee.company_id == company_id" in SRC
+
+
+class TestUnpairedTraineesSurviveARefresh:
+    """ADR-264 — held out is only safe if VISIBLE.
+
+    The run-time warning lives in the POST response only; GET /dispatch/{date}
+    returned `"warnings": []`. So a held-out trainee vanished from the day on
+    the first page refresh — present in neither the crew view (no
+    AssignmentMember row) nor the warnings panel.
+    """
+
+    def test_the_read_path_derives_rather_than_stores(self):
+        """A stored warning would have to be revoked when dispatch pairs them,
+        and a warning nobody revoked is worse than none."""
+        import inspect
+
+        from app.services.assign_driver_trainees import unpaired_driver_trainees
+
+        src = inspect.getsource(unpaired_driver_trainees)
+        assert "get_available_pool" in src
+        assert "AssignmentMember.employee_id" in src
+
+    def test_a_placed_trainee_is_not_reported(self):
+        """The moment an AssignmentMember row exists they drop out, with
+        nothing to clean up."""
+        import inspect
+
+        from app.services.assign_driver_trainees import unpaired_driver_trainees
+
+        src = inspect.getsource(unpaired_driver_trainees)
+        assert "if trainee.id in placed_ids:" in src
+        assert "continue" in src
+
+    def test_the_dispatch_get_returns_them(self):
+        import inspect
+
+        from app.routers import dispatch
+
+        src = inspect.getsource(dispatch.get_daily_dispatch)
+        assert "unpaired_driver_trainees(" in src
+        assert '"unpaired_driver_trainees": unpaired' in src
+
+    def test_the_get_no_longer_hardcodes_empty_warnings(self):
+        """THE bug: `"warnings": []` discarded everything the run reported."""
+        import inspect
+
+        from app.routers import dispatch
+
+        # Comments in this function QUOTE the old literal while explaining the
+        # bug, so a raw substring check fails on the documentation. Strip
+        # comments first — the same trap that has bitten three source-scanning
+        # tests in this codebase.
+        src = inspect.getsource(dispatch.get_daily_dispatch)
+        code = "\n".join(
+            ln.split("#")[0] for ln in src.splitlines()
+            if not ln.lstrip().startswith("#")
+        )
+        assert '"warnings": []' not in code, (
+            "an early-return path still discards warnings"
+        )
+        assert '"warnings": read_warnings' in code
+
+    def test_the_derivation_is_company_scoped(self):
+        """ADR-115 dim 1 — both the pool read and the placed-row lookup."""
+        import inspect
+
+        from app.services.assign_driver_trainees import unpaired_driver_trainees
+
+        src = inspect.getsource(unpaired_driver_trainees)
+        assert "company_id=company_id" in src
+        assert src.count("company_id == company_id") == 2

@@ -43,6 +43,13 @@ REASSIGN_ONLY = {
     # appended to. A curriculum item's track membership is restated from the
     # seed data as a unit, so there is no in-place-mutation path to lose.
     "TrainingCurriculum.roles":             "seed-managed; assigned as a whole list",
+    # ADR-264 D10. Same shape as TrainingCurriculum.roles above: a question's
+    # TRACK membership is a property of the question, restated as a unit rather
+    # than appended to. Verified at authoring time: no write path mutates a
+    # roles list in place anywhere in app/ (`grep -rn "\.roles\.append"` is
+    # empty), and quiz templates have no in-app create/update endpoint yet — if
+    # one is added, assign the whole list.
+    "GraduationQuizTemplate.roles":         "track membership; assigned as a whole list",
 
     # ADR-273 sort telemetry. Every one of these is a histogram computed in a
     # single pass (compute_sort_metrics / roll_up_company_day) and assigned as a

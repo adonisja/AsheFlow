@@ -61,9 +61,14 @@ type Assignment = {
 
 const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
+  // ADR-264 — a driver trainee rides on a truck crew, so they surface here.
+  // Without an entry the `?? role` fallback renders "driver_trainee".
+  captain: 'Captain', driver_trainee: 'Driver Trainee',
 };
 
-const ROLE_ORDER = ['driver', 'trainer', 'trainee', 'walker'];
+// ADR-264: driver_trainee sits next to driver — they are the day's main
+// worker with the driver supervising, not a walker-side role.
+const ROLE_ORDER = ['driver', 'driver_trainee', 'captain', 'trainer', 'trainee', 'walker'];
 
 // Dispatch phase → Badge tone + label (ADR-207; themed via the Badge primitive).
 type BadgeTone = 'success' | 'warning' | 'danger' | 'info' | 'primary' | 'gold' | 'teal' | 'slate' | 'neutral' | 'muted';
@@ -145,13 +150,22 @@ export default function TodayAssignmentScreen() {
           }
 
           // Pairing: trainee → their trainer's name; trainer → their trainees.
+          // ADR-264 adds the driver side: driver_trainee → their supervising
+          // DRIVER, and a driver → whoever they are supervising. Both use the
+          // same paired_trainer_id column, so the only difference is which
+          // roles to match.
           const myEntry = myCrew.find((m) => m.employee_id === eid);
-          if (myEntry?.role === 'trainee' && myEntry.paired_trainer_id) {
-            const trainer = myCrew.find((m) => m.employee_id === myEntry.paired_trainer_id);
-            if (trainer) pairedNames.push(trainer.name);
-          } else if (myEntry?.role === 'trainer') {
+          const isSupervisedTrainee =
+            myEntry?.role === 'trainee' || myEntry?.role === 'driver_trainee';
+          if (isSupervisedTrainee && myEntry?.paired_trainer_id) {
+            const supervisor = myCrew.find((m) => m.employee_id === myEntry.paired_trainer_id);
+            if (supervisor) pairedNames.push(supervisor.name);
+          } else if (myEntry?.role === 'trainer' || myEntry?.role === 'driver') {
             for (const m of myCrew) {
-              if (m.role === 'trainee' && m.paired_trainer_id === eid) pairedNames.push(m.name);
+              if (
+                (m.role === 'trainee' || m.role === 'driver_trainee') &&
+                m.paired_trainer_id === eid
+              ) pairedNames.push(m.name);
             }
           }
         }
@@ -316,7 +330,13 @@ export default function TodayAssignmentScreen() {
             {assignment.pairedNames.length > 0 && (
               <View style={{ flex: 1 }}>
                 <Text style={s.myRoleLabel}>
-                  {assignment.role === 'trainer' ? 'Your Trainee' : 'Your Trainer'}
+                  {/* ADR-264: a driver trainee is supervised by a DRIVER, not a
+                      trainer, and a driver supervising one is not a "trainer"
+                      either — that word means walker trainer everywhere else. */}
+                  {assignment.role === 'trainer' ? 'Your Trainee'
+                    : assignment.role === 'driver' ? 'Your Driver Trainee'
+                    : assignment.role === 'driver_trainee' ? 'Your Supervising Driver'
+                    : 'Your Trainer'}
                 </Text>
                 {assignment.pairedNames.map(n => (
                   <Text key={n} style={s.pairedName}>{n}</Text>

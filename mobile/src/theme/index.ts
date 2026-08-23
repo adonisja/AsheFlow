@@ -302,11 +302,17 @@ export function getRoleLight(role: FieldRole, colors: ThemeColors): string {
 }
 
 export const ROLE_LABELS: Record<string, string> = {
-  driver:     'Driver',
-  walker:     'Walker',
-  trainer:    'Trainer',
-  trainee:    'Trainee',
-  admin:      'Admin',
-  management: 'Management',
-  dispatch:   'Dispatch',
+  driver:           'Driver',
+  walker:           'Walker',
+  trainer:          'Trainer',
+  trainee:          'Trainee',
+  admin:            'Admin',
+  management:       'Management',
+  dispatch:         'Dispatch',
+  // ADR-256 / ADR-264. Callers do `ROLE_LABELS[r] ?? r`, so a missing entry
+  // renders the raw enum — a driver trainee saw the literal
+  // "driver_trainee", underscore and all.
+  captain:          'Captain',
+  field_supervisor: 'Field Supervisor',
+  driver_trainee:   'Driver Trainee',
 };

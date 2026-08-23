@@ -40,6 +40,9 @@ const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday',
 
 const ROLE_LABELS: Record<string, string> = {
   driver: 'Driver', trainer: 'Trainer', trainee: 'Trainee', walker: 'Walker',
+  // ADR-264 — a driver trainee rides on a truck crew, so they surface here.
+  // Without an entry the `?? role` fallback renders "driver_trainee".
+  captain: 'Captain', driver_trainee: 'Driver Trainee',
 };
 const SCR_TYPE_LABELS: Record<string, string> = {
   add_day: 'Add Work Day', drop_day: 'Drop Work Day', full_rework: 'Full Rework',

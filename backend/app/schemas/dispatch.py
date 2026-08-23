@@ -14,7 +14,10 @@ class ManualAssignmentCreate(BaseModel):
     """Schema for manually assigning an employee to a truck for a specific date."""
     employee_id: UUID = Field(..., description="UUID of the employee to assign")
     truck_id: UUID = Field(..., description="UUID of the truck")
-    role: Literal["driver", "trainer", "trainee", "walker", "captain"] = Field(..., description="Role for the assignment")
+    # ADR-264 adds driver_trainee. This Literal is what the assign endpoint
+    # actually enforces (constants.ASSIGNABLE_ROLES has no importers), so
+    # omitting it here 422s the drag that pairs a held-out driver trainee.
+    role: Literal["driver", "trainer", "trainee", "walker", "captain", "driver_trainee"] = Field(..., description="Role for the assignment")
     date: datetime.date = Field(..., description="Date of the assignment")
 
 class ManualAssignmentUpdate(BaseModel):
@@ -22,7 +25,7 @@ class ManualAssignmentUpdate(BaseModel):
     employee_id: UUID = Field(..., description="UUID of the employee to move")
     date: datetime.date = Field(..., description="Date of the assignment being modified")
     new_truck_id: UUID = Field(..., description="UUID of the destination truck")
-    new_role: Optional[Literal["driver", "trainer", "trainee", "walker", "captain"]] = Field(None, description="Optional new role for the assignment")
+    new_role: Optional[Literal["driver", "trainer", "trainee", "walker", "captain", "driver_trainee"]] = Field(None, description="Optional new role for the assignment")
 
 
 class TraineePairingUpdate(BaseModel):
