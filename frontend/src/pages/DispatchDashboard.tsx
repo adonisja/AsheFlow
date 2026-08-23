@@ -237,7 +237,9 @@ function CurrentAssignments() {
         })
         .catch(() => {/* no history yet — dispatch types the bay */});
       const hasCrews = Object.keys(res.data.assigned_crews).length > 0;
-      const hasStatus = !!res.data.workflow_status;
+      // ADR-286: "none" is TRUTHY, and it means dispatch has NOT run. A bare
+      // `!!workflow_status` would read a hub-only day as "dispatch ran".
+      const hasStatus = !!res.data.workflow_status && res.data.workflow_status !== 'none';
       setDispatchData((!hasCrews && !hasStatus) ? null : res.data);
       return res.data.workflow_status === 'finalized';
     } catch {
@@ -569,8 +571,13 @@ function CurrentAssignments() {
       // Only null out dispatchData if there are genuinely no assignments AND no
       // workflow_status — an empty crew dict with a status means dispatch ran
       // and the button must stay disabled.
+      //
+      // ADR-286: except "none", which is truthy and means the opposite. A day
+      // holding only a hub reports "none", and treating that as "dispatch ran"
+      // is the bug this ADR removed on the backend arriving by a second route.
       const hasCrews = Object.keys(response.data.assigned_crews).length > 0;
-      const hasStatus = !!response.data.workflow_status;
+      const hasStatus =
+        !!response.data.workflow_status && response.data.workflow_status !== 'none';
       if (!hasCrews && !hasStatus) {
         setDispatchData(null);
       } else {
@@ -1017,6 +1024,12 @@ function CurrentAssignments() {
   // Workflow step derived from durable backend status — never from local flag
   type WorkflowStep = 'none' | 'dispatched' | 'published' | 'finalized';
   const workflowStep: WorkflowStep = !dispatchData
+    ? 'none'
+    // ADR-286 — the backend now says 'none' explicitly when no NON-HUB
+    // assignment exists. Without this branch the value falls through to the
+    // `: 'dispatched'` default below, which is the very bug being fixed: a day
+    // with only a hub would still disable Run Dispatch.
+    : dispatchData.workflow_status === 'none'
     ? 'none'
     : dispatchData.workflow_status === 'finalized'
     ? 'finalized'
