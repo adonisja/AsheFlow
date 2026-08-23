@@ -1025,9 +1025,11 @@ function CurrentAssignments() {
     (criticalDecline || declinedIds.length >= 3 || understaffed) && emergencyPool.length > 0;
 
   const unassigned = getUnassignedEmployees();
-  const maxCrewSize = dispatchData?.assigned_crews
-    ? Object.values(dispatchData.assigned_crews).reduce((max: number, crew: any) => Math.max(max, crew.length), 0) || 3
-    : 3;
+  /* `maxCrewSize` is gone. It was the largest crew on ANY truck today, falling
+     back to 3 — not a capacity. There is no capacity column on Truck and no
+     crew-size config, so `20 / 20` in green meant "ties today's biggest crew",
+     not "full", and the denominator moved as crews changed. The card now shows
+     the count alone: what is known, with nothing invented. */
 
   // Workflow step derived from durable backend status — never from local flag
   type WorkflowStep = 'none' | 'dispatched' | 'published' | 'finalized';
@@ -1656,28 +1658,36 @@ function CurrentAssignments() {
                        <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${isHub ? 'bg-primary/20' : 'bg-primary/10'}`}>
                          <Truck className={`w-4 h-4 ${isHub ? 'text-primary' : 'text-primary'}`} />
                        </div>
-                       {/* Name and HUB badge on ONE line. The badge used to sit
-                           on its own line beneath the name, which made every hub
-                           card a row taller than its neighbours before any crew
-                           appeared. */}
-                       <div className="flex items-baseline gap-1.5 min-w-0">
-                         <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
-                           {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
-                         </h3>
-                         {isHub && (
-                           <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                             Hub
-                           </span>
-                         )}
-                       </div>
+                       <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
+                         {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
+                       </h3>
                      </div>
+                     {/* Right-hand group: crew count, then the HUB badge.
+                         The badge sat next to the name, but the name is
+                         left-justified in the row and the badge belongs with
+                         the other card-level metadata rather than trailing the
+                         title. */}
                      <div className="flex items-center gap-2 shrink-0 ml-auto">
-                       {/* whitespace-nowrap + shrink-0: at the 1-column
-                           breakpoint this collapsed to a vertical "0 / 3"
-                           stack, which reads as three separate values. */}
-                       <div className={`shrink-0 whitespace-nowrap px-2 py-1 text-xs font-semibold rounded-full tabular-nums ${(crew as any[]).length >= maxCrewSize ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
-                         {(crew as any[]).length} / {maxCrewSize}
+                       {/* Crew COUNT, not a ratio — see the maxCrewSize note
+                           above. Colour still carries the one fact that is
+                           real: an empty crew needs attention.
+                           whitespace-nowrap + shrink-0 because at the 1-column
+                           breakpoint this used to wrap into a vertical stack. */}
+                       <div
+                         className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-full tabular-nums ${
+                           (crew as any[]).length === 0
+                             ? 'bg-warning/20 text-warning'
+                             : 'bg-success/20 text-success'}`}
+                         title={`${(crew as any[]).length} crew member${(crew as any[]).length === 1 ? '' : 's'} on this truck`}
+                       >
+                         <Users className="w-3 h-3" />
+                         {(crew as any[]).length}
                        </div>
+                       {isHub && (
+                         <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                           Hub
+                         </span>
+                       )}
                      </div>
                    </div>
 
