@@ -193,6 +193,13 @@ class AsheFlowBot(commands.Bot):
             return
         await dispatch_cog.hub_finalize_truck(payload)
 
+    async def trigger_crew_embed_update(self, payload: dict) -> None:
+        dispatch_cog = self.cogs.get("Dispatch")
+        if dispatch_cog is None:
+            logger.error("Dispatch cog not loaded — cannot update crew embed.")
+            return
+        await dispatch_cog.update_crew_embed(payload)
+
     async def trigger_swap(
         self,
         company_id: str,
@@ -590,11 +597,36 @@ async def handle_hub_finalize(request: web.Request) -> web.Response:
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
+async def handle_crew_embed_update(request: web.Request) -> web.Response:
+    """POST /internal/crew-embed-update  (ADR-295 D3)
+
+    body: {
+        "company_id", "date", "truck_id", "truck_name",
+        "discord_channel_id", "message_id": int | null,
+        "crew": [ ... ],                 # roster AS IT NOW STANDS
+        "change": {"verb": "added"|"removed", "employee_name": "..."}
+    }
+
+    Edits the truck's posted crew embed in place and posts a one-line notice
+    saying it changed.
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data = await request.json()
+    if not data.get("company_id") or not data.get("date"):
+        return web.Response(status=400, text="Missing company_id or date")
+
+    asyncio.create_task(bot.trigger_crew_embed_update(data))
+    return web.json_response({"status": "queued"})
+
+
 async def start_webhook_server() -> None:
     app = web.Application()
     app.router.add_post("/internal/publish",          handle_publish)
     app.router.add_post("/internal/finalize",         handle_finalize)
     app.router.add_post("/internal/hub-finalize",     handle_hub_finalize)
+    app.router.add_post("/internal/crew-embed-update", handle_crew_embed_update)
     app.router.add_post("/internal/role-sync",        handle_role_sync)
     app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)

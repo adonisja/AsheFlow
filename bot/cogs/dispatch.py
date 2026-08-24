@@ -590,7 +590,21 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
             crew_embed = _build_truck_channel_embed(truck_name, confirmed_crew, dispatch_date)
             try:
-                await truck_channel.send(embed=crew_embed)
+                crew_msg = await truck_channel.send(embed=crew_embed)
+                # ADR-295 D2 — keep the receipt so a later crew change can EDIT
+                # this message instead of leaving a stale roster standing.
+                # Non-fatal on its own: if the id never lands, the crew change
+                # falls back to posting an ADR-288 correction, which is exactly
+                # the right degradation. Failing the finalize over a bookkeeping
+                # call would be far worse than losing the ability to edit.
+                try:
+                    await api.record_crew_embed(dispatch_date, truck_id, crew_msg.id)
+                except Exception as e:
+                    logger.warning(
+                        "finalize: could not record crew embed id for %s — "
+                        "later crew changes will post corrections instead: %s",
+                        truck_name, e,
+                    )
             except Exception as e:
                 channel_errors.append(f"{truck_name}: could not post crew card — {e}")
 
@@ -701,6 +715,119 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # ------------------------------------------------------------------
     # HUB FINALIZE — post crew embed to a single hub truck channel
     # ------------------------------------------------------------------
+
+    async def update_crew_embed(self, payload: dict) -> None:
+        """Edit a truck's posted crew embed in place, then say so in the channel.
+
+        ADR-295 D3. The edit makes the roster true again; the notice is what
+        tells the channel it changed. An edit ALONE rewrites history silently —
+        a driver who read the crew at 06:00 would get no signal — which is the
+        one honest advantage the ADR-288 correction had. Doing both keeps that
+        signal without leaving a wrong roster standing.
+
+        payload: {
+          company_id, date, truck_id, truck_name, discord_channel_id,
+          message_id: int | None,   # None -> nothing to edit, post fresh
+          crew: [ ... ],            # the roster AS IT NOW STANDS
+          change: {"verb": "added" | "removed", "employee_name": "..."},
+        }
+        """
+        company_id     = payload.get("company_id")
+        dispatch_date  = payload.get("date")
+        truck_id       = payload.get("truck_id")
+        truck_name     = payload.get("truck_name", "Truck")
+        channel_id_str = payload.get("discord_channel_id")
+        message_id     = payload.get("message_id")
+        crew: list[dict] = payload.get("crew", [])
+        change: dict = payload.get("change", {})
+
+        if not channel_id_str:
+            logger.warning("update_crew_embed: no channel for truck %s — nothing to do.", truck_name)
+            return
+
+        cfg = await get_guild_config(company_id)
+        if not (cfg and cfg.is_configured):
+            logger.warning("update_crew_embed: guild not configured for company %s.", company_id)
+            return
+        guild = bot.get_guild(cfg.guild_id)
+        if not guild:
+            logger.warning("update_crew_embed: guild %s unavailable.", cfg.guild_id)
+            return
+        channel = guild.get_channel(int(channel_id_str))
+        if not channel:
+            logger.warning("update_crew_embed: channel %s not found.", channel_id_str)
+            return
+
+        fresh_embed = _build_truck_channel_embed(truck_name, crew, dispatch_date)
+
+        # ADR-295 D4 — an edit must never be the thing that fails a crew change.
+        # Every failure below lands on the ADR-288 correction, which is already
+        # shipped and tested.
+        edited = False
+        if message_id:
+            try:
+                msg = await channel.fetch_message(int(message_id))
+                await msg.edit(embed=fresh_embed)
+                edited = True
+            except discord.NotFound:
+                # Deleted in Discord. Clear the stored id so the NEXT change
+                # does not pay for another dead fetch, then fall through.
+                logger.info(
+                    "update_crew_embed: crew embed %s for %s is gone — reposting.",
+                    message_id, truck_name,
+                )
+                await self._clear_crew_embed_id(dispatch_date, truck_id, truck_name)
+            except discord.Forbidden:
+                logger.warning(
+                    "update_crew_embed: no permission to edit in %s — reposting.", truck_name
+                )
+            except Exception as e:
+                logger.warning("update_crew_embed: edit failed for %s: %s", truck_name, e)
+
+        if not edited:
+            # No id, or the edit failed: post a fresh crew embed and record it,
+            # so the channel still ends up with one true roster and the next
+            # change can edit again.
+            try:
+                new_msg = await channel.send(embed=fresh_embed)
+                if truck_id:
+                    try:
+                        await api.record_crew_embed(dispatch_date, truck_id, new_msg.id)
+                    except Exception as e:
+                        logger.warning("update_crew_embed: could not record new id: %s", e)
+            except Exception as e:
+                logger.warning("update_crew_embed: could not repost crew for %s: %s", truck_name, e)
+                return
+
+        # The notice. Plain text, not an embed: it is a one-line event, and a
+        # second embed is what made corrections noisy in the first place.
+        verb = change.get("verb", "updated")
+        who  = change.get("employee_name")
+        if who and verb in ("added", "removed"):
+            notice = (
+                f"📝 **Crew updated** — {who} {verb}. "
+                f"The crew list above has been corrected."
+            )
+        else:
+            notice = "📝 **Crew updated** — the crew list above has been corrected."
+        try:
+            await channel.send(notice)
+        except Exception as e:
+            logger.warning("update_crew_embed: could not post notice for %s: %s", truck_name, e)
+
+    async def _clear_crew_embed_id(self, dispatch_date: str, truck_id: str | None, truck_name: str) -> None:
+        """Clear a stored crew embed id after finding the message deleted.
+
+        ADR-295 D4. Uses message_id=0 as the sentinel the backend maps to NULL:
+        the column is nullable and 0 is not a valid snowflake, so it is
+        unambiguous without widening the request schema to accept null.
+        """
+        if not truck_id:
+            return
+        try:
+            await api.record_crew_embed(dispatch_date, truck_id, 0)
+        except Exception as e:
+            logger.warning("could not clear stale crew embed id for %s: %s", truck_name, e)
 
     async def revoke_member_from_channel(self, discord_id: str, channel_id: int) -> None:
         """Remove a member's permission overwrite from a truck channel.
@@ -818,7 +945,19 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
                 crew_embed = _build_truck_channel_embed(truck_name, crew, dispatch_date)
                 try:
-                    await truck_channel.send(embed=crew_embed)
+                    crew_msg = await truck_channel.send(embed=crew_embed)
+                    # ADR-295 D2 — same receipt, hub path. truck_id is already
+                    # in the webhook payload; it was simply never read.
+                    truck_id = payload.get("truck_id")
+                    if truck_id:
+                        try:
+                            await api.record_crew_embed(dispatch_date, truck_id, crew_msg.id)
+                        except Exception as e:
+                            logger.warning(
+                                "hub_finalize_truck: could not record crew embed id "
+                                "for %s — later crew changes will post corrections: %s",
+                                truck_name, e,
+                            )
                 except Exception as e:
                     logger.warning("hub_finalize_truck: could not post embed to %s: %s", truck_name, e)
             else:
