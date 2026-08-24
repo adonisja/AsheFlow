@@ -53,3 +53,4 @@ from app.models.scorecard import Scorecard, ScorecardMetric
 from app.models.scorecard_appeal import ScorecardAppeal, ScorecardAppealItem
 from app.models.route_sort_run import RouteSortRun, RouteSortDaily   # ADR-273: sort telemetry
 from app.models.btr_sheet import BTRSheet, BTRRoute, BTRBag, BTROVZone   # ADR-290: Amazon BTR sheet
+from app.models.tote_address import ToteAddress   # ADR-291: captain-entered tote geography
