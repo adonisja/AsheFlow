@@ -58,6 +58,13 @@ _NO_AUDIT = {
     # heuristic because it is a POST (it has to be: the file is the body).
     # The write it precedes, confirm_bulk_profiles, IS audited.
     "building_profiles.py::preview_bulk_profiles",
+    # ADR-290 D3: the same shape. It parses a BTR sheet and reports what was
+    # READ — no INSERT, no UPDATE, nothing persisted. POST only because the
+    # uploaded file is the body. Giving it no write path is precisely what
+    # forces an OCR read through a human before it can reach the database;
+    # test_preview_endpoint_has_no_write_path asserts that structurally.
+    # The write it precedes, confirm_btr_sheet, IS audited.
+    "btr_sheets.py::preview_btr_sheet",
     "building_profiles.py::lock_building_profile",
     "building_profiles.py::set_operational_note",
     "building_profiles.py::submit_building_profile",
