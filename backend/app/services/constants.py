@@ -23,6 +23,13 @@ MANAGEMENT_ROLES: tuple[str, ...] = ("management", "admin")
 # everywhere `assert_can_access` is called.
 OVERSIGHT_ROLES: tuple[str, ...] = ("management", "admin", "dispatch", "field_supervisor")
 
+# ── Operating mode (ADR-289) ─────────────────────────────────────────────────
+# Whether this tenant has an Amazon package feed. Decides whether the package-path
+# routers exist for them at all (see api.deps.RequireMode).
+MODE_FULL: str = "full"            # manifest available; the whole sort pipeline runs
+MODE_WORKFORCE: str = "workforce"  # no package feed; package routers return 404
+OPERATING_MODES: tuple[str, ...] = (MODE_FULL, MODE_WORKFORCE)
+
 # Roles that receive dispatch assignments (appear in assigned_crews).
 # NOTE: no importers — see FIELD_ROLES above. The list actually enforced at the
 # trust boundary is the Literal in `schemas/dispatch.py`, which must be widened

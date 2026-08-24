@@ -185,6 +185,25 @@ class CompanyConfig(Base):
     # ── Manifest ingestion mode ───────────────────────────────────────────────
     ingestion_mode = Column(String(10), nullable=True)                 # "file" | "api"; default "file"
 
+    # ── Operating mode (ADR-289) ──────────────────────────────────────────────
+    # "full"      — Amazon package manifest available; the whole sort pipeline runs.
+    # "workforce" — no package feed; package-path routers are gated off (404).
+    #
+    # nullable=False DELIBERATELY, unlike ingestion_mode / route_assembly_mode above.
+    # A null here cannot distinguish "new company, not yet configured" from "config was
+    # lost" — the two states ADR-283 showed a process cannot tell apart once they collapse
+    # into one observable value. The mode decides whether ~40 endpoints exist, so it is
+    # never inferred and never defaulted in code.
+    #
+    # SUPER ADMIN ONLY, and writable through exactly ONE endpoint:
+    # PATCH /admin/companies/{id}/operating-mode, which carries the no-op 400, the
+    # in-flight 409, the typed confirmation and the forced-override audit entry.
+    #
+    # It is in companies._GUARDED_FIELDS (not _SUPER_ADMIN_ONLY_FIELDS): both config
+    # PATCH endpoints refuse it, the super-admin one included. Guards buried in a
+    # generic field-setter are guards that get skipped.
+    operating_mode = Column(String(20), nullable=False, server_default="workforce")
+
     # ── GeoClient address enrichment ─────────────────────────────────────────
     geoclient_borough = Column(String(30), nullable=True)              # e.g. "manhattan", "brooklyn", "queens"
 

@@ -53,9 +53,22 @@ def resolve_pending_addresses() -> dict:
     db = SessionLocal()
     resolved = rejected = skipped = 0
     try:
+        # ADR-289: this is the highest-frequency task in the system (every 10 min,
+        # 144×/day). In workforce mode a tenant's building profiles are entered
+        # manually and already carry an address, so there is no pending queue to
+        # resolve — without this filter the task would scan and geocode on behalf of
+        # companies that structurally cannot produce that work.
+        from app.services.company_config import full_mode_company_ids
+        full_mode = full_mode_company_ids(db)
+        if not full_mode:
+            return {"resolved": 0, "rejected": 0, "skipped": 0}
+
         pending = (
             db.query(BuildingProfile)
-            .filter(BuildingProfile.address_status == "pending")
+            .filter(
+                BuildingProfile.address_status == "pending",
+                BuildingProfile.company_id.in_(full_mode),
+            )
             .limit(_BATCH)
             .all()
         )

@@ -9,7 +9,8 @@ from app.database import engine
 from app import models
 from app.models.base import Base
 from app.core.config import settings
-from app.api.deps import require_configured
+from app.api.deps import require_configured, RequireMode
+from app.services.constants import MODE_FULL
 from app.api.ratelimit import limiter
 from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics
 
@@ -75,6 +76,12 @@ api_v1_router = APIRouter(prefix="/api/v1")
 #   - company_admin_router: this IS the setup endpoint — must be reachable to complete setup
 _configured = [Depends(require_configured)]
 
+# ADR-289: routers whose feature only exists when the tenant has an Amazon package
+# feed. RequireMode returns 404 (not 403) — a company without a feed should not be
+# told the endpoint exists. Keep this list in step with _FULL_MODE_FEATURES in
+# routers/companies.py, which is what clients gate their navigation on.
+_full_mode = _configured + [Depends(RequireMode(MODE_FULL))]
+
 api_v1_router.include_router(employees.router,                dependencies=_configured)
 api_v1_router.include_router(trucks.router,                   dependencies=_configured)
 api_v1_router.include_router(truck_assignments.router,        dependencies=_configured)
@@ -101,9 +108,38 @@ api_v1_router.include_router(analytics.router,                dependencies=_conf
 api_v1_router.include_router(assignment_history.router,        dependencies=_configured)
 api_v1_router.include_router(shift_ops.router,                dependencies=_configured)
 api_v1_router.include_router(shift_sessions.router,           dependencies=_configured)
+# ADR-289: the proprietary bundle registers dispatch/training/field_ops itself and
+# receives the base dependency list. Those three are THIN, not HIDE — their cores
+# (crew pairing, training phases, inspections/fuel/check-in) have zero package
+# coupling and must keep working in workforce mode — so they correctly stay on
+# `_configured`. The package-coupled endpoints INSIDE them (dispatch's four
+# package_manifest routes, field_ops' four walker-performance routes) need
+# per-endpoint RequireMode(MODE_FULL) applied within asheflow_private, which this
+# repo cannot do. `_full_mode` is passed so that bundle can gate them without
+# reconstructing the dependency list and drifting from this one.
+#
+# The signature is INSPECTED, not tried/excepted: a bundle that accepts three
+# arguments but raises TypeError from inside its own body would otherwise be
+# registered a second time by the fallback, silently double-registering every
+# proprietary route.
 if _register_proprietary:
-    _register_proprietary(api_v1_router, _configured)
-api_v1_router.include_router(sort.router,                     dependencies=_configured)
+    import inspect as _inspect
+    try:
+        _accepts_mode = len(_inspect.signature(_register_proprietary).parameters) >= 3
+    except (TypeError, ValueError):
+        _accepts_mode = False   # C-implemented or unintrospectable — assume old form
+    if _accepts_mode:
+        _register_proprietary(api_v1_router, _configured, _full_mode)
+    else:
+        # Older bundle without the mode-aware signature — register unchanged rather
+        # than failing startup. Its package endpoints stay ungated until it is updated.
+        logging.getLogger(__name__).warning(
+            "asheflow_private.register_proprietary_routers does not accept the "
+            "full-mode dependency list (ADR-289); its package-coupled endpoints are "
+            "NOT gated by operating_mode."
+        )
+        _register_proprietary(api_v1_router, _configured)
+api_v1_router.include_router(sort.router,                     dependencies=_full_mode)
 api_v1_router.include_router(graduation_quiz.router,          dependencies=_configured)
 api_v1_router.include_router(gear_requests.router,            dependencies=_configured)
 api_v1_router.include_router(trainee_credentials.router,      dependencies=_configured)
@@ -112,16 +148,16 @@ api_v1_router.include_router(driver_surveys.router,           dependencies=_conf
 api_v1_router.include_router(adp.router,                            dependencies=_configured)
 api_v1_router.include_router(building_profiles.router,              dependencies=_configured)
 api_v1_router.include_router(building_profile_library.router,       dependencies=_configured)
-api_v1_router.include_router(walker_routes.router,                  dependencies=_configured)
-api_v1_router.include_router(rts.router,                            dependencies=_configured)
+api_v1_router.include_router(walker_routes.router,                  dependencies=_full_mode)
+api_v1_router.include_router(rts.router,                            dependencies=_full_mode)
 api_v1_router.include_router(roll_call.router,                      dependencies=_configured)
 api_v1_router.include_router(crew_status.router,                    dependencies=_configured)
 api_v1_router.include_router(scorecards.router,                     dependencies=_configured)
 api_v1_router.include_router(scorecard_appeals.router,              dependencies=_configured)
-api_v1_router.include_router(package_lookup.router,                 dependencies=_configured)
-api_v1_router.include_router(package_intake.router,                 dependencies=_configured)
+api_v1_router.include_router(package_lookup.router,                 dependencies=_full_mode)
+api_v1_router.include_router(package_intake.router,                 dependencies=_full_mode)
 api_v1_router.include_router(dashboards.router,                     dependencies=_configured)
-api_v1_router.include_router(sort_metrics.router,                    dependencies=_configured)
+api_v1_router.include_router(sort_metrics.router,                    dependencies=_full_mode)
 api_v1_router.include_router(companies.router,                      dependencies=_configured)
 # Exempt — must be reachable before and during setup
 api_v1_router.include_router(registration.router)

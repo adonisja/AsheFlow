@@ -315,15 +315,90 @@ def require_configured(
             detail="No employee record found for your account. Contact your manager.",
         )
 
-    from app.models.company import CompanyConfig
-    row = db.query(CompanyConfig).filter(
-        CompanyConfig.company_id == employee.company_id
-    ).first()
+    row = _company_config_for_request(db, employee.company_id)
     if row is None or not row.is_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Company setup is not complete. An admin must finish configuration before the platform can be used.",
         )
+
+
+def _company_config_for_request(db: Session, company_id):
+    """CompanyConfig for this company, memoised on the request's Session.
+
+    ``require_configured`` and ``RequireMode`` both run on every gated request and
+    both need this row. ``filter().first()`` does NOT hit SQLAlchemy's identity map
+    (verified: two calls emit two SELECTs), so without this a gated endpoint pays a
+    second round trip on the hot path of the busiest routers.
+
+    ``get_db`` yields a fresh Session per request and closes it after, so the cache
+    cannot outlive the request or leak across tenants. Keyed by company_id anyway,
+    so a request that legitimately touches two companies stays correct.
+    """
+    from app.models.company import CompanyConfig
+
+    cache = getattr(db, "_asheflow_config_cache", None)
+    if cache is None:
+        cache = {}
+        db._asheflow_config_cache = cache
+    if company_id not in cache:
+        cache[company_id] = (
+            db.query(CompanyConfig)
+            .filter(CompanyConfig.company_id == company_id)
+            .first()
+        )
+    return cache[company_id]
+
+
+class RequireMode:
+    """Gate a router on the caller's company operating_mode (ADR-289).
+
+    Add to ``APIRouter(dependencies=[...])`` — or to ``include_router(...,
+    dependencies=[...])`` — for every router whose feature only exists when the
+    tenant has an Amazon package feed::
+
+        api_v1_router.include_router(
+            sort.router, dependencies=_configured + [Depends(RequireMode(MODE_FULL))]
+        )
+
+    **404, not 403.** A 403 says "this exists and you may not have it", which invites
+    retries and leaks the shape of the product to a tenant who will never have it. A 404
+    says "this company does not have this feature", which is the truth. The detail string
+    is deliberately generic for the same reason.
+
+    Super admins have no Employee row and are never company-scoped, so they bypass this
+    exactly as ``require_configured`` does — otherwise a platform operator could not
+    inspect a workforce tenant's endpoints at all.
+
+    A missing CompanyConfig row is treated as NOT having the mode. That is the safe
+    direction: the alternative (assume ``full``) would expose the package pipeline to a
+    tenant whose configuration never said so.
+    """
+
+    def __init__(self, required: str):
+        self.required = required
+
+    def __call__(
+        self,
+        current_user: dict = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> None:
+        if "super_admin" in current_user.get("cognito_groups", []):
+            return
+
+        employee, _ = _resolve_employee_from_cognito(current_user, db)
+        if not employee:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No employee record found for your account. Contact your manager.",
+            )
+
+        row = _company_config_for_request(db, employee.company_id)
+        if row is None or row.operating_mode != self.required:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Not found.",
+            )
 
 
 def assert_owns_or_privileged(
