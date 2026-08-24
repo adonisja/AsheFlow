@@ -101,3 +101,63 @@ def test_has_feature_fails_open(path):
     assert re.search(r"capabilities\s*\?", src) or "if (!capabilities) return true" in src, (
         f"{path.name}: hasFeature does not visibly fail open on null capabilities"
     )
+
+
+# ── superadmin flip dialog (ADR-289 D1c/D1d) ─────────────────────────────────
+
+COMPANY_DETAIL = ROOT / "frontend" / "src" / "pages" / "superadmin" / "CompanyDetail.tsx"
+
+
+def _mode_card() -> str:
+    src = COMPANY_DETAIL.read_text()
+    return src[src.index("function OperatingModeCard"):src.index("// 1. Company identity card")]
+
+
+def test_flip_requires_typed_slug_confirmation():
+    """Not a checkbox. A super admin has several tenants open at once and the
+    realistic mistake is flipping the wrong one, so the control demands the
+    company's own slug rather than a generic yes."""
+    card = _mode_card()
+    assert "typed.trim() === detail.slug" in card
+    assert "if (!confirmed) return" in card, "submit must refuse without confirmation"
+    assert "disabled={!confirmed || busy}" in card, "button must be disabled too"
+
+
+def test_flip_targets_the_opposite_mode():
+    """A one-button toggle that computed the wrong target would silently no-op
+    against the server's 400 guard, which reads as a broken button."""
+    assert "current === 'full' ? 'workforce' : 'full'" in _mode_card()
+
+
+def test_only_the_dangerous_direction_carries_the_warning():
+    """ADR-289 D1d: the directions are NOT mirror images.
+
+    full -> workforce removes automated routing but leaves a working manual path.
+    workforce -> full removes that manual path and replaces it with a pipeline
+    that produces nothing until a manifest lands — so it is the direction that
+    can leave a tenant with no routes on a shift morning, and the only one that
+    warns. A symmetric "are you sure?" would hide exactly that asymmetry.
+    """
+    src = COMPANY_DETAIL.read_text()
+    block = src[src.index("const MODE_COPY"):src.index("} as const;")]
+    to_workforce = block[block.index("workforce:"):block.index("full:")]
+    to_full = block[block.index("full:"):]
+
+    assert "warn: null" in to_workforce, "full->workforce should not warn"
+    assert "no routes until a manifest" in to_full, "workforce->full MUST warn"
+
+
+def test_dialog_states_that_nothing_is_deleted():
+    """The one genuinely reassuring thing the dialog can say, and it is true —
+    records from the other mode are retained, which is what makes the change
+    recoverable. Worth pinning so a copy edit cannot quietly drop it."""
+    assert "Nothing is deleted" in _mode_card()
+
+
+def test_flip_posts_to_the_guarded_endpoint_only():
+    """The dedicated endpoint carries the no-op/in-flight/audit guards. Posting
+    the mode to the generic config PATCH would bypass every one of them (and be
+    refused by _GUARDED_FIELDS), so the URL is worth pinning."""
+    card = _mode_card()
+    assert "/operating-mode`" in card
+    assert "confirm_slug: typed.trim()" in card

@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import {
   ArrowLeft, Building2, Settings2, Save, RotateCcw,
   ShieldCheck, ShieldAlert, Pencil, X, Users, AlertTriangle,
-  CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot,
+  CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, Package, PackageX,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -18,6 +18,9 @@ interface CompanyConfig {
   id: string;
   company_id: string;
   is_configured: boolean;
+  /** ADR-289. Read-only here — set via the Operating Mode card, which is the
+   *  only writer. Optional so an older API response still parses. */
+  operating_mode?: 'full' | 'workforce';
   shift_start: string | null;
   shift_end: string | null;
   checkin_open: string | null;
@@ -268,6 +271,168 @@ function SectionCard({ title, action, children }: {
       </div>
       {children}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Operating mode card (ADR-289)
+// ---------------------------------------------------------------------------
+
+/** The two directions are NOT mirror images, and the copy must say which.
+ *  full -> workforce removes automated routing but leaves a working manual path.
+ *  workforce -> full removes that manual path and replaces it with a pipeline
+ *  that produces NOTHING until a manifest is uploaded and enriched — so the
+ *  direction that sounds like an upgrade is the one that can leave a tenant with
+ *  no routes at all on a shift morning. */
+const MODE_COPY = {
+  workforce: {
+    heading: 'Turn package sorting OFF',
+    stops: 'Manifest upload, station sort, route sort, package scanning and per-package returns stop being available.',
+    keeps: 'Crews, dispatch, training, scheduling, compliance and scorecards keep working exactly as they do now.',
+    warn: null as string | null,
+  },
+  full: {
+    heading: 'Turn package sorting ON',
+    stops: 'Manual tote entry is replaced by manifest-driven sorting.',
+    keeps: 'Everything else is unchanged.',
+    warn: 'There will be no routes until a manifest is uploaded and enriched. Switch this on the evening before a shift, not on the morning of one.',
+  },
+} as const;
+
+function OperatingModeCard({
+  detail,
+  onChanged,
+}: {
+  detail: CompanyDetail;
+  onChanged: (mode: 'full' | 'workforce') => void;
+}) {
+  const current = detail.config?.operating_mode ?? 'workforce';
+  const target: 'full' | 'workforce' = current === 'full' ? 'workforce' : 'full';
+  const copy = MODE_COPY[target];
+
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Typed confirmation, not a checkbox: a super admin has several tenants open
+  // at once and the realistic mistake is flipping the wrong one.
+  const confirmed = typed.trim() === detail.slug;
+
+  const reset = () => { setOpen(false); setTyped(''); setError(null); };
+
+  const submit = async () => {
+    if (!confirmed) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await axiosClient.patch<{ operating_mode: 'full' | 'workforce'; notified: number }>(
+        `/admin/companies/${detail.id}/operating-mode`,
+        { operating_mode: target, confirm_slug: typed.trim() },
+      );
+      onChanged(res.data.operating_mode);
+      setNotice(
+        `Switched to ${res.data.operating_mode} mode. ${res.data.notified} admin(s) notified.`
+      );
+      reset();
+    } catch (err: unknown) {
+      // A 409 is the in-flight guard, not a failure of the request — it means
+      // routes are still out and flipping now would strand a walker mid-route.
+      setError(errorText(err, 'Could not change operating mode.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SectionCard
+      title={
+        <>
+          {current === 'full'
+            ? <Package className="w-4 h-4 text-accent" />
+            : <PackageX className="w-4 h-4 text-warning" />}
+          <span className="font-semibold text-foreground text-sm">Operating Mode</span>
+        </>
+      }
+      action={
+        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+          current === 'full'
+            ? 'bg-accent/10 text-accent'
+            : 'bg-warning/10 text-warning'
+        }`}>
+          {current === 'full' ? 'Package sorting ON' : 'Package sorting OFF'}
+        </span>
+      }
+    >
+      {error && <ErrorBanner message={error} />}
+      {notice && (
+        <div className="text-xs text-success bg-success/10 border border-success/20 rounded-lg px-3 py-2">
+          {notice}
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        {current === 'full'
+          ? 'This company has an Amazon package feed. The full sort pipeline is available.'
+          : 'This company has no package feed. Package surfaces are hidden and their endpoints return 404.'}
+      </p>
+
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="text-sm font-medium px-3 py-1.5 rounded-lg bg-secondary text-foreground hover:bg-secondary/80 transition-colors"
+        >
+          {copy.heading}
+        </button>
+      ) : (
+        <div className="space-y-3 p-3 rounded-xl border border-warning/30 bg-warning/5">
+          <p className="text-sm font-semibold text-foreground">{copy.heading}</p>
+
+          <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+            <li>{copy.stops}</li>
+            <li>{copy.keeps}</li>
+            <li><strong className="text-foreground">Nothing is deleted.</strong> Records from the other mode are kept and simply stop appearing.</li>
+          </ul>
+
+          {copy.warn && (
+            <p className="text-xs text-warning font-medium border-l-2 border-warning pl-2">
+              {copy.warn}
+            </p>
+          )}
+
+          <div>
+            <label className="text-xs text-muted-foreground">
+              Type <code className="text-foreground font-mono">{detail.slug}</code> to confirm
+            </label>
+            <input
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
+              placeholder={detail.slug}
+              autoFocus
+              className="input mt-1 w-full font-mono text-sm"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={submit}
+              disabled={!confirmed || busy}
+              className="text-sm font-medium px-3 py-1.5 rounded-lg bg-warning/15 text-warning hover:bg-warning/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {busy ? 'Switching…' : copy.heading}
+            </button>
+            <button
+              onClick={reset}
+              disabled={busy}
+              className="text-sm font-medium px-3 py-1.5 rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -1071,6 +1236,19 @@ export default function CompanyDetailPage() {
       {companyId && <DiscordConfigCard companyId={companyId} />}
 
       {/* 6. Danger zone */}
+      {/* ADR-289: sits ABOVE the Danger Zone deliberately. It is a high-impact
+          change but a reversible, non-destructive one — grouping it with
+          deactivation would overstate it, and burying it below would understate
+          how much of the product it decides. */}
+      <OperatingModeCard
+        detail={detail}
+        onChanged={mode => setDetail(prev =>
+          prev && prev.config
+            ? { ...prev, config: { ...prev.config, operating_mode: mode } }
+            : prev
+        )}
+      />
+
       <DangerZoneCard
         detail={detail}
         onToggled={active => setDetail(prev => prev ? { ...prev, is_active: active } : prev)}
