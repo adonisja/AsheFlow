@@ -660,10 +660,22 @@ function CurrentAssignments() {
             // D2 — refused, not coerced: a trainee on a hub is unsupervised,
             // and a silent relabel makes the day look like work while their
             // phase progression does not advance.
-            setError(
-              `${emp?.name || 'That employee'} is a trainee and cannot be assigned to a hub — ` +
-              `there is no route to run and no trainer to supervise them.`
-            );
+            //
+            // A DIALOG, not setError. The error banner renders ~335 lines above
+            // the truck cards, so a rejection triggered by dropping onto a card
+            // appeared off-screen and read as "nothing happened" — the drag
+            // just silently failed. A refusal has to be visible where the
+            // action was taken.
+            openDialog({
+              title: 'Trainees cannot work a hub',
+              message:
+                `${emp?.name || 'That employee'} is a trainee. A hub runs no route and has ` +
+                `no trainer to supervise them, so their day would not count toward ` +
+                `training.\n\nAssign them to a delivery truck instead.`,
+              confirmLabel: 'Got it',
+              variant: 'warning',
+              onConfirm: () => closeDialog(),
+            });
             return;
           }
           if (role === 'captain' || role === 'trainer') role = 'walker';
@@ -682,7 +694,22 @@ function CurrentAssignments() {
       await fetchDispatchData(); // Refresh on drop
     } catch (err: unknown) {
       console.error(err);
-      setError(errorText(err, 'Failed to move employee.'));
+      // A dialog, for the same reason as the trainee refusal above: this fires
+      // from a drop onto a card ~335 lines below the error banner, so setError
+      // alone renders the rejection off-screen and the drag reads as having
+      // silently failed. The backend's 409s here are specific and worth
+      // reading — "already assigned on this date" (ADR-287), "final crew is
+      // already posted, use a transfer" (ADR-288 D3), "a trainee cannot be
+      // assigned to a hub" (ADR-284 D2).
+      const msg = errorText(err, 'Failed to move employee.');
+      setError(msg);
+      openDialog({
+        title: 'Could not place that employee',
+        message: msg,
+        confirmLabel: 'Got it',
+        variant: 'warning',
+        onConfirm: () => closeDialog(),
+      });
     } finally {
       setIsLoading(false);
     }
