@@ -250,3 +250,56 @@ def test_route_lookup_writes_nothing():
     src = inspect.getsource(W.route_lookup)
     for writer in ("db.add", "db.commit", "db.delete", "db.flush", ".update("):
         assert writer not in src, f"route_lookup calls {writer}"
+
+
+# ── per-route package count (D11) ─────────────────────────────────────────────
+
+def test_flex_count_payload_is_bounded():
+    from app.routers.workforce_routes import FlexPackageCountIn
+    FlexPackageCountIn(package_count=0)          # a route that carried nothing
+    FlexPackageCountIn(package_count=250)
+    with pytest.raises(Exception):
+        FlexPackageCountIn(package_count=-1)
+    with pytest.raises(Exception):
+        FlexPackageCountIn(package_count=2001)
+    with pytest.raises(Exception):
+        FlexPackageCountIn(package_count=100, bogus=1)
+
+
+def test_flex_count_is_nullable_not_zero_defaulted():
+    """NULL means 'not recorded yet'; 0 means the route genuinely carried
+    nothing. A NOT NULL default of 0 makes those indistinguishable — the
+    zero-versus-absence failure ADR-294 exists to prevent."""
+    from app.models.walker_route import Route
+    assert Route.__table__.c.flex_package_count.nullable
+    assert Route.__table__.c.flex_package_count.default is None
+    assert Route.__table__.c.flex_package_count.server_default is None
+
+
+def test_flex_count_is_separate_from_derived_package_count():
+    """package_count is sum(len(t.packages)) from the sort, and a workforce
+    'package' is a captain-entered ADDRESS. Overwriting it would corrupt the
+    field dashboards and assignment history already read."""
+    src = inspect.getsource(W.record_flex_package_count)
+    assert "route.flex_package_count = payload.package_count" in src
+    assert "route.package_count =" not in src, "clobbers the sort's own count"
+
+
+def test_flex_count_is_re_recordable_and_audits_the_previous_value():
+    """Deliberately NOT a one-way stamp. A miscounted scan is corrected in the
+    moment, and a 409 on the second attempt would leave a known-wrong number in
+    the reporting. The audit carries before/after so the correction is traceable."""
+    src = inspect.getsource(W.record_flex_package_count)
+    assert "HTTP_409_CONFLICT" not in src
+    assert "previous = route.flex_package_count" in src
+    assert "before={" in src and "after={" in src
+
+
+def test_flex_count_endpoint_is_route_lead_gated():
+    gates = [
+        getattr(p.default.dependency, "allowed_roles", None)
+        for p in inspect.signature(W.record_flex_package_count).parameters.values()
+        if getattr(p.default, "dependency", None) is not None
+    ]
+    roles = next(g for g in gates if g)
+    assert "captain" in roles and "walker" not in roles
