@@ -876,22 +876,79 @@ function CurrentAssignments() {
     }
   };
 
+  /* ADR-288 D1 — publish ONE truck. Was hub-only because hubs were the only
+     card with a button; the endpoint never had hub-specific logic, so this
+     works for any truck via the truck-neutral route. */
+  /* ADR-288 D1 — each truck's own phase. TruckAssignment.status has always been
+     a per-truck state machine (planned → active → completed); the dashboard
+     collapsed every truck into one day-level workflow_status and rendered a
+     single pair of buttons for the whole day. The card now reads its own. */
+  const truckStatus = (truckId: string): 'planned' | 'active' | 'completed' =>
+    ((dispatchData?.truck_assignments || [])
+      .find((a: any) => a.truck_id === truckId)?.status as
+        'planned' | 'active' | 'completed') || 'planned';
+
+  /* The quota for active → completed is ADR-205's existing per-truck rate:
+     confirmed / total for THIS truck's crew. Not a new concept — the same
+     number already gates the day-level button. */
+  const truckConfirmRate = (truckId: string): { confirmed: number; total: number; rate: number } => {
+    const crew = (dispatchData?.assigned_crews || {})[truckId] || [];
+    const total = crew.length;
+    const confirmed = crew.filter((m: any) => confirmations[m.employee_id] === 'confirmed').length;
+    return { confirmed, total, rate: total ? confirmed / total : 0 };
+  };
+
+  // Trucks that already have an assignment for selectedDate (to exclude from hub modal picker)
+  const assignedTruckIds: Set<string> = new Set(
+    Object.keys(dispatchData?.assigned_crews || {})
+  );
+
   const handlePublishHub = (truckId: string) => {
-    const truckName = trucks[truckId]?.name || 'Hub';
+    const truckName = trucks[truckId]?.name || 'this truck';
     openDialog({
-      title: 'Publish Hub',
-      message: `Send dispatch_assignment notifications to all staff on ${truckName} and post their crew card to Discord?`,
-      confirmLabel: 'Publish Hub',
+      title: `Publish ${truckName}`,
+      message: `Send assignment notifications to everyone on ${truckName} and post their crew card to Discord?`,
+      confirmLabel: `Publish ${truckName}`,
       variant: 'default',
       onConfirm: async () => {
         closeDialog();
         setPublishingHubTruckId(truckId);
         setError(null);
         try {
-          await axiosClient.post(`/dispatch/hubs/${truckId}/publish`, { date: selectedDate });
-          await fetchDispatchData();
+          await axiosClient.post(`/dispatch/trucks/${truckId}/publish`, { date: selectedDate });
+          await Promise.all([fetchDispatchData(), fetchConfirmations()]);
         } catch (err: unknown) {
-          setError(errorText(err, 'Failed to publish hub.'));
+          setError(errorText(err, `Failed to publish ${truckName}.`));
+        } finally {
+          setPublishingHubTruckId(null);
+        }
+      },
+    });
+  };
+
+  /* ADR-288 D1 — post ONE truck's final crew, via the finalize endpoint's
+     `truck_id` scope. Written first without it, calling the day-level endpoint:
+     the button would then have finalised every qualifying truck, which is more
+     than "Post FALCON final crew" promises. */
+  const handleFinalizeTruck = (truckId: string) => {
+    const truckName = trucks[truckId]?.name || 'this truck';
+    const { confirmed, total } = truckConfirmRate(truckId);
+    openDialog({
+      title: `Post ${truckName} final crew`,
+      message: `${confirmed} of ${total} confirmed on ${truckName}. Post their final crew to Discord?`,
+      confirmLabel: 'Post final crew',
+      variant: 'default',
+      onConfirm: async () => {
+        closeDialog();
+        setPublishingHubTruckId(truckId);
+        setError(null);
+        try {
+          await axiosClient.post(
+            `/dispatch/${selectedDate}/finalize?truck_id=${truckId}`, {},
+          );
+          await Promise.all([fetchDispatchData(), fetchConfirmations()]);
+        } catch (err: unknown) {
+          setError(errorText(err, `Failed to post ${truckName}'s final crew.`));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -1080,11 +1137,6 @@ function CurrentAssignments() {
     (dispatchData?.truck_assignments || [])
       .filter((a: any) => a.is_hub)
       .map((a: any) => a.truck_id)
-  );
-
-  // Trucks that already have an assignment for selectedDate (to exclude from hub modal picker)
-  const assignedTruckIds: Set<string> = new Set(
-    Object.keys(dispatchData?.assigned_crews || {})
   );
 
   /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
@@ -1703,26 +1755,73 @@ function CurrentAssignments() {
                        the same shape: name + count. Sharing the header with the
                        count pill made a hub card visibly denser than the regular
                        trucks beside it — three rows of chrome before any crew. */}
-                   {isHub && (
-                     <div className="flex items-center gap-2 mb-3 flex-wrap">
+                   {/* ADR-288 D1 — ONE button, mutating on THIS truck's status.
+                       Not two with one disabled: TruckAssignment.status is a
+                       single value, so the control reading it should be single
+                       too, and the card is already dense.
+
+                         planned   → Publish FALCON to Discord
+                         active    → Post FALCON Final Crew (gated on quota)
+                         completed → ✓ Final crew posted
+
+                       Previously hub-only, because hubs were the only card with
+                       a per-truck button. The endpoint never had hub-specific
+                       logic. */}
+                   {(() => {
+                     const st = truckStatus(truckId);
+                     const busy = publishingHubTruckId === truckId;
+                     const crewCount = (crew as any[]).length;
+                     const { confirmed, total, rate } = truckConfirmRate(truckId);
+                     // ADR-205's existing threshold, applied per truck.
+                     const quotaMet = total > 0 && rate >= FINALIZE_BLOCK;
+                     const name = trucks[truckId]?.name || 'this truck';
+                     return (
+                   <div className="flex items-center gap-2 mb-3 flex-wrap">
+                       {st === 'planned' && (
                          <button
                            onClick={() => handlePublishHub(truckId)}
-                           disabled={publishingHubTruckId === truckId || (crew as any[]).length === 0}
+                           disabled={busy || crewCount === 0}
                            className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-success/15 text-success hover:bg-success/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                           title={crew.length === 0
+                           title={crewCount === 0
                              ? 'Add staff before publishing'
-                             : `Notify everyone assigned to ${trucks[truckId]?.name || 'this hub'}`}
+                             : `Notify everyone assigned to ${name}`}
                          >
-                           {publishingHubTruckId === truckId
+                           {busy
                              ? <div className="w-3 h-3 border border-success border-t-transparent rounded-full animate-spin" />
                              : <Send className="w-3 h-3" />}
-                           Publish {trucks[truckId]?.name || 'Hub'} to Discord
+                           Publish {name} to Discord
                          </button>
+                       )}
+                       {st === 'active' && (
+                         <button
+                           onClick={() => handleFinalizeTruck(truckId)}
+                           disabled={busy || !quotaMet}
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-primary/15 text-primary hover:bg-primary/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                           title={quotaMet
+                             ? `Post ${name}'s final crew to Discord`
+                             : `${confirmed}/${total} confirmed — at least 50% must confirm before posting the final crew`}
+                         >
+                           {busy
+                             ? <div className="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin" />
+                             : <CheckCircle2 className="w-3 h-3" />}
+                           Post {name} Final Crew
+                         </button>
+                       )}
+                       {st === 'completed' && (
+                         <span
+                           className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold text-success/80 px-2 py-1"
+                           title="Crew changes now go through a truck transfer (ADR-288 D3)"
+                         >
+                           <CheckCircle2 className="w-3 h-3" />
+                           Final crew posted
+                         </span>
+                       )}
                        {/* REMOVE — hubs only (ADR-274 D8). A hub is created one
                            at a time by hand, so it must be removable one at a
                            time; a mistake should not cost the whole day via
                            Clear Dispatch. Regular trucks have no equivalent:
                            they arrive as a balanced SET from Run Dispatch. */}
+                       {isHub && (
                          <button
                            onClick={() => handleRemoveHub(
                              truckId,
@@ -1739,8 +1838,10 @@ function CurrentAssignments() {
                              : <Trash2 className="w-3 h-3" />}
                            Remove
                          </button>
-                     </div>
-                   )}
+                       )}
+                   </div>
+                     );
+                   })()}
 
                    {/* Dock zone (ADR-274 D17) — the bay this truck collects
                        from. Its OWN row, not wedged into the identity block:
