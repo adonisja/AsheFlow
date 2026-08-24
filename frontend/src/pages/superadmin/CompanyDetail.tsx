@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import {
   ArrowLeft, Building2, Settings2, Save, RotateCcw,
   ShieldCheck, ShieldAlert, Pencil, X, Users, AlertTriangle,
-  CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, Package, PackageX,
+  CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, PackageCheck, PackageX,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -350,19 +350,24 @@ function OperatingModeCard({
       title={
         <>
           {current === 'full'
-            ? <Package className="w-4 h-4 text-accent" />
+            ? <PackageCheck className="w-4 h-4 text-success" />
             : <PackageX className="w-4 h-4 text-warning" />}
           <span className="font-semibold text-foreground text-sm">Operating Mode</span>
         </>
       }
       action={
-        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-          current === 'full'
-            ? 'bg-accent/10 text-accent'
-            : 'bg-warning/10 text-warning'
-        }`}>
-          {current === 'full' ? 'Package sorting ON' : 'Package sorting OFF'}
-        </span>
+        // Same treatment as the Configured / Connected badges above, so the
+        // three read as one family. The first version used `accent`, which is a
+        // pale violet in the light theme and rendered near-invisible.
+        current === 'full' ? (
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-success/10 text-success font-medium">
+            <PackageCheck className="w-3 h-3" /> Package sorting ON
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-warning/10 text-warning font-medium">
+            <PackageX className="w-3 h-3" /> Package sorting OFF
+          </span>
+        )
       }
     >
       {error && <ErrorBanner message={error} />}
@@ -372,19 +377,40 @@ function OperatingModeCard({
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
-        {current === 'full'
-          ? 'This company has an Amazon package feed. The full sort pipeline is available.'
-          : 'This company has no package feed. Package surfaces are hidden and their endpoints return 404.'}
-      </p>
-
       {!open ? (
-        <button
-          onClick={() => setOpen(true)}
-          className="text-sm font-medium px-3 py-1.5 rounded-lg bg-secondary text-foreground hover:bg-secondary/80 transition-colors"
-        >
-          {copy.heading}
-        </button>
+        // Mirrors the Danger Zone's row: what it is on the left, the action on
+        // the right. Previously a bare sentence with a grey button underneath,
+        // which read as less consequential than the Discord card above it.
+        <div className={`flex items-center justify-between gap-4 flex-wrap p-3 rounded-xl border ${
+          current === 'full'
+            ? 'border-success/20 bg-success/5'
+            : 'border-warning/20 bg-warning/5'
+        }`}>
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              {current === 'full'
+                ? 'Package sorting is available to this company'
+                : 'This company runs without a package feed'}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {current === 'full'
+                ? 'Manifest upload, station sort, route sort and package scanning are all live.'
+                : 'Those surfaces are hidden in the apps and their endpoints return 404. Crews, training and scheduling are unaffected.'}
+            </p>
+          </div>
+          <button
+            onClick={() => setOpen(true)}
+            className={`flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors ${
+              current === 'full'
+                ? 'bg-warning/10 text-warning hover:bg-warning/20'
+                : 'bg-success/10 text-success hover:bg-success/20'
+            }`}
+          >
+            {current === 'full'
+              ? <><PackageX className="w-3.5 h-3.5" /> Turn OFF</>
+              : <><PackageCheck className="w-3.5 h-3.5" /> Turn ON</>}
+          </button>
+        </div>
       ) : (
         <div className="space-y-3 p-3 rounded-xl border border-warning/30 bg-warning/5">
           <p className="text-sm font-semibold text-foreground">{copy.heading}</p>
