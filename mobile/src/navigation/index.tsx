@@ -1,4 +1,4 @@
-import React, { useState, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import {
   NavigationContainer,
 } from '@react-navigation/native';
@@ -89,6 +89,15 @@ type TabDef = {
   icon: string;
   roles: readonly string[];
   component: React.ComponentType<any>;
+  /** ADR-289: capability key this tab needs, checked against
+   *  GET /companies/my-capabilities. Absent = always available.
+   *
+   *  Deliberately NOT in navigation/roles.ts. That module imports nothing on
+   *  purpose — constants there once lived here and created a require cycle that
+   *  made a role constant `undefined` at import time, showing Field Ops to every
+   *  role. Mode is a second filter applied at RENDER (see visibleTabs), never
+   *  folded into the role constants. */
+  feature?: string;
 };
 
 const ALL_TABS: TabDef[] = [
@@ -96,9 +105,9 @@ const ALL_TABS: TabDef[] = [
   { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
   { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointTab },
   { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
-  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator },
-  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen },
-  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen },
+  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator, feature: 'route_sort' },
+  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen, feature: 'route_sort' },
+  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen, feature: 'package_rts' },
   { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
   { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
@@ -233,10 +242,14 @@ const tabBarStyles = (c: ThemeColors) => StyleSheet.create({
 
 // ── Main app shell ────────────────────────────────────────────────────────────
 function MainShell() {
-  const { hasRole } = useAuth();
+  const { hasRole, hasFeature } = useAuth();
 
+  // Two independent filters: ROLE (who you are) then FEATURE (what this company
+  // has, ADR-289). hasFeature fails open while capabilities are unknown, so a
+  // slow or failed call leaves the tabs intact rather than emptying the app.
   const visibleTabs = ALL_TABS.filter(t =>
-    t.roles.length === 0 || hasRole(...t.roles)
+    (t.roles.length === 0 || hasRole(...t.roles)) &&
+    (!t.feature || hasFeature(t.feature))
   );
 
   const [activeKey, setActiveKey] = useState(visibleTabs[0]?.key ?? 'Home');
@@ -246,6 +259,16 @@ function MainShell() {
     const target = key === 'NotificationsTab' ? 'Notifications' : key;
     setActiveKey(target);
   }, []);
+
+  // ADR-289: capabilities arrive AFTER the first render, so a tab that was
+  // visible on mount can disappear a moment later. Without this the tab bar
+  // highlights nothing while ActiveScreen silently falls back to Home — the
+  // user sees the Home screen with no tab selected and no idea why.
+  useEffect(() => {
+    if (visibleTabs.length && !visibleTabs.some(t => t.key === activeKey)) {
+      setActiveKey(visibleTabs[0].key);
+    }
+  }, [visibleTabs, activeKey]);
 
   const ActiveScreen = visibleTabs.find(t => t.key === activeKey)?.component ?? HomeNavigator;
 
