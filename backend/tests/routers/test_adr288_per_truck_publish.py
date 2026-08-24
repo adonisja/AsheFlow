@@ -153,68 +153,48 @@ class TestAssignPhaseIsPerTruck:
         assert "TruckAssignment.date" not in window
 
 
-class TestCrewCorrectionEmbed:
-    """ADR-288 D5 — an added member on an `active` truck posts a correction.
+class TestCrewChangeReachesTheChannel:
+    """ADR-288 D5, as SUPERSEDED by ADR-295.
 
-    The bot cannot edit the original crew embed: handle_post_embed does
-    `asyncio.create_task(channel.send(embed=embed))`, discarding the Message
-    and the id an edit needs, and no id is persisted anywhere. So: a second
-    embed. It also beats an edit on honesty — an edit rewrites history
-    silently, a second message IS the notification.
+    D5 originally posted a *correction* embed beside the stale roster, because
+    the bot had not kept the crew embed's message id. ADR-295 found that claim
+    was based on the wrong endpoint — the crew embeds already `await` their
+    send — and replaced the correction with an in-place EDIT plus a chat notice.
+
+    What survives from D5 unchanged is the REQUIREMENT: a crew change on a
+    published truck must reach the truck's channel, not just the individual's
+    DMs, and must not be gated on the employee having a Discord account. Those
+    are asserted here; the edit mechanics live in test_adr295_crew_embed_edit.
     """
 
-    CORRECTION = _code_only(dispatch._fire_crew_correction)
-
-    def test_active_truck_posts_a_correction(self):
-        assert "_fire_crew_correction(" in SWAP
+    def test_a_change_on_an_active_truck_reaches_the_channel(self):
+        assert "_fire_crew_embed_update(" in SWAP
 
     def test_it_is_sent_for_employees_with_no_discord_account(self):
         """Guarded on `discord_id` it would skip exactly the case the channel
         most needs told about — a crew member the bot cannot DM."""
-        i = SWAP.index("_fire_crew_correction(")
-        preceding = SWAP[:i]
-        block_start = preceding.rindex('if dispatch_phase == "active"')
-        assert "discord_id" not in preceding[block_start:].split("\n")[0]
+        i = SWAP.index("_fire_crew_embed_update(")
+        guard_line = SWAP[:i].rstrip().splitlines()[-1]
+        assert 'if dispatch_phase == "active":' in guard_line
+        assert "discord_id" not in guard_line
 
-    def test_it_targets_the_destination_trucks_channel(self):
-        i = SWAP.index("_fire_crew_correction(")
-        assert "destination_truck.discord_channel_id" in SWAP[i : i + 400]
+    def test_it_targets_the_destination_truck(self):
+        i = SWAP.index("_fire_crew_embed_update(")
+        assert "truck=destination_truck" in SWAP[i : i + 400]
 
-    def test_it_names_the_person_added(self):
-        assert "employee_name" in self.CORRECTION
-        assert "Added" in self.CORRECTION
+    def test_completed_trucks_are_left_to_the_transfer_system(self):
+        """A completed truck routes through transfers, which carries its own
+        notification. Two messages for one move is noise.
 
-    def test_it_says_the_earlier_crew_list_is_stale(self):
-        """A correction that does not say what it corrects is just a second
-        crew message. The driver has to know the first one is wrong."""
-        assert "out of date" in self.CORRECTION or "correction" in self.CORRECTION
-
-    def test_a_truck_with_no_channel_is_a_no_op(self):
-        assert "if not channel_id:" in self.CORRECTION
-        i = self.CORRECTION.index("if not channel_id:")
-        assert "return" in self.CORRECTION[i : i + 60]
-
-    def test_it_is_fire_and_forget_like_every_other_bot_call_here(self):
-        """The assignment is already committed. A dead bot must not 500 a
-        move that succeeded — the same rule publish_dispatch learned."""
-        assert "threading.Thread(" in self.CORRECTION
-        assert "daemon=True" in self.CORRECTION
-
-    def test_failures_are_logged_not_raised(self):
-        assert "logger.warning(" in self.CORRECTION
-
-    def test_completed_trucks_do_not_get_a_correction(self):
-        """A completed truck routes through the transfer system, which carries
-        its own notification. Two messages for one move is noise."""
-        # rindex, not index: swap_assignment has TWO `elif completed`
-        # blocks — an earlier one picking the in-app notification type,
-        # and the later Discord one. Anchoring on the first spans the
-        # correction call, so the test passes for the wrong reason.
+        rindex, not index: swap_assignment has TWO `elif completed` blocks — an
+        earlier one picking the in-app notification type, and the later Discord
+        one. Anchoring on the first spans the call and passes for the wrong
+        reason."""
         i = SWAP.rindex('elif dispatch_phase == "completed":')
-        assert "_fire_crew_correction(" not in SWAP[i:]
+        assert "_fire_crew_embed_update(" not in SWAP[i:]
 
 
-class TestManualAssignmentAlsoCorrects:
+class TestManualAssignmentAlsoReachesTheChannel:
     """ADR-288 D5, second path — found by the Dimension-8 audit pass.
 
     D5 was implemented against swap_assignment (drag a member between trucks).
@@ -226,17 +206,17 @@ class TestManualAssignmentAlsoCorrects:
     """
 
     def test_it_posts_a_correction_on_an_active_truck(self):
-        assert "_fire_crew_correction(" in ASSIGN
+        assert "_fire_crew_embed_update(" in ASSIGN
 
     def test_it_targets_the_trucks_channel(self):
-        i = ASSIGN.index("_fire_crew_correction(")
-        assert "truck.discord_channel_id" in ASSIGN[i : i + 400]
+        i = ASSIGN.index("_fire_crew_embed_update(")
+        assert "truck=truck," in ASSIGN[i : i + 400]
 
     def test_it_is_not_gated_on_the_employee_having_discord(self):
         """The DM above is gated on `employee.discord_id and not existing_conf`.
         The correction must not inherit either guard: a crew member the bot
         cannot DM is precisely the one the channel needs told about."""
-        i = ASSIGN.index("_fire_crew_correction(")
+        i = ASSIGN.index("_fire_crew_embed_update(")
         guard_line = ASSIGN[:i].rstrip().splitlines()[-1]
         assert 'if dispatch_phase == "active":' in guard_line
         assert "discord_id" not in guard_line
@@ -246,4 +226,4 @@ class TestManualAssignmentAlsoCorrects:
         """A completed-phase add grants channel access with announce=False and
         is handled by the transfer/grant path — not a correction."""
         i = ASSIGN.index('if dispatch_phase == "completed" and truck.discord_channel_id:')
-        assert "_fire_crew_correction(" not in ASSIGN[i:]
+        assert "_fire_crew_embed_update(" not in ASSIGN[i:]
