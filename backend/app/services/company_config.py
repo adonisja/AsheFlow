@@ -226,6 +226,13 @@ class DiscordGuildConfig:
     role_bot:            int | None
     role_dispatch:       int | None
     role_driver:         int | None
+    # Migration ff90779895f6 split trainer out of the captain role and added
+    # `company_configs.discord_role_trainer`. It updated the DB, the ORM column,
+    # and internal.py's reader — but NOT this dataclass or the two constructors
+    # below, so `cfg.role_trainer` raised AttributeError on every guild-config
+    # fetch. The bot treats that 500 as "Discord not configured" and skips
+    # silently, which is why publishes returned 200 with no notification.
+    role_trainer:        int | None
     role_captain:        int | None
     role_walker:         int | None
 
@@ -249,7 +256,7 @@ def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
             general_channel_id=None, invite_channel_id=None,
             role_admin=None, role_manager=None, role_asheflow=None,
             role_bot=None, role_dispatch=None, role_driver=None,
-            role_captain=None, role_walker=None,
+            role_trainer=None, role_captain=None, role_walker=None,
         )
     return DiscordGuildConfig(
         guild_id            = row.discord_guild_id,
@@ -264,6 +271,7 @@ def get_discord_config(db: Session, company_id: UUID) -> DiscordGuildConfig:
         role_bot            = row.discord_role_bot,
         role_dispatch       = row.discord_role_dispatch,
         role_driver         = row.discord_role_driver,
+        role_trainer        = row.discord_role_trainer,
         role_captain        = row.discord_role_captain,
         role_walker         = row.discord_role_walker,
     )
