@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, Date, DateTime, ForeignKey, CheckConstraint, UniqueConstraint, BigInteger
 from sqlalchemy.dialects.postgresql import UUID
 from app.models.base import Base
 import uuid
@@ -46,3 +46,17 @@ class TruckAssignment(Base):
     # Nullable: a truck-day with no bay set yet is normal, and the value is
     # prefilled from the truck's previous assignment for dispatch to confirm.
     dock_zone           = Column(String(50), nullable=True)
+
+    # ADR-295 — the Discord message id of the crew embed posted to this truck's
+    # channel, so a later crew change can EDIT that message instead of leaving
+    # a stale roster standing and posting a correction beside it.
+    #
+    # BigInteger, not String: a Discord snowflake is a 64-bit int, and
+    # trucks.discord_channel_id already stores one this way.
+    #
+    # Nullable, and it must stay nullable: every row predating this column has
+    # no embed, a truck whose channel post failed has none, and D4 CLEARS this
+    # back to NULL when a fetch finds the message deleted — that reset is what
+    # stops the next crew change retrying a dead fetch. A non-null default
+    # would make "no embed" unrepresentable.
+    crew_embed_message_id = Column(BigInteger, nullable=True)

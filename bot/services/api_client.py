@@ -114,6 +114,21 @@ class AsheFlowClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def record_crew_embed(self, date: str, truck_id: str, message_id: int) -> dict[str, Any]:
+        """Report the Discord message id of a truck's crew embed (ADR-295 D2).
+
+        Lets a later crew change EDIT that message rather than leaving a stale
+        roster in the channel with a correction posted beside it.
+        """
+        token = await self._ensure_token()
+        async with self._session.post(
+            f"{self._path_prefix}/dispatch/{date}/trucks/{truck_id}/crew-embed",
+            json={"message_id": message_id},
+            headers=self._headers(token),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
     async def get_confirmations(self, date: str) -> dict:
         """Fetch all confirmation statuses for a given dispatch date.
 
