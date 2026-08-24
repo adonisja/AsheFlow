@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import require_configured, RequireMode
 from app.services.constants import MODE_FULL
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -156,6 +156,12 @@ api_v1_router.include_router(scorecards.router,                     dependencies
 api_v1_router.include_router(scorecard_appeals.router,              dependencies=_configured)
 api_v1_router.include_router(package_lookup.router,                 dependencies=_full_mode)
 api_v1_router.include_router(package_intake.router,                 dependencies=_full_mode)
+# ADR-290 D1: MODE-INDEPENDENT — deliberately _configured, not _full_mode.
+# In workforce mode this is the bag inventory the sort consumes; in full mode
+# it is a dock-time reconciliation source against the manifest. Gating it would
+# remove the reconciliation benefit from exactly the tenants who have a
+# manifest to reconcile against.
+api_v1_router.include_router(btr_sheets.router,                     dependencies=_configured)
 api_v1_router.include_router(dashboards.router,                     dependencies=_configured)
 api_v1_router.include_router(sort_metrics.router,                    dependencies=_full_mode)
 api_v1_router.include_router(companies.router,                      dependencies=_configured)
