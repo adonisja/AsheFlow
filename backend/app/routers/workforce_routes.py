@@ -7,6 +7,7 @@ The path a workforce tenant actually uses:
     DELETE /workforce/tote-addresses/{id}     remove a mistyped entry
     POST   /workforce/commit-sort             build Route rows from those addresses
     PATCH  /workforce/routes/{id}/assign      captain gives a route to a walker  (D8)
+    PATCH  /workforce/routes/{id}/package-count  the count Flex showed at scan  (D11)
     POST   /workforce/route-lookup            which route does this address belong to? (D9)
 
 GATED TO WORKFORCE MODE. The mirror of walker_routes, which is gated to `full`.
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid as _uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -88,6 +89,15 @@ class AssignWalkerIn(BaseModel):
     employee_id: UUID
 
 
+class FlexPackageCountIn(BaseModel):
+    """D11 — the count a captain read off Amazon Flex at scan time."""
+    model_config = ConfigDict(extra="forbid")
+
+    # A route is a walking load; 2000 is far above any real one and exists to
+    # bound the write, not to express a business rule.
+    package_count: int = Field(..., ge=0, le=2000)
+
+
 class RouteLookupIn(BaseModel):
     """D9 — which of today's routes should carry this address?"""
     model_config = ConfigDict(extra="forbid")
@@ -138,6 +148,9 @@ class WorkforceRouteOut(BaseModel):
     status: str
     assigned_to: Optional[UUID] = None
     assigned_to_name: Optional[str] = None
+    # D11. NULL = not recorded yet; 0 = genuinely carried nothing. package_count
+    # above counts captain-entered ADDRESSES, which is not a parcel count.
+    flex_package_count: Optional[int] = None
 
 
 class CommitWorkforceSortOut(BaseModel):
@@ -533,6 +546,7 @@ def commit_workforce_sort(
                 block_keys=list(r.block_keys or []), package_count=r.package_count,
                 slot_cost=r.slot_cost, capacity_limit=r.capacity_limit,
                 overflow_half_slots=r.overflow_half_slots, status=r.status,
+                flex_package_count=r.flex_package_count,
             )
             for r in created
         ],
@@ -630,6 +644,74 @@ def assign_walker(
         slot_cost=route.slot_cost, capacity_limit=route.capacity_limit,
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=walker.id, assigned_to_name=walker.name,
+        flex_package_count=route.flex_package_count,
+    )
+
+
+# ── per-route package count (D11) ─────────────────────────────────────────────
+
+@router.patch("/routes/{route_id}/package-count", response_model=WorkforceRouteOut)
+def record_flex_package_count(
+    route_id: UUID,
+    payload: FlexPackageCountIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """Record the package count Amazon Flex showed while the walker scanned.
+
+    D11: `Route.package_count` is derived by the sort as the number of packages
+    it carried — and a workforce "package" is one captain-entered ADDRESS. A
+    route holding one tote with three addresses reports 3 while that tote
+    physically holds fifty, and both `dashboard_summaries` and
+    `assignment_history` read that field. Flex shows the real number at scan
+    time, so the captain records it here.
+
+    Deliberately RE-RECORDABLE, unlike the one-way stamps elsewhere in this
+    codebase. A miscounted scan is corrected in the moment, and a 409 on the
+    second attempt would leave a known-wrong number in the reporting rather than
+    protecting anything. Every write is audited with the previous value, so the
+    correction is traceable.
+    """
+    route = (
+        db.query(Route)
+        .filter(Route.id == route_id, Route.company_id == caller.company_id)
+        .first()
+    )
+    if route is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route not found.")
+
+    ta = _assignment(db, caller, route.truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, route.route_date, db)
+
+    previous = route.flex_package_count
+    route.flex_package_count = payload.package_count
+    route.flex_count_recorded_by = caller.id
+    route.flex_count_recorded_at = datetime.now(timezone.utc)
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_route.flex_count",
+        target_table="routes",
+        target_id=str(route.id),
+        before={"flex_package_count": previous},
+        after={"flex_package_count": payload.package_count},
+        detail={"route_number": route.route_number, "corrected": previous is not None},
+    )
+    db.commit()
+    db.refresh(route)
+
+    names = _participant_names(db, caller.company_id, [route])
+    return WorkforceRouteOut(
+        id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
+        block_keys=list(route.block_keys or []), package_count=route.package_count,
+        slot_cost=route.slot_cost, capacity_limit=route.capacity_limit,
+        overflow_half_slots=route.overflow_half_slots, status=route.status,
+        assigned_to_name=names.get(route.id),
+        flex_package_count=route.flex_package_count,
     )
 
 
