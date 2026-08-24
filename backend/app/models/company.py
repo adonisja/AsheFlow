@@ -17,6 +17,19 @@ class Company(Base):
     name             = Column(String(255),        nullable=False)
     slug             = Column(String(100),        nullable=False, unique=True, index=True)
     amazon_dsp_code  = Column(String(20),         nullable=True)
+    # ADR-289 D8 / ADR-290 D6: the DSP name as Amazon prints it on the BTR sheet
+    # (e.g. "NYCD"). Distinct from `name`, which is the company's own legal or
+    # trading name and need not match Amazon's label.
+    #
+    # Lives here rather than on CompanyConfig (where the ADR first placed it)
+    # because its sibling `amazon_dsp_code` is here: the two are one fact about
+    # the company's Amazon identity, and splitting them across tables would mean
+    # a BTR import joins two rows to validate one sheet.
+    #
+    # Nullable: a company that has never seen a BTR sheet has no value to give,
+    # and ADR-290 D6 treats "not configured" as "cannot validate" rather than
+    # inventing a match.
+    amazon_dsp_name  = Column(String(100),        nullable=True)
     timezone         = Column(String(64),         nullable=False, default="America/New_York")
     is_active        = Column(Boolean,            nullable=False, default=True, index=True)
     # ADR-280: is this tenant's data real?

@@ -47,6 +47,18 @@ class TruckAssignment(Base):
     # prefilled from the truck's previous assignment for dispatch to confirm.
     dock_zone           = Column(String(50), nullable=True)
 
+    # ADR-290: the warehouse zone where THIS TRUCK'S TOTES are staged ("BTR31").
+    #
+    # A DIFFERENT PLACE from dock_zone above. dock_zone is where the driver
+    # collects the vehicle; this is where the load is picked. An earlier draft of
+    # ADR-290 proposed splitting dock_zone on the theory it conflated the two —
+    # it does not (see that ADR's context correction), so this is purely
+    # additive and the six existing dock_zone readers are untouched.
+    #
+    # Denormalised from BTRSheet.btr_loading_zone at import so the dispatch board
+    # and the driver's home card can show it without joining the sheet tables.
+    btr_loading_zone    = Column(String(50), nullable=True)
+
     # ADR-295 — the Discord message id of the crew embed posted to this truck's
     # channel, so a later crew change can EDIT that message instead of leaving
     # a stale roster standing and posting a correction beside it.
