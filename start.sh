@@ -11,7 +11,11 @@ PLATFORM="${1:-web}"
 DEVICE_ARG="${2:-}"
 
 echo "Starting AsheFlow backend stack (Postgres, Redis, FastAPI, Bot, Celery)..."
-if ! docker compose up -d; then
+# The dev overlay is REQUIRED, not optional: docker-compose.yml alone exposes
+# 8000 only on the Docker network (for Caddy) and never publishes it to the
+# host, so the readiness check below — and the mobile app, which targets
+# http://<LAN_IP>:8000 — both find nothing listening. It also enables --reload.
+if ! docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d; then
   echo ""
   echo "ERROR: docker-compose failed. Check that .env exists at the project root and contains all required variables (see .env.example)."
   exit 1
@@ -20,9 +24,20 @@ fi
 # Wait until the backend is accepting connections before handing off to the
 # dev server. Avoids "connection refused" errors on first API call after boot.
 echo "Waiting for backend to be ready..."
-until curl -sf http://localhost:8000/health > /dev/null 2>&1; do
+# Bounded. An unbounded loop here hangs forever on a backend that will never
+# come up (bad .env, failed migration, unpublished port) with no clue why —
+# the failure looks like a hung script rather than a broken container.
+for _ in $(seq 1 60); do
+  curl -sf http://localhost:8000/health > /dev/null 2>&1 && break
   sleep 1
 done
+if ! curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+  echo ""
+  echo "ERROR: backend did not become ready within 60s."
+  echo "Its last log lines:"
+  docker logs asheflow_backend --tail 20 2>&1 | sed 's/^/  /'
+  exit 1
+fi
 echo "Backend is up."
 echo ""
 

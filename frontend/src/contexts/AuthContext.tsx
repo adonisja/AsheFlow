@@ -12,6 +12,16 @@ interface AuthUser {
   firstName?: string;
 }
 
+/** What this company can do (ADR-289). Read once at sign-in from
+ *  GET /companies/my-capabilities and used to gate navigation. */
+export interface Capabilities {
+  operating_mode: 'full' | 'workforce';
+  /** Feature keys. A key ABSENT means "render no entry point for it". Clients
+   *  must not infer features from operating_mode itself, so adding a mode later
+   *  needs no client release. */
+  features: string[];
+}
+
 interface AuthContextType {
   user: AuthUser | null;
   groups: string[];
@@ -19,6 +29,13 @@ interface AuthContextType {
   isLoading: boolean;
   isConfigured: boolean;
   refreshConfigured: () => Promise<void>;
+  /** null while loading or when the call failed — see hasFeature. */
+  capabilities: Capabilities | null;
+  /** True when the feature is available. Returns TRUE while capabilities are
+   *  unknown: a transient failure must not blank out a working nav, and every
+   *  gated route is enforced server-side anyway (RequireMode → 404). Failing
+   *  open here costs a dead tab; failing closed costs a walker their app. */
+  hasFeature: (key: string) => boolean;
   federatedError: string | null;
   clearFederatedError: () => void;
   checkAuth: () => Promise<void>;
@@ -32,6 +49,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isConfigured, setIsConfigured] = useState(true);
   const [federatedError, setFederatedError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
 
   const refreshConfigured = async () => {
     try {
@@ -41,6 +59,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // Non-admins will 403 here — treat as configured so gate doesn't block them
       setIsConfigured(true);
     }
+  };
+
+  /** Load this company's capabilities. Called for EVERY role, not just admins:
+   *  a walker's nav depends on it as much as an admin's. On failure we leave
+   *  capabilities null, which hasFeature treats as "show everything". */
+  const loadCapabilities = async () => {
+    try {
+      const res = await axiosClient.get<Capabilities>('/companies/my-capabilities');
+      setCapabilities(res.data);
+    } catch {
+      setCapabilities(null);
+    }
+  };
+
+  const hasFeature = (key: string) => {
+    if (!capabilities) return true;   // unknown → fail open; server still enforces
+    return capabilities.features.includes(key);
   };
 
   const clearFederatedError = () => setFederatedError(null);
@@ -90,11 +125,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setIsConfigured(true);
       }
 
+      // Every role, not just admins (ADR-289).
+      await loadCapabilities();
+
     } catch {
       // If this throws, the user is simply not logged in.
       setUser(null);
       setGroups([]);
       setIsConfigured(true);
+      setCapabilities(null);
     } finally {
       // We are done checking against AWS
       setIsLoading(false);
@@ -113,6 +152,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         case 'signedOut':
           setUser(null);
           setGroups([]);
+          setCapabilities(null);
           break;
         case 'signIn_failure': {
           // Fired when a federated flow is rejected — e.g. pre-signup Lambda blocks the user.
@@ -137,6 +177,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     isLoading,
     isConfigured,
     refreshConfigured,
+    capabilities,
+    hasFeature,
     federatedError,
     clearFederatedError,
     checkAuth,

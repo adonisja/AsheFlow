@@ -242,7 +242,7 @@ function TitleBar() {
 // ---------------------------------------------------------------------------
 
 const Navbar = () => {
-  const { groups, isAuthenticated } = useAuth();
+  const { groups, isAuthenticated, hasFeature } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [trainerPhase, setTrainerPhase] = useState<number | null>(null);
   const [hasActiveQuiz, setHasActiveQuiz] = useState(false);
@@ -270,7 +270,7 @@ const Navbar = () => {
 
   // Config-driven nav: one source of truth for both desktop and mobile, and
   // the App.tsx route gates read the same role sets (see navConfig.ts).
-  const navItems = navItemsForGroups(groups, { trainerPhase, hasActiveQuiz });
+  const navItems = navItemsForGroups(groups, { trainerPhase, hasActiveQuiz, hasFeature });
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all duration-200 press ${
