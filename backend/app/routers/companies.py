@@ -2,12 +2,12 @@ import logging
 import re
 import secrets
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
@@ -143,6 +143,10 @@ class CompanyConfigResponse(BaseModel):
     effort_time_factor:               Optional[float]
     effort_physical_factor:           Optional[float]
     ingestion_mode:                   Optional[str]
+    # ADR-289: read-only here. Set only via PATCH /admin/companies/{id}/operating-mode.
+    # Exposed on the tenant-facing read so a company admin can see WHY a feature is
+    # absent; _GUARDED_FIELDS refuses it on both write paths.
+    operating_mode:                   str = "workforce"
     # Scorecard tier targets (ADR-262). None = not configured.
     scorecard_dcr_target:             Optional[float] = None
     scorecard_dnr_dpmo_target:        Optional[int]   = None
@@ -205,6 +209,7 @@ class CompanyConfigResponse(BaseModel):
             effort_time_factor=obj.effort_time_factor,
             effort_physical_factor=obj.effort_physical_factor,
             ingestion_mode=obj.ingestion_mode,
+            operating_mode=obj.operating_mode,
             scorecard_dcr_target=obj.scorecard_dcr_target,
             scorecard_dnr_dpmo_target=obj.scorecard_dnr_dpmo_target,
             scorecard_pod_target=obj.scorecard_pod_target,
@@ -656,6 +661,19 @@ _SORT_TUNING_FIELDS = frozenset({
 
 _SUPER_ADMIN_ONLY_FIELDS = frozenset({"invite_expiry_days"}) | _SORT_TUNING_FIELDS
 
+# ADR-289: fields that carry guards a generic field-setter cannot express — for
+# operating_mode: a no-op 400, an in-flight 409, a typed confirmation and a
+# forced-override audit entry.
+#
+# Deliberately NOT in _SUPER_ADMIN_ONLY_FIELDS. That set means "a super admin may set
+# this here"; these fields may be set by NOBODY here. _apply_config_update checks this
+# set FIRST and raises regardless of allow_super_admin_fields, which closes the bypass
+# where the super-admin config PATCH passes allow_super_admin_fields=True and would
+# otherwise write the value with none of the guards.
+#
+# The only writer is PATCH /admin/companies/{id}/operating-mode.
+_GUARDED_FIELDS = frozenset({"operating_mode"})
+
 # All editable config fields with their types (used for validation messaging)
 _TIME_FIELDS = frozenset({"shift_start", "shift_end", "checkin_open", "checkin_close", "dispatch_confirmation_cutoff"})
 
@@ -784,6 +802,17 @@ def _apply_config_update(config: CompanyConfig, payload: CompanyConfigUpdate, al
     data = payload.model_dump(exclude_unset=True)
 
     for field, value in data.items():
+        # ADR-289: refused on BOTH paths, super admin included. These fields have
+        # guards (no-op, in-flight, forced-override audit) that only their dedicated
+        # endpoint runs; allowing them here would set the value with none of them.
+        if field in _GUARDED_FIELDS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"'{field}' cannot be changed here. "
+                    f"Use the dedicated endpoint for this setting."
+                ),
+            )
         if field in _SUPER_ADMIN_ONLY_FIELDS and not allow_super_admin_fields:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -858,6 +887,240 @@ def update_company_config_super_admin(
 
 
 # ---------------------------------------------------------------------------
+# Operating mode (ADR-289) — its own endpoint, because it has its own guards
+# ---------------------------------------------------------------------------
+
+class OperatingModeUpdate(BaseModel):
+    """Request body for a mode flip.
+
+    `confirm_slug` is a typed confirmation, not a checkbox: a super admin has several
+    tenants open at once and the realistic mistake is flipping the wrong one. It must
+    match the target company's slug exactly.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    operating_mode: Literal["full", "workforce"]
+    confirm_slug:   str = Field(..., min_length=1, max_length=100)
+    # Overrides the in-flight guard. For the onboarding-mistake case: the mode was set
+    # wrongly and today's data is junk anyway. Recorded in the audit row.
+    force:          bool = False
+    reason:         Optional[str] = Field(None, max_length=500)
+
+
+class OperatingModeResponse(BaseModel):
+    company_id:     UUID
+    company_slug:   str
+    operating_mode: str
+    previous_mode:  str
+    forced:         bool
+    notified:       int      # admins/management told about the change
+
+
+def _mode_flip_blockers(db: Session, company_id: UUID) -> list[str]:
+    """Live work that a mode flip would strand mid-day (ADR-289 D1c).
+
+    A walker mid-route whose route endpoints start returning 404 cannot finish their
+    route, cannot report an undelivered package, and cannot tell anyone why — the
+    surfaces that would let them are the ones that just disappeared. This is the one
+    place a warning is insufficient and the change must be refused.
+    """
+    from app.models.walker_route import Route
+    from app.models.truck_assignment import TruckAssignment
+    from app.models.truck_zone import TruckZone
+    from app.services.local_date import company_today
+
+    today = company_today(db, company_id)
+    blockers: list[str] = []
+
+    live_routes = (
+        db.query(Route)
+        .join(TruckAssignment, TruckAssignment.id == Route.truck_assignment_id)
+        .filter(
+            Route.company_id == company_id,
+            TruckAssignment.company_id == company_id,
+            Route.route_date == today,
+            Route.status.in_(("assigned", "in_progress")),
+            Route.returned_at.is_(None),
+        )
+        .count()
+    )
+    if live_routes:
+        blockers.append(f"{live_routes} route(s) are still out")
+
+    committed_sort = (
+        db.query(TruckZone)
+        .filter(
+            TruckZone.company_id == company_id,
+            TruckZone.zone_date == today,
+            TruckZone.is_active.is_(True),
+        )
+        .count()
+    )
+    if committed_sort:
+        blockers.append("today's sort has already been committed")
+
+    return blockers
+
+
+@router.patch("/{company_id}/operating-mode", response_model=OperatingModeResponse)
+def set_operating_mode(
+    company_id: UUID,
+    payload: OperatingModeUpdate,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Change a company's operating mode. Super admin only (ADR-289).
+
+    This is the highest-impact configuration change in the platform: it decides whether
+    ~40 endpoints exist for the tenant. It is deliberately NOT settable through either
+    config PATCH — those would set it with none of the guards below.
+
+    Guards, in order:
+      400  the mode is already what you asked for (no-op — no audit noise, no notifications)
+      400  confirm_slug does not match the company
+      409  live work would be stranded (unless force=true)
+
+    Nothing is deleted in either direction. Records from the other mode are retained and
+    simply become unreachable through the UI, which is what makes the change recoverable.
+    """
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    config = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    if not config:
+        raise HTTPException(status_code=404, detail="Company config not found.")
+
+    previous = config.operating_mode
+
+    # No-op — mirrors deactivate_company's "already inactive" guard. A flip to the
+    # current value should not write an audit row or notify anyone.
+    if previous == payload.operating_mode:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Company is already in '{payload.operating_mode}' mode.",
+        )
+
+    if payload.confirm_slug != company.slug:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Confirmation does not match this company. "
+                f"Type the company slug exactly to confirm."
+            ),
+        )
+
+    blockers = _mode_flip_blockers(db, company_id)
+    if blockers and not payload.force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot change operating mode while {', and '.join(blockers)}. "
+                "Wait until the day is closed out, or re-send with force=true if this "
+                "day's data can be abandoned."
+            ),
+        )
+
+    config.operating_mode = payload.operating_mode
+
+    # Tell the tenant's own admins. They cannot make this change (it is super-admin
+    # only), so without this they would simply find features missing.
+    notified = _notify_mode_change(
+        db, company_id, previous, payload.operating_mode
+    )
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(company_id),
+        action_type="company_config.operating_mode_change",
+        target_table="company_configs",
+        target_id=str(config.id),
+        before={"operating_mode": previous},
+        after={
+            **super_admin_identity(_),
+            "operating_mode": payload.operating_mode,
+            "forced":   payload.force,
+            "blockers": blockers,          # what was overridden, when forced
+            "reason":   payload.reason,
+            "company_slug": company.slug,
+        },
+    )
+    db.commit()
+    db.refresh(config)
+
+    logger.warning(
+        "operating_mode_changed",
+        extra={
+            "company_id": str(company_id),
+            "from": previous,
+            "to": payload.operating_mode,
+            "forced": payload.force,
+            "blockers": blockers,
+        },
+    )
+
+    return OperatingModeResponse(
+        company_id=company_id,
+        company_slug=company.slug,
+        operating_mode=config.operating_mode,
+        previous_mode=previous,
+        forced=payload.force,
+        notified=notified,
+    )
+
+
+def _notify_mode_change(
+    db: Session, company_id: UUID, previous: str, new_mode: str
+) -> int:
+    """Notify the tenant's admins/management that the mode changed. Returns the count.
+
+    The two directions have different consequences and the message says which. The
+    workforce -> full direction is the one people underestimate: it does not restore
+    capability, it replaces a working manual path with a pipeline that produces nothing
+    until a manifest is uploaded and enriched.
+    """
+    from app.models.notification import Notification
+
+    if new_mode == "workforce":
+        message = (
+            "Your AsheFlow plan changed: package sorting is now off. "
+            "Route sorting, package scanning and per-package returns are unavailable; "
+            "crews, training, scheduling and compliance are unchanged. "
+            "Nothing was deleted."
+        )
+    else:
+        message = (
+            "Your AsheFlow plan changed: package sorting is now on. "
+            "Manual tote entry is replaced by manifest-driven sorting — upload today's "
+            "manifest before crews arrive, or there will be no routes. "
+            "Nothing was deleted."
+        )
+
+    recipients = (
+        db.query(Employee)
+        .filter(
+            Employee.company_id == company_id,
+            Employee.role.in_(("admin", "management")),
+            Employee.is_active.is_(True),
+        )
+        .all()
+    )
+    for emp in recipients:
+        db.add(Notification(
+            company_id=company_id,
+            employee_id=emp.id,
+            type="operating_mode_change",
+            message=message,
+        ))
+    return len(recipients)
+
+
+# ---------------------------------------------------------------------------
 # Company admin: read + update their own config
 # ---------------------------------------------------------------------------
 
@@ -887,6 +1150,76 @@ def get_my_company_info(
     if not company:
         raise HTTPException(status_code=404, detail="Company not found.")
     return {"name": company.name, "timezone": company.timezone}
+
+
+class CapabilitiesResponse(BaseModel):
+    """What this tenant's app is allowed to show (ADR-289).
+
+    The single source of truth for client navigation. Without it every new surface has
+    to remember to check the mode, and one that forgets renders a door onto a 404.
+    """
+    operating_mode: str
+    # Feature keys the client gates navigation on. A key ABSENT from this list means
+    # "do not render an entry point for it" — clients must not infer features from the
+    # mode string itself, so adding a mode later does not require a client release.
+    features: list[str]
+
+
+# Features that exist only when the tenant has an Amazon package feed. Mirrors the
+# routers gated with RequireMode(MODE_FULL) in main.py — keep the two in step.
+_FULL_MODE_FEATURES: tuple[str, ...] = (
+    "manifest_upload",
+    "station_sort",
+    "route_sort",
+    "package_rts",
+    "package_intake",
+    "package_lookup",
+    "sort_metrics",
+)
+
+# Features present regardless of mode.
+_BASE_FEATURES: tuple[str, ...] = (
+    "dispatch",
+    "crew",
+    "training",
+    "scheduling",
+    "time_off",
+    "incidents",
+    "gear",
+    "driver_surveys",
+    "scorecards",
+    "vehicle_compliance",
+    "notifications",
+)
+
+
+@company_admin_router.get("/my-capabilities", response_model=CapabilitiesResponse)
+def get_my_capabilities(
+    caller: Employee = Depends(get_caller_employee),
+    db: Session = Depends(get_db),
+):
+    """What this caller's company can do. Available to EVERY authenticated role.
+
+    Deliberately not role-gated: a walker's app needs this to build its navigation just
+    as much as an admin's does, and a 403 here would leave field staff with either a
+    blank shell or a menu full of 404s.
+
+    Roles still gate individual endpoints — this says what the COMPANY has, not what
+    the CALLER may do.
+    """
+    config = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == caller.company_id)
+        .first()
+    )
+    # Absent config is treated as workforce — the same safe direction RequireMode takes.
+    mode = config.operating_mode if config else "workforce"
+
+    features = list(_BASE_FEATURES)
+    if mode == "full":
+        features.extend(_FULL_MODE_FEATURES)
+
+    return CapabilitiesResponse(operating_mode=mode, features=features)
 
 
 @company_admin_router.get("/my-config", response_model=CompanyConfigResponse)
