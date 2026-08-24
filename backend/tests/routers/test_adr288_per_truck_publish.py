@@ -32,6 +32,9 @@ def _code_only(obj) -> str:
 PUB = _code_only(dispatch.publish_dispatch)
 FIN = _code_only(dispatch.finalize_dispatch)
 ASSIGN = _code_only(dispatch.manual_assignment)
+# swap_assignment is the OTHER write path onto a truck (drag between trucks).
+# It carried its own copy of the day-level phase scan; D3/D5 below cover it.
+SWAP = _code_only(dispatch.swap_assignment)
 
 
 class TestPublishScopesToPlanned:
@@ -117,3 +120,130 @@ class TestLateAdditionReadsItsOwnTruck:
         checks, right after the assignment is resolved."""
         guard = 'if (truck_assignment.status or "planned") == "completed":'
         assert ASSIGN.index(guard) < ASSIGN.index("new_member = AssignmentMember(")
+
+
+class TestAssignPhaseIsPerTruck:
+    """ADR-288 D3 — a live bug found while implementing D5.
+
+    `manual_assignment` derived the phase from EVERY TruckAssignment on the
+    date and took the furthest-along status any of them had:
+
+        date_statuses = {row.status for row in db.query(TruckAssignment)...}
+        if "completed" in date_statuses: dispatch_phase = "completed"
+
+    Correct while publishing was day-level and all trucks moved in lockstep.
+    Under per-truck publishing it misfires: with truck A completed and truck B
+    still planned, dropping someone onto B took the "completed" branch — DM'ing
+    them "you've been assigned for today", granting B's Discord channel, and
+    skipping the confirmation reset, for a truck nobody had published.
+    """
+
+    def test_phase_reads_the_destination_trucks_own_status(self):
+        assert 'dispatch_phase = destination_assignment.status or "planned"' in SWAP
+
+    def test_the_date_wide_scan_is_gone(self):
+        assert "date_statuses" not in SWAP
+
+    def test_no_other_truck_on_the_date_is_consulted(self):
+        """The whole point: one other truck's status must not reach this
+        decision. Any surviving query over TruckAssignment-by-date in the
+        phase derivation would reintroduce it."""
+        i = SWAP.index("dispatch_phase =")
+        window = SWAP[max(0, i - 500) : i + 200]
+        assert "TruckAssignment.date" not in window
+
+
+class TestCrewCorrectionEmbed:
+    """ADR-288 D5 — an added member on an `active` truck posts a correction.
+
+    The bot cannot edit the original crew embed: handle_post_embed does
+    `asyncio.create_task(channel.send(embed=embed))`, discarding the Message
+    and the id an edit needs, and no id is persisted anywhere. So: a second
+    embed. It also beats an edit on honesty — an edit rewrites history
+    silently, a second message IS the notification.
+    """
+
+    CORRECTION = _code_only(dispatch._fire_crew_correction)
+
+    def test_active_truck_posts_a_correction(self):
+        assert "_fire_crew_correction(" in SWAP
+
+    def test_it_is_sent_for_employees_with_no_discord_account(self):
+        """Guarded on `discord_id` it would skip exactly the case the channel
+        most needs told about — a crew member the bot cannot DM."""
+        i = SWAP.index("_fire_crew_correction(")
+        preceding = SWAP[:i]
+        block_start = preceding.rindex('if dispatch_phase == "active"')
+        assert "discord_id" not in preceding[block_start:].split("\n")[0]
+
+    def test_it_targets_the_destination_trucks_channel(self):
+        i = SWAP.index("_fire_crew_correction(")
+        assert "destination_truck.discord_channel_id" in SWAP[i : i + 400]
+
+    def test_it_names_the_person_added(self):
+        assert "employee_name" in self.CORRECTION
+        assert "Added" in self.CORRECTION
+
+    def test_it_says_the_earlier_crew_list_is_stale(self):
+        """A correction that does not say what it corrects is just a second
+        crew message. The driver has to know the first one is wrong."""
+        assert "out of date" in self.CORRECTION or "correction" in self.CORRECTION
+
+    def test_a_truck_with_no_channel_is_a_no_op(self):
+        assert "if not channel_id:" in self.CORRECTION
+        i = self.CORRECTION.index("if not channel_id:")
+        assert "return" in self.CORRECTION[i : i + 60]
+
+    def test_it_is_fire_and_forget_like_every_other_bot_call_here(self):
+        """The assignment is already committed. A dead bot must not 500 a
+        move that succeeded — the same rule publish_dispatch learned."""
+        assert "threading.Thread(" in self.CORRECTION
+        assert "daemon=True" in self.CORRECTION
+
+    def test_failures_are_logged_not_raised(self):
+        assert "logger.warning(" in self.CORRECTION
+
+    def test_completed_trucks_do_not_get_a_correction(self):
+        """A completed truck routes through the transfer system, which carries
+        its own notification. Two messages for one move is noise."""
+        # rindex, not index: swap_assignment has TWO `elif completed`
+        # blocks — an earlier one picking the in-app notification type,
+        # and the later Discord one. Anchoring on the first spans the
+        # correction call, so the test passes for the wrong reason.
+        i = SWAP.rindex('elif dispatch_phase == "completed":')
+        assert "_fire_crew_correction(" not in SWAP[i:]
+
+
+class TestManualAssignmentAlsoCorrects:
+    """ADR-288 D5, second path — found by the Dimension-8 audit pass.
+
+    D5 was implemented against swap_assignment (drag a member between trucks).
+    But manual_assignment is the OTHER way a member lands on a published truck
+    (drag from the available pool), and it DM'd the individual while leaving
+    the truck channel's posted crew embed stale — the identical defect D5
+    exists to fix. The feature was half-applied until the audit asked "which
+    other write paths create the data this depends on?".
+    """
+
+    def test_it_posts_a_correction_on_an_active_truck(self):
+        assert "_fire_crew_correction(" in ASSIGN
+
+    def test_it_targets_the_trucks_channel(self):
+        i = ASSIGN.index("_fire_crew_correction(")
+        assert "truck.discord_channel_id" in ASSIGN[i : i + 400]
+
+    def test_it_is_not_gated_on_the_employee_having_discord(self):
+        """The DM above is gated on `employee.discord_id and not existing_conf`.
+        The correction must not inherit either guard: a crew member the bot
+        cannot DM is precisely the one the channel needs told about."""
+        i = ASSIGN.index("_fire_crew_correction(")
+        guard_line = ASSIGN[:i].rstrip().splitlines()[-1]
+        assert 'if dispatch_phase == "active":' in guard_line
+        assert "discord_id" not in guard_line
+        assert "existing_conf" not in guard_line
+
+    def test_completed_adds_do_not_get_one(self):
+        """A completed-phase add grants channel access with announce=False and
+        is handled by the transfer/grant path — not a correction."""
+        i = ASSIGN.index('if dispatch_phase == "completed" and truck.discord_channel_id:')
+        assert "_fire_crew_correction(" not in ASSIGN[i:]
