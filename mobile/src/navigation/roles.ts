@@ -63,3 +63,10 @@ export const REATTEMPT_ROLES          = ['driver', 'trainer', 'captain'] as cons
 // for the reason _allow_delivery already records: they do not walk blocks or
 // assess buildings.
 export const TRUCK_BUILDINGS_ROLES    = ['walker', 'trainer', 'trainee', 'captain', 'dispatch'] as const;
+
+// ADR-291: entering tote addresses is route-lead work — a captain walks the
+// truck reading addresses off packages. Driver included because a solo driver
+// runs the truck when no captain is crewed; dispatch for station-side
+// correction. Walkers deliberately absent: they carry the routes this produces,
+// they do not define them.
+export const TOTE_ADDRESS_ROLES     = ['captain', 'driver', 'dispatch'] as const;
