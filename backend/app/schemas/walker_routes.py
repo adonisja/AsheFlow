@@ -469,6 +469,13 @@ class CommitSortResponse(BaseModel):
     packages_dropped: int
     dropped_tbas: list[str]
     unassigned_misroutes: list[MisroutedPackageOut]
+    # ADR-304 D3. Packages skipped because they sit on a route this re-sort
+    # RETAINED (in progress or completed). Distinct from `dropped_tbas`, which
+    # is "not in the manifest" — these are known, accounted for, and being
+    # delivered by someone right now. Reported rather than silently omitted so a
+    # re-sort that plans fewer packages explains why.
+    already_routed_tbas: list[str] = []
+    retained_routes: int = 0
 
 
 # ---------------------------------------------------------------------------
