@@ -64,3 +64,23 @@ def color_hex(color: str | None) -> str | None:
         return None
     enum = _COLOR_ALIASES.get(color.strip().lower())
     return BAG_COLOR_HEX[enum] if enum else None
+
+
+# Reverse of BAG_COLOR_HEX. A client that receives only a hex cannot LABEL or
+# SEARCH by colour — and colour is how a captain actually finds a tote in a
+# stack ("the orange one"), with the number confirming it. Deriving the name
+# here keeps one source of truth; duplicating the map client-side would drift
+# the moment a colour is added.
+_HEX_TO_NAME: dict[str, str] = {hexv: name for name, hexv in BAG_COLOR_HEX.items()}
+
+
+def color_name_for_hex(hex_value: str | None) -> str | None:
+    """"#F97316" -> "orange". None for an unknown or absent colour.
+
+    None is a real answer: a sheet whose label carried no colour word, or one
+    this system does not know. The client renders a neutral pill rather than
+    guessing a name.
+    """
+    if not hex_value:
+        return None
+    return _HEX_TO_NAME.get(hex_value.strip().upper()) or _HEX_TO_NAME.get(hex_value.strip())
