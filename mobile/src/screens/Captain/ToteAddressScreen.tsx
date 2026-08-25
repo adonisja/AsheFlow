@@ -77,7 +77,10 @@ type UnaddressedBag = {
   bag_id: string;
   /** Resolved hex from the sheet's colour word; null renders a neutral pill. */
   bag_color: string | null;
-  /** Reference only (ADR-290 D7) — how a captain locates the physical stack. */
+  /** The colour WORD ("orange"), for labelling and search. */
+  bag_color_name: string | null;
+  /** Reference only (ADR-290 D7). Deliberately NOT a grouping key — a captain
+   *  cannot tell which Amazon route a physical tote belongs to by looking. */
   amazon_route_name: string | null;
 };
 
@@ -284,31 +287,54 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                   onChangeText={setFilter}
                   placeholder="Filter by number or colour"
                   placeholderTextColor={c.mutedForeground}
-                  keyboardType="number-pad"
+                  // NOT number-pad. The placeholder invites a colour, and a
+                  // numeric keyboard makes "orange" literally untypable — the
+                  // control contradicted its own label.
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  clearButtonMode="while-editing"
                   returnKeyType="search"
                   style={[s.input, s.filterInput]}
                   accessibilityLabel="Filter bags"
                 />
               ) : null}
 
-              {groupedBags.map(([routeName, bags]) => {
-                const open = openGroup === routeName || groupedBags.length === 1;
+              {groupedBags.map(([routeName, bags], gi) => {
+                // First group opens by default so the screen never lands fully
+                // collapsed. A single group is NOT a reason to hide the header:
+                // 25 bags under one colour is exactly when the captain needs to
+                // see what they are looking at. The old `length > 1` guard had
+                // this backwards and rendered a flat 25-chip grid, unlabelled.
+                const open = openGroup === null ? gi === 0 : openGroup === routeName;
                 return (
                   <View key={routeName} style={s.group}>
-                    {groupedBags.length > 1 ? (
-                      <TouchableOpacity
-                        onPress={() => setOpenGroup(open ? null : routeName)}
-                        style={s.groupHeader}
-                        accessibilityLabel={`${routeName}, ${bags.length} bags`}
-                        accessibilityState={{ expanded: open }}
-                      >
-                        <Text style={s.groupTitle}>{routeName}</Text>
-                        <View style={s.headerRight}>
-                          <Badge tone="muted">{bags.length}</Badge>
-                          <Text style={s.chevron}>{open ? '▾' : '▸'}</Text>
-                        </View>
-                      </TouchableOpacity>
-                    ) : null}
+                    <TouchableOpacity
+                      // Collapsing must not fall back to "first group open".
+                      onPress={() => {
+                        tick();
+                        setOpenGroup(open ? '__none__' : routeName);
+                      }}
+                      style={s.groupHeader}
+                      accessibilityLabel={`${routeName}, ${bags.length} bags`}
+                      accessibilityState={{ expanded: open }}
+                    >
+                      <View style={s.groupLeft}>
+                        {/* Safe to read bags[0]: the group KEY is the colour,
+                            so every bag in this group shares one hex. */}
+                        <View
+                          style={[
+                            s.groupSwatch,
+                            { backgroundColor: bags[0]?.bag_color ?? c.surfaceMuted },
+                            !bags[0]?.bag_color && s.swatchEmpty,
+                          ]}
+                        />
+                        <Text style={s.groupTitle}>{titleCase(routeName)}</Text>
+                      </View>
+                      <View style={s.headerRight}>
+                        <Badge tone="muted">{bags.length}</Badge>
+                        <Text style={s.chevron}>{open ? '▾' : '▸'}</Text>
+                      </View>
+                    </TouchableOpacity>
 
                     {open ? (
                       <View style={s.chips}>
@@ -349,9 +375,11 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
               {/* No BTR sheet means the bag list is unknowable, so free entry is
                   the only way through — the fallback, never the default. */}
               {!hasSheet ? (
-                <>
-                  <Text style={[s.label, s.labelSpaced]}>
-                    No BTR sheet today — type the bag number
+                <View style={s.fallback}>
+                  <Text style={s.fallbackTitle}>No BTR sheet imported today</Text>
+                  <Text style={s.fallbackHint}>
+                    Without it we do not know which totes are on this truck, so
+                    type the bag number from the label.
                   </Text>
                   <View style={s.inlineRow}>
                     <TextInput
@@ -373,7 +401,7 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                       Use
                     </Button>
                   </View>
-                </>
+                </View>
               ) : null}
             </View>
           ) : null}
@@ -508,26 +536,47 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/** Filter by id, then group by Amazon route. Returns [routeName, bags][]. */
+/** Filter by number OR colour, then group by COLOUR. Returns [colour, bags][].
+ *
+ * GROUPED BY COLOUR, NOT BY AMAZON ROUTE. An earlier version grouped by route,
+ * which is useless in the hand: a captain looking at a physical tote has no way
+ * to tell which Amazon route it belongs to. Colour is the one attribute they
+ * can SEE, so it is the only grouping that maps to the thing in front of them.
+ */
 function groupBags(bags: UnaddressedBag[], filter: string): [string, UnaddressedBag[]][] {
   const q = filter.trim().toLowerCase();
   const matched = q
-    ? bags.filter(b => b.bag_id.toLowerCase().includes(q))
+    // Number OR colour — either is a reasonable thing to have in mind while
+    // holding a bag. Matching only the number is why colour search found nothing.
+    ? bags.filter(
+        b =>
+          b.bag_id.toLowerCase().includes(q) ||
+          (b.bag_color_name ?? '').toLowerCase().includes(q),
+      )
     : bags;
 
   const out = new Map<string, UnaddressedBag[]>();
   for (const b of matched) {
-    // A bag with no route still needs a home. "Unassigned" is honest — the
-    // sheet did not say, rather than us inventing a grouping.
-    const key = b.amazon_route_name ?? 'Unassigned';
+    // A bag whose sheet carried no colour still needs a home. "No colour" is
+    // honest — the sheet did not say, rather than inventing one.
+    const key = b.bag_color_name ?? 'No colour';
     const list = out.get(key) ?? [];
     list.push(b);
     out.set(key, list);
   }
   for (const list of out.values()) list.sort((a, b) => a.bag_id.localeCompare(b.bag_id));
-  return [...out.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  // Ungrouped last; otherwise alphabetical so order is stable between refreshes
+  // rather than shifting as bags get addressed.
+  return [...out.entries()].sort((a, b) =>
+    a[0] === 'No colour' ? 1 : b[0] === 'No colour' ? -1 : a[0].localeCompare(b[0]),
+  );
 }
 
+
+/** "orange" -> "Orange". The API returns lowercase colour words. */
+function titleCase(v: string): string {
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
 
 function groupByBag(rows: ToteAddress[]): Record<string, ToteAddress[]> {
   const out: Record<string, ToteAddress[]> = {};
@@ -627,6 +676,23 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingVertical: spacing.sm,
   },
+  fallback: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.surfaceMuted,
+    gap: spacing.xs,
+  },
+  fallbackTitle: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.semibold,
+    color: c.foreground,
+  },
+  fallbackHint: { fontSize: fontSize.sm, color: c.mutedForeground },
+  groupLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  groupSwatch: { width: 16, height: 16, borderRadius: 8 },
   groupTitle: { fontSize: fontSize.md, fontWeight: fontWeight.medium, color: c.foreground },
   chevron: { fontSize: fontSize.md, color: c.mutedForeground },
   // The colour is what the captain scans for; a bag with no colour on the sheet

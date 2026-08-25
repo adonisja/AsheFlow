@@ -34,6 +34,7 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
+from app.core.bag_colors import color_name_for_hex
 from app.models.btr_sheet import BTRBag, BTRSheet
 from app.models.tote_address import ToteAddress
 from app.models.truck_assignment import TruckAssignment
@@ -157,6 +158,9 @@ def _enrich_unaddressed(
         UnaddressedBagOut(
             bag_id=b,
             bag_color=(by_id[b].bag_color if b in by_id else None),
+            bag_color_name=color_name_for_hex(
+                by_id[b].bag_color if b in by_id else None
+            ),
             amazon_route_name=(by_id[b].amazon_route_name if b in by_id else None),
         )
         for b in bag_ids
@@ -169,8 +173,13 @@ class UnaddressedBagOut(BaseModel):
     # Resolved hex from ADR-230's label parse. Null when the sheet carried no
     # colour word — the client renders a neutral pill rather than inventing one.
     bag_color: Optional[str] = None
+    # The colour WORD ("orange"), derived server-side from the hex so the client
+    # can label and search by it. A hex alone is unsearchable — nobody types
+    # "#F97316", they type "orange", which is what they are looking at.
+    bag_color_name: Optional[str] = None
     # Which Amazon route the sheet listed it under. Reference only (ADR-290 D7):
-    # our sort re-partitions freely, but it is how a captain locates the stack.
+    # our sort re-partitions freely. NOT a grouping key for the captain — they
+    # cannot tell which Amazon route a physical tote belongs to by looking at it.
     amazon_route_name: Optional[str] = None
 
 
