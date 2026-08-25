@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import require_configured, RequireMode
 from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -169,6 +169,10 @@ api_v1_router.include_router(package_intake.router,                 dependencies
 # manifest to reconcile against.
 api_v1_router.include_router(btr_sheets.router,                     dependencies=_configured)
 api_v1_router.include_router(workforce_routes.router,               dependencies=_workforce_mode)
+# ADR-292: the small workforce mirror of rts.py (which is _full_mode and carries
+# 394 package references' worth of manifest coupling). Same models, same enum —
+# only the manifest check is skipped and `source` records provenance.
+api_v1_router.include_router(manual_returns.router,                 dependencies=_workforce_mode)
 api_v1_router.include_router(dashboards.router,                     dependencies=_configured)
 api_v1_router.include_router(sort_metrics.router,                    dependencies=_full_mode)
 api_v1_router.include_router(companies.router,                      dependencies=_configured)

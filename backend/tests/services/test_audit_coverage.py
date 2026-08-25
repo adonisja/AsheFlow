@@ -71,6 +71,12 @@ _NO_AUDIT = {
     # address in the query string, the URL bar, and every access log (dim 7).
     # test_route_lookup_writes_nothing asserts the absence structurally.
     "workforce_routes.py::route_lookup",
+    # ADR-292 D4: an OCR read, not a write. It hands a photographed label to
+    # label_ingestor and returns the TBA it found — no INSERT, no UPDATE. POST
+    # only because the image is the body. Giving it no write path is exactly
+    # what forces a human to confirm the read before it reaches the database;
+    # test_scan_label_writes_nothing asserts that structurally.
+    "manual_returns.py::scan_label",
     "building_profiles.py::lock_building_profile",
     "building_profiles.py::set_operational_note",
     "building_profiles.py::submit_building_profile",
