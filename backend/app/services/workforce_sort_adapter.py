@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 from uuid import UUID
@@ -82,6 +82,11 @@ class AdapterResult:
     # Entries whose address would not parse into a block_key. They still reach
     # the sort (as __unknown_ sentinels) so the tote is not silently lost.
     unparseable: list[str]
+    # ADR-302 D3: totes skipped because a RETAINED route already carries them —
+    # out with a walker, or delivered. Distinct from `unaddressed_bags` (nobody
+    # has typed an address) and `unparseable` (the address did not resolve).
+    # Last because it is the only defaulted field.
+    already_routed: list[str] = field(default_factory=list)
 
 
 def build_packages(
@@ -89,6 +94,7 @@ def build_packages(
     company_id: UUID,
     truck_id: UUID,
     entry_date: date,
+    exclude_bag_ids: set[str] | None = None,
 ) -> AdapterResult:
     """Assemble `run_sort` input from a truck's captain-entered addresses.
 
@@ -99,6 +105,13 @@ def build_packages(
     Dimension 5 — no silent drops. A tote nobody addressed is still physically
     on the truck and must reach a walker, so it is surfaced rather than omitted.
     A sort that quietly loses a tote strands real packages.
+
+    `exclude_bag_ids` (ADR-302 D3) drops totes that are already spoken for by a
+    route this re-sort RETAINED — out with a walker, or delivered. Without it a
+    re-sort plans a second route for totes that are not in the truck, and a
+    walker is sent to find them. They are reported in `already_routed`, NOT
+    silently dropped: the same no-silent-drops rule as `unaddressed_bags`, since
+    a captain seeing fewer totes than they entered needs to know why.
     """
     addresses = (
         db.query(ToteAddress)
@@ -114,6 +127,13 @@ def build_packages(
     by_bag: dict[str, list[ToteAddress]] = {}
     for a in addresses:
         by_bag.setdefault(a.bag_id, []).append(a)
+
+    # ADR-302 D3. Reported, never silently omitted.
+    already_routed: list[str] = []
+    if exclude_bag_ids:
+        already_routed = sorted(b for b in by_bag if b in exclude_bag_ids)
+        for b in already_routed:
+            by_bag.pop(b, None)
 
     packages: list[PackageInput] = []
     disagreements: list[ToteBlockDisagreement] = []
@@ -153,7 +173,12 @@ def build_packages(
                 # which the caller layers on separately.
             ))
 
-    unaddressed = _unaddressed_bags(db, company_id, truck_id, entry_date, set(by_bag))
+    # Excluded totes count as ADDRESSED for this purpose: they are on a retained
+    # route, not awaiting a captain. Passing only `by_bag` would resurface them
+    # as unaddressed and tell the captain to go address a tote that is currently
+    # out with a walker.
+    accounted_for = set(by_bag) | set(already_routed)
+    unaddressed = _unaddressed_bags(db, company_id, truck_id, entry_date, accounted_for)
 
     logger.info(
         "workforce_adapter_built",
@@ -173,6 +198,7 @@ def build_packages(
         unaddressed_bags=unaddressed,
         disagreements=disagreements,
         unparseable=unparseable,
+        already_routed=already_routed,
     )
 
 

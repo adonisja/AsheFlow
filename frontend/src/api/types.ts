@@ -1784,6 +1784,32 @@ export interface DispatchPerformanceSummary {
   slowest_routes: SlowestRoute[];
   fastest_crew?: CrewPerformance | null;
   slowest_crew?: CrewPerformance | null;
+
+  /** ADR-298 D3. False in workforce mode: package-derived metrics do not apply.
+   *  Do NOT infer this from `baseline_minutes_per_package === null` — a
+   *  full-mode company with no completed routes in 30 days is also null. */
+  available: boolean;
+  unavailable_reason?: string | null;
+
+  /** ADR-298 D1 — the lean card, populated when `available` is false. All
+   *  package figures come from flex_package_count (the parcel count a captain
+   *  reads off Amazon Flex), never from package_count, which counts ADDRESSES
+   *  in workforce mode.
+   *
+   *  These are CARRIED metrics, not delivered ones: nothing in workforce mode
+   *  counts a delivery as it happens. Label them accordingly in the UI.
+   *  null means "not recorded / not applicable" — render an em-dash, never 0. */
+  routes_completed?: number | null;
+  packages_carried?: number | null;
+  mean_packages_per_route?: number | null;
+  mean_blocks_per_route?: number | null;
+  mean_totes_per_route?: number | null;
+  capacity_utilisation_pct?: number | null;
+  rts_per_100_carried?: number | null;
+  missing_per_100_carried?: number | null;
+  /** Closed routes with no Flex count yet. When > 0, packages_carried is null
+   *  rather than a partial sum that would report a smaller day. */
+  routes_missing_flex_count?: number | null;
 }
 
 export interface DispatchDashboardSummary {

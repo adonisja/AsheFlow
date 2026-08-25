@@ -78,5 +78,24 @@ TRUCK_SCOPED_ROLES: tuple[str, ...] = ("driver", "captain")
 # execution authority.
 STATION_RESOLVE_ROLES: tuple[str, ...] = ("dispatch", "management", "admin")
 
+
+# ---------------------------------------------------------------------------
+# Re-sort safety (ADR-302 / ADR-304)
 # ---------------------------------------------------------------------------
 
+# The ONLY route states a re-sort may destroy: never worked, so nothing is lost
+# but a plan.
+#
+# DELIBERATELY AN ALLOW-LIST. A block-list ("protect assigned and in_progress")
+# makes every FUTURE status default to DELETABLE — the unsafe direction — and
+# that is exactly how this went wrong twice: full mode's commit-sort had no
+# guard at all, and workforce mode's listed the statuses reachable when it was
+# written, so `completed` later became reachable and inherited no protection.
+# Six tables CASCADE off `routes`, including `delivery_stops`.
+#
+# Eligibility is decided by ROUTE status only. A route is the container and its
+# stops are contents, so cascade eligibility belongs to the container.
+#
+# Shared by BOTH commit-sorts on purpose: two divergent guards on the same
+# operation is how the defect survived in one of them.
+DELETABLE_ON_RESORT: frozenset = frozenset({"unassigned", None})

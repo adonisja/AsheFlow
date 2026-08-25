@@ -187,11 +187,33 @@ def test_lookup_tiers_are_ordered_best_first():
 
 # ── the refusals ──────────────────────────────────────────────────────────────
 
-def test_resort_refuses_to_delete_a_live_route():
-    """A walker holding a route must not have it deleted underneath them."""
+def test_resort_never_deletes_a_route_whose_totes_left_the_truck():
+    """A walker holding a route must not have it deleted underneath them.
+
+    REWRITTEN for ADR-302. The original asserted the literal string
+    `r.status in ("assigned", "in_progress")` — the very guard ADR-302 found
+    INVERTED. It blocked the whole re-sort on `in_progress`, which defeats the
+    purpose of a mid-day re-sort (some walkers are always already out), while
+    treating `assigned` — a name on a plan, totes still in the truck — as
+    equally untouchable.
+
+    The invariant that actually matters is unchanged and is now asserted as
+    BEHAVIOUR rather than as a source literal: a status whose totes have left
+    the truck can never enter the delete set.
+    """
+    from app.services.constants import DELETABLE_ON_RESORT
+
+    # in_progress: departed_at is stamped, the walker is gone with the totes.
+    # completed: delivered, and six tables CASCADE off routes (ADR-304).
+    assert "in_progress" not in DELETABLE_ON_RESORT
+    assert "completed" not in DELETABLE_ON_RESORT
+
+    # `assigned` is deliberately NOT deletable-by-default either: it needs the
+    # captain's explicit clear (D2a), so the default is "nothing happens".
+    assert "assigned" not in DELETABLE_ON_RESORT
+
     src = inspect.getsource(W.commit_workforce_sort)
-    assert 'Route.status in ("assigned", "in_progress")' in src or \
-           'r.status in ("assigned", "in_progress")' in src
+    assert "DELETABLE_ON_RESORT" in src
     assert "HTTP_409_CONFLICT" in src
 
 
@@ -285,14 +307,28 @@ def test_flex_count_is_separate_from_derived_package_count():
     assert "route.package_count =" not in src, "clobbers the sort's own count"
 
 
-def test_flex_count_is_re_recordable_and_audits_the_previous_value():
+def test_flex_count_is_re_recordable_until_the_route_closes():
     """Deliberately NOT a one-way stamp. A miscounted scan is corrected in the
-    moment, and a 409 on the second attempt would leave a known-wrong number in
-    the reporting. The audit carries before/after so the correction is traceable."""
+    moment, and a 409 on every second attempt would leave a known-wrong number
+    in the reporting. The audit carries before/after so the correction is
+    traceable.
+
+    AMENDED by ADR-300 D5. The original asserted `HTTP_409_CONFLICT not in src`
+    — a blanket "never refuses". It now refuses in exactly one case: after the
+    route is CLOSED, when the count has become the day's persisted record
+    (ADR-299 D4) and a late re-record would silently change a number the day was
+    already reported on. Re-recording before the close is unchanged.
+    """
     src = inspect.getsource(W.record_flex_package_count)
-    assert "HTTP_409_CONFLICT" not in src
     assert "previous = route.flex_package_count" in src
     assert "before={" in src and "after={" in src
+
+    # The ONLY refusal is the post-close freeze, and it is conditioned on
+    # returned_at — not on the count already having a value.
+    assert "route.returned_at is not None" in src
+    assert src.count("HTTP_409_CONFLICT") == 1, (
+        "re-recording before the close must stay unrestricted"
+    )
 
 
 def test_flex_count_endpoint_is_route_lead_gated():
