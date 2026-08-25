@@ -276,10 +276,29 @@ def cross_check_scorecard(
         .order_by(func.count(RTSPackage.id).desc()).all()
     ]
 
+    # ADR-294 D5: label the precision. In workforce mode there are no
+    # DeliveryStop rows, so `delivered` is not a per-package count and an appeal
+    # citing it must know that.
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == caller.company_id)
+        .first()
+    )
+    full_mode = cfg is not None and cfg.operating_mode == MODE_FULL
+
     return CrossCheckResponse(
         scorecard_id=sc.id, week=sc.week, week_start=week_start, week_end=week_end,
         our_delivered=int(delivered), our_rts=int(our_rts), our_missing=int(our_missing),
         items=items, rts_evidence=evidence,
+        precision="per_package" if full_mode else "captain_reported",
+        precision_note=None if full_mode else (
+            "Your delivered figure comes from captain-recorded route counts, not "
+            "per-package scans. Treat any difference from Amazon's number as "
+            "approximate before filing an appeal."
+        ),
     )
 
 

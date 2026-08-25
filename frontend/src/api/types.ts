@@ -1531,15 +1531,22 @@ export interface ManagementOperationalSummary {
   period: string;
   period_start: string;
   period_end: string;
-  total_packages_delivered: number;
-  total_packages_assigned: number;
+  // ADR-294: nullable. null = "this company has no package feed"; 0 = "the crew
+  // delivered nothing today". Rendering the second for the first is the failure
+  // this ADR exists to prevent — check package_metrics_available, not the value.
+  total_packages_delivered: number | null;
+  total_packages_assigned: number | null;
   total_paid_hours?: number | null;
   paid_hours_source: string;
   packages_per_hour?: number | null;
   avg_minutes_per_stop?: number | null;
   delivery_success_rate_pct?: number | null;
   rework_rate_pct?: number | null;
-  total_rework_count: number;
+  total_rework_count: number | null;
+  /** ADR-294 D2: false when this company has no package feed. */
+  package_metrics_available?: boolean;
+  /** e.g. "no_package_feed". Present only when the above is false. */
+  package_metrics_unavailable_reason?: string | null;
   routes_dispatched: number;
   routes_completed: number;
   completion_rate_pct?: number | null;

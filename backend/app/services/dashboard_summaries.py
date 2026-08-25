@@ -78,15 +78,19 @@ def _pct(num: float | int | None, den: float | int | None) -> Optional[float]:
     Returning None rather than 0.0 is deliberate: "no data" and "zero percent"
     are different facts and must not render identically.
     """
-    if not den:
+    # ADR-294: a NULL numerator is an absence too. `num or 0` would report 0%
+    # for "we do not track this", which reads as a real and alarming figure.
+    # Zero itself is still a legitimate measurement and passes through.
+    if num is None or not den:
         return None
-    return round((num or 0) / den * 100, 2)
+    return round(num / den * 100, 2)
 
 
 def _ratio(num: float | int | None, den: float | int | None, digits: int = 2) -> Optional[float]:
-    if not den:
+    # Same reasoning as _pct: a null numerator is unknown, not zero.
+    if num is None or not den:
         return None
-    return round((num or 0) / den, digits)
+    return round(num / den, digits)
 
 
 def _age_minutes(ts: Optional[datetime]) -> int:
@@ -241,7 +245,50 @@ def _package_totals(db: Session, company_id: UUID, start: date, end: date) -> di
         "rework": int((row.rts or 0) + (row.missing or 0)),
         "stops": int(row.stops or 0),
         "avg_stop_minutes": round(float(avg_stop_minutes), 2) if avg_stop_minutes else None,
+        "available": True,
+        "reason": None,
     }
+
+
+# ADR-294 D1/D2. In workforce mode DeliveryStop is never written — there is no
+# per-package tracking to aggregate — so every figure above would be a hard
+# zero. Zero is a measurement ("your crew delivered nothing"); this is an
+# absence ("the question does not apply here"). Returning the first for the
+# second is the 2026-07-29 fabricated-field failure, and a dispatcher acts on it.
+_NO_PACKAGE_FEED = "no_package_feed"
+
+_UNAVAILABLE_PACKAGE_TOTALS = {
+    "delivered": None,
+    "assigned": None,
+    "rework": None,
+    "stops": None,
+    "avg_stop_minutes": None,
+    "available": False,
+    "reason": _NO_PACKAGE_FEED,
+}
+
+
+def _package_totals_for_mode(db: Session, company_id: UUID, start: date, end: date) -> dict:
+    """`_package_totals`, or an explicit absence when the company has no feed.
+
+    One shape either way (D3): same keys, nulls where inapplicable. Branching
+    the DTO instead would mean two hand-maintained TypeScript interfaces in a
+    `types.ts` with no codegen, and they would drift.
+    """
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    # A missing config is treated as NOT having the feed — the same safe
+    # direction RequireMode takes. Reporting real-looking zeros for a company
+    # whose configuration never claimed a feed is the worse error.
+    if cfg is None or cfg.operating_mode != MODE_FULL:
+        return dict(_UNAVAILABLE_PACKAGE_TOTALS)
+    return _package_totals(db, company_id, start, end)
 
 
 def _paid_hours(db: Session, company_id: UUID, start: date, end: date) -> tuple[Optional[float], str]:
@@ -687,11 +734,11 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
     prior_start, prior_end = _prior_bounds(period, start, end)
     shift_end = _shift_end(db, company_id)
 
-    pkg = _package_totals(db, company_id, start, end)
+    pkg = _package_totals_for_mode(db, company_id, start, end)
     hours, hours_source = _paid_hours(db, company_id, start, end)
     timing = _route_timing(db, company_id, start, end, shift_end)
 
-    prior_pkg = _package_totals(db, company_id, prior_start, prior_end)
+    prior_pkg = _package_totals_for_mode(db, company_id, prior_start, prior_end)
     prior_hours, _ = _paid_hours(db, company_id, prior_start, prior_end)
 
     pph = _ratio(pkg["delivered"], hours)
@@ -739,6 +786,9 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
         delivery_success_rate_pct=success,
         rework_rate_pct=_pct(pkg["rework"], pkg["assigned"]),
         total_rework_count=pkg["rework"],
+        # D2: say WHY, rather than leaving the client to infer it from nulls.
+        package_metrics_available=pkg["available"],
+        package_metrics_unavailable_reason=pkg["reason"],
         routes_dispatched=int(routes_dispatched),
         routes_completed=int(routes_completed),
         completion_rate_pct=_pct(routes_completed, routes_dispatched),
@@ -1022,7 +1072,7 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
                 DeliveryStop.completed_at < next_day)
         .group_by(DeliveryStop.status).all()
     )
-    pkg = _package_totals(db, company_id, target, target)
+    pkg = _package_totals_for_mode(db, company_id, target, target)
 
     fleet_snapshot = DispatchFleetSnapshot(
         timestamp=_utcnow(),
@@ -1043,6 +1093,8 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
         # per ACTIVE TRUCK — Phase 2 averaged per stop and mislabelled it.
         avg_packages_per_active_truck=_ratio(pkg["delivered"], trucks_active),
         avg_minutes_per_stop=pkg["avg_stop_minutes"],
+        package_metrics_available=pkg["available"],
+        package_metrics_unavailable_reason=pkg["reason"],
     )
 
     # ── action queue: reassignments only (time-off moved to ADP) ──

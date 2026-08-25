@@ -133,9 +133,18 @@ def _seed_days(db, n: int, period: str = "month") -> list[date]:
     return [d for d in days if d >= start] or [today]
 
 
-def _config(db, shift_end: time | None = time(18, 0)):
+def _config(db, shift_end: time | None = time(18, 0), operating_mode="full"):
+    """A configured company. FULL MODE by default (ADR-294).
+
+    Every test in this file asserts package aggregates — delivered counts,
+    rework rates, packages-per-hour — which only exist when the tenant has an
+    Amazon feed. `operating_mode` now defaults to `workforce` at the column
+    level, so leaving it unset would suppress exactly the metrics these tests
+    are here to check, and they would pass against nulls while proving nothing.
+    """
     db.add(CompanyConfig(id=uuid.uuid4(), company_id=COMPANY,
-                         is_configured=True, shift_end=shift_end))
+                         is_configured=True, shift_end=shift_end,
+                         operating_mode=operating_mode))
     db.commit()
 
 
@@ -715,3 +724,38 @@ class TestTimestampWindow:
         assert lo <= as_utc < hi, (
             "a row recorded late in the company's day fell outside 'today'"
         )
+
+
+class TestWorkforceModeSuppressesPackageMetrics:
+    """ADR-294 D1/D2 — through the real summary builder, not just the helper.
+
+    In workforce mode DeliveryStop is never written, so these aggregates would
+    otherwise return hard zeros and a dispatcher would read "0 packages
+    delivered" as a real and alarming figure.
+    """
+
+    def test_totals_are_null_not_zero(self, db):
+        _config(db, operating_mode="workforce")
+        op = get_management_dashboard_summary(db, COMPANY, period="week").operational
+
+        assert op.total_packages_delivered is None, "a zero reads as a real figure"
+        assert op.total_packages_assigned is None
+        assert op.total_rework_count is None
+
+    def test_the_reason_is_carried_not_inferred(self, db):
+        """A client guessing "null means workforce" is wrong the first time a
+        full-mode company legitimately has no deliveries yet today."""
+        _config(db, operating_mode="workforce")
+        op = get_management_dashboard_summary(db, COMPANY, period="week").operational
+
+        assert op.package_metrics_available is False
+        assert op.package_metrics_unavailable_reason == "no_package_feed"
+
+    def test_full_mode_is_unaffected(self, db):
+        """The regression guard: an empty FULL-mode company still reports 0,
+        because that is a genuine measurement of an idle day."""
+        _config(db, operating_mode="full")
+        op = get_management_dashboard_summary(db, COMPANY, period="week").operational
+
+        assert op.total_packages_delivered == 0
+        assert op.package_metrics_available is True
