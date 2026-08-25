@@ -85,6 +85,14 @@ class CrossCheckResponse(BaseModel):
 # the one dataset with an inherent baseline (Amazon's own tiers). Everything
 # below is a multi-week view over company-scope scorecards.
 
+    # ADR-294 D5. In workforce mode our side of this comparison is built from
+    # captain-entered counts rather than per-package DeliveryStop rows, so it is
+    # COARSER — and it must say so. An appeal built on a number of unstated
+    # precision puts the DSP's credibility with Amazon behind a figure we know
+    # is approximate, which is worse than filing no appeal at all.
+    precision: str = "per_package"          # per_package | captain_reported
+    precision_note: Optional[str] = None
+
 class MetricTrendPoint(BaseModel):
     week: str
     value: Optional[float] = None      # parsed numeric, None if non-numeric
