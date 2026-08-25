@@ -1177,6 +1177,19 @@ _FULL_MODE_FEATURES: tuple[str, ...] = (
     "sort_metrics",
 )
 
+# ADR-291: features that exist ONLY in workforce mode — the mirror of
+# _FULL_MODE_FEATURES. A full-mode tenant must NOT see these: the manifest
+# already supplies the geography, so a captain typing tote addresses by hand
+# there would be duplicate work feeding a sort that ignores it.
+#
+# This is why the capability list is a set of keys rather than a mode string.
+# A client asking "do I have workforce_sort?" needs no knowledge of what modes
+# exist, so adding a third mode later requires no app release.
+_WORKFORCE_MODE_FEATURES: tuple[str, ...] = (
+    "workforce_sort",       # captain-entered tote addresses -> routes
+    "manual_returns",       # RTS / missing / damaged typed by hand (ADR-292)
+)
+
 # Features present regardless of mode.
 _BASE_FEATURES: tuple[str, ...] = (
     "dispatch",
@@ -1216,8 +1229,9 @@ def get_my_capabilities(
     mode = config.operating_mode if config else "workforce"
 
     features = list(_BASE_FEATURES)
-    if mode == "full":
-        features.extend(_FULL_MODE_FEATURES)
+    features.extend(
+        _FULL_MODE_FEATURES if mode == "full" else _WORKFORCE_MODE_FEATURES
+    )
 
     return CapabilitiesResponse(operating_mode=mode, features=features)
 

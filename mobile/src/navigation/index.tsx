@@ -44,10 +44,12 @@ import {
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
   WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
   GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES, TRUCK_BUILDINGS_ROLES,
+  TOTE_ADDRESS_ROLES,
 } from './roles';
 import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
 import MyRouteTabScreen from '@screens/Trainee/MyRouteScreen';
 import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
+import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -108,6 +110,10 @@ const ALL_TABS: TabDef[] = [
   { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator, feature: 'route_sort' },
   { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen, feature: 'route_sort' },
   { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen, feature: 'package_rts' },
+  // ADR-291: the workforce sort's INPUT. Gated on `workforce_sort`, so it is
+  // absent for a full-mode tenant — there the manifest supplies this and a
+  // captain typing addresses by hand would be duplicate, contradictory work.
+  { key: 'ToteAddresses',   label: 'Tote Addresses',   icon: '📮', roles: TOTE_ADDRESS_ROLES,     component: ToteAddressScreen, feature: 'workforce_sort' },
   { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
   { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },

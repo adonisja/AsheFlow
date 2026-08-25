@@ -324,6 +324,51 @@ def add_tote_address(
     )
 
 
+class MyTruckOut(BaseModel):
+    """Which truck this caller is crewed on for a date.
+
+    A captain should not have to pick their own truck out of a list — they are
+    standing next to it. Dispatch legitimately has none (they are station-side),
+    and that is a real answer rather than an error, which is why `truck_id` is
+    nullable instead of this 404ing.
+    """
+    truck_id: Optional[UUID] = None
+    truck_name: Optional[str] = None
+    no_truck_assigned: bool = False
+
+
+@router.get("/my-truck/{entry_date}", response_model=MyTruckOut)
+def my_truck(
+    entry_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_read),
+    db: Session = Depends(get_db),
+):
+    """The truck this caller is crewed on, so the client need not ask them.
+
+    Mirrors building_profiles.buildings_for_truck's resolution rather than
+    inventing a second rule for the same question.
+    """
+    from app.models.truck import Truck
+
+    row = (
+        db.query(TruckAssignment, Truck)
+        .join(AssignmentMember, AssignmentMember.assignment_id == TruckAssignment.id)
+        .join(Truck, Truck.id == TruckAssignment.truck_id)
+        .filter(
+            TruckAssignment.company_id == caller.company_id,
+            TruckAssignment.date == entry_date,
+            AssignmentMember.employee_id == caller.id,
+            AssignmentMember.company_id == caller.company_id,
+        )
+        .first()
+    )
+    if row is None:
+        return MyTruckOut(no_truck_assigned=True)
+    ta, truck = row
+    return MyTruckOut(truck_id=truck.id, truck_name=truck.name)
+
+
 @router.get("/tote-addresses/{entry_date}", response_model=ToteAddressListOut)
 def list_tote_addresses(
     entry_date: date,

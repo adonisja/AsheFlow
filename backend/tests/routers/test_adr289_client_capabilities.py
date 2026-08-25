@@ -30,8 +30,16 @@ _FEATURE_RE = re.compile(r"feature:\s*'([a-z_]+)'")
 
 
 def _server_features() -> set[str]:
-    from app.routers.companies import _BASE_FEATURES, _FULL_MODE_FEATURES
-    return set(_BASE_FEATURES) | set(_FULL_MODE_FEATURES)
+    """Every key the server can emit, across ALL modes.
+
+    Includes _WORKFORCE_MODE_FEATURES (ADR-291): a workforce-only tab is gated on
+    a key a full-mode tenant never receives, which is the whole point — but it is
+    still a key the server emits, so it must not read as a typo here.
+    """
+    from app.routers.companies import (
+        _BASE_FEATURES, _FULL_MODE_FEATURES, _WORKFORCE_MODE_FEATURES,
+    )
+    return set(_BASE_FEATURES) | set(_FULL_MODE_FEATURES) | set(_WORKFORCE_MODE_FEATURES)
 
 
 def _client_features(path: Path) -> set[str]:
@@ -62,9 +70,10 @@ def test_package_surfaces_are_actually_gated(path):
     assert "route_sort" in used, f"{path.name} does not gate any route/sort tab"
 
 
-def test_gated_keys_are_full_mode_keys_not_base_keys():
+def test_gated_keys_are_mode_specific_not_base_keys():
     """Gating a tab on a BASE feature is a no-op that reads like protection —
-    base features are present in every mode, so the tab never hides."""
+    base features are present in every mode, so the tab never hides. A
+    mode-specific key (full OR workforce) is the only kind that gates anything."""
     from app.routers.companies import _BASE_FEATURES
 
     for path in (NAV_WEB, NAV_MOBILE):
@@ -161,3 +170,36 @@ def test_flip_posts_to_the_guarded_endpoint_only():
     card = _mode_card()
     assert "/operating-mode`" in card
     assert "confirm_slug: typed.trim()" in card
+
+
+# ── workforce-only features (ADR-291) ─────────────────────────────────────────
+
+def test_full_and_workforce_feature_sets_are_disjoint():
+    """A key in both would gate nothing — the tab would show in every mode, and
+    the gate would read like protection while providing none."""
+    from app.routers.companies import _FULL_MODE_FEATURES, _WORKFORCE_MODE_FEATURES
+
+    overlap = set(_FULL_MODE_FEATURES) & set(_WORKFORCE_MODE_FEATURES)
+    assert not overlap, f"keys claimed by both modes: {sorted(overlap)}"
+
+
+def test_neither_mode_set_overlaps_the_base_set():
+    """A mode key that is also a base key is always present, so it cannot gate."""
+    from app.routers.companies import (
+        _BASE_FEATURES, _FULL_MODE_FEATURES, _WORKFORCE_MODE_FEATURES,
+    )
+    base = set(_BASE_FEATURES)
+    assert not base & set(_FULL_MODE_FEATURES)
+    assert not base & set(_WORKFORCE_MODE_FEATURES)
+
+
+def test_a_full_mode_tenant_does_not_receive_workforce_keys():
+    """The mirror of the original gate. A tenant with a manifest must not be
+    offered captain-entered tote addresses — that would be duplicate,
+    contradictory work feeding a sort that ignores it."""
+    from app.routers.companies import (
+        _BASE_FEATURES, _FULL_MODE_FEATURES, _WORKFORCE_MODE_FEATURES,
+    )
+    full_payload = set(_BASE_FEATURES) | set(_FULL_MODE_FEATURES)
+    assert "workforce_sort" not in full_payload
+    assert not full_payload & set(_WORKFORCE_MODE_FEATURES)
