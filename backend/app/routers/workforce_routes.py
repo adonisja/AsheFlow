@@ -42,7 +42,7 @@ from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route, RouteParticipant
 from app.schemas.walker_routes import SortRequest
 from app.services.audit import write_audit
-from app.services.constants import ROUTE_LEAD_ROLES
+from app.services.constants import DELETABLE_ON_RESORT, ROUTE_LEAD_ROLES
 from app.services.package_intake import resolve_address
 from app.services.route_sort import run_sort
 from app.services.workforce_sort_adapter import build_packages
@@ -83,6 +83,17 @@ class CommitWorkforceSortIn(BaseModel):
     # D7: the captain may knowingly exceed the capacity lock. Off by default so
     # an overflow is always a deliberate act, never a silent side effect.
     allow_overflow: bool = False
+
+    # ADR-302 D2a. Re-planning a route someone was told is theirs is an
+    # operational act, so the captain says so explicitly. Default is "nothing
+    # happens": an assigned route present with no choice supplied is a 409 that
+    # NAMES the routes, never a silent re-plan.
+    #
+    #   None  -> refuse if any route is assigned (the safe default)
+    #   [...] -> clear exactly these assigned routes, keep the rest
+    #   []    -> with clear_all_assigned=True, clear every assigned route
+    clear_assigned_route_ids: Optional[list[UUID]] = Field(default=None, max_length=200)
+    clear_all_assigned: bool = False
 
 
 class AssignWalkerIn(BaseModel):
@@ -253,6 +264,11 @@ class WorkforceRouteOut(BaseModel):
 
 class CommitWorkforceSortOut(BaseModel):
     routes: list[WorkforceRouteOut]
+    # ADR-302 D3. Totes skipped because a RETAINED route already carries them.
+    # NOT the same as `unaddressed_bags` — these are accounted for, and someone
+    # is either carrying them right now or already delivered them.
+    already_routed_bags: list[str] = []
+    retained_routes: int = 0
     totes_sorted: int
     # Reported, never silently dropped (dim 5).
     unaddressed_bags: list[str]
@@ -597,17 +613,82 @@ def commit_workforce_sort(
         )
         .all()
     )
-    live = [r for r in existing if r.status in ("assigned", "in_progress")]
-    if live:
+    # ADR-302 D2. WHAT MAY BE RE-PLANNED IS DECIDED BY WHERE THE TOTES ARE.
+    #
+    # The old guard asked "is someone holding this route" and blocked on both
+    # `assigned` and `in_progress`. That was inverted on both counts:
+    #
+    #   assigned    -> the totes are still IN THE TRUCK. Nothing has moved; it is
+    #                  a name attached to a plan, and re-planning it is exactly
+    #                  what a captain re-sorting intends.
+    #   in_progress -> `departed_at` is stamped. The walker has physically LEFT
+    #                  with those totes; no re-sort can reach them.
+    #   completed   -> delivered; the record is final (and six tables CASCADE off
+    #                  `routes`, see ADR-304).
+    #
+    # So in_progress/completed are FILTERED OUT — excluded from the operation —
+    # rather than refused. Blocking on `in_progress` defeats the purpose of a
+    # mid-day re-sort, which exists precisely because some walkers are already
+    # out.
+    #
+    # An allow-list, not a block-list: a status added later defaults to
+    # PROTECTED. (ADR-304 is the same defect in full mode's commit-sort, where a
+    # block-list let `completed` silently become deletable.)
+    replaceable = [r for r in existing if r.status in DELETABLE_ON_RESORT]
+    assigned    = [r for r in existing if r.status == "assigned"]
+    out_of_reach = [
+        r for r in existing
+        if r.status not in DELETABLE_ON_RESORT and r.status != "assigned"
+    ]
+
+    # D2a: clearing an assigned route is a DECISION, never a side effect.
+    if payload.clear_all_assigned:
+        to_clear = list(assigned)
+    elif payload.clear_assigned_route_ids:
+        wanted = set(payload.clear_assigned_route_ids)
+        to_clear = [r for r in assigned if r.id in wanted]
+        unknown = wanted - {r.id for r in to_clear}
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"{len(unknown)} route(s) to clear are not assigned routes on "
+                    f"this truck-day."
+                ),
+            )
+    else:
+        to_clear = []
+
+    keeping_assigned = [r for r in assigned if r not in to_clear]
+    if keeping_assigned:
+        # Names them: "this walker is busy" is useless without "...on route 4".
+        numbers = ", ".join(str(r.route_number) for r in sorted(
+            keeping_assigned, key=lambda r: r.route_number or 0))
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"{len(live)} route(s) are already assigned or out. Unassign them "
-                f"before re-sorting, or a walker loses the route they are holding."
+                f"Route(s) {numbers} are assigned to a walker. Clear them "
+                f"explicitly to re-plan them, or re-sort without them."
             ),
         )
 
-    built = build_packages(db, caller.company_id, ta.truck_id, payload.route_date)
+    stale = replaceable + to_clear
+    retained = out_of_reach
+
+    # ADR-302 D3. FILTERING THE ROUTES IS NOT ENOUGH — their totes must go too.
+    #
+    # build_packages reads ToteAddress and knows nothing about routes. Retain a
+    # route without excluding its totes and the re-sort plans a SECOND route for
+    # them: for `in_progress` that means sending a walker after totes another
+    # walker is physically carrying, and for `completed` after totes already
+    # delivered. That is worse than the deletion this guards, because it looks
+    # like it worked.
+    spoken_for: set[str] = {b for r in retained for b in (r.tote_ids or [])}
+
+    built = build_packages(
+        db, caller.company_id, ta.truck_id, payload.route_date,
+        exclude_bag_ids=spoken_for or None,
+    )
     if not built.packages:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -641,9 +722,33 @@ def commit_workforce_sort(
         if over:
             overflowed += 1
 
-    for old in existing:
+    for old in stale:
         db.delete(old)
     db.flush()
+
+    # ADR-302 D6 (mirrors ADR-304 D6): a re-sort that destroys rows says so.
+    if stale:
+        write_audit(
+            db=db,
+            company_id=str(caller.company_id),
+            actor_id=str(caller.id),
+            action_type="workforce_route.resort_replaced",
+            target_table="routes",
+            target_id=str(ta.id),
+            detail={
+                "deleted_route_ids": [str(r.id) for r in stale],
+                "deleted_count": len(stale),
+                "cleared_assigned_count": len(to_clear),
+                "retained_count": len(retained),
+                "route_date": payload.route_date.isoformat(),
+            },
+        )
+
+    # ADR-302 D3a. run_sort always numbers from 1 and
+    # `uq_routes_assignment_number` is UNIQUE on (truck_assignment_id,
+    # route_number) — so emitting 1..n beside a retained route 1 raises
+    # IntegrityError and fails the whole re-sort. Continue past the survivors.
+    number_offset = max((r.route_number or 0) for r in retained) if retained else 0
 
     created: list[Route] = []
     for r in result.routes:
@@ -652,7 +757,7 @@ def commit_workforce_sort(
             company_id=caller.company_id,
             truck_assignment_id=ta.id,
             route_date=payload.route_date,
-            route_number=r.route_number,
+            route_number=r.route_number + number_offset,   # ADR-302 D3a
             block_keys=r.block_keys,
             # No segments in workforce mode (D10) and no per-stop data, so these
             # are empty rather than fabricated.
@@ -708,6 +813,8 @@ def commit_workforce_sort(
             )
             for r in created
         ],
+        already_routed_bags=built.already_routed,      # ADR-302 D3
+        retained_routes=len(retained),
         totes_sorted=len({p.bag_id for p in built.packages}),
         unaddressed_bags=built.unaddressed_bags,
         unparseable=built.unparseable,
@@ -717,6 +824,230 @@ def commit_workforce_sort(
             for d in built.disagreements
         ],
         overflowed_routes=overflowed,
+    )
+
+
+@router.get("/routes/{entry_date}", response_model=list[WorkforceRouteOut])
+def list_workforce_routes(
+    entry_date: date,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """The truck-day's routes, WITHOUT rebuilding them (ADR-302 D1).
+
+    Until this existed, `POST /commit-sort` was the only thing that returned a
+    truck's routes — and it REBUILDS them to do so. A captain wanting to review
+    the sort they just ran had exactly one option: run it again, destructively.
+
+    Returns the same `WorkforceRouteOut` shape commit-sort returns, so the
+    captain surface renders one shape whether it just sorted or is reviewing an
+    earlier sort. Deliberately NOT the full `CommitWorkforceSortOut`: totes_sorted
+    / unparseable / disagreements describe a sort RUN, not the routes, and
+    re-deriving them here would re-parse addresses that may since have been
+    PII-nulled (ADR-219) — giving different answers on different days for the
+    same routes.
+    """
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, entry_date, db)
+
+    routes = (
+        db.query(Route)
+        .filter(
+            Route.company_id == caller.company_id,
+            Route.truck_assignment_id == ta.id,
+            Route.route_date == entry_date,
+        )
+        .order_by(Route.route_number.asc())
+        .all()
+    )
+    names = _participant_names(db, caller.company_id, routes)
+
+    return [
+        WorkforceRouteOut(
+            id=r.id,
+            route_number=r.route_number,
+            tote_ids=list(r.tote_ids or []),
+            block_keys=list(r.block_keys or []),
+            package_count=r.package_count,
+            slot_cost=r.slot_cost,
+            capacity_limit=r.capacity_limit,
+            overflow_half_slots=r.overflow_half_slots,
+            status=r.status,
+            assigned_to=None,
+            assigned_to_name=names.get(r.id),
+            flex_package_count=r.flex_package_count,
+        )
+        for r in routes
+    ]
+
+
+@router.patch("/routes/{route_id}/depart", response_model=WorkforceRouteOut)
+def depart_route(
+    route_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """The walker has left the truck with this route's totes (ADR-300 D2).
+
+    Stamps `departed_at` and moves the route to `in_progress`. That pair —
+    departed set, returned NULL — IS what "in progress" means, and it is what
+    makes two other things correct:
+
+      * a re-sort steps around this route instead of planning its totes onto a
+        new one (ADR-302 D2/D3): those totes are physically gone
+      * the captain cannot hand this walker a second route until it closes
+        (D2b)
+
+    Never back-filled. A departure that was not observed stays NULL rather than
+    being invented at close to make a duration look computable.
+    """
+    route = (
+        db.query(Route)
+        .filter(Route.id == route_id, Route.company_id == caller.company_id)
+        .first()
+    )
+    if route is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route not found.")
+
+    ta = _assignment(db, caller, route.truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, route.route_date, db)
+
+    # One-way stamp (CLAUDE.md dim 2). Re-tapping must not move the clock.
+    if route.departed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Route {route.route_number} already departed.",
+        )
+    if route.status != "assigned":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Route {route.route_number} is {route.status} — assign it to a "
+                f"walker before recording a departure."
+            ),
+        )
+
+    route.departed_at = datetime.now(timezone.utc)
+    route.status = "in_progress"
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_route.departed",
+        target_table="routes",
+        target_id=str(route.id),
+        detail={"route_number": route.route_number,
+                "route_date": route.route_date.isoformat()},
+    )
+    db.commit()
+    db.refresh(route)
+
+    names = _participant_names(db, caller.company_id, [route])
+    return WorkforceRouteOut(
+        id=route.id, route_number=route.route_number,
+        tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
+        package_count=route.package_count, slot_cost=route.slot_cost,
+        capacity_limit=route.capacity_limit,
+        overflow_half_slots=route.overflow_half_slots, status=route.status,
+        assigned_to=None, assigned_to_name=names.get(route.id),
+        flex_package_count=route.flex_package_count,
+    )
+
+
+@router.patch("/routes/{route_id}/close", response_model=WorkforceRouteOut)
+def close_route(
+    route_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """The walker is back at the truck; the route's day is over (ADR-300).
+
+    D1: the CAPTAIN closes it, not the walker. The captain is at the truck, the
+    walker is arriving with whatever came back, and the close is that handover.
+    A walker self-closing from the field would settle the route before the
+    packages are physically accounted for — the one thing the close exists to
+    prevent.
+
+    D2: `status="completed"` and `returned_at` are set TOGETHER. Full mode
+    separates them because it knows per-stop when work finished, independently
+    of when the walker got back. Workforce mode knows neither: there is no stop
+    grain, so the only observable event is *the walker is standing here*.
+    Modelling two states from one signal invents a distinction we cannot fill.
+
+    D4: closing is the moment exceptions are recorded — the returns endpoints
+    (ADR-292) are keyed by route_id and the CLIENT prompts for them before
+    calling this. A route with zero returns closes cleanly: a clean route is a
+    real and common outcome, so nothing is required here.
+
+    D5: the close FREEZES `flex_package_count`. Until now it is deliberately
+    re-recordable (a miscounted scan is corrected in the moment); afterwards it
+    is the day's record (ADR-299 D4) and further writes are refused.
+    """
+    route = (
+        db.query(Route)
+        .filter(Route.id == route_id, Route.company_id == caller.company_id)
+        .first()
+    )
+    if route is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route not found.")
+
+    ta = _assignment(db, caller, route.truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, route.route_date, db)
+
+    # D3 — one-way stamp with a 409, matching full mode's back-at-truck guard.
+    # Closing twice must not re-open a settled number.
+    if route.returned_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Route {route.route_number} is already closed.",
+        )
+    if route.status not in ("assigned", "in_progress"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Route {route.route_number} is {route.status} — only a route "
+                f"that is out or assigned can be closed."
+            ),
+        )
+
+    route.returned_at = datetime.now(timezone.utc)
+    route.status = "completed"
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_route.closed",
+        target_table="routes",
+        target_id=str(route.id),
+        detail={
+            "route_number": route.route_number,
+            "route_date": route.route_date.isoformat(),
+            # The number this close FREEZES (D5). NULL means it was never
+            # scanned — recorded as such rather than as 0.
+            "flex_package_count": route.flex_package_count,
+            "departed_at": route.departed_at.isoformat() if route.departed_at else None,
+        },
+    )
+    db.commit()
+    db.refresh(route)
+
+    names = _participant_names(db, caller.company_id, [route])
+    return WorkforceRouteOut(
+        id=route.id, route_number=route.route_number,
+        tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
+        package_count=route.package_count, slot_cost=route.slot_cost,
+        capacity_limit=route.capacity_limit,
+        overflow_half_slots=route.overflow_half_slots, status=route.status,
+        assigned_to=None, assigned_to_name=names.get(route.id),
+        flex_package_count=route.flex_package_count,
     )
 
 
@@ -765,6 +1096,45 @@ def assign_walker(
     )
     if walker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
+
+    # ADR-300 D2b. IS THIS WALKER ALREADY OUT?
+    #
+    # The guard above protects the ROUTE ("this route is already out"); nothing
+    # protected the WALKER. A captain could hand a second route to someone still
+    # walking their first, and nothing objected — verified: zero queries of the
+    # assignee's other routes.
+    #
+    # `departed_at` set with `returned_at` NULL IS "in progress". That pair is
+    # the route lifecycle, and this is what it is for: a multi-wave day means
+    # assigning a new route once the first is done, which requires knowing
+    # whether they are done.
+    #
+    # Scoped to the same route_date: yesterday's unclosed route is a data-hygiene
+    # problem, not a reason to block today's assignment.
+    busy = (
+        db.query(Route.route_number)
+        .join(RouteParticipant, RouteParticipant.route_id == Route.id)
+        .filter(
+            Route.company_id == caller.company_id,
+            Route.route_date == route.route_date,
+            Route.id != route.id,
+            Route.departed_at.isnot(None),
+            Route.returned_at.is_(None),
+            RouteParticipant.company_id == caller.company_id,
+            RouteParticipant.employee_id == walker.id,
+            RouteParticipant.role == "executor",
+        )
+        .first()
+    )
+    if busy is not None:
+        # Names the route: "this walker is busy" is useless without "...on 4".
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{walker.name} is still out on route {busy.route_number}. "
+                f"Close that route first, or assign this one to someone else."
+            ),
+        )
 
     # Exactly one executor per route (ADR-212, enforced by a partial unique
     # index). Replacing means clearing the old one first, not adding a second.
@@ -841,6 +1211,18 @@ def record_flex_package_count(
 
     ta = _assignment(db, caller, route.truck_assignment_id)
     _assert_truck_member(caller, ta.truck_id, route.route_date, db)
+
+    # ADR-300 D5. Re-recordable RIGHT UP TO the close, then frozen: after that
+    # it is the day's persisted record (ADR-299 D4), and a late re-record
+    # silently changes a number the day was already reported on.
+    if route.returned_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Route {route.route_number} is closed — its package count is "
+                f"the day's record and cannot be changed."
+            ),
+        )
 
     previous = route.flex_package_count
     route.flex_package_count = payload.package_count

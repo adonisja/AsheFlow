@@ -424,6 +424,33 @@ class DispatchPerformanceSummary(BaseModel):
     fastest_crew: Optional[CrewPerformance] = None
     slowest_crew: Optional[CrewPerformance] = None
 
+    # ADR-298 D3. Carried AT THE CARD, not only on the totals: a client that
+    # infers unavailability from `baseline is None` will be wrong the first time
+    # a full-mode company legitimately has no completed routes in 30 days — a new
+    # tenant, or a Monday after a holiday.
+    available: bool = True
+    unavailable_reason: Optional[str] = None
+
+    # ADR-298 D1. The LEAN CARD: metrics workforce mode genuinely holds, all
+    # sourced from `flex_package_count` (the real parcel count a captain reads
+    # off Amazon Flex at scan time). `package_count` is never read here — in
+    # workforce mode it counts ADDRESSES.
+    #
+    # These are CARRIED metrics and the labels must say so. Nothing in workforce
+    # mode counts a delivery as it happens, so "packages per hour" here is a
+    # CARRYING rate, not a delivery rate; where a walker returns packages the two
+    # genuinely differ.
+    routes_completed: Optional[int] = None
+    packages_carried: Optional[int] = None
+    mean_packages_per_route: Optional[float] = None
+    mean_blocks_per_route: Optional[float] = None
+    mean_totes_per_route: Optional[float] = None
+    capacity_utilisation_pct: Optional[float] = None
+    rts_per_100_carried: Optional[float] = None
+    missing_per_100_carried: Optional[float] = None
+    # NULL until a captain records the Flex count; never 0 as a stand-in.
+    routes_missing_flex_count: Optional[int] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
