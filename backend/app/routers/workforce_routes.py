@@ -34,7 +34,7 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
-from app.core.bag_colors import color_name_for_hex
+from app.core.bag_colors import canonical_hex, color_name_for_hex
 from app.services.derive_block_key import describe_stored_block
 from app.models.btr_sheet import BTRBag, BTRSheet
 from app.models.tote_address import ToteAddress
@@ -187,7 +187,10 @@ def _enrich_unaddressed(
     return [
         UnaddressedBagOut(
             bag_id=b,
-            bag_color=(by_id[b].bag_color if b in by_id else None),
+            # canonical_hex, not the raw stored value: bag_color is written at
+            # ingest, so one truck can hold bags from either side of a palette
+            # change and would otherwise paint one physical colour two ways.
+            bag_color=canonical_hex(by_id[b].bag_color if b in by_id else None),
             bag_color_name=color_name_for_hex(
                 by_id[b].bag_color if b in by_id else None
             ),
@@ -504,7 +507,7 @@ def list_tote_addresses(
                 ),
                 entry_sequence=r.entry_sequence, entered_by_name=r.entered_by_name,
                 geocoded=r.block_key is not None,
-                bag_color=_bag_color(entered_bags, r.bag_id),
+                bag_color=canonical_hex(_bag_color(entered_bags, r.bag_id)),
                 bag_color_name=color_name_for_hex(_bag_color(entered_bags, r.bag_id)),
             )
             for r in rows

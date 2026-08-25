@@ -39,6 +39,7 @@ from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.services.audit import write_audit
+from app.core.bag_colors import canonical_hex
 from app.services.btr_ingestor import (
     BTRSheetRead, CSVBTRIngestor, ImageBTRIngestor, ManualBTRIngestor, reconcile,
 )
@@ -180,7 +181,7 @@ def _to_out(sheet: BTRSheetRead, dsp_mismatch: Optional[str] = None) -> BTRSheet
                 package_count=r.package_count,
                 bag_count=r.bag_count,
                 ov_count=r.ov_count,
-                bags=[BagOut(bag_id=b.bag_id, bag_color=b.bag_color,
+                bags=[BagOut(bag_id=b.bag_id, bag_color=canonical_hex(b.bag_color),
                              amazon_route_name=r.amazon_route_name) for b in r.bags],
                 ov_zones=[OVZoneOut(zone_label=z.zone_label, ov_count=z.ov_count)
                           for z in r.ov_zones],
@@ -370,7 +371,7 @@ def confirm_btr_sheet(
                 btr_sheet_id=sheet.id,
                 btr_route_id=route.id,
                 bag_id=b.bag_id,
-                bag_color=b.bag_color,
+                bag_color=canonical_hex(b.bag_color),
                 amazon_route_name=r.amazon_route_name,
             ))
             bag_total += 1

@@ -80,12 +80,47 @@ def color_hex(color: str | None) -> str | None:
     return BAG_COLOR_HEX[enum] if enum else None
 
 
-# Reverse of BAG_COLOR_HEX. A client that receives only a hex cannot LABEL or
-# SEARCH by colour — and colour is how a captain actually finds a tote in a
-# stack ("the orange one"), with the number confirming it. Deriving the name
-# here keeps one source of truth; duplicating the map client-side would drift
-# the moment a colour is added.
-_HEX_TO_NAME: dict[str, str] = {hexv: name for name, hexv in BAG_COLOR_HEX.items()}
+# Hexes this system USED to emit, mapped to the colour they still mean.
+#
+# `BTRBag.bag_color` is a stored String(10) written at ingest time, NOT resolved
+# on read. So every row ingested before a hex changed still holds the OLD value,
+# and the reverse lookup below must keep recognising it or those bags silently
+# lose their colour — they do not error, they just start reporting as "no
+# colour" and drop out of the picker's colour group.
+#
+# This happened: ADR-296 moved black from #94A3B8 to #000000, and four already
+# ingested black totes immediately regrouped under "No colour" on the captain's
+# screen. Any future hex change must add its old value here in the same commit.
+_LEGACY_HEX_TO_NAME: dict[str, str] = {
+    "#94A3B8": "black",   # pre-ADR-296 slate; see ADR-230 for why it was slate
+}
+
+# Reverse of BAG_COLOR_HEX, plus the legacy values above. A client that receives
+# only a hex cannot LABEL or SEARCH by colour — and colour is how a captain
+# actually finds a tote in a stack ("the orange one"), with the number confirming
+# it. Deriving the name here keeps one source of truth; duplicating the map
+# client-side would drift the moment a colour is added.
+_HEX_TO_NAME: dict[str, str] = {
+    **{hexv: name for name, hexv in BAG_COLOR_HEX.items()},
+    **_LEGACY_HEX_TO_NAME,
+}
+
+
+def canonical_hex(hex_value: str | None) -> str | None:
+    """Map any hex this system has ever emitted to the one it emits TODAY.
+
+    `bag_color` is stored at ingest, so a truck can hold bags ingested either
+    side of a palette change. Serving the raw stored value would paint the same
+    physical colour two different ways on one screen — pre-ADR-296 black totes
+    slate, post-ADR-296 ones true black — which is worse than either value alone,
+    because it invents a colour distinction that does not exist on the truck.
+
+    Resolving through the NAME is what makes this total: any recognised hex,
+    current or legacy, comes back as today's value for that colour. Unknown and
+    absent stay None, which the client already renders as a neutral pill.
+    """
+    name = color_name_for_hex(hex_value)
+    return BAG_COLOR_HEX[name] if name else None
 
 
 def color_name_for_hex(hex_value: str | None) -> str | None:
