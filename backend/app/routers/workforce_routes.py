@@ -35,6 +35,7 @@ from app.database import get_db
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.core.bag_colors import color_name_for_hex
+from app.services.derive_block_key import describe_stored_block
 from app.models.btr_sheet import BTRBag, BTRSheet
 from app.models.tote_address import ToteAddress
 from app.models.truck_assignment import TruckAssignment
@@ -116,17 +117,57 @@ class ToteAddressOut(BaseModel):
     raw_address: Optional[str] = None
     normalised_address: Optional[str] = None
     block_key: Optional[str] = None
+    # The block key as a sentence (ADR-296 D5). Null when the address is gone or
+    # no longer parses; the client then shows the raw key, which is what it did
+    # before this field existed.
+    block_description: Optional[str] = None
     entry_sequence: int
     entered_by_name: Optional[str] = None
     # False when the address could not be parsed into a block_key. The entry is
     # still stored and still sorts — the captain can see and fix it.
     geocoded: bool = True
+    # ADR-296 D4: the same colour the picker chip shows, so one physical tote
+    # looks identical in both places. Null when the sheet carried no colour word.
+    bag_color: Optional[str] = None
+    bag_color_name: Optional[str] = None
 
 
 class ToteDisagreementOut(BaseModel):
     bag_id: str
     block_keys: list[str]
     winning_block_key: str
+
+
+def _bag_color(by_id: dict, bag_id: str) -> Optional[str]:
+    """The sheet's colour hex for a bag, or None when no sheet listed it."""
+    row = by_id.get(bag_id)
+    return row.bag_color if row is not None else None
+
+
+def _bags_by_id(
+    db: Session, company_id: UUID, truck_id: UUID, entry_date: date,
+    bag_ids: list[str],
+) -> dict[str, "BTRBag"]:
+    """The BTR sheet rows for these bags, keyed by bag id.
+
+    One query for the whole response. Shared by the unaddressed picker and the
+    entered-address cards (ADR-296 D4) so the two cannot disagree about a tote's
+    colour — they are looking at the same physical bag.
+    """
+    if not bag_ids:
+        return {}
+    rows = (
+        db.query(BTRBag)
+        .join(BTRSheet, BTRSheet.id == BTRBag.btr_sheet_id)
+        .filter(
+            BTRBag.company_id == company_id,
+            BTRSheet.truck_id == truck_id,
+            BTRSheet.sheet_date == entry_date,
+            BTRBag.bag_id.in_(bag_ids),
+        )
+        .all()
+    )
+    return {r.bag_id: r for r in rows}
 
 
 def _enrich_unaddressed(
@@ -142,18 +183,7 @@ def _enrich_unaddressed(
     if not bag_ids:
         return []
 
-    rows = (
-        db.query(BTRBag)
-        .join(BTRSheet, BTRSheet.id == BTRBag.btr_sheet_id)
-        .filter(
-            BTRBag.company_id == company_id,
-            BTRSheet.truck_id == truck_id,
-            BTRSheet.sheet_date == entry_date,
-            BTRBag.bag_id.in_(bag_ids),
-        )
-        .all()
-    )
-    by_id = {r.bag_id: r for r in rows}
+    by_id = _bags_by_id(db, company_id, truck_id, entry_date, bag_ids)
     return [
         UnaddressedBagOut(
             bag_id=b,
@@ -457,13 +487,25 @@ def list_tote_addresses(
     )
     built = build_packages(db, caller.company_id, truck_id, entry_date)
 
+    # One lookup for every bag that has an address, so each entered card can show
+    # the same colour pill as the picker chip (ADR-296 D4).
+    entered_bags = _bags_by_id(
+        db, caller.company_id, truck_id, entry_date,
+        sorted({r.bag_id for r in rows}),
+    )
+
     return ToteAddressListOut(
         addresses=[
             ToteAddressOut(
                 id=r.id, bag_id=r.bag_id, raw_address=r.raw_address,
                 normalised_address=r.normalised_address, block_key=r.block_key,
+                block_description=describe_stored_block(
+                    r.normalised_address or r.raw_address, r.block_key
+                ),
                 entry_sequence=r.entry_sequence, entered_by_name=r.entered_by_name,
                 geocoded=r.block_key is not None,
+                bag_color=_bag_color(entered_bags, r.bag_id),
+                bag_color_name=color_name_for_hex(_bag_color(entered_bags, r.bag_id)),
             )
             for r in rows
         ],

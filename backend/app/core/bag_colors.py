@@ -4,21 +4,35 @@
 The manifest lists each bag as ``<Color> <number>`` (e.g. ``Orange 6218``), with
 the cell shaded the bag's physical color. The color is REAL data, not
 system-assigned: we parse the leading color word here, normalise it to a known
-enum, and map it to a dark-mode-safe hex. This module is the SINGLE source of
-truth for bag color — clients receive the resolved hex and do no color logic.
+enum, and map it to the hex a client paints the swatch with. This module is the
+SINGLE source of truth for bag color — clients receive the resolved hex and do no
+color logic, and in particular do NOT vary it by theme: a black tote is black in
+both light and dark mode, because the captain is matching it against a physical
+bag that does not change (ADR-296 D1).
 An unknown / missing color resolves to ``None`` (clients render a neutral pill).
 """
 from __future__ import annotations
 
-# Known physical bag colors → dark-mode-safe hex (fill/text tint on the client).
-# Navy is intentionally a lighter blue than true navy so it stays legible on a
-# dark surface (true navy on dark is invisible). Keys are the normalised enum.
+# Known physical bag colors → the hex clients paint the swatch with.
+#
+# These are SWATCH colors, not text colors. The client draws each one as a small
+# filled circle with a hairline ring around it (ADR-296 D1), and the ring is what
+# keeps a swatch visible against a surface of the same value. That is why black
+# can be true black here: it is never painted as text, and the ring separates it
+# from a dark background.
+#
+# Navy stays a lighter blue than the physical bag. Unlike black, navy has no ring
+# trick available — it must remain distinguishable from BLUE-adjacent swatches at
+# 12pt, and true navy reads as black at that size.
 BAG_COLOR_HEX: dict[str, str] = {
-    "black":  "#94A3B8",   # slate — true black is invisible on dark; use a neutral slate
+    # True black. An earlier slate (#94A3B8) traded honesty for legibility and got
+    # neither: the dot sat beside the word "Black" and disagreed with the physical
+    # tote in the captain's hand. The ring solves legibility without the lie.
+    "black":  "#000000",
     "green":  "#10B981",
     "yellow": "#EAB308",
     "orange": "#F97316",
-    "navy":   "#3B82F6",   # lighter blue for dark-mode legibility
+    "navy":   "#3B82F6",   # lighter blue: must not read as black at swatch size
 }
 
 # Label words we accept, normalised to the enum above. "blue" is an alias for navy
