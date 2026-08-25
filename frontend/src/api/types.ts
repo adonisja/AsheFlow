@@ -731,6 +731,11 @@ export interface CommitSortResponse {
   packages_dropped: number;
   dropped_tbas: string[];
   unassigned_misroutes: MisroutedPackageOut[];
+  /** ADR-304 D3: packages skipped because they are on a route this re-sort
+   *  retained (in progress or completed). NOT the same as dropped_tbas — these
+   *  are being delivered right now by someone. */
+  already_routed_tbas: string[];
+  retained_routes: number;
 }
 
 export interface WaveAssignmentEntry {
