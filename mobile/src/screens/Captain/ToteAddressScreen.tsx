@@ -536,6 +536,22 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+/** Colour words a captain might type for a given canonical colour.
+ *
+ * The bags are physically NAVY but crews say "blue" — bag_colors.py already
+ * accepts "blue" as an alias when PARSING the sheet, so search has to accept it
+ * too. Otherwise the one word most people reach for silently returns nothing.
+ */
+const COLOR_ALIASES: Record<string, string> = { navy: 'blue' };
+
+/** Canonical name plus any alias, lowercased, for substring matching. */
+function colorSearchText(name: string | null): string {
+  if (!name) return '';
+  const n = name.toLowerCase();
+  const alias = COLOR_ALIASES[n];
+  return alias ? `${n} ${alias}` : n;
+}
+
 /** Filter by number OR colour, then group by COLOUR. Returns [colour, bags][].
  *
  * GROUPED BY COLOUR, NOT BY AMAZON ROUTE. An earlier version grouped by route,
@@ -551,7 +567,7 @@ function groupBags(bags: UnaddressedBag[], filter: string): [string, Unaddressed
     ? bags.filter(
         b =>
           b.bag_id.toLowerCase().includes(q) ||
-          (b.bag_color_name ?? '').toLowerCase().includes(q),
+          colorSearchText(b.bag_color_name).includes(q),
       )
     : bags;
 
