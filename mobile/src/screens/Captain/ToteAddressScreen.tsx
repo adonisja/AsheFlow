@@ -119,23 +119,6 @@ type Props = {
   onDone?: () => void;
 };
 
-/** The hairline ring every colour swatch wears.
- *
- * Theme-FIXED on purpose (ADR-296 D1). The swatch depicts a physical tote, so
- * none of it may shift with the theme — a ring drawn from `c.border` would make
- * a black bag look different in light and dark mode, reintroducing the confusion
- * that true black was chosen to end.
- *
- * Mid-grey at 45% is the one value that works on both grounds: light enough to
- * separate #000000 from a dark card, dark enough to separate a pale swatch from
- * a white one. A pure-white or pure-black ring only solves one of those, and RN
- * borders do not stack, so there is exactly one ring to spend.
- */
-const SWATCH_RING = {
-  borderWidth: 1,
-  borderColor: 'rgba(128,128,128,0.45)',
-} as const;
-
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onDone }: Props) {
@@ -849,18 +832,26 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   fallbackHint: { fontSize: fontSize.sm, color: c.mutedForeground },
   groupLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  groupSwatch: { width: 16, height: 16, borderRadius: 8, ...SWATCH_RING },
+  groupSwatch: { width: 16, height: 16, borderRadius: 8, borderWidth: 1, borderColor: c.swatchRing },
   groupTitle: { fontSize: fontSize.md, fontWeight: fontWeight.medium, color: c.foreground },
   chevron: { fontSize: fontSize.md, color: c.mutedForeground },
-  // The colour is what the captain scans for; a bag with no colour on the sheet
-  // gets a hollow ring rather than a filled pill that would read as a real one.
-  // Ringed with the theme-fixed SWATCH_RING — see its definition for why the
-  // ring must not come from `c.border`.
+  // The colour is what the captain scans for, and every swatch wears a hairline
+  // ring (ADR-296 D1).
+  //
+  // `c.swatchRing` is deliberately NOT `c.border`: it holds the SAME value in
+  // light and dark mode, because the swatch depicts a tote the captain is
+  // physically holding and nothing about it may shift with a display preference.
+  // A themed ring would make a black bag look different between modes — the very
+  // mismatch true black was chosen to end. It is also not `c.ring`, which is the
+  // dedicated focus indicator and is reserved for nothing else (WCAG 2.4.11).
   swatch: {
     width: 12, height: 12, borderRadius: 6, marginRight: spacing.xs,
-    ...SWATCH_RING,
+    borderWidth: 1, borderColor: c.swatchRing,
   },
-  swatchEmpty: { borderWidth: 1, borderColor: c.border },
+  // A bag with no colour on the sheet gets a hollow ring rather than a filled
+  // pill that would read as a real colour. Same ring as its siblings — otherwise
+  // the one swatch that means "unknown" would be the one that moves with theme.
+  swatchEmpty: { borderWidth: 1, borderColor: c.swatchRing },
 
   bagPill: {
     flexDirection: 'row',
@@ -873,7 +864,7 @@ const styles = (c: ThemeColors) => StyleSheet.create({
     borderWidth: 1,
     borderColor: c.border,
   },
-  pillSwatch: { width: 12, height: 12, borderRadius: 6, ...SWATCH_RING },
+  pillSwatch: { width: 12, height: 12, borderRadius: 6, borderWidth: 1, borderColor: c.swatchRing },
   bagPillText: {
     fontSize: fontSize.md,
     fontWeight: fontWeight.semibold,

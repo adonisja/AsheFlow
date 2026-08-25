@@ -16,7 +16,7 @@
 
   "meta": {
     "version": 1,
-    "updated": "2026-08-03",
+    "updated": "2026-08-25",
     "targets": {
       "text": 4.5,
       "ui": 3.0,
@@ -92,6 +92,9 @@
 
     "border":            { "hsl": [220, 16, 88] },
     "borderStrong":      { "hsl": [220, 14, 76] },
+    "swatchRing":        { "hsl": [220, 10, 50],
+                           "_note": "CONSTANT across themes, like brandSurface: the swatch depicts a physical object (a bag colour, ADR-296) the captain is holding, so nothing about it may shift with a display preference. It is what makes a true-black bag visible on a dark card without faking the colour. Mid-grey is the one value >=3:1 on BOTH light and dark surfaces, which the single ring must have since RN borders do not stack. NOT `ring` — that is the dedicated focus indicator and is used for nothing else.",
+                           "_check": { "on": "surface", "min": 3.0 } },
     "ring":              { "hsl": [185, 75, 36],
                            "_was": [275, 80, 46],
                            "_note": "cyan #1795A1 — dedicated focus indicator, used for NOTHING else. Was byte-identical to brand AND trainee, so on a trainee's screen a focused control was the same colour as role chrome. Focus must never be ambiguous (WCAG 2.4.11). Lab distance >=31 from every role, status and brand token under normal, deuteranopic and protanopic vision.",
@@ -166,6 +169,9 @@
 
     "border":            { "hsl": [231, 25, 26] },
     "borderStrong":      { "hsl": [231, 20, 38] },
+    "swatchRing":        { "hsl": [220, 10, 50],
+                           "_note": "CONSTANT across themes, like brandSurface: the swatch depicts a physical object (a bag colour, ADR-296) the captain is holding, so nothing about it may shift with a display preference. It is what makes a true-black bag visible on a dark card without faking the colour. Mid-grey is the one value >=3:1 on BOTH light and dark surfaces, which the single ring must have since RN borders do not stack. NOT `ring` — that is the dedicated focus indicator and is used for nothing else.",
+                           "_check": { "on": "surface", "min": 3.0 } },
     "ring":              { "hsl": [195, 90, 78],
                            "_was": [272, 75, 63],
                            "_note": "cyan #94E0F9 — dedicated focus indicator, used for NOTHING else. See light theme. Lab distance >=29 from every role, status and brand token under normal, deuteranopic and protanopic vision.",
