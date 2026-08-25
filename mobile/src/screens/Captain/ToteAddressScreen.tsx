@@ -15,22 +15,27 @@
  * leave the picker once they have an address, so the list doubles as a countdown
  * of what is left.
  *
- * THE PICKER NEVER CLOSES while bags remain unaddressed. An earlier version
- * swapped the picker OUT for the entry form once a bag was chosen, which forced
- * the captain to commit before seeing the alternatives and made "Change" a
- * decision they had to take too late. Now the remaining bags stay on screen and
- * the entry form opens UNDERNEATH the selected one, so switching is one tap and
- * the count of what is left is always visible.
+ * ONE BAG AT A TIME: PICKER, OR ENTRY — NEVER BOTH (ADR-296 D2).
+ * This REVERSES ADR-291's "the picker never closes". That rule was written
+ * against a real worry — that swapping the picker out forces a commit before the
+ * captain has seen the alternatives — but it bought protection from the wrong
+ * failure. Keeping both on screen put a 25-row picker above the form and the
+ * entered-bag cards below it, so after every submit the one thing the captain
+ * wanted to see (the address that just saved) was the one region scrolled off.
+ * And they are not weighing alternatives: they walked to a physical tote and
+ * picked it up. The escape hatch survives as "Back to bags" in the entry header,
+ * which costs the same one tap that re-picking did.
  *
- * Once a bag is selected it STAYS selected. A captain enters several addresses
- * for one tote before moving on, and re-picking each time would be three taps
- * per address while holding a package. The address field clears and refocuses
- * instead, so the rhythm is type-address, submit, type-address — one field, one
- * thumb — until they tap Done.
+ * WITHIN the form the bag STAYS selected. A captain enters several addresses for
+ * one tote before moving on, so submit clears the field and refocuses rather than
+ * returning: type-address, submit, type-address — one field, one thumb — until
+ * they tap Done. Done goes back to the picker, where the tote they just finished
+ * is now on screen as an entered card.
  *
  * A tote can hold more than one street, and a bag with an address is no longer
  * in the picker, so each entered bag carries its own "Add another" — the only
- * way back to a tote once it has left the list.
+ * way back to a tote once it has left the list, and the ONLY affordance for it
+ * (ADR-296 D3 removed the duplicate that stood at the top of the screen).
  *
  * With no BTR sheet imported the bag list is unknowable, so free entry is
  * offered as an explicit fallback rather than the default.
@@ -62,9 +67,15 @@ type ToteAddress = {
   raw_address: string | null;
   normalised_address: string | null;
   block_key: string | null;
+  /** The block key as a sentence. Server-derived — see ADR-296 D5. Null when the
+   *  address no longer parses, in which case the raw key stands alone. */
+  block_description: string | null;
   entry_sequence: number;
   entered_by_name: string | null;
   geocoded: boolean;
+  /** Same colour the picker chip shows, so one tote looks the same in both. */
+  bag_color: string | null;
+  bag_color_name: string | null;
 };
 
 type Disagreement = {
@@ -107,6 +118,23 @@ type Props = {
   entryDate?: string;
   onDone?: () => void;
 };
+
+/** The hairline ring every colour swatch wears.
+ *
+ * Theme-FIXED on purpose (ADR-296 D1). The swatch depicts a physical tote, so
+ * none of it may shift with the theme — a ring drawn from `c.border` would make
+ * a black bag look different in light and dark mode, reintroducing the confusion
+ * that true black was chosen to end.
+ *
+ * Mid-grey at 45% is the one value that works on both grounds: light enough to
+ * separate #000000 from a dark card, dark enough to separate a pale swatch from
+ * a white one. A pure-white or pure-black ring only solves one of those, and RN
+ * borders do not stack, so there is exactly one ring to spend.
+ */
+const SWATCH_RING = {
+  borderWidth: 1,
+  borderColor: 'rgba(128,128,128,0.45)',
+} as const;
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -235,6 +263,22 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
   }
 
   const byBag = groupByBag(data?.addresses ?? []);
+  // The selected bag may live in EITHER list: unaddressed while it is being
+  // filled in, entered once it has an address and left the picker. Checking one
+  // only would drop the colour exactly when "Add another" reopens a finished tote.
+  const selectedBag =
+    (data?.unaddressed ?? []).find(b => b.bag_id === bagId) ?? null;
+  const selectedEntered = bagId ? (byBag[bagId] ?? [])[0] ?? null : null;
+  const selectedColor = selectedBag?.bag_color ?? selectedEntered?.bag_color ?? null;
+  const selectedColorName =
+    selectedBag?.bag_color_name ?? selectedEntered?.bag_color_name ?? null;
+
+  // Entered cards, in bag-id order, narrowed to the open bag while one is open.
+  // Both the list AND its empty state read from this, so a freshly opened bag
+  // with no addresses cannot fall through to rendering nothing at all.
+  const visibleBags = sortedBags(byBag).filter(
+    ([bag]) => !bagId || bag === bagId,
+  );
   // Bags that already have at least one address — they have left the picker, so
   // "Add another" is the only route back and the form must say which mode it is
   // in, or a captain cannot tell why the bag is not in the list above.
@@ -270,7 +314,7 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
 
               Groups collapse to a single row each, so 25 totes across 4 routes is
               4 lines until one is opened. */}
-          {(data?.unaddressed?.length ?? 0) > 0 || !hasSheet ? (
+          {!bagId && ((data?.unaddressed?.length ?? 0) > 0 || !hasSheet) ? (
             <View style={s.card}>
               <View style={s.bagHeader}>
                 <Text style={s.sectionTitle}>Which bag?</Text>
@@ -410,16 +454,21 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
           {bagId ? (
             <View style={[s.card, s.selectedCard]}>
               <View style={s.bagHeader}>
-                <Text style={s.sectionTitle}>
-                  {alreadyAddressed.has(bagId)
-                    ? `Another address for bag ${bagId}`
-                    : `Bag ${bagId}`}
-                </Text>
+                <BagPill
+                  bagId={bagId}
+                  color={selectedColor}
+                  colorName={selectedColorName}
+                  styles={s}
+                  c={c}
+                />
                 <TouchableOpacity
-                  onPress={() => { setBagId(''); setAddress(''); }}
-                  accessibilityLabel="Done with this bag"
+                  onPress={() => { tick(); setBagId(''); setAddress(''); }}
+                  style={s.addAnother}
+                  accessibilityLabel="Back to the bag list"
                 >
-                  <Text style={s.link}>Done</Text>
+                  <Text style={s.link}>
+                    {alreadyAddressed.has(bagId) ? 'Done' : 'Back to bags'}
+                  </Text>
                 </TouchableOpacity>
               </View>
 
@@ -452,13 +501,21 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
               </Button>
 
               <Text style={s.hint}>
-                Staying on bag {bagId} — add its other addresses, or tap Done.
+                Staying on bag {bagId} — add its other addresses, or tap
+                {alreadyAddressed.has(bagId) ? ' Done' : ' Back to bags'} when
+                this tote is finished.
               </Text>
             </View>
           ) : null}
 
           {/* ── Split totes (D4) ────────────────────────────────────────── */}
-          {(data?.disagreements ?? []).map(d => (
+          {/* Scoped to the open bag for the same reason the cards below are: while
+              a captain is entering, the only tote that matters is the one in
+              hand. A split warning for a DIFFERENT bag is not actionable until
+              they walk to it. */}
+          {(data?.disagreements ?? [])
+            .filter(d => !bagId || d.bag_id === bagId)
+            .map(d => (
             <View key={d.bag_id} style={s.warnBox}>
               <Text style={s.warnTitle}>Bag {d.bag_id} spans {d.block_keys.length} blocks</Text>
               <Text style={s.warnBody}>
@@ -472,18 +529,32 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
           ))}
 
           {/* ── What has been entered ───────────────────────────────────── */}
-          {Object.keys(byBag).length === 0 ? (
+          {/* While a bag is open, ONLY that bag's entries are listed. The other
+              totes are a distraction from the one physically in hand, and on a
+              phone they push the just-saved address off screen — the same
+              failure the picker caused (ADR-296 D2), one region further down. */}
+          {visibleBags.length === 0 ? (
             <View style={s.card}>
               <Text style={s.empty}>
-                No addresses yet. Read one off a package in the first tote and
-                enter it above.
+                {bagId
+                  // A bag is open but has nothing yet: say so about THIS tote.
+                  // The generic "no addresses yet" would read as though the whole
+                  // day were empty while the captain is mid-entry on bag 2500.
+                  ? `Nothing entered for bag ${bagId} yet. Read an address off a package in this tote and enter it above.`
+                  : 'No addresses yet. Read one off a package in the first tote and enter it above.'}
               </Text>
             </View>
           ) : (
-            Object.entries(byBag).map(([bag, rows]) => (
+            visibleBags.map(([bag, rows]) => (
               <View key={bag} style={s.card}>
                 <View style={s.bagHeader}>
-                  <Text style={s.sectionTitle}>Bag {bag}</Text>
+                  <BagPill
+                    bagId={bag}
+                    color={rows[0]?.bag_color ?? null}
+                    colorName={rows[0]?.bag_color_name ?? null}
+                    styles={s}
+                    c={c}
+                  />
                   <View style={s.headerRight}>
                     <Badge tone={disagreeing.has(bag) ? 'warning' : 'muted'}>
                       {rows.length} {rows.length === 1 ? 'address' : 'addresses'}
@@ -516,6 +587,13 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                           ? r.block_key
                           : 'Could not read a block from this address'}
                       </Text>
+                      {/* The key is the system's token; this is what it means.
+                          Server-derived (ADR-296 D5) — the trailing number is a
+                          hundred-block on one address format and a cross street
+                          on another, and the key alone cannot tell you which. */}
+                      {r.block_description ? (
+                        <Text style={s.rowSub}>{r.block_description}</Text>
+                      ) : null}
                     </View>
                     <TouchableOpacity
                       onPress={() => remove(r.id)}
@@ -531,6 +609,51 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
           )}
       </View>
     </ScreenShell>
+  );
+}
+
+// ── BagPill ───────────────────────────────────────────────────────────────────
+
+/** The bag id wearing its tote's colour (ADR-296 D3/D4).
+ *
+ * The same component titles the entry form and every entered card, so a tote
+ * looks identical wherever it appears — which is the point: the captain is
+ * matching it against a physical bag in front of them.
+ *
+ * The swatch is the PHYSICAL colour and does not move with the theme (ADR-296 D1).
+ * A black tote is black in light mode and dark mode, because the captain is
+ * matching it against a bag that does not change. Black is true #000000; the
+ * hairline ring — also theme-fixed — is what keeps it visible on a dark surface,
+ * which is the job the old slate (#94A3B8) was doing by lying about the colour.
+ */
+function BagPill({
+  bagId, color, colorName, styles: s, c,
+}: {
+  bagId: string;
+  color: string | null;
+  colorName: string | null;
+  styles: ReturnType<typeof styles>;
+  c: ThemeColors;
+}) {
+  return (
+    <View style={s.bagPill}>
+      <View
+        style={[
+          s.pillSwatch,
+          { backgroundColor: color ?? c.surfaceMuted },
+          !color && s.swatchEmpty,
+        ]}
+      />
+      <Text
+        style={s.bagPillText}
+        // Screen readers get the colour word; sighted users get the swatch.
+        accessibilityLabel={
+          colorName ? `${titleCase(colorName)} bag ${bagId}` : `Bag ${bagId}`
+        }
+      >
+        {bagId}
+      </Text>
+    </View>
   );
 }
 
@@ -592,6 +715,24 @@ function groupBags(bags: UnaddressedBag[], filter: string): [string, Unaddressed
 /** "orange" -> "Orange". The API returns lowercase colour words. */
 function titleCase(v: string): string {
   return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+/** Entered bags in bag-id order, numerically where the ids are numbers.
+ *
+ * NOT `Object.entries`. JS hoists integer-like keys into ascending numeric order
+ * and appends everything else in insertion order, so the list LOOKS sorted for a
+ * numeric BTR sheet and silently is not: one hand-typed non-numeric bag (the
+ * no-sheet fallback allows any string) lands at the end regardless of its value,
+ * and the captain scanning for it finds it somewhere other than where the number
+ * says it should be. Sorting explicitly means the order is a decision rather
+ * than an artefact of key insertion.
+ */
+function sortedBags(
+  byBag: Record<string, ToteAddress[]>,
+): [string, ToteAddress[]][] {
+  return Object.entries(byBag).sort(([a], [b]) =>
+    a.localeCompare(b, undefined, { numeric: true }),
+  );
 }
 
 function groupByBag(rows: ToteAddress[]): Record<string, ToteAddress[]> {
@@ -708,13 +849,36 @@ const styles = (c: ThemeColors) => StyleSheet.create({
   },
   fallbackHint: { fontSize: fontSize.sm, color: c.mutedForeground },
   groupLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  groupSwatch: { width: 16, height: 16, borderRadius: 8 },
+  groupSwatch: { width: 16, height: 16, borderRadius: 8, ...SWATCH_RING },
   groupTitle: { fontSize: fontSize.md, fontWeight: fontWeight.medium, color: c.foreground },
   chevron: { fontSize: fontSize.md, color: c.mutedForeground },
   // The colour is what the captain scans for; a bag with no colour on the sheet
   // gets a hollow ring rather than a filled pill that would read as a real one.
-  swatch: { width: 12, height: 12, borderRadius: 6, marginRight: spacing.xs },
+  // Ringed with the theme-fixed SWATCH_RING — see its definition for why the
+  // ring must not come from `c.border`.
+  swatch: {
+    width: 12, height: 12, borderRadius: 6, marginRight: spacing.xs,
+    ...SWATCH_RING,
+  },
   swatchEmpty: { borderWidth: 1, borderColor: c.border },
+
+  bagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: c.surfaceMuted,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderWidth: 1,
+    borderColor: c.border,
+  },
+  pillSwatch: { width: 12, height: 12, borderRadius: 6, ...SWATCH_RING },
+  bagPillText: {
+    fontSize: fontSize.md,
+    fontWeight: fontWeight.semibold,
+    color: c.foreground,
+  },
   inlineRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
   chipOn: { backgroundColor: c.brand, borderColor: c.brand },
   chipTextOn: { color: c.brandForeground },
