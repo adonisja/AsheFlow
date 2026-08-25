@@ -34,6 +34,7 @@ from app.api.deps import RoleChecker, get_caller_employee
 from app.database import get_db
 from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
+from app.models.btr_sheet import BTRBag, BTRSheet
 from app.models.tote_address import ToteAddress
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route, RouteParticipant
@@ -127,6 +128,52 @@ class ToteDisagreementOut(BaseModel):
     winning_block_key: str
 
 
+def _enrich_unaddressed(
+    db: Session, company_id: UUID, truck_id: UUID, entry_date: date,
+    bag_ids: list[str],
+) -> list["UnaddressedBagOut"]:
+    """Attach colour and Amazon route to each unaddressed bag, from the sheet.
+
+    One query, not one per bag. Returns bare entries when no BTR sheet exists —
+    the bags are then only known because someone typed them, so there is nothing
+    to enrich and the client renders neutral pills.
+    """
+    if not bag_ids:
+        return []
+
+    rows = (
+        db.query(BTRBag)
+        .join(BTRSheet, BTRSheet.id == BTRBag.btr_sheet_id)
+        .filter(
+            BTRBag.company_id == company_id,
+            BTRSheet.truck_id == truck_id,
+            BTRSheet.sheet_date == entry_date,
+            BTRBag.bag_id.in_(bag_ids),
+        )
+        .all()
+    )
+    by_id = {r.bag_id: r for r in rows}
+    return [
+        UnaddressedBagOut(
+            bag_id=b,
+            bag_color=(by_id[b].bag_color if b in by_id else None),
+            amazon_route_name=(by_id[b].amazon_route_name if b in by_id else None),
+        )
+        for b in bag_ids
+    ]
+
+
+class UnaddressedBagOut(BaseModel):
+    """A tote on the truck that nobody has addressed yet."""
+    bag_id: str
+    # Resolved hex from ADR-230's label parse. Null when the sheet carried no
+    # colour word — the client renders a neutral pill rather than inventing one.
+    bag_color: Optional[str] = None
+    # Which Amazon route the sheet listed it under. Reference only (ADR-290 D7):
+    # our sort re-partitions freely, but it is how a captain locates the stack.
+    amazon_route_name: Optional[str] = None
+
+
 class ToteAddressListOut(BaseModel):
     addresses: list[ToteAddressOut]
     # D4: totes whose addresses point at different blocks — loose bagging or a
@@ -134,6 +181,15 @@ class ToteAddressListOut(BaseModel):
     disagreements: list[ToteDisagreementOut]
     # Totes the BTR sheet says are on the truck that nobody has addressed.
     unaddressed_bags: list[str]
+    # ADR-291: the SAME bags, enriched from the BTR sheet (ADR-290).
+    #
+    # A flat id list is unusable at real scale — a 25-tote truck renders 25
+    # identical four-digit chips and the captain hunts for one. Colour and
+    # Amazon route are how a tote is actually found in a physical stack, and the
+    # sheet already carries both, so withholding them makes the client guess.
+    #
+    # `unaddressed_bags` is kept alongside for any caller that only needs ids.
+    unaddressed: list["UnaddressedBagOut"] = []
 
 
 class WorkforceRouteOut(BaseModel):
@@ -408,6 +464,9 @@ def list_tote_addresses(
             for d in built.disagreements
         ],
         unaddressed_bags=built.unaddressed_bags,
+        unaddressed=_enrich_unaddressed(
+            db, caller.company_id, truck_id, entry_date, built.unaddressed_bags
+        ),
     )
 
 
