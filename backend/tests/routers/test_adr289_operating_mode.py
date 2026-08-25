@@ -220,6 +220,7 @@ _EMPTY_ARRAYS = "'[]'"
 def _insert_route(db, company_id, truck_assignment_id, *, status, returned_at=None):
     import datetime as dt
     from sqlalchemy import text
+    day = _company_today(db, company_id)
     db.execute(text(
         "INSERT INTO routes (id, company_id, truck_assignment_id, route_date, "
         "route_number, block_keys, segment_ids, tote_ids, tba_numbers, "
@@ -229,10 +230,23 @@ def _insert_route(db, company_id, truck_assignment_id, *, status, returned_at=No
         "'[]', '[]', 0, 0, 12, 'standard', 'default', 0, 1, :st, :ret)"
     ), {
         "id": uuid.uuid4().hex, "cid": company_id.hex, "ta": truck_assignment_id.hex,
-        "d": dt.date.today().isoformat(), "st": status,
+        "d": day.isoformat(), "st": status,
         "ret": returned_at.isoformat() if returned_at else None,
     })
     db.commit()
+
+
+def _company_today(db, company_id):
+    """The date the CODE will use.
+
+    `_mode_flip_blockers` calls `company_today()` — the company's local date, not
+    the server's. On CI (UTC) those differ for five hours every night, so a test
+    seeding rows with `date.today()` writes them on the wrong day and the blocker
+    query correctly finds nothing. That is a real bug in the test, not a CI
+    quirk: it would also fail for any operator running this after 8pm Eastern.
+    """
+    from app.services.local_date import company_today
+    return company_today(db, company_id)
 
 
 def _tenant(db, slug="flip-co"):
@@ -263,7 +277,7 @@ def test_a_route_still_out_blocks_the_flip(flip_db):
     truck = Truck(id=uuid.uuid4(), company_id=cid, name="T1", is_active=True)
     flip_db.add(truck); flip_db.flush()
     ta = TruckAssignment(id=uuid.uuid4(), company_id=cid, truck_id=truck.id,
-                         date=dt.date.today())
+                         date=_company_today(flip_db, cid))
     flip_db.add(ta); flip_db.flush()
     _insert_route(flip_db, cid, ta.id, status="in_progress")
 
@@ -282,7 +296,7 @@ def test_a_returned_route_does_not_block(flip_db):
     truck = Truck(id=uuid.uuid4(), company_id=cid, name="T1", is_active=True)
     flip_db.add(truck); flip_db.flush()
     ta = TruckAssignment(id=uuid.uuid4(), company_id=cid, truck_id=truck.id,
-                         date=dt.date.today())
+                         date=_company_today(flip_db, cid))
     flip_db.add(ta); flip_db.flush()
     _insert_route(flip_db, cid, ta.id, status="completed",
                   returned_at=dt.datetime.now(dt.timezone.utc))
@@ -303,7 +317,7 @@ def test_blockers_do_not_leak_across_tenants(flip_db):
     truck = Truck(id=uuid.uuid4(), company_id=busy, name="T1", is_active=True)
     flip_db.add(truck); flip_db.flush()
     ta = TruckAssignment(id=uuid.uuid4(), company_id=busy, truck_id=truck.id,
-                         date=dt.date.today())
+                         date=_company_today(flip_db, busy))
     flip_db.add(ta); flip_db.flush()
     _insert_route(flip_db, busy, ta.id, status="in_progress")
 
