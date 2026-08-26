@@ -262,6 +262,83 @@ class WorkforceRouteOut(BaseModel):
     flex_package_count: Optional[int] = None
 
 
+class TruckDayTotalsOut(BaseModel):
+    """The truck-day's persisted record (ADR-299 D1/D4).
+
+    OURS, not Amazon's. The morning reference (Amazon's BTR sums, surfaced on
+    the Discord board) is a different number from a different source, and the
+    two are deliberately never reconciled: a gap between them is operationally
+    meaningful — packages that never made it onto a route, a wrong sheet, a tote
+    nobody addressed.
+    """
+    route_date: date
+    truck_assignment_id: UUID
+
+    routes_total: int
+    routes_closed: int
+
+    # D4: sum of flex_package_count over the truck's routes. NULL — never a
+    # partial sum — while any closed route is still unscanned: summing three of
+    # five silently reports a smaller truck. The unrecorded count is both the
+    # honest caveat and the operational nudge.
+    packages_carried: Optional[int] = None
+    routes_missing_flex_count: int = 0
+
+    # `Route.package_count` appears nowhere: it counts captain-entered ADDRESSES
+    # (ADR-298), and a field absent from the payload cannot be rendered by
+    # accident.
+
+
+class MyRouteToteOut(BaseModel):
+    """One tote on the walker's route (ADR-297 D3).
+
+    The TOTE is the unit of work here, not the stop. Full mode's walker works a
+    list of stops and the tote is incidental packaging; in workforce mode the
+    captain's entry unit was the tote, the sort's input was the tote, and the
+    thing the walker physically picks up is the tote.
+    """
+    bag_id: str
+    # ADR-296's swatch rules apply unchanged: a physical-object swatch, ringed,
+    # theme-fixed. Null renders a neutral pill rather than inventing a colour.
+    bag_color: Optional[str] = None
+    bag_color_name: Optional[str] = None
+    # The blocks this tote's addresses derived to, as sentences where possible
+    # (ADR-296 D5) and as raw keys where the address is gone (ADR-219 nulling).
+    block_keys: list[str] = []
+    block_descriptions: list[str] = []
+
+
+class MyRouteOut(BaseModel):
+    """The walker's own route for a day (ADR-297).
+
+    D6: ONE shape whether or not a route exists. `no_route_assigned` is an
+    explicit field rather than a 404, because a walker with no route is a normal
+    state on a normal day — they are on a truck, not yet assigned — and a 404
+    would force the client to distinguish that from "the endpoint is missing",
+    which is the confusion RequireMode's 404 already occupies.
+    """
+    no_route_assigned: bool = False
+    route_id: Optional[UUID] = None
+    route_number: Optional[int] = None
+    status: Optional[str] = None
+    truck_name: Optional[str] = None
+
+    # D3: what the walker is carrying, and the ground it covers.
+    totes: list[MyRouteToteOut] = []
+    block_keys: list[str] = []
+
+    # D5/D6: the REAL parcel count (ADR-291 D11), NULL until a captain records
+    # it at scan time. Never 0 as a stand-in — 0 means "carried nothing".
+    # `package_count` is deliberately absent from this payload entirely: in
+    # workforce mode it counts captain-entered ADDRESSES, and a field that is
+    # not in the response cannot be rendered by accident.
+    flex_package_count: Optional[int] = None
+
+    # Lifecycle (ADR-300). departed_at set + returned_at null IS "in progress".
+    departed_at: Optional[datetime] = None
+    returned_at: Optional[datetime] = None
+
+
 class CommitWorkforceSortOut(BaseModel):
     routes: list[WorkforceRouteOut]
     # ADR-302 D3. Totes skipped because a RETAINED route already carries them.
@@ -824,6 +901,189 @@ def commit_workforce_sort(
             for d in built.disagreements
         ],
         overflowed_routes=overflowed,
+    )
+
+
+@router.get("/day-totals/{entry_date}", response_model=TruckDayTotalsOut)
+def truck_day_totals(
+    entry_date: date,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """The truck-day's own numbers, from OUR routes (ADR-299 D1/D4).
+
+    The end-of-day counterpart to the morning board. The board shows Amazon's
+    BTR figure, labelled as Amazon's, for the people loading the truck; this is
+    the number that gets persisted and reported, and it comes from
+    `flex_package_count` — the real parcel count a captain reads off Amazon Flex
+    while the walker scans (ADR-291 D11).
+
+    D5: the two are never reconciled. A gap between Amazon's morning claim and
+    our close-out is a real signal — packages that never made it onto a route, a
+    sheet that was wrong, a tote nobody addressed — and averaging or silently
+    preferring one destroys it.
+    """
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, entry_date, db)
+
+    routes = (
+        db.query(Route.flex_package_count, Route.returned_at)
+        .filter(
+            Route.company_id == caller.company_id,
+            Route.truck_assignment_id == ta.id,
+            Route.route_date == entry_date,
+        )
+        .all()
+    )
+
+    closed = [r for r in routes if r.returned_at is not None]
+    unscanned = [r for r in closed if r.flex_package_count is None]
+
+    # D4. A partial sum reports a smaller truck than actually went out, so the
+    # total is withheld until every closed route has a count. Zero closed routes
+    # is also NULL, not 0 — the day has not produced a number yet.
+    carried: Optional[int] = None
+    if closed and not unscanned:
+        carried = sum(r.flex_package_count for r in closed)
+
+    return TruckDayTotalsOut(
+        route_date=entry_date,
+        truck_assignment_id=ta.id,
+        routes_total=len(routes),
+        routes_closed=len(closed),
+        packages_carried=carried,
+        routes_missing_flex_count=len(unscanned),
+    )
+
+
+@router.get("/my-route/{entry_date}", response_model=MyRouteOut)
+def my_route(
+    entry_date: date,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_read),
+    db: Session = Depends(get_db),
+):
+    """The caller's own route for a day (ADR-297).
+
+    D1: a new endpoint on this router rather than a mode-branch inside
+    `walker_routes.py`. That file is the proprietary bundle and is gated
+    wholesale under `_full_mode`; ungating it to serve one read would expose the
+    package-coupled reads beside it, and a mode-branching read inside a full-mode
+    router is exactly the "off switch with nothing behind it" shape ADR-290 was
+    written to correct.
+
+    D2: THE CALLER IS THE KEY. No route_id in the path and no client-supplied
+    employee id — the server resolves `RouteParticipant.employee_id == caller.id`
+    with `role="executor"`. A walker asking "what is my route" must not be able
+    to ask it about somebody else, and an id in the path is an object-level
+    ownership check waiting to be forgotten.
+
+    Gated with the existing `_allow_read` (route leads + walker/trainer/trainee),
+    already described in this router as "field staff read their own assignment
+    but never build or assign routes" — precisely this endpoint. A route lead
+    passing through still sees only their OWN route, because the resolution is by
+    caller id: a captain who also walks a route is a real case, and the
+    truck-wide view is a separate concern (`GET /workforce/routes/{date}`).
+    """
+    route = (
+        db.query(Route)
+        .join(RouteParticipant, RouteParticipant.route_id == Route.id)
+        .filter(
+            Route.company_id == caller.company_id,
+            Route.route_date == entry_date,
+            RouteParticipant.company_id == caller.company_id,
+            RouteParticipant.employee_id == caller.id,
+            RouteParticipant.role == "executor",
+        )
+        .order_by(Route.route_number.asc())
+        .first()
+    )
+    if route is None:
+        # D6: a real state, not an error. Same shape, flag set.
+        return MyRouteOut(no_route_assigned=True)
+
+    ta = (
+        db.query(TruckAssignment)
+        .filter(
+            TruckAssignment.id == route.truck_assignment_id,
+            TruckAssignment.company_id == caller.company_id,
+        )
+        .first()
+    )
+    truck_name = None
+    if ta is not None:
+        # Local import matches this module's existing style (see my_truck).
+        from app.models.truck import Truck
+
+        truck = (
+            db.query(Truck)
+            .filter(Truck.id == ta.truck_id, Truck.company_id == caller.company_id)
+            .first()
+        )
+        truck_name = truck.name if truck is not None else None
+
+    bag_ids = list(route.tote_ids or [])
+    by_id = _bags_by_id(
+        db, caller.company_id, ta.truck_id, entry_date, bag_ids
+    ) if ta is not None else {}
+
+    # D4: block descriptions are re-derived from the ADDRESS, because the key
+    # alone is ambiguous — "100-15 Astoria Blvd" and a Manhattan hundred-block
+    # both produce Astoria_Blvd_100. `describe_stored_block` returns None when
+    # the address is gone (ADR-219 nulls them after the retention window), when
+    # it no longer parses, or when the re-derived key disagrees with the stored
+    # one. None is EXPECTED here, not exceptional: the row falls back to the raw
+    # key, which is what the captain-facing list already does.
+    #
+    # D7: the descriptions are what ships. `raw_address` and
+    # `normalised_address` never enter this payload — the describer takes an
+    # address as INPUT and it must not leak out beside its output.
+    addr_rows = (
+        db.query(ToteAddress)
+        .filter(
+            ToteAddress.company_id == caller.company_id,
+            ToteAddress.entry_date == entry_date,
+            ToteAddress.bag_id.in_(bag_ids),
+        )
+        .all()
+    ) if bag_ids else []
+
+    by_bag: dict[str, list] = {}
+    for a in addr_rows:
+        by_bag.setdefault(a.bag_id, []).append(a)
+
+    totes: list[MyRouteToteOut] = []
+    for bag_id in bag_ids:
+        entries = by_bag.get(bag_id, [])
+        keys, descs = [], []
+        for e in entries:
+            if e.block_key and e.block_key not in keys:
+                keys.append(e.block_key)
+                d = describe_stored_block(
+                    e.normalised_address or e.raw_address, e.block_key
+                )
+                descs.append(d or e.block_key)
+        hexv = canonical_hex(_bag_color(by_id, bag_id))
+        totes.append(MyRouteToteOut(
+            bag_id=bag_id,
+            bag_color=hexv,
+            bag_color_name=color_name_for_hex(hexv),
+            block_keys=keys,
+            block_descriptions=descs,
+        ))
+
+    return MyRouteOut(
+        route_id=route.id,
+        route_number=route.route_number,
+        status=route.status,
+        truck_name=truck_name,
+        totes=totes,
+        block_keys=list(route.block_keys or []),
+        flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at,
+        returned_at=route.returned_at,
     )
 
 
