@@ -58,6 +58,14 @@ _NO_AUDIT = {
     # heuristic because it is a POST (it has to be: the file is the body).
     # The write it precedes, confirm_bulk_profiles, IS audited.
     "building_profiles.py::preview_bulk_profiles",
+    # ADR-312 D4: deprecated delegations. They carry no logic of their own —
+    # each calls the moved handler in company_zones.py, which writes the audit.
+    # Auditing here too would double-log every zone edit for one release.
+    # REMOVE these four with the delegations themselves.
+    "sort.py::upsert_company_zone_deprecated",
+    "sort.py::upsert_company_zone_from_streets_deprecated",
+    "sort.py::upsert_company_zone_from_intersections_deprecated",
+    "sort.py::upsert_company_zone_from_corners_deprecated",
     # ADR-290 D3: the same shape. It parses a BTR sheet and reports what was
     # READ — no INSERT, no UPDATE, nothing persisted. POST only because the
     # uploaded file is the body. Giving it no write path is precisely what

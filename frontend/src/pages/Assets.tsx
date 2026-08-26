@@ -1817,7 +1817,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await axiosClient.get<CompanyZone | null>('/sort/company-zone');
+      const { data } = await axiosClient.get<CompanyZone | null>('/company-zones');
       setError(null);
       setZone(data);
       if (data) {
@@ -1853,7 +1853,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
     if (drawnCorners.length < 3) { setError('Draw at least 3 vertices on the map.'); return; }
     setSaving(true); setError(null); setSuccess(false);
     try {
-      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone/from-corners', {
+      const { data } = await axiosClient.post<CompanyZone>('/company-zones/from-corners', {
         corners: drawnCorners,
       });
       cacheZone(data); setZone(data); setEditing(false);
@@ -1869,7 +1869,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
     if (filled.length < 3) { setError('Enter at least 3 complete intersections.'); return; }
     setSaving(true); setError(null); setSuccess(false);
     try {
-      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone/from-intersections', {
+      const { data } = await axiosClient.post<CompanyZone>('/company-zones/from-intersections', {
         intersections: filled.map(r => ({ street: r.street.trim(), avenue: r.avenue.trim() })),
         borough,
       });
@@ -1883,7 +1883,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
   async function saveFromCoords() {
     setSaving(true); setError(null); setSuccess(false);
     try {
-      const { data } = await axiosClient.post<CompanyZone>('/sort/company-zone', {
+      const { data } = await axiosClient.post<CompanyZone>('/company-zones', {
         sw_lat: parseFloat(swLat), sw_lng: parseFloat(swLng),
         ne_lat: parseFloat(neLat), ne_lng: parseFloat(neLng),
       });
