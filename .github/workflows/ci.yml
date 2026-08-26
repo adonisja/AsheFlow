@@ -354,12 +354,28 @@ jobs:
         working-directory: backend
         env:
           MIN_TESTS: "2700"
+          APP_ENV: test
+          DATABASE_URL: "sqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+          AWS_REGION: us-east-1
+          AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+          AWS_COGNITO_APP_CLIENT_ID: test-client-id
+          INTERNAL_SECRET: ci-test-secret-not-real
+          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
         run: |
-          COLLECTED=$(python -m pytest tests/ -q --collect-only 2>/dev/null \
-            | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
+          # Collection output kept, not discarded: a module that fails to import
+          # is the most likely cause of a shrunken suite, and 2>/dev/null hid
+          # exactly that on this step's first run.
+          OUT=$(python -m pytest tests/ -q --collect-only 2>&1) || true
+          COLLECTED=$(printf '%s' "$OUT" | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
           if [ -z "$COLLECTED" ]; then
             echo "::error::Could not determine the collected test count — pytest collection itself failed."
-            python -m pytest tests/ -q --collect-only 2>&1 | tail -20
+            printf '%s\n' "$OUT" | tail -30
+            exit 1
+          fi
+          if printf '%s' "$OUT" | grep -qE "error(s)? during collection"; then
+            echo "::error::Collection errors — some modules did not import."
+            printf '%s\n' "$OUT" | grep -E "^ERROR|error(s)? during collection" | head -20
             exit 1
           fi
           echo "collected: $COLLECTED (floor: $MIN_TESTS)"
