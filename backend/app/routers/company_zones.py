@@ -494,3 +494,83 @@ def upsert_company_zone_from_corners(
     )
 
 
+
+
+# ── Address inventory bootstrap (ADR-303 D1a) ────────────────────────────────
+
+class ZoneBootstrapOut(BaseModel):
+    """What the bootstrap did. Counts, never addresses (Dimension 7)."""
+    zone_id: UUID
+    enumerated: int
+    created: int
+    skipped_existing: int
+    skipped_unparseable: int
+    source: str = "nyc_addresspoint"
+
+
+@router.post("/bootstrap", response_model=ZoneBootstrapOut, status_code=status.HTTP_200_OK)
+def bootstrap_zone_inventory(
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_admin),
+    db: Session = Depends(get_db),
+):
+    """Enumerate the addresses inside the company's active zone into BuildingProfile.
+
+    ADR-303. The segment map self-seeds from packages, which workforce mode does
+    not have, so nothing ever populates its address inventory. This enumerates
+    from NYC AddressPoint, filtered server-side by the zone polygon.
+
+    Explicit rather than only hooked to zone definition (D1a): a zone defined
+    months ago will never fire a create event, and a background job with no way
+    to re-trigger it is a job that fails once and stays failed.
+
+    Synchronous on purpose for now — measured at 4,786 addresses in 3.6s for a
+    real Midtown zone, which is inside a request budget. It makes NO GeoClient
+    calls (D9); segment resolution is deferred until that cost is measured.
+    """
+    from app.services.address_inventory import (
+        AddressSourceUnavailable, enumerate_zone_addresses, persist_zone_inventory,
+    )
+
+    zone = (
+        db.query(CompanyZone)
+        .filter(
+            CompanyZone.company_id == caller.company_id,
+            CompanyZone.parent_zone_id.is_(None),
+            CompanyZone.is_active.is_(True),
+        )
+        .first()
+    )
+    if zone is None or not zone.bounds:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No operating zone is configured. Define one before bootstrapping.",
+        )
+
+    try:
+        addresses = list(enumerate_zone_addresses(zone.bounds))
+    except AddressSourceUnavailable:
+        # Best-effort, matching segment_map's stance: the upstream being down
+        # must not read as "this zone has no addresses". No str(exc) — the URL
+        # carries the polygon and the header carries the token (Dimension 6).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The address source is unavailable. Try again later.",
+        )
+
+    summary = persist_zone_inventory(db, caller.company_id, addresses)
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="company_zone.inventory_bootstrapped",
+        target_table="building_profiles",
+        target_id=str(zone.id),
+        # Counts only — an address list in the audit log would put PII there
+        # permanently (Dimension 7).
+        detail={"enumerated": len(addresses), **summary},
+    )
+    db.commit()
+
+    return ZoneBootstrapOut(zone_id=zone.id, enumerated=len(addresses), **summary)

@@ -63,6 +63,7 @@ def test_the_new_paths_are_registered():
         "/company-zones/from-streets",
         "/company-zones/from-intersections",
         "/company-zones/from-corners",
+        "/company-zones/bootstrap",   # ADR-303 D1a
     }
 
 
@@ -180,3 +181,56 @@ def test_the_geojson_helpers_still_work():
     corners = CZ._geojson_to_corners(poly)
     assert len(corners) == 4, "the closing duplicate is excluded"
     assert CZ._geojson_to_bbox(poly) == (40.74, -74.01, 40.76, -73.99)
+
+
+# ── ADR-303 D1a: the bootstrap endpoint ──────────────────────────────────────
+
+def test_the_bootstrap_endpoint_exists_and_is_admin_gated():
+    """Explicit rather than only hooked to zone definition: a zone defined
+    months ago will never fire a create event, and a background job with no way
+    to re-trigger it is a job that fails once and stays failed."""
+    assert "/company-zones/bootstrap" in {
+        "/company-zones" + r.path if not r.path.startswith("/company-zones") else r.path
+        for r in CZ.router.routes
+    } or any(r.path == "/company-zones/bootstrap" for r in CZ.router.routes)
+
+    def gate(fn):
+        for p in inspect.signature(fn).parameters.values():
+            roles = getattr(getattr(p.default, "dependency", None), "allowed_roles", None)
+            if roles:
+                return set(roles)
+        return set()
+    assert gate(CZ.bootstrap_zone_inventory) == {"admin"}
+
+
+def test_the_bootstrap_reads_only_the_live_root_zone():
+    """Three superseded revisions existed on dsp-test before ADR-312 D6; a
+    bootstrap that ignored is_active would enrich dead polygons."""
+    src = _code_only(CZ.bootstrap_zone_inventory)
+    assert "CompanyZone.is_active.is_(True)" in src
+    assert "CompanyZone.parent_zone_id.is_(None)" in src
+    assert "CompanyZone.company_id == caller.company_id" in src
+
+
+def test_an_unavailable_source_is_503_not_an_empty_inventory():
+    """"The upstream is down" and "this zone has no addresses" are different
+    facts. Returning 200 with zero rows would read as the second."""
+    src = _code_only(CZ.bootstrap_zone_inventory)
+    assert "AddressSourceUnavailable" in src
+    assert "HTTP_503_SERVICE_UNAVAILABLE" in src
+    assert "str(exc)" not in src and "str(e)" not in src
+
+
+def test_the_audit_records_counts_not_addresses():
+    """Dimension 7: an address list in the audit log would put PII there
+    permanently."""
+    src = _code_only(CZ.bootstrap_zone_inventory)
+    assert "write_audit" in src
+    assert "company_zone.inventory_bootstrapped" in src
+    assert "normalised_address" not in src
+
+
+def test_the_response_carries_no_addresses():
+    f = CZ.ZoneBootstrapOut.model_fields
+    assert set(f) == {"zone_id", "enumerated", "created",
+                      "skipped_existing", "skipped_unparseable", "source"}
