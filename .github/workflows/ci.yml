@@ -87,6 +87,18 @@ jobs:
       - name: Shared web/mobile copies are identical
         run: python scripts/check_shared_copies.py
 
+      # ADR-289 gates package-coupled routers on operating_mode. A tab that
+      # renders but whose calls all 404 is worse than a missing tab — and three
+      # shipped that way before anyone noticed, each found by a person using the
+      # app rather than by a test. An earlier hand audit missed two of them by
+      # checking only the tab component; the calls were one import deeper.
+      #
+      # Walks the transitive import tree of every nav entry. Known findings are
+      # in the script's BASELINE with the ADR that fixes each, so a NEW one still
+      # fails the build.
+      - name: Ungated tabs cannot reach full-mode endpoints
+        run: python scripts/check_mode_gated_tabs.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
