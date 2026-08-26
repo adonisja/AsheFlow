@@ -213,13 +213,75 @@ def cross_check_scorecard(
     # manufactures a discrepancy against ourselves in an appeal we are the ones
     # filing. The comparison is only meaningful across packages BOTH sides know
     # about.
-    delivered = db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0)).filter(
-        DeliveryStop.walker_id == emp, DeliveryStop.company_id == cid,
-        DeliveryStop.status == "completed", DeliveryStop.completed_at.isnot(None),
-        DeliveryStop.is_unplanned.is_(False),
-        func.date(DeliveryStop.completed_at) >= week_start,
-        func.date(DeliveryStop.completed_at) <= week_end,
-    ).scalar() or 0
+    # ADR-301 — which side of this comparison we can actually build.
+    #
+    # Full mode reads DeliveryStop. Workforce mode NEVER WRITES that table, so
+    # `delivered` was always 0 there, and both metrics below inherited it in
+    # opposite and equally wrong directions:
+    #
+    #   packages_delivered  delta = amazon - 0  -> ALWAYS over threshold
+    #                       -> every scorecard flagged contestable
+    #   completion_dpmo     attempted = 0 + rts + missing
+    #                       -> our_dpmo = 1,000,000, and `contestable` requires
+    #                          az_dpmo > our_dpmo * 1.25, which no real Amazon
+    #                          DPMO reaches -> NOTHING ever contestable
+    #
+    # The second is the dangerous one: it silently suppressed every legitimate
+    # completion appeal while the response still read "Consistent with our
+    # RTS/missing record".
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == cid)
+        .first()
+    )
+    full_mode = cfg is not None and cfg.operating_mode == MODE_FULL
+
+    delivered = None
+    our_carried = None
+    routes_unrecorded = 0
+
+    if full_mode:
+        # Unplanned stops are EXCLUDED (ADR-197 flag, ADR-246 rule). A package a
+        # walker found in their tote was never manifested to Amazon, so counting it
+        # here inflates our_delivered, makes Amazon's count look too low, and
+        # manufactures a discrepancy against ourselves in an appeal we are the ones
+        # filing. The comparison is only meaningful across packages BOTH sides know
+        # about.
+        delivered = db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0)).filter(
+            DeliveryStop.walker_id == emp, DeliveryStop.company_id == cid,
+            DeliveryStop.status == "completed", DeliveryStop.completed_at.isnot(None),
+            DeliveryStop.is_unplanned.is_(False),
+            func.date(DeliveryStop.completed_at) >= week_start,
+            func.date(DeliveryStop.completed_at) <= week_end,
+        ).scalar() or 0
+    else:
+        # D1 — our side is the captain-recorded parcel count per route, joined
+        # through the executor participant. This is what ADR-294 D5's precision
+        # note already CLAIMED the code read; it never did.
+        from app.models.walker_route import Route, RouteParticipant
+
+        rows = (
+            db.query(Route.flex_package_count)
+            .join(RouteParticipant, RouteParticipant.route_id == Route.id)
+            .filter(
+                RouteParticipant.employee_id == emp,
+                RouteParticipant.role == "executor",
+                RouteParticipant.company_id == cid,
+                Route.company_id == cid,
+                Route.route_date >= week_start,
+                Route.route_date <= week_end,
+            )
+            .all()
+        )
+        routes_unrecorded = sum(1 for (fc,) in rows if fc is None)
+        # D3 — partial coverage reports None, never a partial sum. A partial sum
+        # understates what was carried, which manufactures a discrepancy in
+        # exactly the direction that produces a bad appeal (ADR-299 D4).
+        if rows and routes_unrecorded == 0:
+            our_carried = sum(fc for (fc,) in rows)
     our_rts = db.query(func.count(RTSPackage.id)).filter(
         RTSPackage.walker_id == emp, RTSPackage.company_id == cid,
         func.date(RTSPackage.recorded_at) >= week_start,
@@ -237,21 +299,48 @@ def cross_check_scorecard(
     # 1) Packages Delivered — direct count comparison.
     az_delivered = _num(metric_by_key["packages_delivered"].value) if "packages_delivered" in metric_by_key else None
     if az_delivered is not None:
-        delta = round(az_delivered - delivered, 1)
-        # Contestable if they differ by more than 5% (or >5 packages on small counts).
-        thresh = max(5, 0.05 * max(az_delivered, delivered, 1))
-        items.append(CrossCheckItem(
-            metric="packages_delivered", amazon_value=az_delivered, our_value=float(delivered),
-            delta=delta, contestable=abs(delta) > thresh,
-            note=("Our completed-stop total differs from Amazon's — verify scan/completion timing."
-                  if abs(delta) > thresh else "Matches our records."),
-        ))
+        # D2 — in workforce mode the honest comparable is carried MINUS returned:
+        # what we took out, less what came back. flex_package_count counts parcels
+        # CARRIED, and workforce mode has no delivery event at all (ADR-297 D5c),
+        # so this is an estimate of delivered, not a measurement of it.
+        ours = (delivered if full_mode
+                else (our_carried - our_rts - our_missing
+                      if our_carried is not None else None))
+        if ours is None:
+            # D3 — no recorded count means no comparison. Not zero, and NOT
+            # contestable: an appeal built on a fabricated discrepancy costs the
+            # DSP more credibility with Amazon than a missing comparison does.
+            items.append(CrossCheckItem(
+                metric="packages_delivered", amazon_value=az_delivered, our_value=None,
+                delta=None, contestable=False,
+                note=(f"No parcel count recorded for {routes_unrecorded} route(s) this week — "
+                      "no comparison possible. Record the Flex count at close-out."
+                      if routes_unrecorded else
+                      "No routes recorded for this employee this week — no comparison possible."),
+            ))
+        else:
+            delta = round(az_delivered - ours, 1)
+            # Contestable if they differ by more than 5% (or >5 packages on small counts).
+            thresh = max(5, 0.05 * max(az_delivered, ours, 1))
+            items.append(CrossCheckItem(
+                metric="packages_delivered", amazon_value=az_delivered, our_value=float(ours),
+                delta=delta, contestable=abs(delta) > thresh,
+                note=(("Our completed-stop total differs from Amazon's — verify scan/completion timing."
+                       if full_mode else
+                       "Our carried-minus-returned estimate differs from Amazon's delivered count.")
+                      if abs(delta) > thresh else "Matches our records."),
+            ))
 
     # 2) Delivery Completion DPMO — our comparable = (rts+missing)/attempted * 1e6.
     az_dpmo = _num(metric_by_key["delivery_completion_dpmo"].value) if "delivery_completion_dpmo" in metric_by_key else None
     if az_dpmo is not None:
-        attempted = delivered + our_rts + our_missing
-        our_dpmo = round((our_rts + our_missing) / attempted * 1_000_000, 1) if attempted > 0 else None
+        # D4 — the denominator is what was ATTEMPTED. Full mode builds it from
+        # delivered + returns; workforce mode uses the carried count directly.
+        # With our_carried None it is withheld rather than computed from a zero
+        # that produces the 1,000,000 inversion described above.
+        attempted = (delivered + our_rts + our_missing) if full_mode else our_carried
+        our_dpmo = (round((our_rts + our_missing) / attempted * 1_000_000, 1)
+                    if attempted else None)
         delta = round(az_dpmo - our_dpmo, 1) if our_dpmo is not None else None
         # Contestable if Amazon's DPMO is materially HIGHER than ours (they charged
         # more defects than our RTS/missing record supports).
@@ -276,28 +365,23 @@ def cross_check_scorecard(
         .order_by(func.count(RTSPackage.id).desc()).all()
     ]
 
-    # ADR-294 D5: label the precision. In workforce mode there are no
-    # DeliveryStop rows, so `delivered` is not a per-package count and an appeal
-    # citing it must know that.
-    from app.models.company import CompanyConfig
-    from app.services.constants import MODE_FULL
-
-    cfg = (
-        db.query(CompanyConfig)
-        .filter(CompanyConfig.company_id == caller.company_id)
-        .first()
-    )
-    full_mode = cfg is not None and cfg.operating_mode == MODE_FULL
-
+    # ADR-294 D5 / ADR-301 D5: label the precision. The note was never wrong to
+    # exist — an appeal built on a number of unstated precision is worse than no
+    # appeal — it was wrong in describing wiring that did not exist. It now
+    # describes what the code above actually reads.
     return CrossCheckResponse(
         scorecard_id=sc.id, week=sc.week, week_start=week_start, week_end=week_end,
-        our_delivered=int(delivered), our_rts=int(our_rts), our_missing=int(our_missing),
+        our_delivered=int(delivered) if delivered is not None else None,
+        our_carried=int(our_carried) if our_carried is not None else None,
+        routes_unrecorded=int(routes_unrecorded),
+        our_rts=int(our_rts), our_missing=int(our_missing),
         items=items, rts_evidence=evidence,
         precision="per_package" if full_mode else "captain_reported",
         precision_note=None if full_mode else (
-            "Your delivered figure comes from captain-recorded route counts, not "
-            "per-package scans. Treat any difference from Amazon's number as "
-            "approximate before filing an appeal."
+            "Your figure is a captain-recorded parcel count per route, less recorded "
+            "returns — not a per-package scan. It is compared against Amazon's "
+            "delivered count, which is a different measurement. Treat any difference "
+            "as approximate before filing an appeal."
         ),
     )
 
