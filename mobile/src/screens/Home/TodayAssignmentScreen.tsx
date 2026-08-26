@@ -228,7 +228,9 @@ export default function TodayAssignmentScreen() {
     if (!assignment?.assignmentId) return;
     setArriving(true);
     try {
-      const res = await apiClient.post('/walker-routes/ap-arrival', {
+      // ADR-306: moved off the full-mode walker_routes router. It used to 404
+      // in workforce mode, so this button did nothing for half the tenants.
+      const res = await apiClient.post('/roll-call/ap-arrival', {
         truck_assignment_id: assignment.assignmentId,
       });
       setAssignment(prev => prev ? { ...prev, apArrivedAt: res.data?.arrived_at ?? new Date().toISOString() } : prev);

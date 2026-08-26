@@ -85,7 +85,6 @@ PRIVATE_ROUTER_PREFIXES: dict[str, str] = {
 }
 
 BASELINE: set[tuple[str, str]] = {
-    ("AnchorPoints", "/walker-routes/ap-arrival"),   # ADR-306 — endpoint moves to roll_call
     ("FieldOps", "/sort/"),                          # ADR-307 D1 — swap to /btr-sheets
     ("FieldOps", "/rts/summary/"),                   # ADR-307 D1 — swap to /workforce/day-totals
     ("FieldOps", "/rts/handoff/"),                   # ADR-307 D2 — no counterpart; say so
