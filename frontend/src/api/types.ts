@@ -1477,11 +1477,27 @@ export interface ScorecardCrossCheck {
   week: string;
   week_start: string;
   week_end: string;
-  our_delivered: number;
+  /** Full mode only — a per-package count from DeliveryStop.
+   *  null in workforce mode, which never writes that table (ADR-301 D2). */
+  our_delivered: number | null;
+  /** Workforce mode — parcels CARRIED (captain-recorded per route), which is
+   *  not a delivery count. null when any route that week has no recorded
+   *  count: a partial sum understates what was carried and manufactures a
+   *  discrepancy in the direction that produces a bad appeal (ADR-301 D3).
+   *  Render null as "—", never 0. */
+  our_carried: number | null;
+  /** Routes in the week with no parcel count recorded. Non-zero with
+   *  our_carried === null is the partial-coverage case. */
+  routes_unrecorded: number;
   our_rts: number;
   our_missing: number;
   items: CrossCheckItem[];
   rts_evidence: { rts_type: string; count: number }[];
+  /** ADR-294 D5 / ADR-301 D5 — how precise our side of the comparison is.
+   *  An appeal built on a number of unstated precision is worse than no
+   *  appeal, so surface the note wherever the figures are shown. */
+  precision: 'per_package' | 'captain_reported';
+  precision_note: string | null;
 }
 
 // ── Dashboard DTOs — GENERATED from the backend OpenAPI schema ──────────────
@@ -1927,6 +1943,19 @@ export interface IndividualRosterResponse {
  *  on both sides; the shape was always known, the latitude was accidental. */
 export interface AppealEvidence {
   rts_reasons: { rts_type: string; count: number }[];
+  /** ADR-301. These were ALREADY sent by ScorecardEntry.tsx while the backend
+   *  model listed only rts_reasons under extra="forbid" — so every appeal
+   *  filed from the UI 422'd on five unrecognised keys. Kept nullable because
+   *  workforce mode has no per-package delivered count, and an unrecorded
+   *  parcel count yields null rather than a fabricated zero. */
+  our_delivered?: number | null;
+  our_carried?: number | null;
+  routes_unrecorded?: number | null;
+  precision?: 'per_package' | 'captain_reported' | null;
+  our_rts?: number | null;
+  our_missing?: number | null;
+  week_start?: string | null;
+  week_end?: string | null;
 }
 
 export interface AppealItemIn {

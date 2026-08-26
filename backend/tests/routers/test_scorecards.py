@@ -144,20 +144,48 @@ def _scorecard(metrics, scope="individual", employee_id=_EMP, week="2026-W28"):
     )
 
 
-def _xc_db(*, scorecard, delivered, rts, missing, evidence_rows=None):
+def _xc_db(*, scorecard, delivered, rts, missing, evidence_rows=None,
+           full_mode=True, carried_rows=None):
     """Mock Session for cross_check: Scorecard.first()→scorecard; the three scalar
-    aggregates in call order (delivered, rts, missing); rts evidence .all()."""
+    aggregates in call order (delivered, rts, missing); rts evidence .all().
+
+    `full_mode` is now explicit (ADR-301). It used to be implied by
+    CompanyConfig.first() returning None, which read as WORKFORCE — so these
+    full-mode tests silently took the workforce branch the moment one existed.
+    A mock that returns None for every model answers questions it was never
+    asked, and the default it implies is the one nobody chose.
+    """
     db = MagicMock()
-    scalars = [delivered, rts, missing]
+    # Workforce mode never runs the DeliveryStop aggregate, so `delivered` must
+    # not sit in the queue there — otherwise rts/missing shift by one and the
+    # arithmetic is silently off by the delivered value.
+    scalars = [delivered, rts, missing] if full_mode else [rts, missing]
 
     def _query(*models):
         from app.models.scorecard import Scorecard
+        from app.models.company import CompanyConfig
         m = MagicMock()
-        for attr in ("filter", "group_by", "order_by"):
+        for attr in ("filter", "group_by", "order_by", "join"):
             getattr(m, attr).return_value = m
-        m.first.return_value = scorecard if models and models[0] is Scorecard else None
+        if models and models[0] is Scorecard:
+            m.first.return_value = scorecard
+        elif models and models[0] is CompanyConfig:
+            m.first.return_value = SimpleNamespace(
+                operating_mode="full" if full_mode else "workforce")
+        else:
+            m.first.return_value = None
         m.scalar.side_effect = lambda: scalars.pop(0) if scalars else 0
-        m.all.side_effect = lambda: (evidence_rows or [])
+        # Workforce mode reads (flex_package_count,) rows off the route join;
+        # full mode's only .all() here is the RTS evidence.
+        # Dispatch on the COLUMN being queried, not on mode: the route join
+        # selects Route.flex_package_count, the evidence query selects
+        # RTSPackage.rts_type. Guessing from mode made both look alike and the
+        # 1-tuple carried rows were handed to the 2-tuple evidence unpack.
+        _first = models[0] if models else None
+        _is_carried = getattr(_first, "key", None) == "flex_package_count"
+        m.all.side_effect = lambda: (
+            (carried_rows or []) if _is_carried else (evidence_rows or [])
+        )
         return m
 
     db.query = _query
@@ -198,6 +226,55 @@ class TestCrossCheck:
         assert dpmo.contestable is True                    # 90000 > 50000 * 1.25
         assert [(e.rts_type, e.count) for e in resp.rts_evidence] == \
             [("no_safe_location", 3), ("access_issue", 2)]
+
+    # ── ADR-301: the workforce branch, executed end-to-end ────────────────
+
+    def test_workforce_uses_carried_minus_returned_not_deliverystop(self):
+        """The inversion this ADR fixes. Before: delivered=0 -> delta=amazon,
+        every scorecard contestable, and our_dpmo pinned at 1,000,000 so no
+        completion appeal could ever fire."""
+        sc = _scorecard([("packages_delivered", "300"),
+                         ("delivery_completion_dpmo", "5000")])
+        db = _xc_db(scorecard=sc, delivered=0, rts=3, missing=1,
+                    full_mode=False, carried_rows=[(200,), (110,)])
+        res = _run_xc(db)
+
+        assert res.our_carried == 310
+        assert res.our_delivered is None, "workforce mode has no delivery count"
+        assert res.routes_unrecorded == 0
+
+        pkg = next(i for i in res.items if i.metric == "packages_delivered")
+        assert pkg.our_value == 306.0          # 310 carried - 3 rts - 1 missing
+        assert pkg.contestable is False        # was True for every week
+
+        dpmo = next(i for i in res.items if i.metric == "delivery_completion_dpmo")
+        assert dpmo.our_value is not None and dpmo.our_value < 1_000_000
+
+    def test_workforce_real_defect_gap_is_appealable(self):
+        """The suppressed case: Amazon charging more defects than our record
+        supports must now flag contestable."""
+        sc = _scorecard([("packages_delivered", "300"),
+                         ("delivery_completion_dpmo", "150000")])
+        db = _xc_db(scorecard=sc, delivered=0, rts=30, missing=5,
+                    full_mode=False, carried_rows=[(310,)])
+        res = _run_xc(db)
+        dpmo = next(i for i in res.items if i.metric == "delivery_completion_dpmo")
+        assert dpmo.contestable is True
+
+    def test_workforce_unrecorded_route_withholds_the_comparison(self):
+        """D3 — NULL is not zero. An appeal built on a fabricated discrepancy
+        costs more credibility than a missing comparison does."""
+        sc = _scorecard([("packages_delivered", "300"),
+                         ("delivery_completion_dpmo", "5000")])
+        db = _xc_db(scorecard=sc, delivered=0, rts=3, missing=1,
+                    full_mode=False, carried_rows=[(200,), (None,)])
+        res = _run_xc(db)
+
+        assert res.our_carried is None, "a partial sum understates what was carried"
+        assert res.routes_unrecorded == 1
+        for item in res.items:
+            assert item.our_value is None
+            assert item.contestable is False
 
     def test_company_scorecard_rejected(self):
         sc = _scorecard([], scope="company", employee_id=None)

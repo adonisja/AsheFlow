@@ -72,7 +72,17 @@ class CrossCheckResponse(BaseModel):
     week: str
     week_start: date
     week_end: date
-    our_delivered: int
+    # Full mode: per-package delivered count from DeliveryStop.
+    # Workforce mode: None — that table is never written (ADR-301 D2/D3).
+    our_delivered: Optional[int] = None
+    # Workforce mode: parcels CARRIED (sum of Route.flex_package_count), which is
+    # not a delivery count and must not be named as one. None when no route that
+    # week has a recorded count — a NULL suppresses the comparison rather than
+    # reading as zero (ADR-301 D3).
+    our_carried: Optional[int] = None
+    # Routes in the week with no flex_package_count recorded. A non-zero value
+    # with our_carried=None is the "partial coverage" case (ADR-299 D4).
+    routes_unrecorded: int = 0
     our_rts: int
     our_missing: int
     items: List[CrossCheckItem] = []
