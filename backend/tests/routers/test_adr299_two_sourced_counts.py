@@ -17,6 +17,10 @@ import inspect
 
 import pytest
 
+# Imported unguarded (ADR-311): CI copies the proprietary routers in from
+# AsheFlow-private before pytest runs, so a failure here is real.
+from app.routers import dispatch as Dsp
+
 from app.routers import workforce_routes as W
 from app.routers.workforce_routes import TruckDayTotalsOut
 
@@ -92,12 +96,7 @@ def test_dispatch_board_sources_the_morning_count_from_the_btr_sheet():
     """Before the truck moves, ours does not exist: no tote addresses entered,
     no sort run, nothing scanned. Amazon's BTR sheet is the only count there is.
     """
-    try:
-        from app.routers import dispatch as Dsp
-    except ImportError:
-        pytest.skip("proprietary dispatch router not available (CI skip)",
-                    allow_module_level=False)
-        return
+    from app.routers import dispatch as Dsp
 
     src = inspect.getsource(Dsp.get_daily_dispatch)
     assert "BTRRoute.package_count" in src
@@ -112,12 +111,7 @@ def test_the_morning_figure_carries_its_attribution():
     are worse than one wrong number: the reader cannot tell whose is whose and
     assumes a bug.
     """
-    try:
-        from app.routers import dispatch as Dsp
-    except ImportError:
-        pytest.skip("proprietary dispatch router not available (CI skip)",
-                    allow_module_level=False)
-        return
+    from app.routers import dispatch as Dsp
 
     src = inspect.getsource(Dsp.get_daily_dispatch)
     assert '"ap_source": ap_source' in src
@@ -126,12 +120,7 @@ def test_the_morning_figure_carries_its_attribution():
 
 def test_full_mode_still_uses_the_manifest_count():
     """Full mode is unchanged — package_count IS a parcel count there."""
-    try:
-        from app.routers import dispatch as Dsp
-    except ImportError:
-        pytest.skip("proprietary dispatch router not available (CI skip)",
-                    allow_module_level=False)
-        return
+    from app.routers import dispatch as Dsp
 
     src = inspect.getsource(Dsp.get_daily_dispatch)
     assert 'ap_source = "manifest"' in src

@@ -11,13 +11,10 @@ from typing import Optional
 
 import pytest
 
-try:
-    from app.services.wave_distribution import (
-        build_assignee_pool, select_wave_routes, match_assignees,
-        build_block_urgency, Assignee, BlockUrgency,
-    )
-except ImportError:
-    pytest.skip("proprietary wave_distribution not available (CI skip)", allow_module_level=True)
+from app.services.wave_distribution import (
+    build_assignee_pool, select_wave_routes, match_assignees,
+    build_block_urgency, Assignee, BlockUrgency,
+)
 
 
 # ── minimal stand-ins (only the fields the service touches) ─────────────────

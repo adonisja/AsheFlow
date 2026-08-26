@@ -11,15 +11,9 @@ import pytest
 # derive_block_key.py is proprietary and gitignored — the public CI checkout does
 # not have it, and a bare top-level import would fail COLLECTION and take the whole
 # backend-test job with it, not just this file.
-try:
-    from app.services.derive_block_key import (
-        ParsedBlock, derive_block_key, describe_stored_block,
-    )
-except ImportError:
-    pytest.skip(
-        "proprietary derive_block_key not available (CI skip)",
-        allow_module_level=True,
-    )
+from app.services.derive_block_key import (
+    ParsedBlock, derive_block_key, describe_stored_block,
+)
 
 
 # ── hundred-block addresses get a real range ─────────────────────────────────

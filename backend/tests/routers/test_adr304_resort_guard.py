@@ -17,13 +17,7 @@ here so nobody reads this file as proving more than it does.
 """
 import pytest
 
-try:
-    from app.routers.walker_routes import DELETABLE_ON_RESORT, _persist_routes  # noqa: F401
-except ImportError:
-    pytest.skip(
-        "proprietary walker_routes deps not available (CI skip)",
-        allow_module_level=True,
-    )
+from app.routers.walker_routes import DELETABLE_ON_RESORT, _persist_routes  # noqa: F401
 
 # ── D1: the allow-list ────────────────────────────────────────────────────────
 

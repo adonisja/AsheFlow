@@ -16,10 +16,7 @@ whole module if so.
 """
 import pytest
 
-try:
-    import app.routers.sort as sort_mod
-except ImportError:
-    pytest.skip("proprietary sort deps not available (CI skip)", allow_module_level=True)
+import app.routers.sort as sort_mod
 
 
 def _name_resolvable_in(func, name: str) -> bool:

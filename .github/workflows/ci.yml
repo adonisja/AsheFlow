@@ -336,6 +336,46 @@ jobs:
           print(f"All {len(mods)} routers import cleanly against the public models.")
           EOF
 
+      # ADR-311 — a suite that SHRINKS is a failure, even when every test passes.
+      #
+      # The proprietary routers/services are gitignored and copied in from
+      # AsheFlow-private above. When tests guarded that import with
+      # `pytest.skip(allow_module_level=True)`, a broken or stale private pull
+      # silently dropped 167 tests and CI still exited 0 — measured, not
+      # hypothetical. The guards are gone (a missing module is now a collection
+      # error), but nothing stopped a future one being added, and the same
+      # green-while-blind failure would return.
+      #
+      # This floor is the backstop: it counts what pytest actually collected and
+      # fails if the suite quietly got smaller, whatever the cause — a new skip
+      # guard, a private pull that no-op'd, a directory that stopped collecting.
+      # Raise MIN_TESTS when the suite grows; never lower it to make CI pass.
+      - name: Assert the suite did not silently shrink
+        working-directory: backend
+        env:
+          MIN_TESTS: "2700"
+        run: |
+          COLLECTED=$(python -m pytest tests/ -q --collect-only 2>/dev/null \
+            | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
+          if [ -z "$COLLECTED" ]; then
+            echo "::error::Could not determine the collected test count — pytest collection itself failed."
+            python -m pytest tests/ -q --collect-only 2>&1 | tail -20
+            exit 1
+          fi
+          echo "collected: $COLLECTED (floor: $MIN_TESTS)"
+          if [ "$COLLECTED" -lt "$MIN_TESTS" ]; then
+            echo "::error::Test suite shrank: $COLLECTED collected, expected >= $MIN_TESTS."
+            echo "Something is silently not running. Most likely causes:"
+            echo "  1. A pytest.skip(allow_module_level=True) guard was added — see ADR-311."
+            echo "     Proprietary modules are pulled from AsheFlow-private BEFORE pytest runs,"
+            echo "     so a failed import is a real failure and must not be skipped."
+            echo "  2. The AsheFlow-private pull failed or synced a stale branch."
+            echo "  3. A test directory stopped being collected."
+            echo "Do NOT lower MIN_TESTS to make this pass."
+            grep -rn "allow_module_level" tests/ || true
+            exit 1
+          fi
+
       - name: Run tests
         working-directory: backend
         run: python -m pytest tests/ -v --tb=short
