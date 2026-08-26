@@ -2370,7 +2370,11 @@ export interface StatsSeries {
 }
 
 export interface LifetimeTotals {
-  delivered: number;
+  /** ADR-305: NULL in workforce mode when no route has been Flex-scanned —
+   *  delivered is DERIVED there (carried − rts − missing), and an empty scanned
+   *  set has no figure. Render an em-dash, never 0: "delivered nothing" is a
+   *  different claim about a real person. Always a number in full mode. */
+  delivered: number | null;
   rts: number;
   missing: number;
   damaged: number;
@@ -2378,6 +2382,10 @@ export interface LifetimeTotals {
   trips: number;
   /** Null, never 0, when nothing has been attempted. */
   success_pct: number | null;
+  /** ADR-305 D3: routes with no Flex count, excluded from BOTH delivered and
+   *  attempted. > 0 means these figures cover a SUBSET of the walker's routes,
+   *  and the UI must say so — "93.9% over 2 of 3 routes", not a bare 93.9%. */
+  routes_excluded_unscanned: number;
 }
 
 /** Per calendar year, ALL TIME — computed server-side because the daily series

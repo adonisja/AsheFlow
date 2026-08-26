@@ -180,7 +180,26 @@ def get_my_stats(
     fetched from /assignment-history/me when a day is opened, which is the only
     level that needs it.
     """
-    lifetime = get_lifetime_totals(db, caller.company_id, caller.id, caller.role)
+    # ADR-305 D5. The mode is resolved ONCE, here, and passed down. Each stats
+    # function asking for itself would be three identical CompanyConfig queries
+    # per request for a fact that cannot change mid-request — the duplicate-
+    # lookup problem `deps.py` already fixed once with a memoised config.
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL, MODE_WORKFORCE
+
+    _cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == caller.company_id)
+        .first()
+    )
+    # A missing config fails to WORKFORCE, the safe direction: deriving from
+    # carried totes is honest for a tenant with no feed, while reading an empty
+    # DeliveryStop would report a real person as having delivered nothing.
+    mode = MODE_FULL if (_cfg and _cfg.operating_mode == MODE_FULL) else MODE_WORKFORCE
+
+    lifetime = get_lifetime_totals(
+        db, caller.company_id, caller.id, caller.role, mode=mode
+    )
     years = get_year_stats(db, caller.company_id, caller.id, caller.role)
     series = get_stats_series(
         db, caller.company_id, caller.id, caller.role, months=months

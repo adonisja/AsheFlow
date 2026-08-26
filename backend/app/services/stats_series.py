@@ -42,8 +42,9 @@ from app.models.assignment_member import AssignmentMember
 from app.models.delivery_stop import DeliveryStop
 from app.models.rts import DamagedPackage, MissingPackage, RTSPackage
 from app.models.shift_roll_call import ShiftRollCall
+from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.models.truck_assignment import TruckAssignment
-from app.models.walker_route import Route
+from app.models.walker_route import Route, RouteParticipant
 from app.services.constants import TRUCK_SCOPED_ROLES
 
 logger = logging.getLogger(__name__)
@@ -346,7 +347,7 @@ class BlockStat:
     """
     block_key: str
     stops: int = 0
-    delivered: int = 0
+    delivered: Optional[int] = 0
     rts: int = 0
     rts_rate: Optional[float] = None
 
@@ -408,6 +409,11 @@ class LifetimeTotals:
     truck_damaged: int = 0
     trips: int = 0
     success_pct: Optional[float] = None
+    # ADR-305 D3 (workforce only). Routes whose flex_package_count was never
+    # recorded, excluded from BOTH delivered and attempted. Reported so the
+    # figures carry their own coverage caveat rather than implying they cover
+    # everything. Always 0 in full mode.
+    routes_excluded_unscanned: int = 0
 
 
 def get_year_stats(
@@ -654,81 +660,170 @@ def get_period_extras(
     return ranked[:top_n], att, reasons
 
 
+def _workforce_delivered_terms(
+    db: Session, company_id: UUID, employee_id: UUID,
+) -> tuple[Optional[int], int, int, int]:
+    """Workforce mode's (delivered, rts, missing, excluded_routes) — ADR-305 D1.
+
+    There is no delivery EVENT in workforce mode (`DeliveryStop` is never
+    written), but the delivered QUANTITY is derivable:
+
+        delivered = sum(flex_package_count) - sum(rts) - sum(missing)
+
+    `flex_package_count` is the parcel count a captain reads off Amazon Flex at
+    scan time (ADR-291 D11). What was carried, minus what came back.
+
+    `DamagedPackage` is subtracted NOWHERE. A station-damaged package is pulled
+    BEFORE the captain takes the Flex count (confirmed with the operator), so it
+    never entered the carried figure. Route damage needs no separate term either
+    — `package_damaged` is one of six `RtsType` values, so it is already inside
+    `sum(rts)`, and subtracting `DamagedPackage` as well would double-count one
+    case while miscounting the other.
+
+    D3 — A ROUTE WITH NO FLEX COUNT IS EXCLUDED FROM BOTH TERMS, not from the
+    numerator alone. Counting an excluded route's returns while excluding its
+    carried count would deflate the ratio against a denominator those packages
+    were never in. The exclusion count is returned so the caller can report it:
+    "93.9% over 2 of 3 routes" is honest, "93.9%" alone is not.
+
+    Returns delivered=None when NO route has been scanned — an empty set has no
+    ratio, and 0 would read as "delivered nothing".
+    """
+    routes = (
+        db.query(Route.id, Route.flex_package_count)
+        .join(RouteParticipant, RouteParticipant.route_id == Route.id)
+        .filter(
+            Route.company_id == company_id,
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.employee_id == employee_id,
+            RouteParticipant.role == "executor",
+        )
+        .all()
+    )
+    scanned = [r for r in routes if r.flex_package_count is not None]
+    excluded = len(routes) - len(scanned)
+
+    if not scanned:
+        return None, 0, 0, excluded
+
+    scanned_ids = [r.id for r in scanned]
+    carried = sum(r.flex_package_count for r in scanned)
+
+    rts = int(
+        db.query(func.count(RTSPackage.id)).filter(
+            RTSPackage.company_id == company_id,
+            RTSPackage.route_id.in_(scanned_ids),
+        ).scalar() or 0
+    )
+    missing = int(
+        db.query(func.count(MissingPackage.id)).filter(
+            MissingPackage.company_id == company_id,
+            MissingPackage.route_id.in_(scanned_ids),
+        ).scalar() or 0
+    )
+    # Cannot go below zero: more returns than carried would mean a miscount
+    # upstream, and a negative delivered figure would be worse than a wrong one.
+    return max(0, carried - rts - missing), rts, missing, excluded
+
+
 def get_lifetime_totals(
-    db: Session, company_id: UUID, employee_id: UUID, role: str
+    db: Session, company_id: UUID, employee_id: UUID, role: str,
+    mode: str = MODE_FULL,
 ) -> LifetimeTotals:
     """The header figures — all time, not windowed.
 
     Deliberately NOT derived from the series above: the series is capped at 24
     months, and "lifetime" that silently means "two years" would be a lie.
+
+    `mode` selects the source for delivered/rts/missing (ADR-305 D0). It is
+    PASSED IN, not re-derived here: the caller resolves it once per request, and
+    a pure computation that queries CompanyConfig to discover its own branch
+    hides a dependency its signature does not declare. Defaults to full mode so
+    existing callers are unchanged.
     """
     out = LifetimeTotals()
 
-    # Same truck-vs-own rule as the series above — a driver's lifetime total
-    # must not disagree with the days that make it up.
-    truck_wide = role in _TRUCK_SCOPED_ROLES
-
-    if truck_wide:
-        base = (
-            db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
-            .join(TruckAssignment,
-                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
-            .join(AssignmentMember,
-                  AssignmentMember.assignment_id == TruckAssignment.id)
-            .filter(
-                DeliveryStop.company_id == company_id,
-                TruckAssignment.company_id == company_id,
-                AssignmentMember.company_id == company_id,
-                AssignmentMember.employee_id == employee_id,
-            )
+    # ADR-305 D0. Workforce mode derives delivered/rts/missing from carried
+    # totes; everything BELOW this branch (damaged, truck_damaged, trips,
+    # success_pct) is mode-independent and runs unchanged for both.
+    #
+    # Full mode's path is not touched: `DeliveryStop` is a real per-package
+    # record there and remains its source.
+    if mode == MODE_WORKFORCE:
+        delivered, wf_rts, wf_missing, excluded = _workforce_delivered_terms(
+            db, company_id, employee_id
         )
-        out.delivered = int(base.scalar() or 0)
-        out.rts = int(
-            db.query(func.coalesce(func.sum(DeliveryStop.rts_count), 0))
-            .join(TruckAssignment,
-                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
-            .join(AssignmentMember,
-                  AssignmentMember.assignment_id == TruckAssignment.id)
-            .filter(
-                DeliveryStop.company_id == company_id,
-                TruckAssignment.company_id == company_id,
-                AssignmentMember.company_id == company_id,
-                AssignmentMember.employee_id == employee_id,
-            ).scalar() or 0
-        )
-        out.missing = int(
-            db.query(func.coalesce(func.sum(DeliveryStop.missing_count), 0))
-            .join(TruckAssignment,
-                  TruckAssignment.id == DeliveryStop.truck_assignment_id)
-            .join(AssignmentMember,
-                  AssignmentMember.assignment_id == TruckAssignment.id)
-            .filter(
-                DeliveryStop.company_id == company_id,
-                TruckAssignment.company_id == company_id,
-                AssignmentMember.company_id == company_id,
-                AssignmentMember.employee_id == employee_id,
-            ).scalar() or 0
-        )
+        out.delivered = delivered            # None when nothing was ever scanned
+        out.rts = wf_rts
+        out.missing = wf_missing
+        out.routes_excluded_unscanned = excluded
     else:
-        out.delivered = int(
-            db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
-            .filter(
-                DeliveryStop.company_id == company_id,
-                DeliveryStop.walker_id == employee_id,
-            ).scalar() or 0
-        )
-        out.rts = int(
-            db.query(func.count(RTSPackage.id)).filter(
-                RTSPackage.company_id == company_id,
-                RTSPackage.walker_id == employee_id,
-            ).scalar() or 0
-        )
-        out.missing = int(
-            db.query(func.count(MissingPackage.id)).filter(
-                MissingPackage.company_id == company_id,
-                MissingPackage.walker_id == employee_id,
-            ).scalar() or 0
-        )
+        # ── full mode, unchanged ──────────────────────────────────────────────
+        # Same truck-vs-own rule as the series above — a driver's lifetime total
+        # must not disagree with the days that make it up.
+        truck_wide = role in _TRUCK_SCOPED_ROLES
+
+        if truck_wide:
+            base = (
+                db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
+                .join(TruckAssignment,
+                      TruckAssignment.id == DeliveryStop.truck_assignment_id)
+                .join(AssignmentMember,
+                      AssignmentMember.assignment_id == TruckAssignment.id)
+                .filter(
+                    DeliveryStop.company_id == company_id,
+                    TruckAssignment.company_id == company_id,
+                    AssignmentMember.company_id == company_id,
+                    AssignmentMember.employee_id == employee_id,
+                )
+            )
+            out.delivered = int(base.scalar() or 0)
+            out.rts = int(
+                db.query(func.coalesce(func.sum(DeliveryStop.rts_count), 0))
+                .join(TruckAssignment,
+                      TruckAssignment.id == DeliveryStop.truck_assignment_id)
+                .join(AssignmentMember,
+                      AssignmentMember.assignment_id == TruckAssignment.id)
+                .filter(
+                    DeliveryStop.company_id == company_id,
+                    TruckAssignment.company_id == company_id,
+                    AssignmentMember.company_id == company_id,
+                    AssignmentMember.employee_id == employee_id,
+                ).scalar() or 0
+            )
+            out.missing = int(
+                db.query(func.coalesce(func.sum(DeliveryStop.missing_count), 0))
+                .join(TruckAssignment,
+                      TruckAssignment.id == DeliveryStop.truck_assignment_id)
+                .join(AssignmentMember,
+                      AssignmentMember.assignment_id == TruckAssignment.id)
+                .filter(
+                    DeliveryStop.company_id == company_id,
+                    TruckAssignment.company_id == company_id,
+                    AssignmentMember.company_id == company_id,
+                    AssignmentMember.employee_id == employee_id,
+                ).scalar() or 0
+            )
+        else:
+            out.delivered = int(
+                db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
+                .filter(
+                    DeliveryStop.company_id == company_id,
+                    DeliveryStop.walker_id == employee_id,
+                ).scalar() or 0
+            )
+            out.rts = int(
+                db.query(func.count(RTSPackage.id)).filter(
+                    RTSPackage.company_id == company_id,
+                    RTSPackage.walker_id == employee_id,
+                ).scalar() or 0
+            )
+            out.missing = int(
+                db.query(func.count(MissingPackage.id)).filter(
+                    MissingPackage.company_id == company_id,
+                    MissingPackage.walker_id == employee_id,
+                ).scalar() or 0
+            )
 
     if role in _OWN_DAMAGE_ROLES:
         out.damaged = int(
@@ -765,8 +860,14 @@ def get_lifetime_totals(
 
     # Null rather than 0.0 when nothing has been attempted: "no data" and "0%
     # success" are different facts and must not render identically.
-    attempted = out.delivered + out.rts + out.missing
-    if attempted:
-        out.success_pct = round(out.delivered / attempted * 100, 1)
+    # ADR-305: `delivered` is None in workforce mode when NO route was ever
+    # Flex-scanned. None + int raises, and a None numerator has no ratio, so the
+    # percentage stays None — which is the same "no data" the branch below has
+    # always produced for a zero denominator. Full mode's arithmetic is
+    # unchanged: `delivered` is always an int there.
+    if out.delivered is not None:
+        attempted = out.delivered + out.rts + out.missing
+        if attempted:
+            out.success_pct = round(out.delivered / attempted * 100, 1)
 
     return out
