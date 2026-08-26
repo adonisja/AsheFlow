@@ -45,11 +45,13 @@ import {
   WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
   GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES, TRUCK_BUILDINGS_ROLES,
   TOTE_ADDRESS_ROLES,
+  WORKFORCE_ROUTE_ROLES,
 } from './roles';
 import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
 import MyRouteTabScreen from '@screens/Trainee/MyRouteScreen';
 import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
 import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
+import MyWorkforceRouteScreen from '@screens/Walker/MyWorkforceRouteScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -114,9 +116,20 @@ const ALL_TABS: TabDef[] = [
   // absent for a full-mode tenant — there the manifest supplies this and a
   // captain typing addresses by hand would be duplicate, contradictory work.
   { key: 'ToteAddresses',   label: 'Tote Addresses',   icon: '📮', roles: TOTE_ADDRESS_ROLES,     component: ToteAddressScreen, feature: 'workforce_sort' },
+  // ADR-297: the workforce sort's OUTPUT, for the person who walks it. Same
+  // capability gate as the input above, because they are two ends of one
+  // pipeline — a tenant with a package feed gets full mode's MyRoute instead,
+  // which is a different screen (stops, not totes) on a different gate.
+  { key: 'WorkforceRoute',  label: 'My Route',         icon: '🧭', roles: WORKFORCE_ROUTE_ROLES,  component: MyWorkforceRouteScreen, feature: 'workforce_sort' },
   { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
   { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
-  { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
+  // ADR-289. Full-mode only: every sub-tab under it (My Route, Found) calls
+  // endpoints registered under `_full_mode` — /rts/stops, /rts/packages,
+  // /packages/intake — so in workforce mode the server 404s all of them and the
+  // controls are dead. The workforce equivalent is the WorkforceRoute tab.
+  //
+  // A walker's own numbers live in Account (My Stats + Scorecard), not here.
+  { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard, feature: 'route_sort' },
   { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', roles: DRIVER_SURVEY_ROLES,     component: DriverSurveyScreen },
   { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
   { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },

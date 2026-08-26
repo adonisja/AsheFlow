@@ -70,3 +70,13 @@ export const TRUCK_BUILDINGS_ROLES    = ['walker', 'trainer', 'trainee', 'captai
 // correction. Walkers deliberately absent: they carry the routes this produces,
 // they do not define them.
 export const TOTE_ADDRESS_ROLES     = ['captain', 'driver', 'dispatch'] as const;
+
+/** ADR-297: who sees the workforce "My Route" tab.
+ *
+ * The people who WALK a route in workforce mode. Deliberately wider than
+ * WALKER_ROLES: a trainee walks their own route (phase 4 solo, ADR-145) and a
+ * trainer walks one like anyone else on a short-staffed day.
+ *
+ * Distinct from MY_ROUTE_TAB_ROLES, which is full mode's screen — a different
+ * shape (stops, not totes) gated on a different capability. */
+export const WORKFORCE_ROUTE_ROLES  = ['walker', 'trainee', 'trainer'] as const;

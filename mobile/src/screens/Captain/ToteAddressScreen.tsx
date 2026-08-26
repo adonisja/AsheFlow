@@ -58,6 +58,7 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { Badge, Button, tick } from '@components/ui/primitives';
 import { errorText } from '@api/errorText';
+import { localYMD } from '@hooks/localDate';
 
 // ── Types (mirror the /workforce endpoints) ───────────────────────────────────
 
@@ -125,7 +126,9 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
   const c = useColors();
   const s = styles(c);
 
-  const day = entryDate ?? new Date().toISOString().slice(0, 10);
+  // Local, not UTC. toISOString() rolls over at 8 PM Eastern, so an evening
+  // sort would file addresses against tomorrow — see hooks/localDate.ts.
+  const day = entryDate ?? localYMD();
 
   const [truck, setTruck] = useState<MyTruck | null>(null);
   const [data, setData] = useState<DayAddresses | null>(null);
