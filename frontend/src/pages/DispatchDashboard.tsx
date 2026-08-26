@@ -141,8 +141,11 @@ function CurrentAssignments() {
      muted until dispatch confirms or edits it.
 
      Publish applies an unconfirmed suggestion anyway (the backend resolves it),
-     so this UI is about VISIBILITY — which bays have actually been looked at —
-     not about whether the driver gets one. */
+     so this UI is about VISIBILITY — which bays have actually been looked at.
+
+     Since ADR-309 an EMPTY bay (no setting and no history to inherit) blocks the
+     bulk publish: `dockGate` below disables the button and the server 409s. A
+     suggested bay is still fine — it resolves to a real value. */
   const [dockDrafts, setDockDrafts] = useState<Record<string, string>>({});
   const [dockSuggest, setDockSuggest] = useState<Record<string, { prefill: string; recent: string[] }>>({});
   const [dockSaving, setDockSaving] = useState<string | null>(null);
@@ -1132,6 +1135,27 @@ function CurrentAssignments() {
   // the < 50% block too — this is UX, not the safety boundary.
   const FINALIZE_BLOCK = 0.5;
   const FINALIZE_WARN = 0.8;
+  /** Trucks with no bay, for the bulk publish gate (ADR-309 D4).
+   *
+   *  A truck resolves to a dock from an explicit setting OR an inherited
+   *  suggestion (ADR-274 D17) — `dockStateFor` already applies that precedence,
+   *  so a suggested-but-unconfirmed bay counts as HAVING one. What blocks is an
+   *  empty value: no setting and no history to inherit from.
+   *
+   *  This is a courtesy, not the enforcement — the server 409s regardless
+   *  (ADR-309 D1), which is what covers a stale tab or a second dispatcher.
+   *
+   *  Deliberately NOT applied to the per-truck publish: publishing one truck
+   *  whose dock is set is routine, and the hub usually leaves before the rest
+   *  (ADR-309 D3). */
+  const dockGate = useMemo(() => {
+    const missing = Object.keys(dispatchData?.assigned_crews || {})
+      .filter(id => !dockStateFor(id).value.trim())
+      .map(id => trucks[id]?.name || id)
+      .sort();
+    return { block: missing.length > 0, missing };
+  }, [dispatchData, dockDrafts, dockSuggest, trucks]);
+
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
     const live = workflowStep === 'published';
@@ -1264,9 +1288,11 @@ function CurrentAssignments() {
           </button>
           <button
             onClick={handlePublishToDiscord}
-            disabled={isPublishing || isLoading || workflowStep !== 'dispatched'}
+            disabled={isPublishing || isLoading || workflowStep !== 'dispatched' || dockGate.block}
             className="bg-success text-white hover:bg-success/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            title="DM each crew member their assignment and open the confirmation window"
+            title={dockGate.block
+              ? `Blocked — no dock set for ${dockGate.missing.join(', ')}. A driver with no bay has nowhere to collect their vehicle.`
+              : 'DM each crew member their assignment and open the confirmation window'}
           >
             {isPublishing ? (
               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
