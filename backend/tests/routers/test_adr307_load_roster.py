@@ -160,6 +160,48 @@ def test_the_roster_read_admits_field_staff_but_the_write_does_not():
     assert "captain" in roles(W.check_tote)
 
 
+# ── The calls actually resolve ───────────────────────────────────────────────
+
+def test_internal_helper_calls_use_the_real_signatures():
+    """Structural tests do not CALL the endpoint, so a wrong keyword argument
+    survives them.
+
+    That happened: `_assignment(db, caller, truck_assignment_id=...)` passed a
+    keyword the helper does not declare (it is `assignment_id`), and every test
+    in this file still passed because none of them invoked check_tote. It failed
+    on the first real request, against staging.
+
+    This binds each internal call against the real signature — the cheapest
+    check that would have caught it.
+    """
+    import ast
+
+    helpers = {
+        "_assignment": inspect.signature(W._assignment),
+        "_assert_truck_member": inspect.signature(W._assert_truck_member),
+    }
+    for fn in (W.load_roster, W.check_tote):
+        tree = ast.parse(_code_only(fn))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None)
+            if name not in helpers:
+                continue
+            kwargs = [k.arg for k in node.keywords if k.arg]
+            params = helpers[name].parameters
+            for kw in kwargs:
+                assert kw in params, (
+                    f"{fn.__name__} calls {name}({kw}=...) but {name} declares "
+                    f"{list(params)} — this fails at runtime, not at import"
+                )
+            positional = len(node.args)
+            assert positional + len(kwargs) <= len(params), (
+                f"{fn.__name__} passes {positional + len(kwargs)} args to {name}, "
+                f"which takes {len(params)}"
+            )
+
+
 # ── Not a rename of full mode's endpoint ─────────────────────────────────────
 
 def test_the_roster_comes_from_the_btr_sheet_not_truckzone():
