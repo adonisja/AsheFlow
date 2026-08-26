@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import require_configured, RequireMode
 from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -146,6 +146,10 @@ if _register_proprietary:
         )
         _register_proprietary(api_v1_router, _configured)
 api_v1_router.include_router(sort.router,                     dependencies=_full_mode)
+# ADR-312 — the operating zone is company configuration, not a sorting artifact.
+# _configured, so a workforce tenant can define and read the area it delivers in;
+# it was unreachable there only because the endpoints sat inside sort.py.
+api_v1_router.include_router(company_zones.router,            dependencies=_configured)
 api_v1_router.include_router(graduation_quiz.router,          dependencies=_configured)
 api_v1_router.include_router(gear_requests.router,            dependencies=_configured)
 api_v1_router.include_router(trainee_credentials.router,      dependencies=_configured)
