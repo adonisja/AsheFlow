@@ -289,6 +289,56 @@ class TruckDayTotalsOut(BaseModel):
     # accident.
 
 
+class LoadRosterToteOut(BaseModel):
+    """One tote the BTR sheet says belongs on this truck (ADR-307 D1a)."""
+    bag_id: str
+    # ADR-296's swatch rules apply unchanged — the driver is matching a physical
+    # bag, so the colour is the find and the number confirms it.
+    bag_color: Optional[str] = None
+    bag_color_name: Optional[str] = None
+    # Reference only: which Amazon route the sheet listed it under. NOT a
+    # grouping key — a driver cannot tell a tote's Amazon route by looking.
+    amazon_route_name: Optional[str] = None
+
+    checked: bool = False
+    checked_by_name: Optional[str] = None
+    checked_at: Optional[datetime] = None
+
+
+class LoadRosterOut(BaseModel):
+    """What SHOULD be on the truck, and what the driver has confirmed.
+
+    One call answers both halves, because the driver's question is a comparison:
+    "the sheet says 25 totes — which do I actually have?"
+    """
+    load_date: date
+    truck_assignment_id: UUID
+    btr_loading_zone: Optional[str] = None
+
+    totes: list[LoadRosterToteOut] = []
+    total: int = 0
+    checked_count: int = 0
+
+    # ADR-307 D1b: unchecked totes are REPORTED, never converted into removals.
+    # Full mode turns an unchecked tote into a PackageRemoval because the
+    # manifest says what was inside it. Workforce mode knows the bag id and its
+    # colour and nothing else, so this is a presence count — not a claim about
+    # what was lost.
+    unchecked_count: int = 0
+
+    # True when no BTR sheet was imported: the tote list is then unknowable, and
+    # an empty roster must not read as "the truck is empty".
+    no_sheet: bool = False
+
+
+class ToteCheckIn(BaseModel):
+    """Dimension 9: one bool, bounded, no free text."""
+    model_config = ConfigDict(extra="forbid")
+
+    truck_assignment_id: UUID
+    checked: bool
+
+
 class MyRouteToteOut(BaseModel):
     """One tote on the walker's route (ADR-297 D3).
 
@@ -901,6 +951,199 @@ def commit_workforce_sort(
             for d in built.disagreements
         ],
         overflowed_routes=overflowed,
+    )
+
+
+@router.get("/load-roster/{load_date}", response_model=LoadRosterOut)
+def load_roster(
+    load_date: date,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_read),
+    db: Session = Depends(get_db),
+):
+    """What the BTR sheet says is on this truck, and what has been checked off.
+
+    ADR-307 D1a. The dock step is REAL work in workforce mode: a driver says
+    which totes they received and which they did not, and that is the moment a
+    missing bag gets caught. It happens whether or not the company has a package
+    feed.
+
+    Full mode's equivalent is `/sort/{date}/rosters`, which returns TruckZone
+    rosters — the station sort's CLUSTERING OUTPUT. That does not exist here, so
+    this is not a renamed endpoint: the BTR sheet supplies the same answer to the
+    driver's question ("what should be on my truck?") from a different source.
+
+    `ToteLoadCheck` is REUSED, not duplicated. It is keyed
+    (company_id, load_date, truck_id, bag_id) with no zone, manifest or TBA
+    reference — it was always mode-agnostic, and only its READERS were full-mode
+    gated. A tenant that switches modes keeps one continuous history.
+    """
+    from app.models.tote_ops import ToteLoadCheck
+
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, load_date, db)
+
+    sheet = (
+        db.query(BTRSheet)
+        .filter(
+            BTRSheet.company_id == caller.company_id,
+            BTRSheet.truck_id == ta.truck_id,
+            BTRSheet.sheet_date == load_date,
+        )
+        .first()
+    )
+    if sheet is None:
+        # No sheet imported: the tote list is UNKNOWABLE, which is a different
+        # fact from "this truck has no totes". The flag says which.
+        return LoadRosterOut(
+            load_date=load_date,
+            truck_assignment_id=ta.id,
+            no_sheet=True,
+        )
+
+    bags = (
+        db.query(BTRBag)
+        .filter(
+            BTRBag.company_id == caller.company_id,
+            BTRBag.btr_sheet_id == sheet.id,
+        )
+        .order_by(BTRBag.bag_id.asc())
+        .all()
+    )
+    checks = {
+        c.bag_id: c
+        for c in db.query(ToteLoadCheck).filter(
+            ToteLoadCheck.company_id == caller.company_id,
+            ToteLoadCheck.load_date == load_date,
+            ToteLoadCheck.truck_id == ta.truck_id,
+        ).all()
+    }
+
+    totes = []
+    for b in bags:
+        chk = checks.get(b.bag_id)
+        hexv = canonical_hex(b.bag_color)
+        totes.append(LoadRosterToteOut(
+            bag_id=b.bag_id,
+            bag_color=hexv,
+            bag_color_name=color_name_for_hex(hexv),
+            amazon_route_name=b.amazon_route_name,
+            checked=chk is not None,
+            checked_by_name=chk.checked_by_name if chk else None,
+            checked_at=chk.checked_at if chk else None,
+        ))
+
+    checked_count = sum(1 for t in totes if t.checked)
+    return LoadRosterOut(
+        load_date=load_date,
+        truck_assignment_id=ta.id,
+        btr_loading_zone=sheet.btr_loading_zone,
+        totes=totes,
+        total=len(totes),
+        checked_count=checked_count,
+        unchecked_count=len(totes) - checked_count,
+    )
+
+
+@router.post("/load-roster/{load_date}/totes/{bag_id}/check",
+             response_model=LoadRosterOut)
+def check_tote(
+    load_date: date,
+    bag_id: str,
+    payload: ToteCheckIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """Tick a tote onto the truck, or untick it (ADR-307 D1a).
+
+    Mirrors `sort.py::check_tote`'s guards deliberately: 409 on double-check and
+    409 on unchecking something unchecked, so a double-tap on a phone in a
+    warehouse cannot silently produce a second row or a confusing no-op.
+
+    D1b — THIS RECORDS PRESENCE ONLY. Full mode turns an unchecked tote into a
+    PackageRemoval (ADR-176) because the manifest says which packages were in it
+    and where they were going. Workforce mode has no per-package address data —
+    a missing tote is a bag id and a colour, and nothing about its contents. So
+    an unchecked bag is reported as unchecked and nothing else: no removal, no
+    custody chain, no claim about what was lost. Inventing a removal from a bag
+    id would fabricate the one thing this mode does not observe.
+    """
+    from app.models.tote_ops import ToteLoadCheck
+
+    ta = _assignment(db, caller, truck_assignment_id=payload.truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, load_date, db)
+
+    # The bag must be on this truck's sheet — otherwise a typo silently creates a
+    # check for a tote nobody expects, and the counts stop reconciling.
+    on_sheet = (
+        db.query(BTRBag.id)
+        .join(BTRSheet, BTRSheet.id == BTRBag.btr_sheet_id)
+        .filter(
+            BTRBag.company_id == caller.company_id,
+            BTRSheet.company_id == caller.company_id,
+            BTRSheet.truck_id == ta.truck_id,
+            BTRSheet.sheet_date == load_date,
+            BTRBag.bag_id == bag_id,
+        )
+        .first()
+    )
+    if on_sheet is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tote {bag_id} is not on this truck's sheet for {load_date}.",
+        )
+
+    existing = (
+        db.query(ToteLoadCheck)
+        .filter(
+            ToteLoadCheck.company_id == caller.company_id,
+            ToteLoadCheck.load_date == load_date,
+            ToteLoadCheck.truck_id == ta.truck_id,
+            ToteLoadCheck.bag_id == bag_id,
+        )
+        .first()
+    )
+
+    if payload.checked:
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="Tote is already checked off.")
+        db.add(ToteLoadCheck(
+            company_id=caller.company_id,
+            load_date=load_date,
+            truck_id=ta.truck_id,
+            bag_id=bag_id,
+            checked_by=caller.id,
+            checked_by_name=caller.name,
+        ))
+        action = "workforce.tote_checked"
+    else:
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="Tote is not checked off.")
+        db.delete(existing)
+        action = "workforce.tote_unchecked"
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type=action,
+        target_table="tote_load_checks",
+        target_id=bag_id,
+        detail={"load_date": load_date.isoformat(), "truck_id": str(ta.truck_id)},
+    )
+    db.commit()
+
+    # Return the whole roster: the driver's next decision depends on the updated
+    # counts, and a second round-trip on a warehouse connection is a real cost.
+    return load_roster(
+        load_date=load_date,
+        truck_assignment_id=payload.truck_assignment_id,
+        caller=caller, _={}, db=db,
     )
 
 

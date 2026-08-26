@@ -84,11 +84,29 @@ PRIVATE_ROUTER_PREFIXES: dict[str, str] = {
     "rts": "/rts",
 }
 
+# A NOTE ON MODE-BRANCHED TABS (learned on ADR-307):
+#
+# Once a tab branches — `stationSort ? full : workforce` — BOTH urls are still
+# reachable from it, so these entries keep firing even though the tab is now
+# correct. The check answers "can this tab reach a gated endpoint", which is the
+# right question for an UNGATED tab and the wrong one for a branched tab.
+#
+# Deliberately not "solved" by teaching it to recognise ternaries: that is
+# guessing at control flow from syntax, and a check that is confidently wrong
+# about a branch is worse than one with a documented blind spot. The honest fix
+# is a per-entry note saying the tab was verified by hand.
 BASELINE: set[tuple[str, str]] = {
-    ("FieldOps", "/sort/"),                          # ADR-307 D1 — swap to /btr-sheets
-    ("FieldOps", "/rts/summary/"),                   # ADR-307 D1 — swap to /workforce/day-totals
-    ("FieldOps", "/rts/handoff/"),                   # ADR-307 D2 — no counterpart; say so
-    ("FieldOps", "/walker-routes/"),                 # ADR-307 D1 — swap to /workforce/routes
+    # ADR-307 SHIPPED — FieldOps now branches on `station_sort` at every one of
+    # these. They still fire because BOTH branches are reachable from the tab
+    # (see the note above), not because the tab is unfixed. Verified by hand:
+    #   /sort/            -> /workforce/load-roster   (D1a)
+    #   /rts/summary/     -> /workforce/day-totals    (D1)
+    #   /walker-routes/   -> /workforce/routes        (D1)
+    #   /rts/handoff/     -> no counterpart; step self-hides (D2)
+    ("FieldOps", "/sort/"),            # ADR-307 D1a — branched to /workforce/load-roster
+    ("FieldOps", "/rts/summary/"),     # ADR-307 D1  — branched to /workforce/day-totals
+    ("FieldOps", "/rts/handoff/"),     # ADR-307 D2  — no counterpart; step self-hides
+    ("FieldOps", "/walker-routes/"),   # ADR-307 D1  — branched to /workforce/routes
 }
 
 
