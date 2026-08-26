@@ -19,10 +19,7 @@ import uuid
 
 import pytest
 
-try:
-    from app.services.rebalance_crews import rebalance_crews
-except ImportError:
-    pytest.skip("proprietary dispatch deps not available (CI skip)", allow_module_level=True)
+from app.services.rebalance_crews import rebalance_crews
 
 # The proprietary file this exercises is gitignored, so CI checks out the PUBLIC
 # repo's copy — which predates ADR-256. Importing succeeds (the module exists); the
@@ -45,11 +42,14 @@ def _excludes_captains() -> bool:
     return any(m["role"] == "captain" for m in crews[a])
 
 
-if not _excludes_captains():
-    pytest.skip(
-        "rebalance_crews predates the ADR-256 captain exclusion (public-repo copy)",
-        allow_module_level=True,
-    )
+# No skip here on purpose (ADR-311). A rebalance_crews that predates the ADR-256
+# captain exclusion is a STALE private sync, which is exactly the condition CI
+# must surface — skipping turned "the private repo is out of date" into a green
+# run. Asserted at import so the failure names the cause.
+assert _excludes_captains(), (
+    "rebalance_crews predates the ADR-256 captain exclusion — the AsheFlow-private "
+    "copy is stale; re-sync it rather than skipping this module"
+)
 
 from tests.conftest import make_employee, make_truck
 

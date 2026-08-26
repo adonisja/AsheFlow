@@ -9,10 +9,7 @@ assign_totes) that are absent in public CI — skip the whole module if so.
 import uuid
 import pytest
 
-try:
-    from app.routers.sort import _nearest_truck_by_coords
-except ImportError:
-    pytest.skip("proprietary sort deps not available (CI skip)", allow_module_level=True)
+from app.routers.sort import _nearest_truck_by_coords
 
 
 def test_picks_nearest_centroid():

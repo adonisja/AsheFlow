@@ -35,14 +35,11 @@ import pytest
 # Proprietary services are only present locally and on EC2 (injected at deploy time).
 # The public repo ships the old tier1_verify without BagOverride — skip the entire
 # module at collection time if the updated private version is not present.
-try:
-    from app.services.sort_analysis import analyze_sort, SortAnalysis
-    from app.services.persist_zones import persist_zones
-    from app.services.assign_clusters import AssignmentProposal, ClusterAssignment
-    from app.services.assign_totes import assign_totes, AnchorPoint
-    from app.services.cluster_packages import Cluster, ClusterResult, BoundingBox
-except ImportError:
-    pytest.skip("proprietary sort services not available (CI skip)", allow_module_level=True)
+from app.services.sort_analysis import analyze_sort, SortAnalysis
+from app.services.persist_zones import persist_zones
+from app.services.assign_clusters import AssignmentProposal, ClusterAssignment
+from app.services.assign_totes import assign_totes, AnchorPoint
+from app.services.cluster_packages import Cluster, ClusterResult, BoundingBox
 
 
 # ---------------------------------------------------------------------------

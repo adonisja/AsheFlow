@@ -998,10 +998,10 @@ class TestBlockKeyParserAgreement:
 
     @staticmethod
     def _norm_theirs(k):
-        try:
-            from app.services.route_sort import _parse_block_key
-        except ImportError:                       # proprietary module absent
-            pytest.skip("route_sort not available in this checkout")
+        # No guard (ADR-311): CI copies route_sort in from AsheFlow-private
+        # before pytest runs. Skipping here would let the two parsers silently
+        # diverge — which is the exact thing this test exists to catch.
+        from app.services.route_sort import _parse_block_key
         t = _parse_block_key(k)
         return None if t is None else (t[0], t[1], t[2].lower(), t[3])
 

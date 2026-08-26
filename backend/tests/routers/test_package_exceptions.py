@@ -10,14 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-try:
-    from app.models.rts import DamagedPackage, MissingPackage
-    from app.routers.rts import (
-        list_missing_queue, report_damaged_package, resolve_damaged_package,
-    )
-    from app.schemas.rts import DamagedPackageCreate, DamagedPackageResolveRequest
-except (ImportError, ModuleNotFoundError):
-    pytest.skip("proprietary rts router not available (CI skip)", allow_module_level=True)
+from app.models.rts import DamagedPackage, MissingPackage
+from app.routers.rts import (
+    list_missing_queue, report_damaged_package, resolve_damaged_package,
+)
+from app.schemas.rts import DamagedPackageCreate, DamagedPackageResolveRequest
 
 from fastapi import HTTPException
 
