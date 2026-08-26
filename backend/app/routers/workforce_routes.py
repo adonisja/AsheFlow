@@ -1072,7 +1072,7 @@ def check_tote(
     """
     from app.models.tote_ops import ToteLoadCheck
 
-    ta = _assignment(db, caller, truck_assignment_id=payload.truck_assignment_id)
+    ta = _assignment(db, caller, payload.truck_assignment_id)
     _assert_truck_member(caller, ta.truck_id, load_date, db)
 
     # The bag must be on this truck's sheet — otherwise a typo silently creates a
