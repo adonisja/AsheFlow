@@ -62,6 +62,17 @@ class BuildingProfileCreate(BaseModel):
         if self.building_type not in BUILDING_TYPES:
             raise ValueError(f"Invalid building_type: {self.building_type!r}")
 
+    # ADR-293 D3 / Dimension 9. `collection_source` is DERIVED server-side, so a
+    # client sending it was previously ignored silently — the value never reached
+    # the model, but the caller got no signal it had been dropped.
+    #
+    # Verified against the real producers before tightening (the ADR-301 lesson):
+    # BuildingProfiles.tsx and MyRoute.tsx both build a typed
+    # `BuildingProfileCreate` carrying exactly normalised_address, block_key,
+    # building_type and raw_note — all declared here. Matches the two sibling
+    # schemas in this module that already forbid extras.
+    model_config = ConfigDict(extra="forbid")
+
 
 class BuildingProfileVerify(BaseModel):
     """Captain/dispatch verifies the building_type. Increments agreement_count."""
