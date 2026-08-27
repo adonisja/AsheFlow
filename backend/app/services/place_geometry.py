@@ -35,6 +35,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -163,7 +164,25 @@ def upsert_building_geometry(db: Session, rows: Iterable[dict]) -> int:
         index_elements=["normalised_address"],
         # library_status is absent on purpose: a promoted row must not be
         # demoted to geometry_only by a later enrichment pass.
-        set_={c: getattr(stmt.excluded, c) for c in _GEOMETRY_COLUMNS},
+        #
+        # COALESCE(excluded, stored) rather than straight assignment: the two
+        # sources are UNEVEN. AddressPoint supplies bin/lat/lng only; GeoClient
+        # supplies all eleven. A plain overwrite meant a bootstrap re-run wiped
+        # every column enrichment had filled — verified against real Postgres,
+        # where a re-run with a null bin cleared bin, bbl, zip, segment_id AND
+        # structures_on_lot in one statement.
+        #
+        # So a null NEVER erases a known value, whichever source produced it:
+        # AddressPoint fills what GeoClient has not reached, GeoClient fills
+        # what AddressPoint could not supply, and neither can undo the other.
+        # `geo_enriched_at` is excluded from the rule — it is a timestamp of the
+        # last write, not a fact to preserve.
+        set_={
+            c: (getattr(stmt.excluded, c) if c == "geo_enriched_at"
+                else func.coalesce(getattr(stmt.excluded, c),
+                                   getattr(BuildingProfileLibrary, c)))
+            for c in _GEOMETRY_COLUMNS
+        },
     )
     db.execute(stmt)
     return len(payload)

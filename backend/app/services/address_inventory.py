@@ -201,10 +201,13 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
     # seed PlaceType below. An iterator would be empty on the second pass.
     addresses = list(addresses)
     created = skipped_existing = skipped_unparseable = 0
-    existing = {
-        addr for (addr,) in db.query(BuildingProfile.normalised_address)
+    existing_rows = {
+        r.normalised_address: r
+        for r in db.query(BuildingProfile)
         .filter(BuildingProfile.company_id == company_id).all()
     }
+    existing = set(existing_rows)
+    backfilled = 0
 
     for a in addresses:
         if not a.block_key:
@@ -214,6 +217,16 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
             continue
         if a.normalised_address in existing:
             skipped_existing += 1
+            # A row created before BIN was persisted (or before AddressPoint had
+            # one) keeps a null forever otherwise: this path never updates, so
+            # the gap would only close if someone deleted the row. Backfill the
+            # identity anchor and nothing else — everything else on a tenant row
+            # is either a human's observation or already correct.
+            if a.bin:
+                row = existing_rows.get(a.normalised_address)
+                if row is not None and not row.bin:
+                    row.bin = a.bin
+                    backfilled += 1
             continue
 
         db.add(BuildingProfile(
@@ -273,5 +286,6 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
         "created": created,
         "skipped_existing": skipped_existing,
         "skipped_unparseable": skipped_unparseable,
+        "bin_backfilled": backfilled,
         "placetype_seeded": seeded,
     }
