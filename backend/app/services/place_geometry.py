@@ -219,6 +219,14 @@ def span_from_geoclient(resp: dict) -> dict:
                                       or resp.get("firstCrossStreetNameNormalized")),
         "second_cross_street": _clean(resp.get("highCrossStreetName1")
                                       or resp.get("secondCrossStreetNameNormalized")),
+        # ADR-316 — the blockface endpoints, in NY State Plane feet. Segment
+        # geometry (verified: identical across three addresses on segment
+        # 0297696), and the last GeoClientResult fields PlaceType could not
+        # answer. Without them every routing caller had to miss the cache.
+        "x_low_address_end":   _as_int(resp.get("xCoordinateLowAddressEnd")),
+        "y_low_address_end":   _as_int(resp.get("yCoordinateLowAddressEnd")),
+        "x_high_address_end":  _as_int(resp.get("xCoordinateHighAddressEnd")),
+        "y_high_address_end":  _as_int(resp.get("yCoordinateHighAddressEnd")),
     }
 
 

@@ -88,6 +88,11 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             "high_house_number":   s.get("high_house_number"),
             "first_cross_street":  s.get("first_cross_street"),
             "second_cross_street": s.get("second_cross_street"),
+            # ADR-316 — blockface endpoints, same ownership reasoning as above.
+            "x_low_address_end":   s.get("x_low_address_end"),
+            "y_low_address_end":   s.get("y_low_address_end"),
+            "x_high_address_end":  s.get("x_high_address_end"),
+            "y_high_address_end":  s.get("y_high_address_end"),
         })
 
     stmt = pg_insert(StreetSegment).values(payload)
@@ -111,6 +116,14 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
                 stmt.excluded.first_cross_street, StreetSegment.first_cross_street),
             "second_cross_street": func.coalesce(
                 stmt.excluded.second_cross_street, StreetSegment.second_cross_street),
+            "x_low_address_end":  func.coalesce(
+                stmt.excluded.x_low_address_end, StreetSegment.x_low_address_end),
+            "y_low_address_end":  func.coalesce(
+                stmt.excluded.y_low_address_end, StreetSegment.y_low_address_end),
+            "x_high_address_end": func.coalesce(
+                stmt.excluded.x_high_address_end, StreetSegment.x_high_address_end),
+            "y_high_address_end": func.coalesce(
+                stmt.excluded.y_high_address_end, StreetSegment.y_high_address_end),
             "last_seen_at":      func.now(),
         },
     )
