@@ -299,3 +299,19 @@ def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str
         for a in shared:
             adj.setdefault(a, set()).update(shared - {a})
     return adj
+
+
+def by_segment_id(db: Session, segment_id: str):
+    """One segment by its LION id, or None.
+
+    Here rather than in a caller because this module owns every read and write
+    of `street_segments` (ADR-237 D2) — the boundary test rejects a second
+    module naming the model, and it caught exactly that during ADR-316.
+    """
+    if not segment_id:
+        return None
+    return (
+        db.query(StreetSegment)
+        .filter(StreetSegment.segment_id == segment_id)
+        .first()
+    )

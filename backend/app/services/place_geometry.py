@@ -259,3 +259,66 @@ def pending_enrichment_count(db: Session) -> int:
         .filter(BuildingProfileLibrary.geo_enriched_at.is_(None))
         .count()
     )
+
+
+def enriched_building_with_segment(db: Session, normalised_address: str):
+    """An ENRICHED building row plus its segment, or None (ADR-316 D2).
+
+    The join is the point: identity and position live on the building row,
+    topology lives on the segment, and a routing caller needs both. Returning
+    the building alone would answer half the question and produce blank columns
+    downstream.
+
+    `geo_enriched_at IS NULL` is a miss, not a partial hit — a bootstrap-only
+    row carries bin/lat/lng from AddressPoint and no topology at all.
+
+    Lives here rather than in the resolver because this module owns PlaceType's
+    geometry tier (ADR-237 D1); the boundary test rejects a second module naming
+    the models.
+    """
+    import re
+    from app.services.derive_block_key import derive_block_key
+    from app.services.segment_map import by_segment_id
+
+    # The lookup CANNOT key on the raw string. AddressPoint and GeoClient use
+    # different vocabularies for the same door — "350 5 AVE" vs "350 5 AVENUE",
+    # "2 W 33 ST" vs "2 WEST 33 STREET" — and a cache keyed on one form never
+    # serves the other. Measured: 0 of 4 sample addresses matched, so the first
+    # version of this cache could not hit at all.
+    #
+    # `derive_block_key` already collapses both vocabularies to one key (both
+    # forms above yield 5_Ave_300 / W_33_St_0), so (house number, block_key) is
+    # a join that survives whichever source wrote the row.
+    building = (
+        db.query(BuildingProfileLibrary)
+        .filter(
+            BuildingProfileLibrary.normalised_address == normalised_address,
+            BuildingProfileLibrary.geo_enriched_at.isnot(None),
+        )
+        .first()
+    )
+    if building is None:
+        m = re.match(r"\s*(\d+)\s", normalised_address or "")
+        parsed = derive_block_key(normalised_address, tba="")
+        block_key = getattr(parsed, "block_key", None)
+        if not (m and block_key):
+            return None
+        house = m.group(1)
+        candidates = (
+            db.query(BuildingProfileLibrary)
+            .filter(
+                BuildingProfileLibrary.block_key == block_key,
+                BuildingProfileLibrary.geo_enriched_at.isnot(None),
+            )
+            .all()
+        )
+        building = next(
+            (c for c in candidates
+             if re.match(r"\s*(\d+)\s", c.normalised_address or "")
+             and re.match(r"\s*(\d+)\s", c.normalised_address).group(1) == house),
+            None,
+        )
+        if building is None:
+            return None
+
+    return building, by_segment_id(db, building.segment_id)
