@@ -79,6 +79,15 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             "lat":               s.get("lat"),
             "lng":               s.get("lng"),
             "source":            s.get("source") or SOURCE_PACKAGE,
+            # ADR-314 D3 — the blockface span and its bounding cross streets.
+            # A property of the SEGMENT, not of each address on it: three
+            # addresses on segment 0297696 all return the same
+            # 000002000AA..000098000AA, so per-address storage would duplicate
+            # one fact ~18 times (the measured mean addresses per block_key).
+            "low_house_number":    s.get("low_house_number"),
+            "high_house_number":   s.get("high_house_number"),
+            "first_cross_street":  s.get("first_cross_street"),
+            "second_cross_street": s.get("second_cross_street"),
         })
 
     stmt = pg_insert(StreetSegment).values(payload)
@@ -89,6 +98,19 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             # partial lookup must not blank out good data.
             "from_lion_node_id": stmt.excluded.from_lion_node_id,
             "to_lion_node_id":   stmt.excluded.to_lion_node_id,
+            # COALESCE, not straight assignment: enrichment supplies the span
+            # and a later package-driven upsert does not, so a plain overwrite
+            # would blank it out on the next sort. Same reasoning as the
+            # topology comment above, which is why it sits here rather than in
+            # a second writer.
+            "low_house_number":    func.coalesce(
+                stmt.excluded.low_house_number, StreetSegment.low_house_number),
+            "high_house_number":   func.coalesce(
+                stmt.excluded.high_house_number, StreetSegment.high_house_number),
+            "first_cross_street":  func.coalesce(
+                stmt.excluded.first_cross_street, StreetSegment.first_cross_street),
+            "second_cross_street": func.coalesce(
+                stmt.excluded.second_cross_street, StreetSegment.second_cross_street),
             "last_seen_at":      func.now(),
         },
     )

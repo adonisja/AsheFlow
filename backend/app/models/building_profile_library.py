@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Integer, Text, Time, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, Float, Integer, Text, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.sql import func
 import uuid
@@ -37,6 +37,29 @@ class BuildingProfileLibrary(Base):
     # Address identity — global key, no company_id
     normalised_address  = Column(String(200), nullable=False)
     block_key           = Column(String(60),  nullable=False)   # denormalised for difficulty flag resolution
+
+    # ── Geometry tier (ADR-314 D0a) ──────────────────────────────────────────
+    # This table held 33 columns of building INTELLIGENCE and no geometry at
+    # all: it could say a building was a walk-up with a tricky mailroom and not
+    # say where it was. These are ground truth — identical for every tenant
+    # standing on the lot — so they belong here rather than on the
+    # company-scoped BuildingProfile (ADR-237's test: "independent of who is
+    # delivering").
+    #
+    # Written by services/place_geometry.py, NOT by the promotion gate. The two
+    # column sets are disjoint on purpose (D0b): enrichment never writes an
+    # intelligence column, promotion never writes a geometry one.
+    bin                 = Column(String(20), nullable=True, index=True)   # building identity (D1)
+    bbl                 = Column(String(20), nullable=True)   # tax lot — join key to PLUTO/DOB/HPD
+    zip_code            = Column(String(10), nullable=True)
+    lat                 = Column(Float(),    nullable=True)
+    lng                 = Column(Float(),    nullable=True)
+    segment_id          = Column(String(20), nullable=True)   # ties a building to PlaceType topology
+    corner_code         = Column(String(10), nullable=True)   # corner buildings approach differently
+    structures_on_lot   = Column(Integer(),  nullable=True)   # >1 = campus, not one building
+    street_frontages    = Column(Integer(),  nullable=True)   # >1 = multiple entrances
+    geo_grc             = Column(String(10), nullable=True)   # GeoClient return code
+    geo_enriched_at     = Column(DateTime(timezone=True), nullable=True)  # NULL = not yet enriched (D4)
 
     # Delivery character
     building_type       = Column(String(30),  nullable=False)
