@@ -197,6 +197,9 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
     """
     from app.models.building_profile import BuildingProfile
 
+    # Materialised: the list is walked twice — once for tenant rows, once to
+    # seed PlaceType below. An iterator would be empty on the second pass.
+    addresses = list(addresses)
     created = skipped_existing = skipped_unparseable = 0
     existing = {
         addr for (addr,) in db.query(BuildingProfile.normalised_address)
@@ -217,6 +220,16 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
             company_id         = company_id,
             normalised_address = a.normalised_address,
             block_key          = a.block_key,
+            # ADR-314 D1 — the building identity, available HERE rather than
+            # only after GeoClient enrichment. AddressPoint carries `bin`
+            # directly and we were already selecting it, then dropping it.
+            #
+            # Verified before relying on it: across a 937-address zone the
+            # AddressPoint bin null rate is 0%, and on a random 20-address
+            # sample AddressPoint and GeoClient agreed on every single BIN
+            # (20 agree / 0 differ / 0 missing). So the identity anchor does not
+            # have to wait for a rate-limited per-address call.
+            bin                = a.bin,
             # The ADDRESS is resolved — we have its coordinates and its block
             # key. That is what this column tracks; it says nothing about
             # whether the building has been observed.
@@ -232,8 +245,33 @@ def persist_zone_inventory(db, company_id, addresses) -> dict:
         existing.add(a.normalised_address)
         created += 1
 
+    # ADR-314 — seed PlaceType with what AddressPoint already gives us.
+    #
+    # bin/lat/lng are 3 of the 11 geometry columns and arrive FREE with the
+    # enumeration; the other 8 (bbl, zip, segment_id, corner_code, structures,
+    # frontages, geo_grc) need a GeoClient call per address and stay deferred
+    # (ADR-303 D9). Seeding now means the identity anchor exists from day one
+    # and a second tenant in the same zone inherits it without any enrichment
+    # pass having run.
+    #
+    # Best-effort: PlaceType is a shared resource and a failure to seed it must
+    # not fail a tenant's bootstrap.
+    seeded = 0
+    try:
+        from app.services.place_geometry import upsert_building_geometry
+        seeded = upsert_building_geometry(db, [
+            {"normalised_address": a.normalised_address,
+             "block_key": a.block_key,
+             "bin": a.bin, "lat": a.lat, "lng": a.lng}
+            for a in addresses if a.block_key
+        ])
+    except Exception:
+        logger.warning("address_inventory: PlaceType seed failed; tenant rows are unaffected",
+                       exc_info=False)
+
     return {
         "created": created,
         "skipped_existing": skipped_existing,
         "skipped_unparseable": skipped_unparseable,
+        "placetype_seeded": seeded,
     }
