@@ -230,3 +230,28 @@ def test_the_address_list_is_materialised_before_being_walked_twice():
     src = _code_only(AI.persist_zone_inventory)
     assert "addresses = list(addresses)" in src
     assert src.index("addresses = list(addresses)") < src.index("for a in addresses")
+
+
+def test_an_existing_row_gets_its_bin_backfilled():
+    """The tenant path skips existing rows, so a row created before BIN was
+    persisted would keep a null forever — the gap would only close if someone
+    deleted the row.
+
+    Backfills the identity anchor ONLY. Everything else on a tenant row is
+    either a human's observation or already correct.
+    """
+    src = _code_only(AI.persist_zone_inventory)
+    i = src.index("skipped_existing += 1")
+    block = src[i:i + 400]
+    assert "row.bin = a.bin" in block
+    assert "not row.bin" in block, "must not overwrite a bin already stored"
+    assert "bin_backfilled" in src
+
+
+def test_the_backfill_touches_nothing_but_bin():
+    """A wider backfill would let a machine overwrite a walker's observation."""
+    src = _code_only(AI.persist_zone_inventory)
+    i = src.index("skipped_existing += 1")
+    block = src[i:i + 400]
+    for col in ("building_type", "workload_class", "operational_note", "block_key"):
+        assert f"row.{col}" not in block, f"the backfill must not touch {col}"

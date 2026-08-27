@@ -258,3 +258,44 @@ def test_the_sentinels_are_insert_only_and_never_overwrite_a_promotion():
             f"{col} must not be in the conflict update set — it would demote a "
             f"promoted row (ADR-314 D0b)"
         )
+
+
+# ── Uneven sources: a null must never erase a known value ────────────────────
+
+def test_a_null_never_overwrites_a_stored_geometry_value():
+    """The two sources are UNEVEN: AddressPoint supplies bin/lat/lng only,
+    GeoClient supplies all eleven.
+
+    With a plain `set_` assignment a bootstrap re-run wiped every column
+    enrichment had filled — verified against real Postgres, where a re-run
+    carrying a null bin cleared bin, bbl, zip_code, segment_id AND
+    structures_on_lot in one statement. COALESCE(excluded, stored) is what makes
+    the two passes composable in either order.
+    """
+    # The conflict set is a dict COMPREHENSION over _GEOMETRY_COLUMNS, so column
+    # names never appear literally. Assert the structure instead: every column
+    # except the timestamp must pass through func.coalesce.
+    src = _code_only(PG.upsert_building_geometry)
+    after = src[src.index("on_conflict_do_update"):]
+    assert "func.coalesce" in after, (
+        "the conflict set must COALESCE — a null from one source would "
+        "otherwise erase what the other supplied"
+    )
+    assert "getattr(BuildingProfileLibrary, c)" in after, (
+        "COALESCE must fall back to the STORED column, not to a constant"
+    )
+    assert "for c in _GEOMETRY_COLUMNS" in after, (
+        "the rule must cover every geometry column, not a hand-picked subset"
+    )
+
+
+def test_the_write_timestamp_is_not_coalesced():
+    """`geo_enriched_at` records the last write, not a fact to preserve — it
+    must advance on every pass, so it is the one exception to the rule."""
+    src = _code_only(PG.upsert_building_geometry)
+    after = src[src.index("on_conflict_do_update"):]
+    assert ("c == 'geo_enriched_at'" in after
+            or 'c == "geo_enriched_at"' in after), (
+        "geo_enriched_at must be the one column excluded from COALESCE — it "
+        "records the last write, not a fact to preserve"
+    )
