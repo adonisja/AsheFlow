@@ -59,6 +59,7 @@ import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/
 import { Badge, Button, tick } from '@components/ui/primitives';
 import { errorText } from '@api/errorText';
 import { localYMD } from '@hooks/localDate';
+import BuildingInfoPrompt from '@components/route/BuildingInfoPrompt';
 
 // ── Types (mirror the /workforce endpoints) ───────────────────────────────────
 
@@ -580,6 +581,15 @@ export default function ToteAddressScreen({ truckId: truckIdProp, entryDate, onD
                       {r.block_description ? (
                         <Text style={s.rowSub}>{r.block_description}</Text>
                       ) : null}
+                      {/* ADR-293 D5 — "know anything about this building?" at
+                          the moment the address is already on screen. Passive
+                          on purpose: the entry loop above clears and refocuses
+                          for the next address, and a blocking prompt would
+                          trade a hundred addresses for a handful of profiles. */}
+                      <BuildingInfoPrompt
+                        normalisedAddress={r.normalised_address}
+                        blockKey={r.block_key}
+                      />
                     </View>
                     <TouchableOpacity
                       onPress={() => remove(r.id)}
