@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, DateTime, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -65,6 +65,15 @@ class StreetSegment(Base):
     # lives on the ephemeral ToteAddress and is nulled each cycle.
     first_cross_street  = Column(String(100), nullable=True)
     second_cross_street = Column(String(100), nullable=True)
+    # ADR-316 — the blockface's two endpoints in NY State Plane feet. Segment
+    # geometry, not address geometry: three addresses on segment 0297696 all
+    # return identical values, so they join from here rather than repeating on
+    # every address. Their absence was the last reason a routing caller had to
+    # miss the cache and call GeoClient anyway.
+    x_low_address_end   = Column(Integer(), nullable=True)
+    y_low_address_end   = Column(Integer(), nullable=True)
+    x_high_address_end  = Column(Integer(), nullable=True)
+    y_high_address_end  = Column(Integer(), nullable=True)
 
     source            = Column(String(20), nullable=False, server_default="package_address")
 

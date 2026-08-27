@@ -299,3 +299,54 @@ def test_the_write_timestamp_is_not_coalesced():
         "geo_enriched_at must be the one column excluded from COALESCE — it "
         "records the last write, not a fact to preserve"
     )
+
+
+# ── ADR-316: the cache can answer a routing caller ───────────────────────────
+
+def test_placetype_covers_every_geoclient_field_but_the_message():
+    """The cache is only useful if it can answer what callers actually need.
+
+    `GeoClientResult` has 14 fields; PlaceType stored 9, and the four missing
+    blockface coordinates forced every routing caller to miss. They are SEGMENT
+    geometry — verified live that three addresses on segment 0297696 return
+    identical values — so they join from street_segments exactly as the
+    house-number span does, rather than repeating ~18 times per block.
+
+    `geo_message` stays unstored on purpose: it describes one lookup's outcome,
+    and replaying it against a different request would misreport what happened.
+    """
+    import dataclasses
+    from app.tasks.enrich_manifest import GeoClientResult
+    lib = {c.name for c in BuildingProfileLibrary.__table__.columns}
+    seg = {c.name for c in StreetSegment.__table__.columns}
+    unstored = [f.name for f in dataclasses.fields(GeoClientResult)
+                if f.name not in lib and f.name not in seg]
+    assert unstored == ["geo_message"], f"unexpected gap: {unstored}"
+
+
+def test_the_endpoints_are_segment_geometry_not_address_geometry():
+    """They belong to the blockface, so storing them per address would duplicate
+    one fact ~18 times (the measured mean addresses per block_key)."""
+    seg = {c.name for c in StreetSegment.__table__.columns}
+    lib = {c.name for c in BuildingProfileLibrary.__table__.columns}
+    for col in ("x_low_address_end", "y_low_address_end",
+                "x_high_address_end", "y_high_address_end"):
+        assert col in seg
+        assert col not in lib, f"{col} is segment geometry, not address geometry"
+
+
+def test_the_endpoints_are_projected_and_coalesced():
+    """A later package-driven upsert must not blank coordinates enrichment
+    supplied — the same failure the span comment warns about."""
+    src = _code_only(PG.span_from_geoclient)
+    for raw in ("xCoordinateLowAddressEnd", "yCoordinateHighAddressEnd"):
+        assert raw in src
+
+    from app.services import segment_map as SM
+    upsert = _code_only(SM.upsert_segments)
+    after = upsert[upsert.index("on_conflict_do_update"):]
+    for col in ("x_low_address_end", "y_high_address_end"):
+        i = after.index(col)
+        assert "coalesce" in after[max(0, i - 150):i + 150].lower(), (
+            f"{col} must COALESCE against the stored value"
+        )
