@@ -116,7 +116,8 @@ def geometry_from_geoclient(resp: dict) -> dict:
     }
 
 
-def upsert_building_geometry(db: Session, rows: Iterable[dict]) -> int:
+def upsert_building_geometry(db: Session, rows: Iterable[dict],
+                             *, mark_enriched: bool = False) -> int:
     """Idempotently persist building geometry into PlaceType. Returns rows written.
 
     Each row needs `normalised_address` and `block_key` (both NOT NULL on the
@@ -147,7 +148,12 @@ def upsert_building_geometry(db: Session, rows: Iterable[dict]) -> int:
         row.update({
             "normalised_address": addr,
             "block_key": bk,
-            "geo_enriched_at": now,
+            # `geo_enriched_at` means "GeoClient has run for this address",
+            # NOT "this row was written". The bootstrap seed writes bin/lat/lng
+            # from AddressPoint and must leave it NULL, or the enrichment pass
+            # sees zero pending rows and silently never runs — which is exactly
+            # what happened the first time this was wired up (ADR-315 D2).
+            "geo_enriched_at": (now if mark_enriched else None),
             # Insert-only placement (see the constants above). Absent from the
             # conflict update set, so a promoted row keeps its real values.
             "library_status": GEOMETRY_ONLY,
@@ -214,3 +220,34 @@ def span_from_geoclient(resp: dict) -> dict:
         "second_cross_street": _clean(resp.get("highCrossStreetName1")
                                       or resp.get("secondCrossStreetNameNormalized")),
     }
+
+
+def pending_enrichment(db: Session, limit: int) -> list[tuple[str, str]]:
+    """Addresses that have never been through GeoClient, oldest first (ADR-315 D2).
+
+    Lives here rather than in the task because this module owns PlaceType's
+    geometry tier — the ADR-237 boundary test flagged the task importing
+    `BuildingProfileLibrary` directly, correctly: a second module naming the
+    model is how ownership erodes.
+
+    Returns `(normalised_address, block_key)` rather than ORM rows so the caller
+    cannot mutate them behind this module's back.
+    """
+    rows = (
+        db.query(BuildingProfileLibrary.normalised_address,
+                 BuildingProfileLibrary.block_key)
+        .filter(BuildingProfileLibrary.geo_enriched_at.is_(None))
+        .order_by(BuildingProfileLibrary.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    return [(a, b) for a, b in rows]
+
+
+def pending_enrichment_count(db: Session) -> int:
+    """How many rows still await GeoClient."""
+    return (
+        db.query(BuildingProfileLibrary)
+        .filter(BuildingProfileLibrary.geo_enriched_at.is_(None))
+        .count()
+    )
