@@ -38,7 +38,7 @@ from app.database import SessionLocal
 from app.models.building_profile import BuildingProfile
 from app.models.company import Company
 from app.services.derive_block_key import derive_block_key, ParsedBlock
-from app.tasks.enrich_manifest import _geoclient_normalise
+from app.services.address_resolver import resolve_address
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,11 @@ def resolve_pending_addresses() -> dict:
                 boroughs[cid] = (company.geoclient_borough if company else None) or "manhattan"
 
             try:
-                geo = _geoclient_normalise(profile.normalised_address, borough=boroughs[cid])
+                # ADR-316 — PlaceType first. This task resolves BuildingProfile
+                # addresses one at a time with a session already open, which is
+                # exactly the shape the resolver wants.
+                geo = resolve_address(db, profile.normalised_address,
+                                      borough=boroughs[cid])
             except Exception:
                 # Network/transport failure is NOT the address's fault, so it
                 # must not be recorded as `rejected` — that would tell the
