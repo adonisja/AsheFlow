@@ -68,6 +68,13 @@ class BuildingProfile(Base):
     # identical for every tenant; storing it here would mean N enrichments
     # returning N identical answers.
     bin                 = Column(String(20), nullable=True, index=True)
+    # ADR-293 D3 — "route" | "manual". How this profile was collected, not how
+    # true it is. Full mode accrues in context at a completed stop (ADR-277);
+    # workforce mode has no stops, so someone types an address they remembered,
+    # which biases the sample toward the memorable. Provenance lets a later
+    # analysis account for that.
+    collection_source   = Column(String(20), nullable=False,
+                                 server_default="route", index=True)
     geo_grc             = Column(String(10), nullable=True)     # Geosupport return code on rejection
     geo_message         = Column(String(200), nullable=True)    # human-readable reason, shown on the retry form
 

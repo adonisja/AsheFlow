@@ -367,3 +367,21 @@ def full_mode_company_ids(db) -> set:
         .all()
     )
     return {r[0] for r in rows}
+
+
+def is_full_mode(db, company_id) -> bool:
+    """Does this ONE company have a package feed (operating_mode='full')?
+
+    The request-path counterpart to `full_mode_company_ids`, which exists for
+    cross-tenant background tasks. A request already knows its company, so
+    loading every full-mode id to test one of them would be wasteful.
+    """
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig.operating_mode)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    return bool(cfg and cfg[0] == MODE_FULL)
