@@ -184,3 +184,49 @@ def test_the_record_ceiling_is_bounded():
     """A polygon covering the city is a configuration mistake, not a big zone."""
     assert AI._MAX_RECORDS <= 100_000
     assert "_MAX_RECORDS" in _code_only(AI.enumerate_zone_addresses)
+
+
+# ── BIN at bootstrap (ADR-314 D1, corrected) ─────────────────────────────────
+
+def test_bin_is_persisted_at_bootstrap_not_deferred_to_enrichment():
+    """AddressPoint carries `bin` and we were already selecting it — then
+    dropping it on the floor, leaving the identity anchor to wait for a
+    rate-limited per-address GeoClient call that may never run.
+
+    Verified before relying on it: across a 937-address zone the AddressPoint
+    bin null rate is 0%, and on a random 20-address sample AddressPoint and
+    GeoClient agreed on every BIN (20 agree / 0 differ / 0 missing).
+    """
+    src = _code_only(AI.persist_zone_inventory)
+    ctor = src[src.index("BuildingProfile("):]
+    assert "bin=a.bin" in ctor.replace(" ", ""), (
+        "bin arrives with the enumeration; persist it (ADR-314 D1)"
+    )
+
+
+def test_the_bootstrap_seeds_placetype_with_what_it_already_has():
+    """bin/lat/lng are 3 of PlaceType's 11 geometry columns and arrive FREE.
+    Seeding now means a second tenant in the same zone inherits the identity
+    anchor without any enrichment pass having run — the compounding effect the
+    shared tier exists for."""
+    src = _code_only(AI.persist_zone_inventory)
+    assert "upsert_building_geometry" in src
+    assert "placetype_seeded" in src
+
+
+def test_the_placetype_seed_cannot_fail_a_tenant_bootstrap():
+    """PlaceType is a shared resource; a failure to seed it must not fail the
+    tenant's own inventory write."""
+    src = _code_only(AI.persist_zone_inventory)
+    i = src.index("upsert_building_geometry")
+    assert "try:" in src[:i]
+    assert "except" in src[i:]
+
+
+def test_the_address_list_is_materialised_before_being_walked_twice():
+    """`addresses` is typed as an iterable and is now consumed twice — once for
+    tenant rows, once to seed PlaceType. An iterator would be silently empty on
+    the second pass, seeding nothing and reporting success."""
+    src = _code_only(AI.persist_zone_inventory)
+    assert "addresses = list(addresses)" in src
+    assert src.index("addresses = list(addresses)") < src.index("for a in addresses")
