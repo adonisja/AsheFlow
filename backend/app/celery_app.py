@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses", "app.tasks.enrich_geometry"]
 )
 
 celery_app.conf.update(
@@ -36,6 +36,14 @@ celery_app.conf.beat_schedule = {
     # the mechanism, so the interval only bounds how long a dropped dispatch
     # stays invisible. A `pending` profile is excluded from routing lookups, so
     # the cost of the gap is a building the crew cannot see yet — not bad data.
+    # ADR-315 — fill PlaceType's geometry tier from GeoClient. Nightly because
+    # enrichment has no deadline: nothing downstream fails without it, and a
+    # zone bootstrapped today is fully enriched by tomorrow. Bounded batch, so
+    # a large zone is finished by the next run rather than one long job.
+    "enrich-place-geometry": {
+        "task": "app.tasks.enrich_geometry.enrich_place_geometry",
+        "schedule": crontab(hour=4, minute=30),
+    },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
         "schedule": crontab(minute="*/10"),
