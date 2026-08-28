@@ -43,7 +43,20 @@ def _server_features() -> set[str]:
 
 
 def _client_features(path: Path) -> set[str]:
-    return set(_FEATURE_RE.findall(path.read_text()))
+    """Feature keys a client gates tabs on.
+
+    ADR-317 D3 moved mobile's gates out of `navigation/index.tsx` into
+    `navigation/roles.ts` (TAB_GATES), so ONE list feeds both the tab registry
+    and anything linking to a tab. The keys are the same; they live next door.
+    Read the sibling too, or this guard silently sees zero gated tabs and
+    reports a client that gates nothing — which is what it did on the first run
+    after the move.
+    """
+    text = path.read_text()
+    sibling = path.parent / "roles.ts"
+    if sibling.exists():
+        text += sibling.read_text()
+    return set(_FEATURE_RE.findall(text))
 
 
 @pytest.mark.parametrize("path", [NAV_WEB, NAV_MOBILE], ids=["web", "mobile"])

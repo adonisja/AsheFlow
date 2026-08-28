@@ -8,6 +8,18 @@
  * so no backend response shape can ever crash the tree.
  */
 export function errorText(e: unknown, fallback: string): string {
+  const status = (e as { response?: { status?: number } })?.response?.status;
+
+  // ADR-317 D4 — a 401 renders as FastAPI's stock "Not authenticated", which is
+  // accurate and useless to a captain in a van: it names the state, not the
+  // action. It also reads like a permissions problem, and during the incident
+  // that produced this it was mistaken for one (a role rejection is a 403 and
+  // says "Operation not permitted").
+  //
+  // Deliberately client-side: the server's message is correct, and other
+  // consumers may reasonably render it differently.
+  if (status === 401) return 'Your session expired — sign in again.';
+
   const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
   if (typeof detail === 'string' && detail.trim()) return detail;
   if (Array.isArray(detail)) {
