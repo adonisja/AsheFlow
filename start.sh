@@ -27,15 +27,28 @@ echo "Waiting for backend to be ready..."
 # Bounded. An unbounded loop here hangs forever on a backend that will never
 # come up (bad .env, failed migration, unpublished port) with no clue why —
 # the failure looks like a hung script rather than a broken container.
-for _ in $(seq 1 60); do
+# 60s was too tight: a cold start runs migrations before uvicorn binds, and with
+# --reload that regularly overran the bound. The script then exited before ever
+# reaching the ios/android branch, so a slow backend looked like "the simulator
+# won't start". Bail out early if the container has actually died, so a genuinely
+# broken backend still fails fast instead of burning the full timeout.
+BACKEND_TIMEOUT=180
+for _ in $(seq 1 "$BACKEND_TIMEOUT"); do
   curl -sf http://localhost:8000/health > /dev/null 2>&1 && break
+  if [ -z "$(docker ps -q -f name=asheflow_backend -f status=running)" ]; then
+    echo ""
+    echo "ERROR: the asheflow_backend container is not running."
+    echo "Its last log lines:"
+    docker logs asheflow_backend --tail 30 2>&1 | sed 's/^/  /'
+    exit 1
+  fi
   sleep 1
 done
 if ! curl -sf http://localhost:8000/health > /dev/null 2>&1; then
   echo ""
-  echo "ERROR: backend did not become ready within 60s."
+  echo "ERROR: backend did not become ready within ${BACKEND_TIMEOUT}s."
   echo "Its last log lines:"
-  docker logs asheflow_backend --tail 20 2>&1 | sed 's/^/  /'
+  docker logs asheflow_backend --tail 30 2>&1 | sed 's/^/  /'
   exit 1
 fi
 echo "Backend is up."
@@ -43,7 +56,11 @@ echo ""
 
 # ── Shared Metro startup (iOS + Android) ─────────────────────────────────────
 start_metro() {
-  cd mobile
+  # No bare `cd` here: this function used to leave the caller in mobile/, so the
+  # iOS branch checked Pods at mobile/ios/Pods (root-relative) but ran run-ios
+  # from mobile/. Two assumed working directories in one branch, and a second
+  # call would resolve mobile/mobile. Metro is launched in a subshell instead so
+  # the caller's directory is never mutated.
 
   # Reuse a HEALTHY Metro instead of killing it. Both simulators share one
   # bundler; killing it here is what made ios/android runs order-dependent —
@@ -65,7 +82,7 @@ start_metro() {
     sleep 1
   fi
 
-  npx react-native start --reset-cache &
+  (cd mobile && npx react-native start --reset-cache) &
   METRO_PID=$!
 
   echo "Waiting for Metro to be ready..."
@@ -89,7 +106,7 @@ finish_metro() {
 
 case "$PLATFORM" in
 
-  ios|mobile|--mobile)
+  ios|-ios|--ios|mobile|-mobile|--mobile)
     SIMULATOR="${DEVICE_ARG:-iPhone 16 Pro}"
     echo "Launching $SIMULATOR simulator and installing app..."
 
@@ -105,12 +122,12 @@ case "$PLATFORM" in
     start_metro
 
     echo "Building and launching on $SIMULATOR..."
-    npx react-native run-ios --simulator "$SIMULATOR"
+    (cd mobile && npx react-native run-ios --simulator "$SIMULATOR") || exit 1
 
     finish_metro
     ;;
 
-  android)
+  android|-android|--android)
     # Android SDK tools aren't on PATH by default on this machine.
     export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
     export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
@@ -146,16 +163,29 @@ case "$PLATFORM" in
     echo "Building and launching on Android..."
     # run-android sets up `adb reverse tcp:8081` for Metro automatically; the
     # app itself reaches the backend via 10.0.2.2:8000 (see mobile/src/api/client.ts).
-    npx react-native run-android
+    (cd mobile && npx react-native run-android) || exit 1
 
     finish_metro
     ;;
 
-  web|*)
+  web|-web|--web)
     echo "Starting AsheFlow web frontend (Vite)..."
     echo "Press ^C to stop the frontend server."
     echo ""
     cd frontend && npm run dev
+    ;;
+
+  # An unrecognised platform used to fall through to `web|*)`, so a typo like
+  # `-ios` silently started Vite and the simulator never opened — the script
+  # gave no hint it had ignored the argument. Fail loudly instead.
+  *)
+    echo "ERROR: unknown platform '$PLATFORM'."
+    echo ""
+    echo "Usage:"
+    echo "  ./start.sh              — Docker stack + web frontend (Vite)"
+    echo "  ./start.sh ios [Sim]    — Docker stack + Metro + iOS app"
+    echo "  ./start.sh android [AVD]— Docker stack + Metro + Android app"
+    exit 1
     ;;
 
 esac
