@@ -39,6 +39,7 @@ import ReattemptScreen          from '@screens/Trainer/ReattemptScreen';
 // screen importing back from here evaluates the constant as undefined).
 // Re-exported for existing imports within this file's consumers.
 export * from './roles';
+import { TAB_GATES } from './roles';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
@@ -105,39 +106,39 @@ type TabDef = {
 };
 
 const ALL_TABS: TabDef[] = [
-  { key: 'Home',            label: 'Home',            icon: '🏠', roles: [],                     component: HomeNavigator },
-  { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
-  { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointTab },
-  { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
-  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator, feature: 'route_sort' },
-  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen, feature: 'route_sort' },
-  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen, feature: 'package_rts' },
+  { key: 'Home',            label: 'Home',            icon: '🏠', component: HomeNavigator, ...TAB_GATES['Home'] },
+  { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', component: FieldOpsScreen, ...TAB_GATES['FieldOps'] },
+  { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', component: AnchorPointTab, ...TAB_GATES['AnchorPoints'] },
+  { key: 'Training',        label: 'Training',         icon: '📋', component: TrainerNavigator, ...TAB_GATES['Training'] },
+  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', component: RouteSortNavigator, ...TAB_GATES['RouteSort'] },
+  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', component: MyRouteTabScreen, ...TAB_GATES['MyRoute'] },
+  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', component: ReattemptScreen, ...TAB_GATES['Reattempts'] },
   // ADR-291: the workforce sort's INPUT. Gated on `workforce_sort`, so it is
   // absent for a full-mode tenant — there the manifest supplies this and a
   // captain typing addresses by hand would be duplicate, contradictory work.
-  { key: 'ToteAddresses',   label: 'Tote Addresses',   icon: '📮', roles: TOTE_ADDRESS_ROLES,     component: ToteAddressScreen, feature: 'workforce_sort' },
+  { key: 'ToteAddresses',   label: 'Tote Addresses',   icon: '📮', component: ToteAddressScreen, ...TAB_GATES['ToteAddresses'] },
   // ADR-297: the workforce sort's OUTPUT, for the person who walks it. Same
   // capability gate as the input above, because they are two ends of one
   // pipeline — a tenant with a package feed gets full mode's MyRoute instead,
   // which is a different screen (stops, not totes) on a different gate.
-  { key: 'WorkforceRoute',  label: 'My Route',         icon: '🧭', roles: WORKFORCE_ROUTE_ROLES,  component: MyWorkforceRouteScreen, feature: 'workforce_sort' },
-  { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
-  { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
+  { key: 'WorkforceRoute',  label: 'My Route',         icon: '🧭', component: MyWorkforceRouteScreen, ...TAB_GATES['WorkforceRoute'] },
+  { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', component: TruckBuildingsScreen, ...TAB_GATES['TruckBuildings'] },
+  { key: 'MyTraining',      label: 'My Training',      icon: '📚', component: TraineeNavigator, ...TAB_GATES['MyTraining'] },
   // ADR-289. Full-mode only: every sub-tab under it (My Route, Found) calls
   // endpoints registered under `_full_mode` — /rts/stops, /rts/packages,
   // /packages/intake — so in workforce mode the server 404s all of them and the
   // controls are dead. The workforce equivalent is the WorkforceRoute tab.
   //
   // A walker's own numbers live in Account (My Stats + Scorecard), not here.
-  { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard, feature: 'route_sort' },
-  { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', roles: DRIVER_SURVEY_ROLES,     component: DriverSurveyScreen },
-  { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
-  { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
-  { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
-  { key: 'Gear',            label: 'Gear',             icon: '🎒', roles: GEAR_ROLES,              component: GearRequestsScreen },
-  { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', roles: PREFERENCES_ROLES,       component: PreferencesScreen },
-  { key: 'Notifications',   label: 'Notifications',    icon: '🔔', roles: [],                      component: NotificationsScreen },
-  { key: 'Account',         label: 'Account',          icon: '👤', roles: [],                      component: MyAccountScreen },
+  { key: 'Walker',          label: 'Walker',           icon: '🚶', component: WalkerDashboard, ...TAB_GATES['Walker'] },
+  { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', component: DriverSurveyScreen, ...TAB_GATES['DriverSurvey'] },
+  { key: 'Schedule',        label: 'Schedule',         icon: '📅', component: ScheduleScreen, ...TAB_GATES['Schedule'] },
+  { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', component: ScheduleChangesScreen, ...TAB_GATES['SchChanges'] },
+  { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', component: IncidentsScreen, ...TAB_GATES['Incidents'] },
+  { key: 'Gear',            label: 'Gear',             icon: '🎒', component: GearRequestsScreen, ...TAB_GATES['Gear'] },
+  { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', component: PreferencesScreen, ...TAB_GATES['Preferences'] },
+  { key: 'Notifications',   label: 'Notifications',    icon: '🔔', component: NotificationsScreen, ...TAB_GATES['Notifications'] },
+  { key: 'Account',         label: 'Account',          icon: '👤', component: MyAccountScreen, ...TAB_GATES['Account'] },
 ];
 
 // ── Home stack navigator ──────────────────────────────────────────────────────

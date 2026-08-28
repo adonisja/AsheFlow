@@ -216,11 +216,26 @@ def main() -> int:
         if path:
             components[m.group(1)] = path
 
+    # ADR-317 D3 moved the gates out of ALL_TABS into TAB_GATES (navigation/
+    # roles.ts) so ONE list feeds both the tab registry and anything linking to
+    # a tab. Read them from there: after the move this check saw no `feature:`
+    # in index.tsx at all and reported every gated tab as ungated.
+    gated_keys: set[str] = set()
+    roles_path = os.path.join(MOBILE, "navigation", "roles.ts")
+    if os.path.exists(roles_path):
+        with open(roles_path, encoding="utf-8") as fh:
+            gates_blk = re.search(r"export const TAB_GATES[^=]*=\s*\{(.*?)\n\};",
+                                  fh.read(), re.S)
+        if gates_blk:
+            for gm in re.finditer(r"(\w+):\s*\{([^}]*)\}", gates_blk.group(1)):
+                if FEATURE_RE.search(gm.group(2)):
+                    gated_keys.add(gm.group(1))
+
     findings: list[tuple[str, str, str]] = []
     baselined: list[tuple[str, str, str]] = []
     for m in TAB_RE.finditer(nav):
         key, comp = m.group(1), m.group(2)
-        if FEATURE_RE.search(m.group(0)):
+        if key in gated_keys or FEATURE_RE.search(m.group(0)):
             continue                          # gated — the point of the check
         path = components.get(comp)
         if not path:

@@ -189,10 +189,29 @@ api_v1_router.include_router(internal.router)
 app.include_router(api_v1_router)
 
 @app.get("/health")
-def health_check():
-    """Return a simple liveness check response.
+def health_check(detail: bool = False):
+    """Liveness check. `?detail=1` adds the role/Cognito agreement report.
 
-    Returns:
-        A dict with key ``"status"`` set to ``"ok"``.
+    The detail is OPT-IN because /health is polled by infrastructure that only
+    needs liveness, and because the report costs a Cognito round trip.
+
+    It never changes the status: a directory problem affecting one role must not
+    mark the API unhealthy for every correctly-grouped role (ADR-317 D1).
     """
-    return {"status": "ok"}
+    if not detail:
+        return {"status": "ok"}
+
+    from app.database import SessionLocal
+    from app.services.role_directory_check import check_role_directory
+
+    db = SessionLocal()
+    try:
+        report = check_role_directory(
+            db,
+            pool_id=settings.aws_cognito_user_pool_id,
+            region=settings.aws_region,
+        )
+        # Names and counts only — never a username, email or sub (Dimension 6).
+        return {"status": "ok", "role_directory": report.as_dict()}
+    finally:
+        db.close()

@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses", "app.tasks.enrich_geometry"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses", "app.tasks.enrich_geometry", "app.tasks.role_directory"]
 )
 
 celery_app.conf.update(
@@ -40,6 +40,12 @@ celery_app.conf.beat_schedule = {
     # enrichment has no deadline: nothing downstream fails without it, and a
     # zone bootstrapped today is fully enriched by tomorrow. Bounded batch, so
     # a large zone is finished by the next run rather than one long job.
+    # ADR-317 D1 — surface a role whose Cognito group is missing or empty before
+    # a captain finds out by losing every tab. Reports, never enforces.
+    "check-role-directory-drift": {
+        "task": "app.tasks.role_directory.check_role_directory_drift",
+        "schedule": crontab(hour=5, minute=0),
+    },
     "enrich-place-geometry": {
         "task": "app.tasks.enrich_geometry.enrich_place_geometry",
         "schedule": crontab(hour=4, minute=30),

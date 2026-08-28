@@ -80,3 +80,55 @@ export const TOTE_ADDRESS_ROLES     = ['captain', 'driver', 'dispatch'] as const
  * Distinct from MY_ROUTE_TAB_ROLES, which is full mode's screen — a different
  * shape (stops, not totes) gated on a different capability. */
 export const WORKFORCE_ROUTE_ROLES  = ['walker', 'trainee', 'trainer'] as const;
+
+
+/* ── Tab gates (ADR-317 D3) ────────────────────────────────────────────────
+ *
+ * The role + capability gate for every tab, keyed by tab key. `ALL_TABS` in
+ * navigation/index.tsx reads from here, and so does anything that LINKS to a
+ * tab — home-screen shortcuts especially.
+ *
+ * It lives in this module because this module imports nothing. Putting it in
+ * navigation/index.tsx would force any consumer to import that file, which
+ * imports every screen, which imports HomeScreen — a require cycle, and the
+ * comment on TabDef records what one of those already cost: a role constant
+ * `undefined` at import time, showing Field Ops to every role.
+ *
+ * WHY IT IS SHARED RATHER THAN RESTATED
+ * -------------------------------------
+ * HomeScreen's shortcut tiles used to carry their own copy of the role lists,
+ * and its own comment records the failure that caused: "a tile for a tab the
+ * role doesn't have silently no-ops on tap". FieldOps was given a guard when
+ * that happened; Schedule never was, so five roles (admin, dispatch,
+ * driver_trainee, field_supervisor, management) saw a Schedule tile that did
+ * nothing at all when tapped.
+ *
+ * Two lists drift. One list cannot. */
+export type TabGate = {
+  roles: readonly string[];
+  /** ADR-289 capability key. Absent = available in every mode. */
+  feature?: string;
+};
+
+export const TAB_GATES: Record<string, TabGate> = {
+  Home:            { roles: [] },
+  FieldOps:        { roles: FIELD_OPS_ROLES },
+  AnchorPoints:    { roles: ANCHOR_POINT_ROLES },
+  Training:        { roles: TRAINER_ROLES },
+  RouteSort:       { roles: ROUTE_SORT_ROLES,        feature: 'route_sort' },
+  MyRoute:         { roles: MY_ROUTE_TAB_ROLES,      feature: 'route_sort' },
+  Reattempts:      { roles: REATTEMPT_ROLES,         feature: 'package_rts' },
+  ToteAddresses:   { roles: TOTE_ADDRESS_ROLES,      feature: 'workforce_sort' },
+  WorkforceRoute:  { roles: WORKFORCE_ROUTE_ROLES,   feature: 'workforce_sort' },
+  TruckBuildings:  { roles: TRUCK_BUILDINGS_ROLES },
+  MyTraining:      { roles: TRAINEE_ROLES },
+  Walker:          { roles: WALKER_ROLES,            feature: 'route_sort' },
+  DriverSurvey:    { roles: DRIVER_SURVEY_ROLES },
+  Schedule:        { roles: SCHEDULE_ROLES },
+  SchChanges:      { roles: SCHEDULE_CHANGE_ROLES },
+  Incidents:       { roles: INCIDENT_ROLES },
+  Gear:            { roles: GEAR_ROLES },
+  Preferences:     { roles: PREFERENCES_ROLES },
+  Notifications:   { roles: [] },
+  Account:         { roles: [] },
+};
