@@ -240,12 +240,22 @@ class TestCoverageDepth:
 
     def _staff(self, db, when, *, assigned_drivers=1, spare_drivers=1):
         from app.services.outcome_signals import get_coverage_depth  # noqa
+        # ADR-322: one driver per truck. This used to stack every assigned
+        # driver onto ONE truck, which the partial unique index now rejects —
+        # and which never described a real board anyway. Each driver gets their
+        # own truck, which is what "assigned_drivers=2" means operationally.
         truck = make_truck(db, name=f"T-CD{_seq[0]}")
         _seq[0] += 1
         a = make_assignment(db, truck, target_date=when)
         for i in range(assigned_drivers):
             d = make_employee(db, role="driver", name=f"Assigned Driver {i}")
-            make_member(db, a, d, "driver")
+            if i == 0:
+                make_member(db, a, d, "driver")
+            else:
+                extra_truck = make_truck(db, name=f"T-CD{_seq[0]}")
+                _seq[0] += 1
+                extra = make_assignment(db, extra_truck, target_date=when)
+                make_member(db, extra, d, "driver")
         for i in range(spare_drivers):
             make_employee(db, role="driver", name=f"Spare Driver {i}")
         return a

@@ -56,6 +56,20 @@ class AssignmentMember(Base):
             postgresql_where=text("role = 'captain'"),
             sqlite_where=text("role = 'captain'"),
         ),
+        # ADR-322 D1: one driver per truck, the same guarantee for the same
+        # reason. `driver_trainee` is a DISTINCT role string, so a trainee
+        # riding with their supervising driver is legal by construction — no
+        # exception clause needed, and none should be added, because ADR-264 D6
+        # depends on a trainee never counting as driver supply.
+        #
+        # Both dialects named explicitly, for the reason recorded above.
+        Index(
+            "uq_assignment_members_one_driver",
+            "assignment_id",
+            unique=True,
+            postgresql_where=text("role = 'driver'"),
+            sqlite_where=text("role = 'driver'"),
+        ),
     )
 
     id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
