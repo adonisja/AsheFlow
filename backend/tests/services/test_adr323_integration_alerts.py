@@ -92,33 +92,83 @@ def test_finalize_returns_no_exception_text_or_upstream_body():
     src = _code_only(D.finalize_dispatch)
     assert "detail=f\"Could not reach the Discord bot: {e}\"" not in src
     assert "Bot webhook returned {resp.status}: {body}" not in src
-    assert "An administrator has been notified" in src
+    # ADR-324 removed the 503 that carried "An administrator has been notified",
+    # so the reassurance now belongs in the UI's handling of discord_failed.
+    # What must stay true is that neither the exception nor the body is returned.
 
 
-def test_finalize_refuses_with_503_and_says_nothing_was_finalized():
-    """"Nothing was finalized" is the operationally important sentence: without
-    it a dispatcher cannot tell a failed finalize from a half-finished one, and
-    the safe assumption (that some of it landed) is the wrong one."""
+def test_finalize_does_not_fail_on_a_discord_outage():
+    """ADR-324 D1 REVERSES ADR-323 D1.
+
+    ADR-323 refused with a 503, reasoning from atomicity: the bot call precedes
+    the status flip, so a failure writes nothing and refusing is free. Sound
+    reasoning, wrong conclusion — it never asked whether anyone NEEDS Discord
+    for the operation to be complete. Crews are notified in-app; Discord is a
+    convenience surface.
+
+    Worse, the in-app notifications are created BELOW the bot call, so refusing
+    suppressed them too — a dead secondary channel taking out the primary one.
+    """
     src = _code_only(D.finalize_dispatch)
-    assert "HTTP_503_SERVICE_UNAVAILABLE" in src
-    assert "Nothing was finalized" in src
+    assert "HTTP_503_SERVICE_UNAVAILABLE" not in src
     assert "HTTP_502_BAD_GATEWAY" not in src
+    assert "discord_failed" in src
+
+
+def test_the_in_app_notifications_survive_a_discord_outage():
+    """The assertion that actually pins ADR-324 D1.
+
+    `dispatch_finalized` rows are created downstream of the bot call. Any
+    control flow that leaves the function on a Discord failure — a raise, an
+    early return — silently stops the crew and the dispatch boards being told.
+    """
+    import ast as _ast
+    tree = _ast.parse(_code_only(D.finalize_dispatch))
+
+    src = _code_only(D.finalize_dispatch)
+    bot_call = src.index("/internal/finalize")
+    notif = src.index("dispatch_finalized")
+    assert bot_call < notif, "test premise stale: notifications no longer follow the bot call"
+
+    # No raise/return may sit in the Discord handler, or everything below it is lost.
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.ExceptHandler):
+            continue
+        # Only the handler that CATCHES the sentinel. The aiohttp handler also
+        # mentions _DiscordUnavailable because it raises it — matching that one
+        # too made this assert something the design requires.
+        caught = getattr(node.type, "id", None)
+        if caught != "_DiscordUnavailable":
+            continue
+        handler = _ast.unparse(node)
+        assert "raise" not in handler, (
+            "finalize re-raises on a Discord failure — the in-app notifications "
+            "below the bot call would never be written (ADR-324 D1)"
+        )
+        assert "return" not in handler, (
+            "finalize returns early on a Discord failure — same effect"
+        )
+
+
+def test_the_outage_is_reported_in_the_response_not_swallowed():
+    """Continuing must not mean pretending it worked: the dispatcher still needs
+    to know Discord did not go out."""
+    src = _code_only(D.finalize_dispatch)
+    assert "'discord_failed': discord_failed" in src or '"discord_failed": discord_failed' in src
 
 
 # ── D1: the ordering that makes refusing correct ─────────────────────────────
 
-def test_finalize_still_refuses_rather_than_degrading():
-    """Finalize must NOT be "fixed" to degrade like publish. Its bot call is the
-    first irreversible step and gates the status flip, so a failure has written
-    nothing and is already retryable. Degrading would flip status while crews
-    were never posted — the stranded state publish's own comment exists to
-    prevent."""
+def test_the_bot_call_still_precedes_the_status_flip():
+    """The ordering itself is still worth pinning, even though ADR-324 reversed
+    what we DO on failure. Posting before the flip means a retry re-posts rather
+    than finding the day already complete and skipping the crews."""
     src = _code_only(D.finalize_dispatch)
     bot_call = src.index("/internal/finalize")
     flip = src.index('status = \'completed\'') if "status = 'completed'" in src else src.index('status = "completed"')
     assert bot_call < flip, (
-        "the bot call must stay AHEAD of the status flip — that ordering is what "
-        "makes a failed finalize atomic and retryable (ADR-323 D1)"
+        "the bot call must stay AHEAD of the status flip so a retry re-posts "
+        "instead of skipping an already-complete day"
     )
 
 
@@ -154,7 +204,10 @@ def test_alert_rows_are_committed_on_every_path():
 
         src = _code_only(fn)
         for chunk in src.split("alert_admins_integration_down")[1:]:
-            head = chunk[:400]
+            # Look only as far as the next statement or two — the point is that
+            # a commit follows PROMPTLY, not eventually. finalize commits
+            # immediately because a rollback can intervene before its own.
+            head = chunk[:600]
             assert "db.commit()" in head, (
                 f"{fn.__name__}: no commit follows the alert — the rows are discarded"
             )
