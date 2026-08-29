@@ -128,6 +128,9 @@ function CurrentAssignments() {
   // ADR-256 D3: trucks that finalized without a captain. Warn-only for now —
   // enforcement lands once captains are staffed and assign_captains places them.
   const [captainlessTrucks, setCaptainlessTrucks] = useState<string[]>([]);
+  // ADR-324 D1 — finalize now succeeds when Discord is down, so a 200 is no
+  // longer proof the crews were posted there. This is the only signal.
+  const [discordFailed, setDiscordFailed] = useState(false);
   // hub state
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
@@ -440,6 +443,7 @@ function CurrentAssignments() {
           // did — meant the warning existed on the server and reached nobody.
           const captainless = res.data?.captainless_trucks ?? [];
           setCaptainlessTrucks(captainless);
+          setDiscordFailed(res.data?.discord_failed ?? false);
           await fetchDispatchData();
         } catch (err: unknown) {
           setError(errorText(err, 'Failed to post final assignments to Discord.'));
@@ -1406,6 +1410,31 @@ function CurrentAssignments() {
               </p>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ADR-324 D1 — Discord was unreachable and the finalize went through anyway.
+          Above the captainless banner because this one is not about a subset of
+          trucks: nothing reached Discord at all. Persistent and dismissible, not a
+          toast — a dispatcher who scrolls past it still needs to know the crews
+          were told in-app only. */}
+      {discordFailed && (
+        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
+          <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
+            <AlertCircle className="w-4 h-4" />
+            Discord did not receive the crew post
+          </h3>
+          <p className="text-sm text-warning pl-1">
+            The day was finalized and <span className="font-semibold">crews were notified in
+            the app</span> — only the Discord post failed. An administrator has been alerted.
+          </p>
+          <button
+            type="button"
+            onClick={() => setDiscordFailed(false)}
+            className="text-xs underline text-warning/80 hover:text-warning"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 

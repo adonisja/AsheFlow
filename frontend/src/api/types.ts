@@ -228,6 +228,16 @@ export interface FinalizeResponse {
   status: string;
   date: string;
   captainless_trucks: string[];
+  /** ADR-288 D2 — "finalized" is ambiguous when some trucks were already done. */
+  trucks_finalized: number;
+  trucks_skipped: number;
+  /** ADR-324 D1 — the finalize SUCCEEDED and Discord did not.
+   *
+   * Discord is a secondary surface: crews are notified in-app regardless, so an
+   * outage no longer fails the request. This flag is the only signal that the
+   * Discord post never went out — a 200 alone looks completely clean.
+   */
+  discord_failed: boolean;
 }
 
 export interface UnavailableStaff {
