@@ -511,7 +511,9 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # PHASE 2 — Finalization
     # ------------------------------------------------------------------
 
-    async def finalize_assignments(self, dispatch_date: str, company_id: str) -> None:
+    async def finalize_assignments(
+        self, dispatch_date: str, company_id: str, truck_id: str | None = None
+    ) -> None:
         """Post finalized assignments to truck channels and #drivers-chat."""
         cfg = await get_guild_config(company_id)
         if cfg is None or not cfg.is_configured:
@@ -550,6 +552,31 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         if not assigned_crews:
             await drivers_channel.send(f"No dispatch found for `{dispatch_date}` — nothing to finalize.")
             return
+
+        # ADR-325 D2 — scope to the finalized truck. The backend's per-truck
+        # finalize sends truck_id; without honouring it this loop posts a crew
+        # embed into EVERY truck's room, and the ones that were not finalized
+        # render an empty roster — which reads to a walker as "you have no crew"
+        # rather than "this was a mistake".
+        #
+        # An unknown truck_id must NOT fall through to the whole day. That
+        # silent widening from "one truck" to "all trucks" is exactly this bug,
+        # and posting six embeds is the worst response to an inconsistency.
+        if truck_id:
+            if truck_id not in assigned_crews:
+                logger.error(
+                    "finalize_assignments: truck %s not in assigned_crews for %s — "
+                    "refusing to fall back to the whole day.", truck_id, dispatch_date,
+                )
+                await report_error(
+                    f"Finalize named truck `{truck_id}` but it has no crew on "
+                    f"`{dispatch_date}` — nothing was posted."
+                )
+                return
+            assigned_crews = {truck_id: assigned_crews[truck_id]}
+            logger.info(
+                "finalize_assignments: scoped to truck %s for %s", truck_id, dispatch_date,
+            )
 
         trucks_summary: list[dict] = []
         channel_errors: list[str]  = []

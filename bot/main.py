@@ -179,12 +179,14 @@ class AsheFlowBot(commands.Bot):
         except Exception as e:
             logger.error("Failed to lockdown channel %s: %s", channel_id, e)
 
-    async def trigger_finalize(self, dispatch_date: str, company_id: str) -> None:
+    async def trigger_finalize(
+        self, dispatch_date: str, company_id: str, truck_id: str | None = None
+    ) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
             logger.error("Dispatch cog not loaded — cannot finalize.")
             return
-        await dispatch_cog.finalize_assignments(dispatch_date, company_id)
+        await dispatch_cog.finalize_assignments(dispatch_date, company_id, truck_id)
 
     async def trigger_hub_finalize(self, payload: dict) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
@@ -335,17 +337,26 @@ async def handle_alert(request: web.Request) -> web.Response:
 
 
 async def handle_finalize(request: web.Request) -> web.Response:
-    """POST /internal/finalize  body: { "date": "YYYY-MM-DD", "company_id": "..." }"""
+    """POST /internal/finalize
+
+    body: { "date": "YYYY-MM-DD", "company_id": "...", "truck_id": "..."|null }
+
+    ADR-325 D1 — `truck_id` scopes the run to one truck; null/absent means the
+    whole day. It was absent from this contract while the backend had already
+    gained a per-truck finalize, so finalizing one truck posted a crew embed
+    into every truck's room.
+    """
     if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     dispatch_date = data.get("date")
     company_id = data.get("company_id")
+    truck_id = data.get("truck_id")
     if not dispatch_date or not company_id:
         return web.Response(status=400, text="Missing date or company_id")
 
-    asyncio.create_task(bot.trigger_finalize(dispatch_date, company_id))
+    asyncio.create_task(bot.trigger_finalize(dispatch_date, company_id, truck_id))
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
