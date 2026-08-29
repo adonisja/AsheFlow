@@ -34,6 +34,13 @@ def _code_only(obj) -> str:
 
 
 # ── D4: a driver trainee is not a driver ─────────────────────────────────────
+#
+# ADR-322 D2 SUPERSEDED the consequence, not this. A trainee is still never
+# counted as driver supply — that half of D4 stands, and ADR-264 D6 depends on
+# it. What changed: a truck with a trainee and NO supervising driver now
+# publishes with a loud warning instead of a 409. A truck with NOBODY still
+# 409s, which is what the tests below cover.
+# See test_adr322_one_driver_per_truck.py for the warn-not-block behaviour.
 
 def test_only_role_driver_counts_not_trainees():
     """ADR-264 D6: a trainee and their supervising driver consume one truck and

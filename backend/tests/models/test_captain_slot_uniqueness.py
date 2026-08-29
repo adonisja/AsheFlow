@@ -54,7 +54,11 @@ def test_captain_slots_are_unique_per_truck_not_globally(db):
     assert len(captains) == 2
 
 
-@pytest.mark.parametrize("role", ["walker", "trainee", "trainer", "driver"])
+# ADR-322: `driver` moved OUT of this list — it is now one-per-truck too, with
+# its own partial index. `driver_trainee` takes its place, which also pins the
+# rule that a trainee riding with a driver is legal: if the driver predicate
+# ever grew to include trainees, this parametrisation would fail.
+@pytest.mark.parametrize("role", ["walker", "trainee", "trainer", "driver_trainee"])
 def test_non_captain_roles_are_not_constrained(db, role):
     """The partial predicate must not degrade into a plain unique index.
 
@@ -86,3 +90,36 @@ def test_a_full_crew_coexists_with_one_captain(db):
     ).all()
     assert len(rows) == 5
     assert sum(1 for r in rows if r.role == "captain") == 1
+
+
+def test_one_driver_per_truck(db):
+    """ADR-322 D1 — the same guarantee as the captain slot, for the same reason.
+
+    Lives beside the captain tests because the two indexes must stay symmetric:
+    a change to one that is not made to the other is the kind of drift this file
+    exists to catch.
+    """
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    assignment_id = uuid.uuid4()
+    db.add(_member(assignment_id, "driver"))
+    db.add(_member(assignment_id, "driver"))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_a_driver_and_a_driver_trainee_share_a_truck(db):
+    """THE pairing the predicate must not break (ADR-264): a trainee rides with
+    their supervising driver. `driver_trainee` is a distinct role string, so
+    this is legal by construction — the test pins that it stays so."""
+    assignment_id = uuid.uuid4()
+    db.add(_member(assignment_id, "driver"))
+    db.add(_member(assignment_id, "driver_trainee"))
+    db.commit()
+
+    rows = db.query(AssignmentMember).filter(
+        AssignmentMember.assignment_id == assignment_id,
+    ).all()
+    assert len(rows) == 2

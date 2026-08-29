@@ -284,9 +284,13 @@ class TestDispatchFillRate:
         driver  = make_employee(db, role="driver",  name="D1")
         walker1 = make_employee(db, role="walker",  name="W1")
         walker2 = make_employee(db, role="walker",  name="W2")
-        make_member(db, ta, driver,  is_manual=False)
-        make_member(db, ta, walker1, is_manual=False)
-        make_member(db, ta, walker2, is_manual=True)
+        # ADR-322: the local make_member defaults role="driver", so this used
+        # to put THREE drivers on one truck — which the partial unique index now
+        # rejects, and which contradicted the employees' own roles anyway. The
+        # counts under test are per-member and unchanged by naming them.
+        make_member(db, ta, driver,  role="driver", is_manual=False)
+        make_member(db, ta, walker1, role="walker", is_manual=False)
+        make_member(db, ta, walker2, role="walker", is_manual=True)
 
         result = get_dispatch_fill_rate(start_date=TODAY, end_date=TODAY, db=db, caller=make_admin_caller(db), _={})
 

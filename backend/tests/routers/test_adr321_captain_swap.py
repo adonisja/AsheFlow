@@ -58,7 +58,7 @@ def test_the_sitting_captain_is_displaced_before_the_incoming_one_moves():
     # flush structure. What matters is that the park is FLUSHED — sent to the
     # database — before the move statement runs, because the index is checked
     # per statement.
-    park = SRC.index("displaced_captain.role = _PARKED_CAPTAIN_ROLE")
+    park = SRC.index("displaced_member.role = _PARKED_ROLE")
     move = SRC.index("target_member.assignment_id = destination_assignment.id")
     assert park < move, "the sitting captain must be parked BEFORE the move"
 
@@ -71,7 +71,7 @@ def test_the_sitting_captain_is_displaced_before_the_incoming_one_moves():
 
     # And the park must sit inside the captain guard, not be hoisted out of it
     # into the common path where it would run for every role.
-    guard = SRC.index("if displaced_captain is not None")
+    guard = SRC.index("if displaced_member is not None")
     assert guard < park, "the park must stay inside its own guard"
 
     # NOTE on what is deliberately NOT asserted: relocating the park to
@@ -93,14 +93,16 @@ def test_the_source_is_captured_before_any_mutation():
 def test_only_one_displacement_is_needed():
     """Moving the incoming captain out of its source frees that slot as a side
     effect, so the displaced captain has somewhere to land."""
-    assert SRC.count("_PARKED_CAPTAIN_ROLE") == 1
+    assert SRC.count("_PARKED_ROLE") == 1
 
 
 def test_the_displacement_only_runs_for_captains():
     """Every other role has no such index and must keep its existing path."""
-    i = SRC.index("displaced_captain = None")
+    i = SRC.index("displaced_member = None")
     guard = SRC[i:i + 200]
-    assert "incoming_role == ROLE_CAPTAIN" in guard
+    # ADR-322 D3 generalised this from `== ROLE_CAPTAIN` to set membership so
+    # a second one-per-truck role needs no new swap code.
+    assert "incoming_role in _ONE_PER_TRUCK_ROLES" in guard
 
 
 def test_the_sitting_captain_lookup_excludes_the_member_being_moved():
@@ -109,31 +111,31 @@ def test_the_sitting_captain_lookup_excludes_the_member_being_moved():
     assert "AssignmentMember.employee_id != target_member.employee_id" in SRC
 
 
-def test_an_unassigned_swap_leaves_the_displaced_captain_unassigned():
+def test_an_unassigned_swap_leaves_the_displaced_member_unassigned():
     """`source_assignment_id is None` means the incoming captain came from the
     pool — so the displaced one goes there, which is a true exchange."""
     assert "if source_assignment_id is not None" in SRC
     i = SRC.index("if source_assignment_id is not None")
-    assert "db.delete(displaced_captain)" in SRC[i:i + 400]
+    assert "db.delete(displaced_member)" in SRC[i:i + 400]
 
 
 # ── D2: park by role, not by delete ──────────────────────────────────────────
 
-def test_the_displaced_captain_is_parked_by_role_not_deleted():
+def test_the_displaced_member_is_parked_by_role_not_deleted():
     """`assignment_id` is NOT NULL so there is no null slot, and this schema
     represents unassigned as NO ROW. Deleting would discard paired_trainer_id,
     ap_arrived_at, trip_count and the row identity that audit rows and
     DispatchConfirmation reference by member id."""
     assert AssignmentMember.__table__.columns["assignment_id"].nullable is False
-    assert "displaced_captain.role = _PARKED_CAPTAIN_ROLE" in SRC
+    assert "displaced_member.role = _PARKED_ROLE" in SRC
     # the role is restored in the same transaction
-    assert "displaced_captain.role = ROLE_CAPTAIN" in SRC
+    assert "displaced_member.role = incoming_role" in SRC
 
 
 def test_the_parked_role_is_outside_the_index_predicate():
     """Any value outside WHERE role='captain' works; it must not be 'captain'."""
-    assert D._PARKED_CAPTAIN_ROLE != "captain"
-    assert D._PARKED_CAPTAIN_ROLE == D.ROLE_WALKER
+    assert D._PARKED_ROLE != "captain"
+    assert D._PARKED_ROLE == D.ROLE_WALKER
 
 
 # ── D3: a constraint violation is a 409 ──────────────────────────────────────
