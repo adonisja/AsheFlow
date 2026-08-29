@@ -1135,6 +1135,29 @@ function CurrentAssignments() {
   // the < 50% block too — this is UX, not the safety boundary.
   const FINALIZE_BLOCK = 0.5;
   const FINALIZE_WARN = 0.8;
+  /** How many NON-HUB trucks are still at each phase (ADR-320 D1).
+   *
+   *  The bulk buttons used to gate on `workflowStep`, which is the day's
+   *  furthest-along status — so publishing ONE truck made the whole day
+   *  "published" and the bulk button went dead for the five that never got
+   *  their DMs. ADR-288 fixed exactly this for the per-truck CARDS and left the
+   *  day-level buttons reading the collapsed value.
+   *
+   *  Hubs are excluded the same way `workflow_status` excludes them
+   *  (ADR-274/286), or a hub-only day would re-enable a button it should not.
+   *
+   *  The server already does the right thing with a mixed day —
+   *  publish_dispatch filters to `status == "planned"` — so this only stops the
+   *  client refusing to make the call. */
+  const phaseCounts = useMemo(() => {
+    const rows = (dispatchData?.truck_assignments || [])
+      .filter((a: any) => !a.is_hub);
+    return {
+      planned: rows.filter((a: any) => a.status === 'planned').length,
+      active:  rows.filter((a: any) => a.status === 'active').length,
+    };
+  }, [dispatchData]);
+
   /** Trucks with no bay, for the bulk publish gate (ADR-309 D4).
    *
    *  A truck resolves to a dock from an explicit setting OR an inherited
@@ -1288,10 +1311,13 @@ function CurrentAssignments() {
           </button>
           <button
             onClick={handlePublishToDiscord}
-            disabled={isPublishing || isLoading || workflowStep !== 'dispatched' || dockGate.block}
+            disabled={isPublishing || isLoading || workflowStep === 'none'
+                      || phaseCounts.planned === 0 || dockGate.block}
             className="bg-success text-white hover:bg-success/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={dockGate.block
               ? `Blocked — no dock set for ${dockGate.missing.join(', ')}. A driver with no bay has nowhere to collect their vehicle.`
+              : phaseCounts.planned === 0
+              ? 'Every truck has already been published'
               : 'DM each crew member their assignment and open the confirmation window'}
           >
             {isPublishing ? (
@@ -1299,11 +1325,19 @@ function CurrentAssignments() {
             ) : (
               <Send className="w-4 h-4" />
             )}
-            Publish Initial Confirmations to Discord
+            {/* ADR-320 D3 — say what pressing it will actually do. With a mixed
+                day the plain label overstates: an already-published truck is
+                skipped by the server, and a disabled button with no explanation
+                is what made this look broken rather than finished. */}
+            {phaseCounts.planned === 0
+              ? 'All trucks published'
+              : workflowStep === 'dispatched'
+              ? 'Publish Initial Confirmations to Discord'
+              : `Publish Remaining ${phaseCounts.planned} to Discord`}
           </button>
           <button
             onClick={handleFinalize}
-            disabled={isFinalizing || isLoading || workflowStep !== 'published' || confirmationGate.block}
+            disabled={isFinalizing || isLoading || phaseCounts.active === 0 || confirmationGate.block}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={confirmationGate.block
               ? 'Blocked — under 50% confirmed on at least one truck'
