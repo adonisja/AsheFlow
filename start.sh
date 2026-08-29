@@ -4,6 +4,12 @@
 #   ./start.sh ios [Simulator]    — Docker stack + Metro + iOS app (default: iPhone 16 Pro)
 #   ./start.sh android [AVD]      — Docker stack + Metro + Android app (boots AVD if none running)
 #   ./start.sh mobile             — legacy alias for `ios`
+#
+# Each platform also accepts its dashed spellings (-ios/--ios, -android/--android,
+# -web/--web). Anything else exits 1 with usage — an unrecognised argument used to
+# fall through to the web branch, so `-ios` silently started Vite and the simulator
+# never opened. Invoke as ./start.sh, not `sh start.sh`: the latter ignores the
+# shebang above and runs under /bin/sh, where the bashisms here aren't guaranteed.
 
 cd "$(dirname "$0")"
 
