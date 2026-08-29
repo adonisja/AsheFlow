@@ -48,6 +48,7 @@ import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
 import { spacing, radius, fontSize, fontWeight, shadow, duration, type ThemeColors } from '@theme/index';
 import { Button, Badge } from '@components/ui/primitives';
+import CrewRosterPanel from '@components/route/CrewRosterPanel';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function localToday(): string {
@@ -115,6 +116,9 @@ type ShiftState = {
   routesRemaining: number; // truck routes not yet completed — auto-fills check-ins
   crew: CrewMember[];
   rollCall: Record<string, string>; // employeeId → trainer roll-call status (seeds CI1)
+  /** ADR-319 — employeeId → route number, for the captain's roster. Workforce
+   *  mode only: full mode's /walker-routes response carries no assigned_to. */
+  routeByEmployee: Record<string, number>;
   // station return
   stationReturnArrived: boolean; stationReturnAt: string | null;
   stationHandoff: boolean;
@@ -228,6 +232,7 @@ const EMPTY_SHIFT: ShiftState = {
   routesRemaining: 0,
   crew: [],
   rollCall: {},
+  routeByEmployee: {},
   stationReturnArrived: false, stationReturnAt: null,
   stationHandoff: false,
   eodDone: false, eodData: null,
@@ -591,6 +596,10 @@ export default function FieldOpsScreen() {
   // a driver on a flaky warehouse connection keeps the full-mode branch, and the
   // server's 404 is what actually enforces the gate.
   const stationSort = hasFeature('station_sort');
+  // ADR-319 D2 — `isDriver` becomes a BRANCH, not a gate. A captain used to
+  // reach this screen and match no render branch, getting a header over
+  // nothing. The driver's 19 steps are untouched below (ADR-307).
+  const isCaptain = hasRole('captain');
   const switchTab = useTabSwitch();
   const isDriver = hasRole('driver');
   const isWalker = hasRole('walker');
@@ -800,14 +809,27 @@ export default function FieldOpsScreen() {
     // ADR-307 D1: /workforce/routes/{date} carries the same `status` field, so
     // the count means the same thing in both modes.
     let routesRemaining = 0;
+    const routeByEmployee: Record<string, number> = {};
     if (taId) {
       try {
         const rrRes = stationSort
           ? await apiClient.get(`/walker-routes/${taId}/routes`, sig)
           : await apiClient.get(`/workforce/routes/${today}`,
                                 { params: { truck_assignment_id: taId }, ...sig });
-        const routeList: { status?: string }[] = rrRes.data ?? [];
+        const routeList: { status?: string; route_number?: number;
+                           assigned_to?: string | null }[] = rrRes.data ?? [];
         routesRemaining = routeList.filter(r => r.status !== 'completed').length;
+        // ADR-319 D1 — the captain's roster answers "which route is this person
+        // on". WorkforceRouteOut already carries assigned_to; the count above
+        // was throwing it away. Full mode's /walker-routes shape has no such
+        // field, which is why the panel is workforce-only (D0).
+        if (!stationSort) {
+          for (const r of routeList) {
+            if (r.assigned_to && r.route_number != null) {
+              routeByEmployee[r.assigned_to] = r.route_number;
+            }
+          }
+        }
       } catch {
         routesRemaining = 0;
       }
@@ -836,6 +858,7 @@ export default function FieldOpsScreen() {
       routesRemaining,
       crew,
       rollCall,
+      routeByEmployee,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
       stationHandoff: !!handoff,
       eodDone: !!eodInsp,
@@ -1074,6 +1097,19 @@ export default function FieldOpsScreen() {
             <View style={s.backBtn} />
           )}
         </View>
+
+        {/* ADR-319 D0/D1 — the captain's body. Workforce-mode only: the route
+            column comes from WorkforceRouteOut.assigned_to, and full mode
+            assigns stops from a manifest instead (a separate design). */}
+        {isCaptain && !isDriver && !stationSort && (
+          <CrewRosterPanel
+            crew={shift.crew}
+            rollCall={shift.rollCall}
+            routeByEmployee={shift.routeByEmployee}
+            today={localToday()}
+            onChanged={reload}
+          />
+        )}
 
         {isDriver && allSteps.length > 0 && (() => {
           const secColor  = sectionColor(allSteps[cursor]?.section ?? '', c);
