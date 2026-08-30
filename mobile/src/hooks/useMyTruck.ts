@@ -25,6 +25,8 @@ export type TruckStatus = 'planned' | 'active' | 'completed';
  */
 export interface TruckAssignmentEntry {
   truck_id: string;
+  /** ADR-332 D1 — the name, so clients stop parsing it out of prose. */
+  truck_name?: string | null;
   status?: TruckStatus | string;
   /** Some payloads carry `id`, others `assignment_id`. ReattemptScreen read
    *  both because it hit one of each; absorbing that here is the point. */
@@ -51,6 +53,14 @@ export interface DispatchPayloadLike<M> {
 export interface MyTruck<M> {
   /** null when the employee is on no truck for this date. */
   truckId: string | null;
+  /** The truck's real name from the payload (ADR-332 D2).
+   *
+   *  NotificationsScreen used to regex this out of the notification MESSAGE —
+   *  `/assigned to\s+([^\s,.]+)/` against "assigned to the hub (Atlas)" captured
+   *  the word "the", and the modal rendered "Truck the". A sentence written for
+   *  humans is not a source for a machine-readable fact.
+   */
+  truckName: string | null;
   /** The caller's own crew, exactly as the payload gave it. Empty when unresolved. */
   crew: M[];
   assignmentId: string | null;
@@ -73,7 +83,7 @@ export function useMyTruck<M extends CrewMemberLike>(
   employeeId: string | null | undefined,
 ): MyTruck<M> {
   const none: MyTruck<M> = {
-    truckId: null, crew: EMPTY as M[], assignmentId: null,
+    truckId: null, truckName: null, crew: EMPTY as M[], assignmentId: null,
     status: null, isHub: false, dockZone: null,
   };
   if (!dispatch || !employeeId) return none;
@@ -90,6 +100,7 @@ export function useMyTruck<M extends CrewMemberLike>(
   const status = ta?.status;
   return {
     truckId,
+    truckName: ta?.truck_name ?? null,
     crew: crew ?? (EMPTY as M[]),
     // Both spellings, for the reason above.
     assignmentId: ta?.id ?? ta?.assignment_id ?? null,
