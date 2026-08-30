@@ -2179,7 +2179,14 @@ function CurrentAssignments() {
                                    const conf = confirmations[member.employee_id];
                                    if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" aria-label="Confirmed" />;
                                    if (conf === 'declined')  return <XCircle className="w-4 h-4 text-danger" aria-label="Declined" />;
-                                   if (conf === 'pending' && isAdmin && workflowStep === 'published') {
+                                   // ADR-326 D3 — offer confirm for anyone NOT confirmed, not
+                                   // only 'pending'. A member with no confirmation row at all
+                                   // (publish skipped seeding — ADR-326 D1) has conf ===
+                                   // undefined, so gating on 'pending' rendered no control and
+                                   // left the crew unconfirmable from the UI. Absence is the
+                                   // state that most needs the button, not the one that needs
+                                   // it least.
+                                   if (conf !== 'confirmed' && isAdmin && workflowStep === 'published') {
                                      return (
                                        <button
                                          onClick={() => handleConfirmEmployee(member.employee_id)}
