@@ -1181,6 +1181,23 @@ function CurrentAssignments() {
     };
   }, [dispatchData]);
 
+  /** ADR-329 D1 — each truck's OWN status, for per-truck and per-member controls.
+   *
+   *  `workflowStep` is the day's furthest-along status: 'finalized' the moment
+   *  ANY truck completes. Gating a per-member control on it meant one finalized
+   *  truck hid the confirm button for every crew member on every truck still
+   *  waiting — measured on staging, 95 members across five active trucks.
+   *
+   *  Same defect ADR-320 fixed for the bulk buttons; the per-member gates were
+   *  not revisited. No new endpoint: `truck_assignments` already carries it. */
+  const truckStatuses = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const a of (dispatchData?.truck_assignments || []) as any[]) {
+      if (a?.truck_id) out[String(a.truck_id)] = a.status;
+    }
+    return out;
+  }, [dispatchData]);
+
   /** Trucks with no bay, for the bulk publish gate (ADR-309 D4).
    *
    *  A truck resolves to a dock from an explicit setting OR an inherited
@@ -1204,25 +1221,38 @@ function CurrentAssignments() {
 
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
-    const live = workflowStep === 'published';
+    // ADR-329 D2 — the stats were already per-truck and were then multiplied by
+    // a DAY-level `live` flag, so one finalized truck collapsed block/warn to
+    // false and the under-50% pre-flight warning stopped working for every
+    // truck still awaiting confirmation. Each truck's own status decides
+    // whether it gates; a finalized truck drops out, correctly, because its
+    // crew is already committed.
     const truckStats = Object.entries(crews)
       .map(([truckId, crew]) => {
         const total = crew.length;
         const confirmed = crew.filter(m => confirmations[m.employee_id] === 'confirmed').length;
-        return { name: trucks[truckId]?.name || 'Unnamed truck', total, confirmed, rate: total ? confirmed / total : 1 };
+        return {
+          truckId,
+          name: trucks[truckId]?.name || 'Unnamed truck',
+          total, confirmed, rate: total ? confirmed / total : 1,
+        };
       })
-      .filter(t => t.total > 0);   // trucks with no crew don't gate
+      // trucks with no crew don't gate, and neither do trucks past confirmation
+      .filter(t => t.total > 0 && truckStatuses[t.truckId] === 'active');
 
+    // `live` is retained for the surrounding copy, but no longer multiplies the
+    // gate: it now means "is any truck still in its confirmation window".
+    const live = truckStats.length > 0;
     const below50 = truckStats.filter(t => t.rate < FINALIZE_BLOCK);
     const below80 = truckStats.filter(t => t.rate < FINALIZE_WARN);
     return {
       live,
       truckStats,
-      block: live && below50.length > 0,       // hard gate
-      warn: live && below50.length === 0 && below80.length > 0,  // soft gate
+      block: below50.length > 0,       // hard gate
+      warn: below50.length === 0 && below80.length > 0,  // soft gate
       below50, below80,
     };
-  }, [dispatchData, confirmations, trucks, workflowStep]);
+  }, [dispatchData, confirmations, trucks, truckStatuses]);
 
   // Hub trucks come from the TRUCK, not from a status (ADR-274).
   //
@@ -2224,7 +2254,11 @@ function CurrentAssignments() {
                                    // left the crew unconfirmable from the UI. Absence is the
                                    // state that most needs the button, not the one that needs
                                    // it least.
-                                   if (conf !== 'confirmed' && isAdmin && workflowStep === 'published') {
+                                   // ADR-329 D1 — THIS truck's status, not the day's.
+                                   // workflowStep is 'finalized' the moment ANY truck
+                                   // completes, so one finalized truck hid this button
+                                   // for every member of every truck still waiting.
+                                   if (conf !== 'confirmed' && isAdmin && truckStatuses[truckId] === 'active') {
                                      return (
                                        <button
                                          onClick={() => handleConfirmEmployee(member.employee_id)}
@@ -2242,7 +2276,9 @@ function CurrentAssignments() {
                                    if (conf === 'pending') return <Clock className="w-4 h-4 text-warning" aria-label="Pending confirmation" />;
                                    return null;
                                  })()}
-                                 {(workflowStep === 'published' || workflowStep === 'finalized') && (
+                                 {/* ADR-329 D1 — per-truck, for the same reason. A transfer
+                                     is meaningful once THIS truck is published. */}
+                                 {(truckStatuses[truckId] === 'active' || truckStatuses[truckId] === 'completed') && (
                                    <button
                                      onClick={() => {
                                        setTransferModal({ employeeId: member.employee_id, employeeName: member.name || member.employee_id });
