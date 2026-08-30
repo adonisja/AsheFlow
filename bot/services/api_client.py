@@ -129,6 +129,34 @@ class AsheFlowClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def record_day_summary(self, date: str, channel: str, message_id: int) -> dict[str, Any]:
+        """Report the id of a DAY-level summary post (ADR-327 D2).
+
+        `channel` is "drivers" or "trainers". message_id 0 clears the receipt,
+        used when a fetch finds the message was deleted in Discord — same
+        sentinel as record_crew_embed.
+        """
+        token = await self._ensure_token()
+        async with self._session.post(
+            f"{self._path_prefix}/dispatch/{date}/day-summary",
+            json={"channel": channel, "message_id": message_id},
+            headers=self._headers(token),
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_day_summary(self, date: str) -> dict[str, Any]:
+        """Fetch the standing day-summary message ids, if any (ADR-327 D2)."""
+        token = await self._ensure_token()
+        async with self._session.get(
+            f"{self._path_prefix}/dispatch/{date}/day-summary",
+            headers=self._headers(token),
+        ) as resp:
+            if resp.status == 404:
+                return {}
+            resp.raise_for_status()
+            return await resp.json()
+
     async def get_confirmations(self, date: str) -> dict:
         """Fetch all confirmation statuses for a given dispatch date.
 
