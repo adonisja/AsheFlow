@@ -156,9 +156,22 @@ def test_the_refresh_covers_all_three_channels():
 
 def test_the_empty_guards_survive_the_upsert():
     """ADR-327 D1 — an upsert must not turn "nothing to report" into a posted
-    empty embed."""
+    empty embed.
+
+    THIS TEST SHIPPED THE ADR-334 BUG. It asserted `"if embed.fields:" in body`
+    — the guard's PRESENCE — while that expression was permanently false,
+    because the builder renders into `description` and never calls add_field.
+    Presence is not reachability (ADR-333), one day later in a test I wrote
+    after writing that lesson.
+
+    Now asserts the guard is bound to a value the builder actually produces.
+    """
     body = _cog_fn("_refresh_day_summaries")
-    assert "if embed.fields:" in body, "trainers empty-guard lost"
+    assert "if has_pairings:" in body, "trainers empty-guard lost"
+    assert "has_pairings) = await _build_trainers_chat_embed" in body \
+        or "has_pairings = await _build_trainers_chat_embed" in body, (
+        "the guard is not bound from the builder — it could be permanently false"
+    )
     assert "if lines:" in body, "captains empty-guard lost"
 
 
