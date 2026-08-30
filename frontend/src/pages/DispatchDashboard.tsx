@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mail, Info, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
-import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse } from '../api/types';
+import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse, ClearDispatchResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
 import PreviousAssignments from '../components/PreviousAssignments';
@@ -131,6 +131,8 @@ function CurrentAssignments() {
   // ADR-324 D1 — finalize now succeeds when Discord is down, so a 200 is no
   // longer proof the crews were posted there. This is the only signal.
   const [discordFailed, setDiscordFailed] = useState(false);
+  // ADR-328 D5 — a clear that left Discord messages behind.
+  const [discordClearWarning, setDiscordClearWarning] = useState<string | null>(null);
   // hub state
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
@@ -788,7 +790,24 @@ function CurrentAssignments() {
         setIsLoading(true);
         setError(null);
         try {
-          await axiosClient.delete(`/dispatch/${selectedDate}`);
+          const res = await axiosClient.delete<ClearDispatchResponse>(
+            `/dispatch/${selectedDate}`,
+          );
+          // ADR-328 D5 — the clear can succeed in the database while leaving
+          // messages standing in Discord. Say so: the crew reads Discord, so a
+          // silent partial retraction is the version that misleads people.
+          const failures = res.data?.discord_failures ?? [];
+          if (res.data && res.data.discord_cleared === false) {
+            setDiscordClearWarning(
+              'The day was cleared, but Discord could not be reached — crew posts may still be visible there.',
+            );
+          } else if (failures.length > 0) {
+            setDiscordClearWarning(
+              `The day was cleared. These Discord messages could not be removed: ${failures.join('; ')}.`,
+            );
+          } else {
+            setDiscordClearWarning(null);
+          }
           setDispatchData(null);
           await fetchDispatchData();
         } catch (err: unknown) {
@@ -1410,6 +1429,25 @@ function CurrentAssignments() {
               </p>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ADR-328 D5 — the clear succeeded but Discord kept some posts. Named
+          rather than counted, so the manual cleanup is a 30-second job. */}
+      {discordClearWarning && (
+        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
+          <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
+            <AlertCircle className="w-4 h-4" />
+            Discord was not fully cleared
+          </h3>
+          <p className="text-sm text-warning pl-1">{discordClearWarning}</p>
+          <button
+            type="button"
+            onClick={() => setDiscordClearWarning(null)}
+            className="text-xs underline text-warning/80 hover:text-warning"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
