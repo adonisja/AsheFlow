@@ -967,11 +967,15 @@ function CurrentAssignments() {
         closeDialog();
         setPublishingHubTruckId(truckId);
         setError(null);
+        // ADR-333 D2 — clear this truck's marker on a fresh attempt.
+        setTruckActionError(prev => { const n = { ...prev }; delete n[truckId]; return n; });
         try {
           await axiosClient.post(`/dispatch/trucks/${truckId}/publish`, { date: selectedDate });
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
         } catch (err: unknown) {
-          setError(errorText(err, `Failed to publish ${truckName}.`));
+          const msg = errorText(err, `Failed to publish ${truckName}.`);
+          setError(msg);
+          setTruckActionError(prev => ({ ...prev, [truckId]: 'Publish failed — see the message above.' }));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -995,6 +999,7 @@ function CurrentAssignments() {
         closeDialog();
         setPublishingHubTruckId(truckId);
         setError(null);
+        setTruckActionError(prev => { const n = { ...prev }; delete n[truckId]; return n; });
         try {
           await axiosClient.post(
             `/dispatch/${selectedDate}/finalize?truck_id=${truckId}`, {},
@@ -1002,6 +1007,7 @@ function CurrentAssignments() {
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
         } catch (err: unknown) {
           setError(errorText(err, `Failed to post ${truckName}'s final crew.`));
+          setTruckActionError(prev => ({ ...prev, [truckId]: 'Post final crew failed — see the message above.' }));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -1219,6 +1225,38 @@ function CurrentAssignments() {
     return { block: missing.length > 0, missing };
   }, [dispatchData, dockDrafts, dockSuggest, trucks]);
 
+  /** ADR-333 D1 — bring the error banner to the operator.
+   *
+   *  The banner renders near the top of this page; the per-truck controls that
+   *  set it sit ~540 lines further down. A dispatcher publishing a hub is
+   *  scrolled to that card, so a correct 409 ("HUB has no dock assigned. Set a
+   *  bay before publishing.") painted off-screen and read as a silent failure.
+   *
+   *  Done as an effect on `error` rather than at the 12 setError call sites:
+   *  one place to be right, and a thirteenth caller gets it for free.
+   *
+   *  Not a toast — these messages are INSTRUCTIONS the operator acts on, and a
+   *  toast that auto-dismisses is the same class of loss as a summary nobody
+   *  edits (ADR-327).
+   */
+  /** ADR-333 D2 — which truck's action failed.
+   *
+   *  The banner carries the instruction; this carries the LOCATION. Reading the
+   *  banner means scrolling away from the card, and on a six-truck day "which
+   *  one?" is then ambiguous. Cleared on the next attempt for that truck.
+   */
+  const [truckActionError, setTruckActionError] = useState<Record<string, string>>({});
+
+  const errorRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!error) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    errorRef.current?.scrollIntoView({
+      behavior: reduced ? 'auto' : 'smooth',
+      block: 'center',
+    });
+  }, [error]);
+
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
     // ADR-329 D2 — the stats were already per-truck and were then multiplied by
@@ -1414,7 +1452,7 @@ function CurrentAssignments() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-danger/50 bg-danger/10 p-4 flex gap-3 text-danger">
+        <div ref={errorRef} className="rounded-lg border border-danger/50 bg-danger/10 p-4 flex gap-3 text-danger">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <p className="text-sm font-medium">{error}</p>
         </div>
@@ -1961,6 +1999,14 @@ function CurrentAssignments() {
                      const name = trucks[truckId]?.name || 'this truck';
                      return (
                    <div className="flex items-center gap-2 mb-3 flex-wrap">
+                       {/* ADR-333 D2 — which truck failed, kept next to the
+                           control that failed. The banner above carries the
+                           instruction; this carries the location. */}
+                       {truckActionError[truckId] && (
+                         <p className="w-full text-[10px] font-semibold text-danger">
+                           {truckActionError[truckId]}
+                         </p>
+                       )}
                        {st === 'planned' && (
                          <button
                            onClick={() => handlePublishHub(truckId)}
