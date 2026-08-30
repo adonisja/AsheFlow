@@ -292,8 +292,19 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
 # Helper: build the #trainers-chat pairing embed
 # ---------------------------------------------------------------------------
 
-async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
-    """One embed listing every truck with trainers and/or trainees for the day."""
+async def _build_trainers_chat_embed(
+    trucks_data: list[dict], dispatch_date: str,
+) -> tuple[discord.Embed, bool]:
+    """One embed listing every truck with trainers and/or trainees for the day.
+
+    Returns (embed, has_pairings). ADR-334 D2 — the BUILDER reports emptiness
+    rather than the caller inferring it from a representation detail.
+
+    The caller used to test `if embed.fields:`. This builder renders its table
+    into `description` and calls `add_field` zero times, so that guard was
+    permanently false and the trainer summary was suppressed on every path from
+    ADR-327 until ADR-334 — including when there WERE pairings.
+    """
     embed = discord.Embed(
         title=f"Trainer Pairings — {dispatch_date}",
         color=0x57F287,  # green
@@ -362,14 +373,15 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
                     _day(trainee),
                 ))
 
-    if len(rows) > 2:
+    has_pairings = len(rows) > 2
+    if has_pairings:
         embed.description = "\n".join(rows)
         if unpaired_count:
             embed.set_footer(text=f"{unpaired_count} trainee(s) without a trainer — fix in Dispatch.")
     else:
         embed.description = "No trainer–trainee pairings on today's dispatch."
 
-    return embed
+    return embed, has_pairings
 
 
 # ---------------------------------------------------------------------------
@@ -608,9 +620,12 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
         if trainers_channel:
-            embed = await _build_trainers_chat_embed(day, dispatch_date)
+            embed, has_pairings = await _build_trainers_chat_embed(day, dispatch_date)
             # ADR-327 D1 — silence when there is nothing to say.
-            if embed.fields:
+            # ADR-334 D1/D2 — ask the BUILDER. This tested `embed.fields`, which
+            # this builder never populates (it renders into `description`), so
+            # the guard was permanently false and suppressed every trainer post.
+            if has_pairings:
                 await self._upsert_summary(
                     channel=trainers_channel,
                     embed=embed,
@@ -875,14 +890,25 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
         if trainers_channel:
             try:
-                embed = await _build_trainers_chat_embed(day_summary, dispatch_date)
-                logger.info("finalize_assignments: trainer embed built, has_fields=%d", len(embed.fields))
+                embed, has_pairings = await _build_trainers_chat_embed(day_summary, dispatch_date)
+                # ADR-334 — logged has_fields=%d against a builder that never sets
+                # fields, so this printed 0 forever and read as "nothing to
+                # report" during the ADR-327 investigation. Log the real signal.
+                logger.info(
+                    "finalize_assignments: trainer embed built, has_pairings=%s",
+                    has_pairings,
+                )
                 # ADR-327 D1 — a summary with nothing to say is not posted. The
                 # captains block below has always had this guard; the trainer
                 # block never did, so it announced "No trainer-trainee pairings"
                 # on every finalize. A channel where most posts are empty is a
                 # channel whose real posts get skimmed past.
-                if embed.fields:
+                #
+                # ADR-334 — this was `if embed.fields:`, which this builder
+                # never populates, so the guard was permanently FALSE and
+                # suppressed the post even when pairings existed. The builder
+                # now reports its own emptiness.
+                if has_pairings:
                     await self._upsert_summary(
                         channel=trainers_channel,
                         embed=embed,

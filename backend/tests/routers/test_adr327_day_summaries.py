@@ -57,7 +57,11 @@ def test_an_empty_trainer_embed_is_not_posted():
     """It logged has_fields=0 and sent anyway, so the channel filled with posts
     whose entire content was that there was nothing to report."""
     fn = _cog_finalize()
-    assert "if embed.fields:" in fn, (
+    # ADR-334 — this asserted `if embed.fields:`, which the builder NEVER
+    # populates (it renders into `description`), so the guard was permanently
+    # false and suppressed every trainer post. The decision is unchanged; the
+    # expression that implements it is now bound to the builder's own answer.
+    assert "if has_pairings:" in fn, (
         "the trainer summary must be guarded on having content, the way the "
         "captains roster already is (ADR-327 D1)"
     )
@@ -77,10 +81,10 @@ def test_the_empty_case_is_silent_not_a_nothing_to_report_post():
               if isinstance(n, ast.AsyncFunctionDef) and n.name == "finalize_assignments")
     guard = next(
         (n for n in ast.walk(fn)
-         if isinstance(n, ast.If) and "embed.fields" in ast.unparse(n.test)),
+         if isinstance(n, ast.If) and "has_pairings" in ast.unparse(n.test)),
         None,
     )
-    assert guard is not None, "no `if embed.fields:` guard"
+    assert guard is not None, "no `if has_pairings:` guard (ADR-334)"
     assert guard.orelse, "no else branch — the empty case is unhandled"
     else_src = "".join(ast.unparse(n) for n in guard.orelse)
     assert "send" not in else_src, (
