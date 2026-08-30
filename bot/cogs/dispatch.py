@@ -229,6 +229,21 @@ def _day_trucks_summary(assigned_crews, truck_map, confirmations, ap_by_truck, z
     return rows
 
 
+def _captain_lines(trucks_summary) -> list[str]:
+    """One line per truck that has a captain (ADR-256, ADR-332 D5).
+
+    Extracted so the finalize path and any future caller build the roster the
+    same way — the captains post is a standing per-day message like the other
+    two summaries.
+    """
+    lines = []
+    for truck in trucks_summary:
+        caps = [m["name"] for m in truck.get("crew", []) if m.get("role") == "captain"]
+        if caps:
+            lines.append(f"**{truck.get('truck_name', 'Truck')}:** `{caps[0]}`")
+    return lines
+
+
 def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
     """Embed posted to #drivers-chat after finalization.
 
@@ -422,6 +437,14 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
         await drivers_channel.send(embed=header)
 
+        # ADR-332 D4/D6 — publishing changes the day's state, so the standing
+        # summaries are brought up to date here too. ADR-327 wired the upsert
+        # into the bulk finalize only, so a published-but-not-finalized day left
+        # the summaries showing nothing at all.
+        await self._refresh_day_summaries(
+            guild=guild, cfg=cfg, dispatch_date=dispatch_date, company_id=company_id,
+        )
+
         dm_failures: list[str] = []
 
         for truck_id, crew in assigned_crews.items():
@@ -534,6 +557,81 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # ------------------------------------------------------------------
     # PHASE 2 — Finalization
     # ------------------------------------------------------------------
+
+    async def _refresh_day_summaries(self, *, guild, cfg, dispatch_date, company_id):
+        """Bring all three standing day summaries up to date (ADR-332 D4/D5).
+
+        ADR-327 gave the summaries receipts but wired the upsert into the BULK
+        finalize only. `publish_assignments` still bare-sent, and
+        `hub_finalize_truck` — the per-truck path actually in use — posted no
+        summary at all, which is why DispatchDaySummary had zero rows on staging
+        after a full day of publishes and a per-truck finalize.
+
+        Fetches the day's own state rather than taking a caller-scoped roster:
+        a standing per-day message edited with one truck's payload silently
+        drops the others (ADR-327 D3).
+
+        Never raises — a summary is reporting, and must not fail an operation
+        that has already posted crews and cannot be undone.
+        """
+        try:
+            dispatch = await api.get_dispatch(dispatch_date)
+            confs = await api.get_confirmations(dispatch_date)
+            trucks = await api.get_trucks()
+        except Exception as e:
+            logger.warning("refresh_day_summaries: could not fetch day state: %s", e)
+            return
+
+        truck_map = {str(t["id"]): t for t in (trucks or [])}
+        day = _day_trucks_summary(
+            dispatch.get("assigned_crews", {}) or {},
+            truck_map,
+            (confs or {}).get("confirmations", {}) or {},
+            dispatch.get("ap_by_truck", {}) or {},
+            dispatch.get("zones_by_truck", {}) or {},
+        )
+
+        try:
+            recorded = await api.get_day_summary(dispatch_date) or {}
+        except Exception as e:
+            logger.warning("refresh_day_summaries: could not read receipts: %s", e)
+            recorded = {}
+
+        drivers_channel = guild.get_channel(cfg.drivers_channel_id) if cfg.drivers_channel_id else None
+        if drivers_channel:
+            await self._upsert_summary(
+                channel=drivers_channel,
+                embed=_build_drivers_chat_embed(day, dispatch_date),
+                message_id=recorded.get("drivers_summary_message_id"),
+                dispatch_date=dispatch_date, kind="drivers",
+            )
+
+        trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
+        if trainers_channel:
+            embed = await _build_trainers_chat_embed(day, dispatch_date)
+            # ADR-327 D1 — silence when there is nothing to say.
+            if embed.fields:
+                await self._upsert_summary(
+                    channel=trainers_channel,
+                    embed=embed,
+                    message_id=recorded.get("trainers_summary_message_id"),
+                    dispatch_date=dispatch_date, kind="trainers",
+                )
+
+        captains_channel = guild.get_channel(cfg.captains_channel_id) if cfg.captains_channel_id else None
+        if captains_channel:
+            lines = _captain_lines(day)
+            if lines:
+                await self._upsert_summary(
+                    channel=captains_channel,
+                    embed=discord.Embed(
+                        title=f"Captains — {dispatch_date}",
+                        description="\n".join(lines),
+                        color=0x5865F2,
+                    ),
+                    message_id=recorded.get("captains_summary_message_id"),
+                    dispatch_date=dispatch_date, kind="captains",
+                )
 
     async def _upsert_summary(self, *, channel, embed, message_id, dispatch_date, kind):
         """Edit the standing day summary, or post one and record its id (ADR-327 D2).
@@ -809,11 +907,10 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         # shape as #trainers-chat above.
         captains_channel = guild.get_channel(cfg.captains_channel_id) if cfg.captains_channel_id else None
         if captains_channel:
-            captain_lines = []
-            for truck in trucks_summary:
-                caps = [m["name"] for m in truck.get("crew", []) if m.get("role") == "captain"]
-                if caps:
-                    captain_lines.append(f"**{truck.get('truck_name', 'Truck')}:** `{caps[0]}`")
+            # ADR-332 D5 — built from the DAY, not the ADR-325-scoped truck, for
+            # the same reason as the other two summaries (ADR-327 D3): a standing
+            # roster edited with a single truck's payload drops the others.
+            captain_lines = _captain_lines(day_summary)
             if captain_lines:
                 try:
                     embed = discord.Embed(
@@ -821,7 +918,16 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         description="\n".join(captain_lines),
                         color=0x5865F2,
                     )
-                    await captains_channel.send(embed=embed)
+                    # ADR-332 D5 — edited in place like the other two. The
+                    # empty-guard above is KEPT: an upsert must not turn "no
+                    # captains today" into a posted empty embed (ADR-327 D1).
+                    await self._upsert_summary(
+                        channel=captains_channel,
+                        embed=embed,
+                        message_id=recorded.get("captains_summary_message_id"),
+                        dispatch_date=dispatch_date,
+                        kind="captains",
+                    )
                 except Exception as e:
                     logger.error("finalize_assignments: failed to post captains: %s", e, exc_info=True)
             else:
@@ -1113,6 +1219,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 await discord_user.send(embed=final_embed)
             except Exception:
                 pass
+
+        # ADR-332 D4 — THE gap the operator reported. This per-truck path posted
+        # a crew embed and nothing else, so #drivers-chat, #trainers-chat and
+        # #captains never reflected a truck finalizing individually. ADR-327's
+        # receipts existed but nothing on this path ever wrote them, which is
+        # why DispatchDaySummary had zero rows after a full day's work.
+        await self._refresh_day_summaries(
+            guild=guild, cfg=cfg, dispatch_date=dispatch_date, company_id=company_id,
+        )
 
         logger.info("hub_finalize_truck complete: truck=%s date=%s crew=%d", truck_name, dispatch_date, len(crew))
 

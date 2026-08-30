@@ -36,6 +36,10 @@ class DispatchDaySummary(Base):
     # — an Integer column silently truncates a snowflake.
     drivers_summary_message_id  = Column(BigInteger, nullable=True)
     trainers_summary_message_id = Column(BigInteger, nullable=True)
+    # ADR-332 D5 — the captains roster (ADR-256) is the same kind of
+    # artifact: one standing message per day. Omitted from ADR-327 only
+    # because the reported symptom was in the other two channels.
+    captains_summary_message_id = Column(BigInteger, nullable=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(),

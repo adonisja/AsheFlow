@@ -131,26 +131,18 @@ def test_fieldops_is_deliberately_not_adopted():
     assert "t.truck_id === truckId" in s
 
 
-def test_driversurvey_reads_fields_that_do_not_exist():
-    """Recorded, not fixed (ADR-331 D3). truck_assignments entries carry
-    truck_id/status/assignment_id/is_hub/dock_zone — no members, no truck_name,
-    no driver_name — so this header has never rendered.
+def test_driversurvey_header_now_reads_real_fields():
+    """Was an INVERTED test asserting the bug still existed, so that whoever
+    fixed it would trip this and find the ADR rather than re-deriving it.
 
-    Asserted so the day someone fixes it, this test fails and points at the ADR
-    rather than the bug being re-found from scratch.
+    That is exactly what happened: ADR-332 D1 added `truck_name`, this test
+    fired, and the header turned out to be only HALF fixable — the field
+    existed but the code still flatMapped over a non-existent `ta.members`.
+    Now it goes through useMyTruck, and the driver comes from the crew list
+    (ADR-332 D3: a person does not belong on a row describing a vehicle).
     """
-    s = _src("screens/DriverSurvey/DriverSurveyScreen.tsx")
-    assert "ta.members" in s, (
-        "DriverSurvey no longer reads ta.members — if its header was fixed, "
-        "close ADR-331's Open item and delete this test"
-    )
-
-    router = open(os.path.abspath(os.path.join(
-        os.path.dirname(__file__), "..", "..", "app", "routers", "dispatch.py"))).read()
-    i = router.index("truck_statuses = [")
-    entry = router[i:i + 700]
-    for absent in ('"members"', '"truck_name"', '"driver_name"'):
-        assert absent not in entry, (
-            f"{absent} is now returned — DriverSurvey's header may work; "
-            "re-check ADR-331 Open"
-        )
+    code = _strip_comments(_src("screens/DriverSurvey/DriverSurveyScreen.tsx"))
+    assert "ta.members" not in code, "still flatMapping a field that does not exist"
+    assert "useMyTruck" in code
+    assert "mine.truckName" in code
+    assert "m.role === 'driver'" in code, "the driver must come from the crew list"

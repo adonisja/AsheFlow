@@ -156,16 +156,10 @@ type DispatchModalProps = {
   c: ThemeColors;
 };
 
-function extractTruckName(message: string): string | null {
-  const m = message.match(/\b([A-Z]{2,4}[-\s]?\d{1,4}[A-Z]?)\b/) ??
-            message.match(/truck\s+([^\s,]+)/i) ??
-            message.match(/assigned to\s+([^\s,.]+)/i);
-  return m ? m[1] : null;
-}
-
 function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: DispatchModalProps) {
   const [status,         setStatus]         = useState<ConfirmationStatus>(null);
   const [dispatchPhase,  setDispatchPhase]  = useState<'planned' | 'active' | 'completed' | null>(null);
+  const [truckName,      setTruckName]      = useState<string | null>(null);
   const [loading,        setLoading]        = useState(true);
   const [acting,         setActing]         = useState<'confirming' | 'declining' | null>(null);
   const submitting = useRef(false);
@@ -212,6 +206,7 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
         // returns THIS truck's status and deliberately does not surface the
         // day's workflow_status, so the ADR-330 bug is unexpressible here.
         const mine = useMyTruck(data, userId);
+        setTruckName(mine.truckName);
 
         if (mine.status === 'completed') setDispatchPhase('completed');
         else if (mine.status === 'active') setDispatchPhase('active');
@@ -282,7 +277,9 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
     : '';
 
   const cleanMessage = notif?.message ? stripMarkdown(notif.message) : '';
-  const truckName = cleanMessage ? extractTruckName(cleanMessage) : null;
+  // ADR-332 D2 — the real name from the payload. The regex this replaced
+  // parsed the notification MESSAGE and rendered "Truck the" against
+  // "assigned to the hub (Atlas)".
 
   // The confirmation window is open only during the 'active' dispatch phase.
   // Past-date and finalized dispatches are read-only regardless of status.
