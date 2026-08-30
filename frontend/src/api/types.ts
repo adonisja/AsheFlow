@@ -240,6 +240,20 @@ export interface FinalizeResponse {
   discord_failed: boolean;
 }
 
+/** DELETE /dispatch/{date} (ADR-328).
+ *
+ * Was 204. It now reports whether the day was also retracted from Discord:
+ * the database clear can succeed while messages stay visible to the crew, and
+ * that is the version people act on.
+ */
+export interface ClearDispatchResponse {
+  date: string;
+  assignments_cleared: number;
+  discord_cleared: boolean;
+  /** Named, not counted — "crew embed Eagle: missing Manage Messages". */
+  discord_failures: string[];
+}
+
 export interface UnavailableStaff {
   id: string;
   name: string;
