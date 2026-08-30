@@ -53,22 +53,23 @@ def test_the_phase_is_not_derived_from_the_day_status():
 
 
 def test_the_phase_is_derived_from_the_members_own_truck():
+    """ADR-331 moved the narrowing into useMyTruck(), so this asserts the
+    GUARANTEE (the phase comes from a per-truck resolution keyed on the viewer)
+    rather than the literal lookup, which now lives in the helper."""
     block = _phase_block()
-    assert "assigned_crews" in block, "the member's truck is never resolved"
-    assert "m.employee_id === userId" in block
-    assert "t.truck_id === myTruckId" in block
-    assert "mine?.status === 'completed'" in block
+    assert "useMyTruck(data, userId)" in block, (
+        "the member's truck is no longer resolved from the payload"
+    )
+    assert "mine.status === 'completed'" in block
 
 
 def test_it_matches_the_pattern_the_rest_of_the_app_already_uses():
-    """TodayAssignmentScreen, FieldOps, Reattempt, RouteSort and DriverSurvey
-    all narrow the day payload to the user's own truck. Eight of nine screens
-    had it right; this one took the pre-aggregated field."""
+    """Was: does this screen match TodayAssignmentScreen's hand-rolled lookup.
+    ADR-331 made them share one helper, so the assertion is now that both go
+    through it — a stronger version of the same claim."""
     today = _src("screens/Home/TodayAssignmentScreen.tsx")
-    assert "truckAssignments.find((t) => t.truck_id === myTruckId)" in today, (
-        "the reference implementation changed — re-derive this test"
-    )
-    assert "truck_id === myTruckId" in _phase_block()
+    assert "useMyTruck" in today, "the reference screen no longer uses the helper"
+    assert "useMyTruck" in _phase_block()
 
 
 # ── D2: the fallback direction ───────────────────────────────────────────────
@@ -139,6 +140,10 @@ def test_the_other_screens_narrow_to_their_own_truck(screen):
     """The sweep found these clean; pin them so a future edit cannot quietly
     adopt the day-level shortcut."""
     s = _src(screen)
-    assert "truck_id === myTruckId" in s or "truck_id === truckId" in s, (
-        f"{screen} no longer narrows the day payload to one truck"
-    )
+    # ADR-331 — the adopted screens go through useMyTruck; FieldOps keeps its
+    # own lookup because it gets truckId from a different endpoint.
+    assert (
+        "useMyTruck" in s
+        or "truck_id === myTruckId" in s
+        or "truck_id === truckId" in s
+    ), f"{screen} no longer narrows the day payload to one truck"
