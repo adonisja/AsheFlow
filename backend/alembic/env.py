@@ -12,6 +12,7 @@ from app.models.truck import Truck
 from app.models.truck_assignment import TruckAssignment
 from app.models.assignment_member import AssignmentMember
 from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
+from app.models.dispatch_day_summary import DispatchDaySummary  # ADR-327
 from app.models.employee_off_day import EmployeeOffDay
 from app.models.employee_relationship import EmployeeRelationship
 from app.models.graduation_quiz import GraduationQuizTemplate, GraduationQuiz, GraduationQuizResponse
