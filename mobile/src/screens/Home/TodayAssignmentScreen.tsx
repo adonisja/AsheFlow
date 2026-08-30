@@ -11,6 +11,7 @@ import { useEmployeeId } from '@hooks/useEmployeeId';
 import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
 import { Badge, Button, Avatar } from '@components/ui/primitives';
+import { useMyTruck } from '../../hooks/useMyTruck';
 
 type CrewMember = {
   id: string;
@@ -124,21 +125,16 @@ export default function TodayAssignmentScreen() {
       let myTruckId: string | null = null;
       if (dispatchRes.status === 'fulfilled') {
         const dispatch = dispatchRes.value.data;
-        const assignedCrews: Record<string, CrewMember[] & { employee_id?: string }[]> =
-          dispatch?.assigned_crews ?? {};
-        const truckAssignments: { truck_id: string; status: string }[] = dispatch?.truck_assignments ?? [];
+        // ADR-331 — one implementation of "which truck am I on". This screen
+        // was the reference the others were compared against; it now shares it.
+        const mine = useMyTruck<any>(dispatch, eid);
 
-        const myTruckEntry = Object.entries(assignedCrews).find(([, crew]) =>
-          (crew as any[]).some((m) => m.employee_id === eid),
-        );
-
-        if (myTruckEntry) {
-          const [entryTruckId, myCrew] = myTruckEntry as [string, any[]];
-          myTruckId = entryTruckId;
-          const ta: any = truckAssignments.find((t) => t.truck_id === myTruckId);
-          if (ta?.status === 'completed') dispatchPhase = 'completed';
-          else if (ta?.status === 'active') dispatchPhase = 'active';
-          assignmentId = ta?.assignment_id ?? null;
+        if (mine.truckId) {
+          const myCrew = mine.crew;
+          myTruckId = mine.truckId;
+          if (mine.status === 'completed') dispatchPhase = 'completed';
+          else if (mine.status === 'active') dispatchPhase = 'active';
+          assignmentId = mine.assignmentId;
 
           // My arrival stamp (ADR-145 flow: trainee confirms from here).
           if (assignmentId) {

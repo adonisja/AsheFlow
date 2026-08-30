@@ -10,6 +10,7 @@ import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useMyTruck } from '../../hooks/useMyTruck';
 
 type Notification = {
   id: string;
@@ -207,16 +208,14 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
         // Reattempt, RouteSort and DriverSurvey. This screen was the one that
         // took the pre-aggregated field because it was already in the payload.
         const data = dispatchResult.value.data;
-        const crews: Record<string, any[]> = data?.assigned_crews ?? {};
-        const tas: { truck_id: string; status: string }[] = data?.truck_assignments ?? [];
-        const myTruckId = Object.entries(crews).find(([, crew]) =>
-          (crew as any[]).some((m) => m.employee_id === userId),
-        )?.[0];
-        const mine = myTruckId ? tas.find((t) => t.truck_id === myTruckId) : null;
+        // ADR-331 — one implementation of "which truck am I on". The hook
+        // returns THIS truck's status and deliberately does not surface the
+        // day's workflow_status, so the ADR-330 bug is unexpressible here.
+        const mine = useMyTruck(data, userId);
 
-        if (mine?.status === 'completed') setDispatchPhase('completed');
-        else if (mine?.status === 'active') setDispatchPhase('active');
-        else if (mine?.status === 'planned') setDispatchPhase('planned');
+        if (mine.status === 'completed') setDispatchPhase('completed');
+        else if (mine.status === 'active') setDispatchPhase('active');
+        else if (mine.status === 'planned') setDispatchPhase('planned');
         else {
           // ADR-330 D2 — the member's own truck could not be resolved.
           //
