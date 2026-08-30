@@ -194,13 +194,56 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
       }
 
       if (dispatchResult.status === 'fulfilled') {
-        const wf: string = dispatchResult.value.data?.workflow_status ?? '';
-        if (wf === 'finalized')  setDispatchPhase('completed');
-        else if (wf === 'published') setDispatchPhase('active');
-        else setDispatchPhase('planned');
+        // ADR-330 D1 — THIS member's truck, not the day.
+        //
+        // `workflow_status` is the day's furthest-along status: 'finalized' the
+        // moment ANY truck completes. Reading it here closed the confirm window
+        // on the phone of every crew member on every OTHER truck, and relabelled
+        // them "No Response Recorded" — which reads as though they failed to
+        // reply. Measured on staging: 19 Eagle crew locked out because Falcon
+        // was finalized.
+        //
+        // TodayAssignmentScreen already does this correctly; so do FieldOps,
+        // Reattempt, RouteSort and DriverSurvey. This screen was the one that
+        // took the pre-aggregated field because it was already in the payload.
+        const data = dispatchResult.value.data;
+        const crews: Record<string, any[]> = data?.assigned_crews ?? {};
+        const tas: { truck_id: string; status: string }[] = data?.truck_assignments ?? [];
+        const myTruckId = Object.entries(crews).find(([, crew]) =>
+          (crew as any[]).some((m) => m.employee_id === userId),
+        )?.[0];
+        const mine = myTruckId ? tas.find((t) => t.truck_id === myTruckId) : null;
+
+        if (mine?.status === 'completed') setDispatchPhase('completed');
+        else if (mine?.status === 'active') setDispatchPhase('active');
+        else if (mine?.status === 'planned') setDispatchPhase('planned');
+        else {
+          // ADR-330 D2 — the member's own truck could not be resolved.
+          //
+          // Two different unknowns, and they must not share a default:
+          //
+          //  * the DAY has no dispatch at all ('none', ADR-274) -> 'planned'.
+          //    Nothing has been published, so there is nothing to confirm and
+          //    "planned" is the honest state.
+          //  * the day HAS dispatch but this member's truck is unresolvable
+          //    (crew list still loading, member removed) -> 'active', i.e.
+          //    leave the window OPEN.
+          //
+          // A wrong "closed" silently strips someone's ability to respond and
+          // then labels them "No Response Recorded" — it blames them for the
+          // bug. A wrong "open" shows a button that may 409: visible,
+          // recoverable, honest. Asymmetric failure modes; default to the one
+          // the user can recover from.
+          const wf: string = data?.workflow_status ?? '';
+          if (wf === 'none' || wf === '') setDispatchPhase('planned');
+          else setDispatchPhase('active');
+        }
       }
     }).finally(() => setLoading(false));
-  }, [notif?.id, notif?.dispatch_date]);
+    // ADR-330 — userId is now read inside (to find the member's own truck), so
+    // it belongs in the deps: without it a modal opened before the id resolves
+    // keeps a phase derived from an empty userId and never recomputes.
+  }, [notif?.id, notif?.dispatch_date, userId]);
 
   const respond = useCallback(async (choice: 'confirmed' | 'declined') => {
     if (!notif?.dispatch_date || submitting.current) return;
