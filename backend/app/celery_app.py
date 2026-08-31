@@ -8,16 +8,45 @@ Usage (inside the celery_worker container):
     celery -A app.celery_app worker --beat --loglevel=info
 """
 
+import pkgutil
+
 from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import settings
 
+
+def _task_modules() -> list[str]:
+    """Every module under app/tasks/ (ADR-338).
+
+    This replaced a hand-maintained `include=[...]` list of 17 module paths.
+    That list is a silent foot-gun: a beat entry naming a module nobody imported
+    fails with NO error — the schedule fires, Celery has no task registered
+    under that name, and the work simply never happens. ADR-337's health check
+    hit exactly that, and the only reason it was caught is that someone went
+    looking at how registration works.
+
+    `celery.autodiscover_tasks` is the obvious answer and is the WRONG tool for
+    this layout: it looks for a fixed submodule name (`related_name="tasks"`) in
+    each listed package, so `autodiscover_tasks(["app"])` finds
+    `app/tasks/__init__.py` and stops. It never walks the 17 sibling modules.
+    It is designed for a `myapp/tasks.py`-per-app layout, which this is not.
+
+    Walking the package is what actually matches the structure. Import-time, so
+    a module that fails to import breaks startup LOUDLY rather than going
+    quietly missing at schedule time.
+    """
+    import app.tasks
+
+    return sorted(
+        f"app.tasks.{m.name}" for m in pkgutil.iter_modules(app.tasks.__path__)
+    )
+
 celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses", "app.tasks.enrich_geometry", "app.tasks.role_directory", "app.tasks.integration_health"]
+    include=_task_modules(),
 )
 
 celery_app.conf.update(
