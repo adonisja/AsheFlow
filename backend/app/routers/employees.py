@@ -26,6 +26,10 @@ from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeU
 from app.services.audit import write_audit
 from app.services.company_onboarding import is_onboarding, onboarding_note
 from app.services.email import send_invite_email
+from app.services.integration_alerts import (
+    raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
+    IDENTITY_REVOCATION_FAILED, IDENTITY_REVOCATION_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -93,15 +97,25 @@ def _cognito_client():
     return boto3.client("cognito-idp", region_name=settings.aws_region)
 
 
-def _cognito_revoke_access(cognito_username: str | None) -> None:
-    """Disable the Cognito user and revoke all their tokens — best effort.
+def _cognito_revoke_access(cognito_username: str | None) -> bool:
+    """Disable the Cognito user and revoke all their tokens.
 
     AdminDisableUser blocks new token issuance immediately.
     AdminUserGlobalSignOut invalidates all existing refresh tokens so the
     current access token (max 15 min TTL) cannot be silently renewed.
+
+    Returns True only if BOTH calls succeeded (ADR-336 D2).
+
+    It used to return None and swallow the failure, while its call site said
+    "blocks token refresh immediately" — a claim that is false when Cognito is
+    unreachable. The result: an offboarded employee keeps working credentials
+    while the UI reports them deactivated. Returning the outcome lets the caller
+    tell the truth; the caller raises the alert, because this helper has no
+    session.
     """
     if not cognito_username:
-        return
+        # No Cognito identity to revoke — nothing failed.
+        return True
     cognito = _cognito_client()
     for action in ("admin_disable_user", "admin_user_global_sign_out"):
         try:
@@ -111,6 +125,8 @@ def _cognito_revoke_access(cognito_username: str | None) -> None:
             )
         except ClientError as e:
             logger.warning("Cognito %s failed for %s: %s", action, cognito_username, e)
+            return False
+    return True
 
 
 @router.post("/", response_model=EmployeeResponse, status_code=status.HTTP_201_CREATED)
@@ -186,7 +202,14 @@ def create_employee(
             )
         except ClientError as e:
             logger.error("Invite email failed for %s: %s", employee.email, e)
-            # Don't fail the request — manager can resend from the Assets UI
+            # Don't fail the request — manager can resend from the Assets UI,
+            # PROVIDED they know to. ADR-336 D1 raises the platform alert so
+            # somebody learns SES is down rather than each manager discovering
+            # it one bounced invite at a time.
+            raise_platform_alert(
+                db, alert_type=EMAIL_DELIVERY_FAILED,
+                company_id=caller.company_id, message=EMAIL_DOWN_MESSAGE,
+            )
     else:
         db.commit()
         db.refresh(db_employee)
@@ -324,6 +347,13 @@ def bulk_import_employees(
                 )
             except ClientError as e:
                 logger.error("Invite email failed for %s: %s", row.email, e)
+                # ADR-336 D1/D5 — one alert type for the integration, so a bulk
+                # invite that fails for 40 rows collapses to ONE incident with
+                # occurrence_count=40 rather than 40 board entries.
+                raise_platform_alert(
+                    db, alert_type=EMAIL_DELIVERY_FAILED,
+                    company_id=caller.company_id, message=EMAIL_DOWN_MESSAGE,
+                )
 
         write_audit(
             db=db,
@@ -608,8 +638,24 @@ def deactivate_employee(
     db.commit()
     db.refresh(db_employee)
 
-    # Revoke Cognito session — blocks token refresh immediately
-    _cognito_revoke_access(db_employee.email or db_employee.username)
+    # Revoke Cognito session — blocks token refresh immediately WHEN IT
+    # SUCCEEDS. ADR-336 D2: when Cognito is unreachable this silently did not
+    # happen, leaving an offboarded employee with working credentials while the
+    # UI reported them deactivated. That is the only security exposure the
+    # ADR-336 sweep found, as opposed to a visibility gap.
+    #
+    # The DB write is already committed, so the request must not fail — but
+    # somebody has to learn the revocation did not take. severity="critical":
+    # unlike a missed email, this one leaves access open.
+    if not _cognito_revoke_access(db_employee.email or db_employee.username):
+        raise_platform_alert(
+            db,
+            alert_type=IDENTITY_REVOCATION_FAILED,
+            company_id=db_employee.company_id,
+            message=IDENTITY_REVOCATION_MESSAGE,
+            severity="critical",
+        )
+        db.commit()
 
     return db_employee
 

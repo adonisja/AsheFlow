@@ -17,6 +17,9 @@ from app.services.audit import write_audit
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.services.email import send_invite_email, send_credentials_email
+from app.services.integration_alerts import (
+    raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/registration", tags=["registration"])
@@ -436,6 +439,7 @@ def complete_registration(
     db.commit()
 
     # Send one branded email with both username and temp password
+    email_sent = False
     if employee.email:
         try:
             send_credentials_email(
@@ -444,10 +448,35 @@ def complete_registration(
                 username=username,
                 temp_password=temp_password,
             )
+            email_sent = True
         except ClientError as e:
             logger.error("Credentials email failed for %s: %s", employee.email, e)
+            # ADR-336 D1 — SES is PLATFORM infrastructure; a company admin
+            # cannot verify a sending identity or lift a sandbox limit.
+            #
+            # Dim 7: the recipient's address is deliberately NOT in the alert.
+            # It is the payload of the thing that failed, not something a
+            # cross-tenant board needs, and it would put an employee's email on
+            # a surface spanning every tenant.
+            raise_platform_alert(
+                db,
+                alert_type=EMAIL_DELIVERY_FAILED,
+                company_id=employee.company_id,
+                message=EMAIL_DOWN_MESSAGE,
+            )
+            db.commit()
 
-    return {"detail": "Registration complete. Check your email for sign-in credentials.", "username": username}
+    # ADR-336 D1 — do not promise an email that failed to send. This returned
+    # "Check your email for sign-in credentials" unconditionally, so a new
+    # employee whose email bounced was told to wait for something that would
+    # never arrive, with no reason to suspect the system.
+    detail = (
+        "Registration complete. Check your email for sign-in credentials."
+        if email_sent or not employee.email
+        else "Registration complete, but the credentials email could not be sent. "
+             "Contact your manager for your sign-in details."
+    )
+    return {"detail": detail, "username": username, "email_sent": email_sent}
 
 
 @router.get("/pending-invites")
