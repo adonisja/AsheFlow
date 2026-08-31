@@ -254,6 +254,31 @@ export interface ClearDispatchResponse {
   discord_failures: string[];
 }
 
+/** GET /platform/alerts (ADR-335, surfaced by ADR-340).
+ *
+ * An infrastructure condition only a super admin can fix. Keyed on the
+ * INCIDENT, not a reader: `company_id` is null for a platform-wide fault (a
+ * Discord outage is one incident across every tenant), and `is_resolved`
+ * closes when the integration answers again rather than when someone clicks.
+ */
+export interface PlatformAlert {
+  id: string;
+  alert_type: string;
+  /** null = platform-wide, affecting every tenant. */
+  company_id: string | null;
+  message: string;
+  severity: string;
+  is_resolved: boolean;
+  /** "47 occurrences, still failing" is a different picture from "an alert exists". */
+  occurrence_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  resolved_at: string | null;
+  /** null on a self-resolve — that null is what distinguishes "the condition
+   *  ended" from "a person dismissed it". */
+  resolved_by_email: string | null;
+}
+
 export interface UnavailableStaff {
   id: string;
   name: string;
