@@ -578,6 +578,13 @@ function CurrentAssignments() {
       setIsLoading(true);
       setError(null);
       const response = await axiosClient.get(`/dispatch/${selectedDate}`);
+
+      // ADR-341 — fetched alongside the day's data. Best-effort: a dispatcher
+      // must still see their board if this one call fails.
+      axiosClient
+        .get<{ discord_healthy: boolean; since: string | null }>('/dispatch/integration-status')
+        .then(r => setDiscordDown(r.data?.discord_healthy === false ? { since: r.data.since } : null))
+        .catch(() => { /* not worth an error banner — the board matters more */ });
       
       // Only null out dispatchData if there are genuinely no assignments AND no
       // workflow_status — an empty crew dict with a status means dispatch ran
@@ -1234,6 +1241,14 @@ function CurrentAssignments() {
    */
   const errorRef = useErrorBanner(error);
 
+  /** ADR-341 D1 — is Discord delivering, before the dispatcher finds out by
+   *  clicking finalize? The heartbeat (ADR-337) knows up to ten minutes sooner.
+   *
+   *  A boolean, not the alert rows: a dispatcher can do exactly one thing with
+   *  this — stop expecting Discord posts. The board itself is super-admin-only.
+   */
+  const [discordDown, setDiscordDown] = useState<{ since: string | null } | null>(null);
+
   /** ADR-333 D2 — which truck's action failed.
    *
    *  The banner carries the instruction; this carries the LOCATION. Reading the
@@ -1371,6 +1386,31 @@ function CurrentAssignments() {
             </button>
           )}
         </div>
+
+        {/* ADR-341 D4 — Discord is down, stated as its CONSEQUENCE.
+            "Discord integration failed" tells a dispatcher nothing they can use.
+            The two facts that matter are that crews ARE still being told
+            (ADR-324 D1 — the in-app path is unaffected) and not to wait for the
+            Discord post.
+
+            Sits directly above the action buttons rather than at the top of the
+            page: it is a precondition for those actions, and ADR-333 established
+            that a message far from the control it concerns is one nobody reads. */}
+        {discordDown && (
+          <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 flex gap-3 text-warning">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <p className="text-sm font-medium">
+              <span className="font-semibold">Discord is not delivering messages</span>
+              {discordDown.since && (
+                <span className="font-normal">
+                  {' '}(since {new Date(discordDown.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                </span>
+              )}
+              . Crews are still notified in the app — publish and finalize work as normal.
+              Discord posts and DMs will resume when it is restored.
+            </p>
+          </div>
+        )}
 
         {/* Row 3 — workflow actions */}
         <div className="flex flex-wrap items-center gap-3">
