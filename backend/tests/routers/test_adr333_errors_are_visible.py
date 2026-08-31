@@ -55,27 +55,35 @@ def test_the_error_banner_scrolls_itself_into_view():
     `void 0 &&` — the entire fix disabled, tests green. Presence is not
     reachability.
     """
+    # ADR-339 D4 moved the implementation into the shared `useErrorBanner`
+    # hook, so this page no longer contains scrollIntoView. The GUARANTEE is
+    # unchanged and is asserted where it now lives; here we assert the page
+    # still goes through it rather than having lost the behaviour.
     code = _strip_comments(_fe())
-    assert "errorRef" in code
+    assert "useErrorBanner(error)" in code, (
+        "the page no longer wires the error banner to the scroll behaviour"
+    )
 
-    i = code.index("scrollIntoView")
-    line_start = code.rindex("\n", 0, i) + 1
-    stmt = code[line_start:i]
-    # The call must be a plain statement on the ref, not guarded into a no-op.
-    assert stmt.strip() in ("errorRef.current?.", "errorRef.current."), (
-        f"scrollIntoView is not a reachable statement on errorRef (got {stmt.strip()!r})"
+    hook = _strip_comments(open(os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "..",
+        "frontend", "src", "hooks", "useErrorBanner.ts"))).read())
+    i = hook.index("scrollIntoView")
+    line_start = hook.rindex("\n", 0, i) + 1
+    stmt = hook[line_start:i]
+    assert stmt.strip() in ("ref.current?.", "ref.current."), (
+        f"scrollIntoView is not a reachable statement on the ref (got {stmt.strip()!r})"
     )
 
 
 def test_the_scroll_is_driven_by_the_error_state_not_the_call_sites():
     """Done once as an effect on `error`, so the 13th setError caller gets it
     free rather than being forgotten."""
-    code = _strip_comments(_fe())
-    i = code.index("scrollIntoView")
-    window = code[max(0, i - 400):i]
-    assert "useEffect" in window, "the scroll is not an effect on the error state"
-    tail = code[i:i + 200]
-    assert "[error]" in tail or "}, [error])" in code[i:i + 300]
+    # ADR-339 D4 — now asserted in the hook, which is where the effect lives.
+    hook = _strip_comments(open(os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "..",
+        "frontend", "src", "hooks", "useErrorBanner.ts"))).read())
+    assert "useEffect" in hook, "the scroll is not an effect on the error state"
+    assert "}, [error]);" in hook
 
 
 def test_the_banner_carries_the_ref():
@@ -88,10 +96,12 @@ def test_the_banner_carries_the_ref():
 
 def test_reduced_motion_is_respected():
     """CLAUDE.md: an animation that ignores prefers-reduced-motion is a bug."""
-    code = _strip_comments(_fe())
-    assert "prefers-reduced-motion" in code
-    i = code.index("scrollIntoView")
-    assert "reduced" in code[max(0, i - 300):i + 200]
+    # ADR-339 D4 — lives in the hook now.
+    hook = _strip_comments(open(os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "..",
+        "frontend", "src", "hooks", "useErrorBanner.ts"))).read())
+    assert "prefers-reduced-motion" in hook
+    assert "reduced ? 'auto' : 'smooth'" in hook
 
 
 # ── D2: which truck failed ───────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { errorText } from '../utils/errorText';
+import { useErrorBanner } from '../hooks/useErrorBanner';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -1225,20 +1226,14 @@ function CurrentAssignments() {
     return { block: missing.length > 0, missing };
   }, [dispatchData, dockDrafts, dockSuggest, trucks]);
 
-  /** ADR-333 D1 — bring the error banner to the operator.
+  /** ADR-339 D4 — the ADR-333 prototype, now shared.
    *
-   *  The banner renders near the top of this page; the per-truck controls that
-   *  set it sit ~540 lines further down. A dispatcher publishing a hub is
-   *  scrolled to that card, so a correct 409 ("HUB has no dock assigned. Set a
-   *  bay before publishing.") painted off-screen and read as a silent failure.
-   *
-   *  Done as an effect on `error` rather than at the 12 setError call sites:
-   *  one place to be right, and a thirteenth caller gets it for free.
-   *
-   *  Not a toast — these messages are INSTRUCTIONS the operator acts on, and a
-   *  toast that auto-dismisses is the same class of loss as a summary nobody
-   *  edits (ADR-327).
+   *  Nine other pages had the same shape (Assets worst at ~1934 lines between
+   *  banner and furthest setError). Keeping a private copy here would mean two
+   *  implementations, and the one that diverges is the one nobody notices.
    */
+  const errorRef = useErrorBanner(error);
+
   /** ADR-333 D2 — which truck's action failed.
    *
    *  The banner carries the instruction; this carries the LOCATION. Reading the
@@ -1247,15 +1242,6 @@ function CurrentAssignments() {
    */
   const [truckActionError, setTruckActionError] = useState<Record<string, string>>({});
 
-  const errorRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!error) return;
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-    errorRef.current?.scrollIntoView({
-      behavior: reduced ? 'auto' : 'smooth',
-      block: 'center',
-    });
-  }, [error]);
 
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
