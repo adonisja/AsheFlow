@@ -24,6 +24,25 @@ logger = logging.getLogger(__name__)
 
 DISCORD_INTEGRATION_FAILED = "discord_integration_failed"
 
+# ADR-336 D1/D2 — the other two PLATFORM-credential integrations. One type per
+# integration, not per call site (D5): the dedup key is (alert_type, company_id),
+# so a broad type collapses an outage into one incident instead of fragmenting it
+# across every place that noticed.
+EMAIL_DELIVERY_FAILED = "email_delivery_failed"
+IDENTITY_REVOCATION_FAILED = "identity_revocation_failed"
+
+EMAIL_DOWN_MESSAGE = (
+    "Outbound email is failing (AWS SES). Registration credentials, invites and "
+    "password resets are not reaching recipients until it is restored."
+)
+# Deliberately says WHAT IS NOW UNTRUE rather than just what failed: an
+# offboarded employee retaining access is the fact an operator must act on.
+IDENTITY_REVOCATION_MESSAGE = (
+    "Cognito access revocation failed. One or more offboarded employees may "
+    "still be able to sign in — verify in the Cognito console and disable them "
+    "manually."
+)
+
 # Names the blast radius, not the endpoint that happened to fail. "The bot is
 # down" understates it — every Discord surface stops working at once, and an
 # admin sizing the outage from one endpoint's name would under-react.
