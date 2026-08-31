@@ -654,6 +654,36 @@ async def handle_hub_finalize(request: web.Request) -> web.Response:
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    """GET /internal/health — is the bot actually usable? (ADR-337 D2)
+
+    Reports `discord_ready` from `bot.is_ready()`, NOT merely that this process
+    answered. The original incident is the argument: the container was running
+    and its hostname resolved while the bot crash-looped on
+    `LoginFailure: Improper token has been passed`. A liveness probe would have
+    reported healthy the entire time it was completely unable to send anything.
+
+    Unauthenticated on purpose — it exposes no data beyond "is the bot logged
+    in", and requiring the shared secret would make a health check fail for a
+    second, unrelated reason (a bad INTERNAL_SECRET), which is exactly the
+    ambiguity a health check exists to remove.
+    """
+    ready = False
+    try:
+        ready = bool(bot.is_ready())
+    except Exception:  # a bot that cannot answer this is not ready
+        ready = False
+
+    return web.json_response(
+        {"status": "ok" if ready else "degraded", "discord_ready": ready},
+        # 200 either way: the CALLER decides what to do with discord_ready.
+        # A 503 here would be indistinguishable from the bot being unreachable,
+        # collapsing "logged out" and "process down" into one signal — and those
+        # need different fixes.
+        status=200,
+    )
+
+
 async def handle_clear_day(request: web.Request) -> web.Response:
     """POST /internal/clear-day  (ADR-328 D1)
 
@@ -729,6 +759,7 @@ async def start_webhook_server() -> None:
     app.router.add_post("/internal/hub-finalize",     handle_hub_finalize)
     app.router.add_post("/internal/crew-embed-update", handle_crew_embed_update)
     app.router.add_post("/internal/clear-day",        handle_clear_day)
+    app.router.add_get("/internal/health",            handle_health)
     app.router.add_post("/internal/role-sync",        handle_role_sync)
     app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)
