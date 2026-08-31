@@ -149,6 +149,23 @@ def test_alerts_are_raised_with_no_company():
         )
 
 
+def test_the_probe_set_is_fixed_not_per_company():
+    """ADR-337 D1a — the SES quota API allows 1 request per SECOND.
+
+    At one call per 600s that is 0.167% of the limit, but the margin exists only
+    because this is platform-scoped. A future change looping over companies
+    would multiply by tenant count and saturate SES at roughly 600 tenants —
+    so the probe set must stay fixed.
+    """
+    src = _code_only(H.check_integration_health)
+    for per_company in ("Company", "company_id ==", "for company", "companies"):
+        assert per_company not in src, (
+            f"the heartbeat iterates companies ({per_company!r}) — this saturates "
+            "the SES 1 req/s quota limit as tenants grow (ADR-337 D1a)"
+        )
+    assert len(H._PROBES) == 3
+
+
 def test_adp_is_not_probed():
     """Its credentials are per-company (ADR-336 D3) — a failure is that tenant's
     own admin's to fix and must not reach a cross-tenant board."""
