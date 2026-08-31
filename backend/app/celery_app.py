@@ -17,7 +17,7 @@ celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses", "app.tasks.enrich_geometry", "app.tasks.role_directory"]
+    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses", "app.tasks.enrich_geometry", "app.tasks.role_directory", "app.tasks.integration_health"]
 )
 
 celery_app.conf.update(
@@ -52,6 +52,25 @@ celery_app.conf.beat_schedule = {
     },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
+        "schedule": crontab(minute="*/10"),
+    },
+    # ADR-337 — every 10 min. Every integration alert before this fired only
+    # when someone USED the integration, which is how a revoked Discord token
+    # crash-looped the bot for weeks and surfaced when a dispatcher reported
+    # that messages had stopped.
+    #
+    # Ten minutes is chosen against the cost of being wrong either way: a
+    # credential revoked at 09:00 is known by 09:10 rather than whenever someone
+    # next publishes, and three read-only calls per run is negligible. Tighter
+    # buys nothing — nobody rotates a token expecting sub-minute detection —
+    # and looser approaches "a dispatcher would have noticed first", which is
+    # the failure being fixed.
+    #
+    # It also CLEARS on success, which is what makes SES and Cognito alerts
+    # self-closing (ADR-336's Open item): they have no natural heartbeat of
+    # their own, so without this they sat on the board until tidied by hand.
+    "check-integration-health": {
+        "task": "app.tasks.integration_health.check_integration_health",
         "schedule": crontab(minute="*/10"),
     },
     # 03:00 AM Eastern — quiet period, low API traffic
