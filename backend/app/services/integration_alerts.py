@@ -11,12 +11,14 @@ is about the caller; alerting is about the operator. Keeping them separate means
 a path can do both.
 """
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
 from app.models.notification import Notification
+from app.models.platform_alert import PlatformAlert
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,103 @@ DISCORD_DOWN_MESSAGE = (
     "Discord messages are not being delivered — the bot could not be reached. "
     "Dispatch posts, crew finalisation and DMs are affected until it is restored."
 )
+
+
+def raise_platform_alert(
+    db: Session,
+    *,
+    alert_type: str = DISCORD_INTEGRATION_FAILED,
+    company_id: UUID | None = None,
+    message: str = DISCORD_DOWN_MESSAGE,
+    severity: str = "warning",
+) -> None:
+    """Record an infrastructure condition only a super admin can fix (ADR-335).
+
+    Company admins get a Notification (ADR-323); they must know their crews are
+    on in-app only. But they cannot rotate a Discord bot token — that is
+    platform infrastructure — and a super admin has no Employee row, so a
+    Notification cannot reach them at all (`get_super_admin`, deps.py:247).
+
+    ADR-335 D2 — deduped on the OPEN INCIDENT, not on a reader or a time window.
+    ADR-323 D4 deduped a Notification on `is_read`, which is right for an inbox:
+    an admin already acting on it should not be re-alerted. A platform alert is
+    a CONDITION that closes when the integration answers again, so the key is
+    "is there an unresolved alert of this type for this tenant".
+
+    `occurrence_count` and `last_seen_at` exist because "first seen 09:12, 47
+    occurrences, still failing" is a materially different operational picture
+    from "an alert exists", and the two are indistinguishable without them.
+
+    Never raises — this runs on paths that are ALREADY handling a failure.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        q = db.query(PlatformAlert).filter(
+            PlatformAlert.alert_type == alert_type,
+            PlatformAlert.is_resolved.is_(False),
+        )
+        # `== None` does not match NULL in SQL; a platform-wide alert must dedup
+        # against other platform-wide alerts, so the null case needs `is_()`.
+        q = q.filter(PlatformAlert.company_id.is_(None)) if company_id is None \
+            else q.filter(PlatformAlert.company_id == company_id)
+
+        existing = q.first()
+        if existing is not None:
+            existing.occurrence_count += 1
+            existing.last_seen_at = now
+            return
+
+        db.add(PlatformAlert(
+            alert_type=alert_type,
+            company_id=company_id,
+            message=message,
+            severity=severity,
+        ))
+        logger.warning(
+            "platform alert raised: type=%s company=%s", alert_type, company_id,
+        )
+    except Exception:
+        logger.exception("could not raise platform alert type=%s", alert_type)
+
+
+def clear_integration_alert(
+    db: Session,
+    *,
+    alert_type: str = DISCORD_INTEGRATION_FAILED,
+    company_id: UUID | None = None,
+) -> int:
+    """Close any open alert of this type — the integration answered (ADR-335 D3).
+
+    The natural close for a condition is "it started working again", not
+    "someone clicked". A platform alert that only a human can close is stale
+    within a day, and a stale incident board teaches its reader to distrust it.
+
+    `resolved_by_sub` stays NULL: nobody resolved this, the condition ended.
+    Returns the number closed. Never raises.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        q = db.query(PlatformAlert).filter(
+            PlatformAlert.alert_type == alert_type,
+            PlatformAlert.is_resolved.is_(False),
+        )
+        q = q.filter(PlatformAlert.company_id.is_(None)) if company_id is None \
+            else q.filter(PlatformAlert.company_id == company_id)
+
+        closed = 0
+        for row in q.all():
+            row.is_resolved = True
+            row.resolved_at = now
+            closed += 1
+        if closed:
+            logger.info(
+                "platform alert auto-resolved: type=%s company=%s count=%d",
+                alert_type, company_id, closed,
+            )
+        return closed
+    except Exception:
+        logger.exception("could not clear platform alert type=%s", alert_type)
+        return 0
 
 
 def alert_admins_integration_down(
@@ -96,6 +195,18 @@ def alert_admins_integration_down(
                 )
             )
             added += 1
+
+        # ADR-335 D4 — both audiences from one call, for different reasons.
+        # Company admins must know their crews are on in-app only; super admins
+        # are the only people who can rotate the credential. Raised here rather
+        # than at each call site so a future integration cannot alert one
+        # audience and forget the other.
+        #
+        # Deliberately different dedup: the Notification dedups on UNREAD (an
+        # inbox), the PlatformAlert on the OPEN INCIDENT (a condition). That
+        # difference is why ADR-324 rejected bolting this onto Notification.
+        raise_platform_alert(db, alert_type=notif_type, company_id=company_id,
+                             message=message)
 
         if added:
             logger.warning(
