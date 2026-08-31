@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.api.deps import require_configured, RequireMode
 from app.services.constants import MODE_FULL, MODE_WORKFORCE
 from app.api.ratelimit import limiter
-from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones
+from app.routers import employees, trucks, truck_assignments, assignment_members, employee_off_days, employee_relationships, schedule, time_off_requests, feedback, notifications, continuation_requests, assignment_change_requests, incidents, schedule_change_requests, audit, trainer_marks, trainer_coverage, anchor_points, analytics, shift_ops, registration, companies, internal, shift_sessions, sort, graduation_quiz, gear_requests, trainee_credentials, truck_transfers, driver_surveys, adp, building_profiles, building_profile_library, walker_routes, rts, roll_call, crew_status, scorecards, scorecard_appeals, package_lookup, package_intake, dashboards, assignment_history, sort_metrics, btr_sheets, workforce_routes, manual_returns, company_zones, platform_alerts
 
 try:
     from asheflow_private.register import register_proprietary_routers as _register_proprietary
@@ -183,6 +183,10 @@ api_v1_router.include_router(companies.router,                      dependencies
 # Exempt — must be reachable before and during setup
 api_v1_router.include_router(registration.router)
 api_v1_router.include_router(companies.company_admin_router)
+# ADR-335 — platform alerts are NOT mode- or setup-gated: an alert may have
+# no owning tenant, and a super admin must be able to read them precisely
+# when a company's configuration is broken.
+api_v1_router.include_router(platform_alerts.router)
 # Bot-facing internal endpoints — authenticated by X-Internal-Secret, not Cognito
 api_v1_router.include_router(internal.router)
 # Mount the v1 router to the main app
