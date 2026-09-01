@@ -1,0 +1,67 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListBackupBuckets",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": [
+        "arn:aws:s3:::asheflow-db-backups",
+        "arn:aws:s3:::asheflow-db-backups-dr",
+        "arn:aws:s3:::asheflow-db-backups-locked"
+      ]
+    },
+    {
+      "Sid": "ReadBackupObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::asheflow-db-backups/*",
+        "arn:aws:s3:::asheflow-db-backups-dr/*",
+        "arn:aws:s3:::asheflow-db-backups-locked/*"
+      ]
+    },
+    {
+      "Sid": "ReadRecoverySecrets",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-2:586794453404:parameter/asheflow/prod/*",
+        "arn:aws:ssm:us-east-2:586794453404:parameter/asheflow/staging/*"
+      ]
+    },
+    {
+      "Sid": "DecryptSecureStrings",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:us-east-2:586794453404:key/alias/aws/ssm"
+    },
+    {
+      "Sid": "NeverWriteOrDeleteBackups",
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:PutBucketPolicy",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketReplication"
+      ],
+      "Resource": [
+        "arn:aws:s3:::asheflow-db-backups",
+        "arn:aws:s3:::asheflow-db-backups/*",
+        "arn:aws:s3:::asheflow-db-backups-dr",
+        "arn:aws:s3:::asheflow-db-backups-dr/*",
+        "arn:aws:s3:::asheflow-db-backups-locked",
+        "arn:aws:s3:::asheflow-db-backups-locked/*"
+      ]
+    }
+  ]
+}

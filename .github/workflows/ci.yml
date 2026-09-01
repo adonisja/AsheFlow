@@ -22,6 +22,28 @@ on:
   pull_request:
     branches: [master, staging]
 
+# ── COGNITO IDENTIFIERS ───────────────────────────────────────────────────────
+# ONE source per environment for the pool + app client id (ADR-350).
+#
+# These are NOT secrets. A Cognito pool id and app client id are public
+# identifiers -- the app client has no secret, and both values are already
+# served to every visitor inside the JS bundle. They are a hostname, not a
+# password.
+#
+# They live here because the frontend and the backend must agree on them, and a
+# value that must agree in two places has to be VISIBLE in both. Storing the
+# frontend half in a GitHub secret is what caused the PR #20 production outage:
+# the secret was updated, the backend literal was not, a secret diffs to
+# nothing, and so no diff or review could show the mismatch. Login succeeded and
+# every API call 401'd.
+#
+# Change an environment's pool HERE and every consumer follows.
+env:
+  PROD_COGNITO_POOL_ID: us-east-2_AYHjejPis
+  PROD_COGNITO_CLIENT_ID: 4r8tjkjs01e2b930qtqd12vdmf
+  STAGING_COGNITO_POOL_ID: us-east-2_SvVO2ofAb
+  STAGING_COGNITO_CLIENT_ID: 3hjkvuirnaadus65slhm2ja37d
+
 jobs:
   # ── 0. DESIGN TOKENS ───────────────────────────────────────────────────────
   # Pure stdlib, ~60ms, no services and no pip install — so it has no `needs`
@@ -98,6 +120,13 @@ jobs:
       # fails the build.
       - name: Ungated tabs cannot reach full-mode endpoints
         run: python scripts/check_mode_gated_tabs.py
+
+      # The frontend and backend must agree on the Cognito pool. When the two
+      # halves came from different mechanisms -- a ci.yml literal and a GitHub
+      # secret -- they drifted and prod 401'd on every call after login. A
+      # secret diffs to nothing, so no review could have caught it (ADR-350).
+      - name: Cognito ids are centralised
+        run: python scripts/check_cognito_centralised.py
 
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
@@ -350,10 +379,15 @@ jobs:
       # fails if the suite quietly got smaller, whatever the cause — a new skip
       # guard, a private pull that no-op'd, a directory that stopped collecting.
       # Raise MIN_TESTS when the suite grows; never lower it to make CI pass.
+        #
+        # 2026-09-01: raised 2700 -> 3100. Collection has been a stable 3139 across
+        # five consecutive runs, so a 2700 floor let 439 tests (14% of the suite)
+        # vanish while CI still reported green -- a backstop that loose does not
+        # backstop much. 3100 keeps ~1% headroom for ordinary churn.
       - name: Assert the suite did not silently shrink
         working-directory: backend
         env:
-          MIN_TESTS: "2700"
+          MIN_TESTS: "3100"
           APP_ENV: test
           DATABASE_URL: "sqlite:///:memory:"
           REDIS_URL: redis://localhost:6379/0
@@ -559,8 +593,8 @@ jobs:
               "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
               "echo POSTGRES_DB=asheflow_db >> /home/ubuntu/AsheFlow/.env",
               "echo BOT_INTERNAL_URL=http://bot:8001 >> /home/ubuntu/AsheFlow/.env",
-              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/.env",
-              "echo AWS_COGNITO_APP_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=${{ env.STAGING_COGNITO_POOL_ID }} >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_APP_CLIENT_ID=${{ env.STAGING_COGNITO_CLIENT_ID }} >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo API_DOMAIN=api-staging.asheflow.com >> /home/ubuntu/AsheFlow/.env",
@@ -604,8 +638,8 @@ jobs:
             --document-name AWS-RunShellScript \
             --parameters 'commands=[
               "python3 -c \"import boto3; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); ps=c.get_parameters_by_path(Path=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)+chr(115)]; keep={chr(68)+chr(73)+chr(83)+chr(67)+chr(79)+chr(82)+chr(68)+chr(95)+chr(66)+chr(79)+chr(84)+chr(95)+chr(84)+chr(79)+chr(75)+chr(69)+chr(78),chr(66)+chr(79)+chr(84)+chr(95)+chr(85)+chr(83)+chr(69)+chr(82)+chr(78)+chr(65)+chr(77)+chr(69),chr(66)+chr(79)+chr(84)+chr(95)+chr(80)+chr(65)+chr(83)+chr(83)+chr(87)+chr(79)+chr(82)+chr(68),chr(73)+chr(78)+chr(84)+chr(69)+chr(82)+chr(78)+chr(65)+chr(76)+chr(95)+chr(83)+chr(69)+chr(67)+chr(82)+chr(69)+chr(84)}; lines=[p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1]+chr(61)+p[chr(86)+chr(97)+chr(108)+chr(117)+chr(101)] for p in ps if p[chr(78)+chr(97)+chr(109)+chr(101)].rsplit(chr(47),1)[-1] in keep]; open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(65)+chr(115)+chr(104)+chr(101)+chr(70)+chr(108)+chr(111)+chr(119)+chr(47)+chr(98)+chr(111)+chr(116)+chr(47)+chr(46)+chr(101)+chr(110)+chr(118),chr(119)).write(chr(10).join(lines)+chr(10))\"",
-              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_SvVO2ofAb >> /home/ubuntu/AsheFlow/bot/.env",
-              "echo AWS_COGNITO_CLIENT_ID=3hjkvuirnaadus65slhm2ja37d >> /home/ubuntu/AsheFlow/bot/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=${{ env.STAGING_COGNITO_POOL_ID }} >> /home/ubuntu/AsheFlow/bot/.env",
+              "echo AWS_COGNITO_CLIENT_ID=${{ env.STAGING_COGNITO_CLIENT_ID }} >> /home/ubuntu/AsheFlow/bot/.env",
               "echo AWS_REGION=us-east-2 >> /home/ubuntu/AsheFlow/bot/.env",
               "echo API_BASE_URL=http://backend:8000/api/v1 >> /home/ubuntu/AsheFlow/bot/.env"
             ]' \
@@ -671,6 +705,7 @@ jobs:
               "export HOME=/home/ubuntu",
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git fetch origin staging && git reset --hard origin/staging && git clean -fd",
+                "sudo bash /home/ubuntu/AsheFlow/scripts/provision-host.sh",
               "python3 -c \"import boto3,os; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); v=c.get_parameter(Name=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(115)+chr(116)+chr(97)+chr(103)+chr(105)+chr(110)+chr(103)+chr(47)+chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)][chr(86)+chr(97)+chr(108)+chr(117)+chr(101)]; os.makedirs(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104),exist_ok=True); open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),chr(119)).write(v.strip()+chr(10)); os.chmod(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),0o600)\"",
               "ssh-keyscan github.com >> /home/ubuntu/.ssh/known_hosts 2>/dev/null",
               "rm -rf /tmp/asheflow-private && GIT_SSH_COMMAND=\"ssh -i /home/ubuntu/.ssh/asheflow_private_deploy -o StrictHostKeyChecking=no\" git clone -b staging git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private",
@@ -736,9 +771,9 @@ jobs:
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.STAGING_VITE_API_URL }}
-          VITE_AWS_POOL_ID: ${{ secrets.STAGING_VITE_AWS_POOL_ID }}
+          VITE_AWS_POOL_ID: ${{ env.STAGING_COGNITO_POOL_ID }}
           VITE_AWS_REGION: ${{ secrets.STAGING_VITE_AWS_REGION }}
-          VITE_AWS_CLIENT_ID: ${{ secrets.STAGING_VITE_AWS_CLIENT_ID }}
+          VITE_AWS_CLIENT_ID: ${{ env.STAGING_COGNITO_CLIENT_ID }}
           VITE_AWS_DOMAIN: ${{ secrets.STAGING_VITE_AWS_DOMAIN }}
           VITE_GOOGLE_MAPS_KEY: ${{ secrets.STAGING_VITE_GOOGLE_MAPS_KEY }}
 
@@ -790,8 +825,8 @@ jobs:
               "echo POSTGRES_USER=asheflow >> /home/ubuntu/AsheFlow/.env",
               "echo POSTGRES_DB=asheflow_db >> /home/ubuntu/AsheFlow/.env",
               "echo BOT_INTERNAL_URL=http://bot:8001 >> /home/ubuntu/AsheFlow/.env",
-              "echo AWS_COGNITO_USER_POOL_ID=us-east-2_AYHjejPis >> /home/ubuntu/AsheFlow/.env",
-              "echo AWS_COGNITO_APP_CLIENT_ID=4r8tjkjs01e2b930qtqd12vdmf >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_USER_POOL_ID=${{ env.PROD_COGNITO_POOL_ID }} >> /home/ubuntu/AsheFlow/.env",
+              "echo AWS_COGNITO_APP_CLIENT_ID=${{ env.PROD_COGNITO_CLIENT_ID }} >> /home/ubuntu/AsheFlow/.env",
               "echo APP_BASE_URL=https://asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo CORS_ORIGINS=https://asheflow.com,https://www.asheflow.com >> /home/ubuntu/AsheFlow/.env",
               "echo API_DOMAIN=api.asheflow.com >> /home/ubuntu/AsheFlow/.env",
@@ -848,6 +883,7 @@ jobs:
               "export HOME=/home/ubuntu",
               "git config --global --add safe.directory /home/ubuntu/AsheFlow",
               "cd /home/ubuntu/AsheFlow && git fetch origin master && git reset --hard origin/master && git clean -fd",
+                "sudo bash /home/ubuntu/AsheFlow/scripts/provision-host.sh",
               "python3 -c \"import boto3,os; c=boto3.client(region_name=chr(117)+chr(115)+chr(45)+chr(101)+chr(97)+chr(115)+chr(116)+chr(45)+chr(50),service_name=chr(115)+chr(115)+chr(109)); v=c.get_parameter(Name=chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(47)+chr(112)+chr(114)+chr(111)+chr(100)+chr(47)+chr(80)+chr(82)+chr(73)+chr(86)+chr(65)+chr(84)+chr(69)+chr(95)+chr(82)+chr(69)+chr(80)+chr(79)+chr(95)+chr(68)+chr(69)+chr(80)+chr(76)+chr(79)+chr(89)+chr(95)+chr(75)+chr(69)+chr(89),WithDecryption=True)[chr(80)+chr(97)+chr(114)+chr(97)+chr(109)+chr(101)+chr(116)+chr(101)+chr(114)][chr(86)+chr(97)+chr(108)+chr(117)+chr(101)]; os.makedirs(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104),exist_ok=True); open(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),chr(119)).write(v.strip()+chr(10)); os.chmod(chr(47)+chr(104)+chr(111)+chr(109)+chr(101)+chr(47)+chr(117)+chr(98)+chr(117)+chr(110)+chr(116)+chr(117)+chr(47)+chr(46)+chr(115)+chr(115)+chr(104)+chr(47)+chr(97)+chr(115)+chr(104)+chr(101)+chr(102)+chr(108)+chr(111)+chr(119)+chr(95)+chr(112)+chr(114)+chr(105)+chr(118)+chr(97)+chr(116)+chr(101)+chr(95)+chr(100)+chr(101)+chr(112)+chr(108)+chr(111)+chr(121),0o600)\"",
               "ssh-keyscan github.com >> /home/ubuntu/.ssh/known_hosts 2>/dev/null",
               "rm -rf /tmp/asheflow-private && GIT_SSH_COMMAND=\"ssh -i /home/ubuntu/.ssh/asheflow_private_deploy -o StrictHostKeyChecking=no\" git clone -b main git@github.com:adonisja/AsheFlow-private.git /tmp/asheflow-private",
@@ -899,9 +935,9 @@ jobs:
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.PROD_VITE_API_URL }}
-          VITE_AWS_POOL_ID: ${{ secrets.PROD_VITE_AWS_POOL_ID }}
+          VITE_AWS_POOL_ID: ${{ env.PROD_COGNITO_POOL_ID }}
           VITE_AWS_REGION: ${{ secrets.PROD_VITE_AWS_REGION }}
-          VITE_AWS_CLIENT_ID: ${{ secrets.PROD_VITE_AWS_CLIENT_ID }}
+          VITE_AWS_CLIENT_ID: ${{ env.PROD_COGNITO_CLIENT_ID }}
           VITE_AWS_DOMAIN: ${{ secrets.PROD_VITE_AWS_DOMAIN }}
           VITE_GOOGLE_MAPS_KEY: ${{ secrets.PROD_VITE_GOOGLE_MAPS_KEY }}
 
