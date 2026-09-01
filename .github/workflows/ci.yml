@@ -379,10 +379,15 @@ jobs:
       # fails if the suite quietly got smaller, whatever the cause — a new skip
       # guard, a private pull that no-op'd, a directory that stopped collecting.
       # Raise MIN_TESTS when the suite grows; never lower it to make CI pass.
+        #
+        # 2026-09-01: raised 2700 -> 3100. Collection has been a stable 3139 across
+        # five consecutive runs, so a 2700 floor let 439 tests (14% of the suite)
+        # vanish while CI still reported green -- a backstop that loose does not
+        # backstop much. 3100 keeps ~1% headroom for ordinary churn.
       - name: Assert the suite did not silently shrink
         working-directory: backend
         env:
-          MIN_TESTS: "2700"
+          MIN_TESTS: "3100"
           APP_ENV: test
           DATABASE_URL: "sqlite:///:memory:"
           REDIS_URL: redis://localhost:6379/0
