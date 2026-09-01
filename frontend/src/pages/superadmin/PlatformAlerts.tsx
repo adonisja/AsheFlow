@@ -27,6 +27,7 @@ const TYPE_LABELS: Record<string, string> = {
   discord_integration_failed: 'Discord',
   email_delivery_failed: 'Email (SES)',
   identity_revocation_failed: 'Identity revocation (Cognito)',
+  backup_failed: 'Database backup',
 };
 
 function typeLabel(t: string): string {
