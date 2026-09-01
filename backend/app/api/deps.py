@@ -255,6 +255,37 @@ def get_super_admin(current_user: dict = Depends(get_current_user)) -> dict:
     return current_user
 
 
+PLATFORM_GROUPS = frozenset({"super_admin", "platform_support"})
+
+
+def get_platform_staff(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency for platform endpoints that only READ (ADR-343 D1).
+
+    Accepts `super_admin` OR `platform_support`. Use it for anything that lets
+    someone diagnose a customer's problem; keep `get_super_admin` for anything
+    that changes a customer's world.
+
+    The split is not stylistic. `super_admin` gates 12 writes including
+    `deactivate_company`, `set_operating_mode` and `bootstrap_company_admin` —
+    so before this existed, anyone onboarded to help investigate an issue could
+    also take a tenant offline.
+
+    Like `get_super_admin`, this NEVER touches the Employee table: a platform
+    user belongs to no company, and `Employee.company_id` is nullable=False, so
+    a row would force an arbitrary tenant and inherit its scoping everywhere.
+
+    Dimension 7 (ADR-343 D4): no endpoint gated by this may return employee
+    names, addresses or other personal data. `platform_support` is a
+    cross-tenant login, and PII behind it would be a cross-tenant PII surface.
+    """
+    if not (PLATFORM_GROUPS & set(current_user.get("cognito_groups", []))):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform access required.",
+        )
+    return current_user
+
+
 class RoleChecker:
     """Dependency class to check if a user has the required roles."""
     def __init__(self, allowed_roles: list[str]):

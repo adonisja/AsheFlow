@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_super_admin
+from app.api.deps import get_db, get_super_admin, get_platform_staff
 from app.models.platform_alert import PlatformAlert
 from app.services.audit import write_audit, super_admin_identity
 
@@ -49,7 +49,7 @@ class ResolveRequest(BaseModel):
 def list_platform_alerts(
     include_resolved: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
-    _super: dict = Depends(get_super_admin),
+    _super: dict = Depends(get_platform_staff),
     db: Session = Depends(get_db),
 ) -> list[PlatformAlertOut]:
     """Open infrastructure alerts, newest first (ADR-335 D5).

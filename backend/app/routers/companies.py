@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_super_admin, get_caller_employee, RoleChecker
+from app.api.deps import get_super_admin, get_platform_staff, get_caller_employee, RoleChecker
 from app.services.company_config import _REQUIRED_FIELDS
 from app.services.constants import OVERSIGHT_ROLES
 from app.core.config import settings
@@ -337,7 +337,7 @@ def create_company(
 
 @router.get("/", response_model=list[CompanyResponse])
 def list_companies(
-    _: dict = Depends(get_super_admin),
+    _: dict = Depends(get_platform_staff),
     db: Session = Depends(get_db),
 ):
     """List all tenant companies. Super admin only."""
@@ -360,7 +360,7 @@ def list_companies(
 @router.get("/{company_id}", response_model=CompanyDetailResponse)
 def get_company(
     company_id: UUID,
-    _: dict = Depends(get_super_admin),
+    _: dict = Depends(get_platform_staff),
     db: Session = Depends(get_db),
 ):
     """Get a single company with its current config. Super admin only."""
@@ -425,7 +425,7 @@ def update_company(
 @router.get("/{company_id}/employees/summary", response_model=EmployeeSummaryResponse)
 def get_employee_summary(
     company_id: UUID,
-    _: dict = Depends(get_super_admin),
+    _: dict = Depends(get_platform_staff),
     db: Session = Depends(get_db),
 ):
     """Return headcount by role and a list of admin employees for a company."""
@@ -1519,7 +1519,7 @@ def update_my_discord_config(
 @router.get("/{company_id}/discord-config", response_model=DiscordConfigResponse)
 def get_company_discord_config(
     company_id: UUID,
-    _: dict = Depends(get_super_admin),
+    _: dict = Depends(get_platform_staff),
     db: Session = Depends(get_db),
 ):
     """Return Discord integration settings for a company. Super admin only."""
