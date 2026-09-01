@@ -1,0 +1,16 @@
+{
+  "Role": "arn:aws:iam::586794453404:role/asheflow-s3-replication",
+  "Rules": [
+    {
+      "ID": "replicate-all-backups-to-us-west-2",
+      "Priority": 0,
+      "Status": "Enabled",
+      "Filter": {},
+      "DeleteMarkerReplication": { "Status": "Disabled" },
+      "Destination": {
+        "Bucket": "arn:aws:s3:::asheflow-db-backups-dr",
+        "StorageClass": "STANDARD_IA"
+      }
+    }
+  ]
+}
