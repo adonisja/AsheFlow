@@ -1,0 +1,15 @@
+[Unit]
+Description=AsheFlow nightly verified database backup to S3 (ADR-344)
+Documentation=file:///home/ubuntu/AsheFlow/docs/runbooks/prod-backups.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=ENVIRONMENT=staging
+Environment=BUCKET=asheflow-db-backups
+Environment=DEST=/home/ubuntu/backups
+Environment=KEEP_DAYS=7
+ExecStart=/usr/local/bin/asheflow-db-backup-report.sh
+# The dump is small (~300KB) but pg_dump on a busy box should not run forever.
+TimeoutStartSec=900

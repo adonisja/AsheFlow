@@ -26,8 +26,10 @@ fail() { log "FAILED: $*"; exit 1; }
 # where they would be visible in `ps` to any user on the box (ADR-344, Dim 6).
 PGUSER=$(grep -E '^POSTGRES_USER=' "$ENV_FILE" | cut -d= -f2-)
 PGDB=$(grep -E '^POSTGRES_DB=' "$ENV_FILE" | cut -d= -f2-)
+PGPASS=$(grep -E '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)
 : "${PGUSER:?POSTGRES_USER not found in $ENV_FILE}"
 : "${PGDB:?POSTGRES_DB not found in $ENV_FILE}"
+: "${PGPASS:?POSTGRES_PASSWORD not found in $ENV_FILE}"
 
 docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -qx true \
   || fail "container $CONTAINER is not running"
@@ -38,7 +40,13 @@ NAME="asheflow-${ENVIRONMENT}-${STAMP}.sql.gz"
 ARCHIVE="$DEST/$NAME"
 
 # --clean --if-exists so the dump can be replayed into a non-empty database.
-docker exec "$CONTAINER" pg_dump -U "$PGUSER" -d "$PGDB" --clean --if-exists \
+# PGPASSWORD via -e, never on the command line where `ps` would expose it.
+# Required because pg_hba.conf differs by environment: prod's `local ... trust`
+# lets docker exec in without one, staging's `local all all md5` does not. A
+# script that works only where trust happens to be configured is not portable,
+# and the failure looks like a hang waiting on a password prompt.
+docker exec -e PGPASSWORD="$PGPASS" "$CONTAINER" \
+  pg_dump -U "$PGUSER" -d "$PGDB" --clean --if-exists \
   | gzip -9 > "$ARCHIVE" || fail "pg_dump failed"
 
 # ---- Verify before trusting it (ADR-344 D3) ------------------------------
