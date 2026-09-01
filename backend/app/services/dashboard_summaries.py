@@ -78,15 +78,19 @@ def _pct(num: float | int | None, den: float | int | None) -> Optional[float]:
     Returning None rather than 0.0 is deliberate: "no data" and "zero percent"
     are different facts and must not render identically.
     """
-    if not den:
+    # ADR-294: a NULL numerator is an absence too. `num or 0` would report 0%
+    # for "we do not track this", which reads as a real and alarming figure.
+    # Zero itself is still a legitimate measurement and passes through.
+    if num is None or not den:
         return None
-    return round((num or 0) / den * 100, 2)
+    return round(num / den * 100, 2)
 
 
 def _ratio(num: float | int | None, den: float | int | None, digits: int = 2) -> Optional[float]:
-    if not den:
+    # Same reasoning as _pct: a null numerator is unknown, not zero.
+    if num is None or not den:
         return None
-    return round((num or 0) / den, digits)
+    return round(num / den, digits)
 
 
 def _age_minutes(ts: Optional[datetime]) -> int:
@@ -241,7 +245,80 @@ def _package_totals(db: Session, company_id: UUID, start: date, end: date) -> di
         "rework": int((row.rts or 0) + (row.missing or 0)),
         "stops": int(row.stops or 0),
         "avg_stop_minutes": round(float(avg_stop_minutes), 2) if avg_stop_minutes else None,
+        "available": True,
+        "reason": None,
     }
+
+
+# ADR-294 D1/D2. In workforce mode DeliveryStop is never written — there is no
+# per-package tracking to aggregate — so every figure above would be a hard
+# zero. Zero is a measurement ("your crew delivered nothing"); this is an
+# absence ("the question does not apply here"). Returning the first for the
+# second is the 2026-07-29 fabricated-field failure, and a dispatcher acts on it.
+_NO_PACKAGE_FEED = "no_package_feed"
+
+_UNAVAILABLE_PACKAGE_TOTALS = {
+    "delivered": None,
+    "assigned": None,
+    "rework": None,
+    "stops": None,
+    "avg_stop_minutes": None,
+    "available": False,
+    "reason": _NO_PACKAGE_FEED,
+}
+
+
+def _route_package_metrics_available(db: Session, company_id: UUID) -> bool:
+    """May this company's `Route.package_count` be used as a PARCEL count?
+
+    ADR-298 D5. The guard lives beside `_package_totals_for_mode` and NOT as an
+    `if` at each call site, because scattered ifs are what produced the defect
+    this fixes: ADR-294 guarded the sites it knew about, and the next site added
+    inherited nothing.
+
+    WHY A SEPARATE GUARD FROM `_package_totals_for_mode`. That one reasons about
+    `DeliveryStop` being EMPTY in workforce mode — an absent table, which fails
+    safe: a query over it returns nothing. `Route.package_count` is
+    `nullable=False, default=0` and IS populated in workforce mode, with a number
+    in the WRONG UNIT: a workforce "package" is one captain-entered ADDRESS, so a
+    route holding one tote with three addresses reports 3 while the tote
+    physically carries fifty. An empty table fails safe; a populated column with
+    the wrong unit does not.
+    """
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    # A missing config is treated as NOT having the feed — the same safe
+    # direction RequireMode and _package_totals_for_mode both take.
+    return cfg is not None and cfg.operating_mode == MODE_FULL
+
+
+def _package_totals_for_mode(db: Session, company_id: UUID, start: date, end: date) -> dict:
+    """`_package_totals`, or an explicit absence when the company has no feed.
+
+    One shape either way (D3): same keys, nulls where inapplicable. Branching
+    the DTO instead would mean two hand-maintained TypeScript interfaces in a
+    `types.ts` with no codegen, and they would drift.
+    """
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    # A missing config is treated as NOT having the feed — the same safe
+    # direction RequireMode takes. Reporting real-looking zeros for a company
+    # whose configuration never claimed a feed is the worse error.
+    if cfg is None or cfg.operating_mode != MODE_FULL:
+        return dict(_UNAVAILABLE_PACKAGE_TOTALS)
+    return _package_totals(db, company_id, start, end)
 
 
 def _paid_hours(db: Session, company_id: UUID, start: date, end: date) -> tuple[Optional[float], str]:
@@ -687,11 +764,11 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
     prior_start, prior_end = _prior_bounds(period, start, end)
     shift_end = _shift_end(db, company_id)
 
-    pkg = _package_totals(db, company_id, start, end)
+    pkg = _package_totals_for_mode(db, company_id, start, end)
     hours, hours_source = _paid_hours(db, company_id, start, end)
     timing = _route_timing(db, company_id, start, end, shift_end)
 
-    prior_pkg = _package_totals(db, company_id, prior_start, prior_end)
+    prior_pkg = _package_totals_for_mode(db, company_id, prior_start, prior_end)
     prior_hours, _ = _paid_hours(db, company_id, prior_start, prior_end)
 
     pph = _ratio(pkg["delivered"], hours)
@@ -739,6 +816,9 @@ def get_management_dashboard_summary(db: Session, company_id: UUID,
         delivery_success_rate_pct=success,
         rework_rate_pct=_pct(pkg["rework"], pkg["assigned"]),
         total_rework_count=pkg["rework"],
+        # D2: say WHY, rather than leaving the client to infer it from nulls.
+        package_metrics_available=pkg["available"],
+        package_metrics_unavailable_reason=pkg["reason"],
         routes_dispatched=int(routes_dispatched),
         routes_completed=int(routes_completed),
         completion_rate_pct=_pct(routes_completed, routes_dispatched),
@@ -1022,7 +1102,7 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
                 DeliveryStop.completed_at < next_day)
         .group_by(DeliveryStop.status).all()
     )
-    pkg = _package_totals(db, company_id, target, target)
+    pkg = _package_totals_for_mode(db, company_id, target, target)
 
     fleet_snapshot = DispatchFleetSnapshot(
         timestamp=_utcnow(),
@@ -1043,6 +1123,8 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
         # per ACTIVE TRUCK — Phase 2 averaged per stop and mislabelled it.
         avg_packages_per_active_truck=_ratio(pkg["delivered"], trucks_active),
         avg_minutes_per_stop=pkg["avg_stop_minutes"],
+        package_metrics_available=pkg["available"],
+        package_metrics_unavailable_reason=pkg["reason"],
     )
 
     # ── action queue: reassignments only (time-off moved to ADP) ──
@@ -1085,7 +1167,17 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
             .first()
         )
         completion = remaining = field_hours = None
-        if rt and rt.package_count:
+        # ADR-298 D4. This site was correct only BY ACCIDENT: it joins
+        # DeliveryStop, which workforce mode never writes, so `delivered` came
+        # back 0 and it reported completion=0% — a zero that reads as a
+        # measurement ("this walker has delivered nothing") when the truth is
+        # "we do not track that here". That is ADR-294's original failure
+        # surviving in a corner ADR-294 was written to fix.
+        #
+        # Routed through the explicit guard so it is correct ON PURPOSE:
+        # "correct because a join finds nothing" is a property that silently
+        # expires the day DeliveryStop is written for any reason.
+        if rt and rt.package_count and _route_package_metrics_available(db, company_id):
             delivered = (
                 db.query(func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
                 .filter(DeliveryStop.company_id == company_id,
@@ -1129,20 +1221,35 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
     )
 
     # ── performance: baseline = historical mean minutes-per-package ──
+    # ADR-298. `Route.package_count` is a PARCEL count only in full mode; in
+    # workforce mode it counts captain-entered ADDRESSES and every figure derived
+    # from it is wrong by an order of magnitude. `slowest_routes` is the one that
+    # causes action — a dispatcher reading a ranked list of underperforming
+    # routes has every reason to intervene, and in workforce mode that ranking is
+    # computed against a baseline with no meaning.
+    #
+    # Latent until now only because these blocks filter on
+    # `returned_at IS NOT NULL` and nothing in workforce mode stamped it. ADR-300
+    # stamps it — which is why this fix must land with, or before, that one.
+    pkg_metrics_ok = _route_package_metrics_available(db, company_id)
+
     hist_start = target - timedelta(days=30)
-    hist = (
-        db.query(Route.departed_at, Route.returned_at, Route.package_count)
-        .filter(Route.company_id == company_id,
-                Route.route_date >= hist_start, Route.route_date < target,
-                Route.departed_at.isnot(None), Route.returned_at.isnot(None),
-                Route.package_count > 0)
-        .all()
-    )
-    per_pkg = [
-        (r.returned_at - r.departed_at).total_seconds() / 60.0 / r.package_count
-        for r in hist
-    ]
-    baseline = round(sum(per_pkg) / len(per_pkg), 3) if per_pkg else None
+    per_pkg: list[float] = []
+    baseline: Optional[float] = None
+    if pkg_metrics_ok:
+        hist = (
+            db.query(Route.departed_at, Route.returned_at, Route.package_count)
+            .filter(Route.company_id == company_id,
+                    Route.route_date >= hist_start, Route.route_date < target,
+                    Route.departed_at.isnot(None), Route.returned_at.isnot(None),
+                    Route.package_count > 0)
+            .all()
+        )
+        per_pkg = [
+            (r.returned_at - r.departed_at).total_seconds() / 60.0 / r.package_count
+            for r in hist
+        ]
+        baseline = round(sum(per_pkg) / len(per_pkg), 3) if per_pkg else None
 
     todays = (
         db.query(Route.id, Route.route_number, Route.departed_at,
@@ -1150,7 +1257,7 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
         .filter(Route.company_id == company_id, Route.route_date == target,
                 Route.departed_at.isnot(None), Route.returned_at.isnot(None))
         .all()
-    )
+    ) if pkg_metrics_ok else []
     slowest = []
     for r in todays:
         actual_h = (r.returned_at - r.departed_at).total_seconds() / 3600.0
@@ -1171,6 +1278,10 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
                  reverse=True)
     slowest = slowest[:5]
 
+    # ADR-298 D4. Also accidentally safe — joins DeliveryStop, empty in
+    # workforce mode, so it yields nothing rather than something wrong. Gated
+    # explicitly for the same reason as rts_requests above: the safety is a
+    # property of a join finding nothing, not of a decision anyone made.
     crew_rows = (
         db.query(RouteParticipant.employee_id,
                  func.coalesce(func.sum(DeliveryStop.packages_delivered), 0))
@@ -1179,7 +1290,7 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
         .filter(RouteParticipant.company_id == company_id,
                 Route.route_date == target)
         .group_by(RouteParticipant.employee_id).all()
-    )
+    ) if pkg_metrics_ok else []
     crew_names = _employee_names(db, company_id, [c[0] for c in crew_rows])
     crews = [
         CrewPerformance(
@@ -1190,12 +1301,75 @@ def get_dispatch_dashboard_summary(db: Session, company_id: UUID,
     ]
     crews.sort(key=lambda c: c.packages_delivered, reverse=True)
 
+    # ADR-298 D1 — the LEAN CARD. Workforce mode carries less signal than full
+    # mode, not none, so the card is rebuilt from what this mode genuinely holds
+    # rather than blanked. Every package figure comes from `flex_package_count`;
+    # `package_count` is not read (D5).
+    lean: dict = {}
+    if not pkg_metrics_ok:
+        day_routes = (
+            db.query(Route.flex_package_count, Route.block_keys, Route.tote_ids,
+                     Route.slot_cost, Route.capacity_limit, Route.id)
+            .filter(Route.company_id == company_id,
+                    Route.route_date == target,
+                    Route.returned_at.isnot(None))
+            .all()
+        )
+        if day_routes:
+            scanned = [r for r in day_routes if r.flex_package_count is not None]
+            missing_count = len(day_routes) - len(scanned)
+            # A partial sum silently reports a smaller day (ADR-299 D4), so the
+            # total is NULL until every closed route has been scanned. The
+            # unscanned count is the operational nudge.
+            carried = sum(r.flex_package_count for r in scanned) if not missing_count else None
+
+            caps = [(r.slot_cost or 0, r.capacity_limit or 0) for r in day_routes]
+            cap_total = sum(c for _, c in caps)
+
+            lean = {
+                "routes_completed": len(day_routes),
+                "packages_carried": carried,
+                "mean_packages_per_route": (
+                    round(carried / len(day_routes), 1) if carried is not None else None
+                ),
+                "mean_blocks_per_route": round(
+                    sum(len(r.block_keys or []) for r in day_routes) / len(day_routes), 1),
+                "mean_totes_per_route": round(
+                    sum(len(r.tote_ids or []) for r in day_routes) / len(day_routes), 1),
+                "capacity_utilisation_pct": (
+                    round(sum(sc for sc, _ in caps) / cap_total * 100, 1)
+                    if cap_total else None
+                ),
+                "routes_missing_flex_count": missing_count,
+            }
+            if carried:
+                # Local import mirrors this module's existing style for
+                # RTS models (see the rts_requests block above).
+                from app.models.rts import MissingPackage, RTSPackage
+
+                ids = [r.id for r in day_routes]
+                n_rts = (
+                    db.query(func.count(RTSPackage.id))
+                    .filter(RTSPackage.company_id == company_id,
+                            RTSPackage.route_id.in_(ids)).scalar()
+                ) or 0
+                n_missing = (
+                    db.query(func.count(MissingPackage.id))
+                    .filter(MissingPackage.company_id == company_id,
+                            MissingPackage.route_id.in_(ids)).scalar()
+                ) or 0
+                lean["rts_per_100_carried"] = round(n_rts / carried * 100, 2)
+                lean["missing_per_100_carried"] = round(n_missing / carried * 100, 2)
+
     performance = DispatchPerformanceSummary(
         baseline_minutes_per_package=baseline,
         baseline_sample_size=len(per_pkg),
         slowest_routes=slowest,
         fastest_crew=crews[0] if crews else None,
         slowest_crew=crews[-1] if len(crews) > 1 else None,
+        available=pkg_metrics_ok,
+        unavailable_reason=None if pkg_metrics_ok else _NO_PACKAGE_FEED,
+        **lean,
     )
 
     return DispatchDashboardSummary(fleet_snapshot=fleet_snapshot,

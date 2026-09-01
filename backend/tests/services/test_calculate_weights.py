@@ -25,13 +25,8 @@ from unittest.mock import patch
 
 import pytest
 
-try:
-    from app.services.calculate_weights import calculate_weights
-    from app.services.assign_drivers import assign_drivers
-except (ImportError, ModuleNotFoundError):
-    # Both are gitignored. Absent from the public repo, a module-level import is a
-    # COLLECTION error, which aborts the whole pytest run instead of skipping a file.
-    pytest.skip("proprietary dispatch deps not available (CI skip)", allow_module_level=True)
+from app.services.calculate_weights import calculate_weights
+from app.services.assign_drivers import assign_drivers
 
 from app.services.company_config import PLATFORM_DEFAULTS
 

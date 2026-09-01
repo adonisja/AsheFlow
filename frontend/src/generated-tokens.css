@@ -50,6 +50,7 @@
     --neutral-light: 220 20% 96%;
     --border: 220 16% 88%;
     --border-strong: 220 14% 76%;
+    --swatch-ring: 220 10% 50%;
     --ring: 185 75% 36%;
     --tab-bar: 0 0% 100%;
     --tab-bar-border: 220 16% 88%;
@@ -101,6 +102,7 @@
     --neutral-light: 231 32% 20%;
     --border: 231 25% 26%;
     --border-strong: 231 20% 38%;
+    --swatch-ring: 220 10% 50%;
     --ring: 195 90% 78%;
     --tab-bar: 231 40% 14%;
     --tab-bar-border: 231 25% 26%;

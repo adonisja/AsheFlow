@@ -81,6 +81,22 @@ EXEMPT_VALUES = {
     "'#4285F4'": "Google brand blue",
     "'#000'":    "light-theme shadowColor; dark theme uses elevate()",
     "'#000000'": "light-theme shadowColor",
+    # Modal backdrop scrim. NOT themeable in the current token layer: palette.json
+    # stores opaque HSL triples and build_tokens.py emits no alpha, so a
+    # translucent overlay has no token to reach for. It is also theme-neutral by
+    # intent — a scrim darkens whatever is behind it, in either theme, and the
+    # sheet above it carries the themed surface.
+    #
+    # Six screens already use this exact value (Preferences, Schedule,
+    # MyRoute, Reattempt, RouteSort, and Notifications at 0.55), so exempting
+    # the VALUE keeps them consistent rather than freezing the six in the
+    # baseline while new code is refused.
+    #
+    # If the palette ever grows alpha support, this becomes a `scrim` token and
+    # this entry should be deleted.
+    # Keys are the RAW match, unquoted: HEX captures its quotes, RGB does not.
+    "rgba(0,0,0,0.5)":  "modal backdrop scrim — no alpha in the token layer",
+    "rgba(0,0,0,0.55)": "modal backdrop scrim (Notifications)",
 }
 
 

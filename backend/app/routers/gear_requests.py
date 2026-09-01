@@ -29,7 +29,14 @@ from app.services.local_date import company_today
 
 router = APIRouter(prefix="/gear-requests", tags=["gear-requests"])
 
-allow_all       = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+# ADR-319 D5 — `captain` was the ONLY field role missing here, which made the
+# Gear tab render an empty page for captains: get_catalogue and get_my_orders
+# both 403'd, so there was no data to draw and nothing errored visibly.
+# A captain at the truck needs gloves and safety gear like anyone else.
+#
+# Read and request only. approve/deny/fulfill and the pending queue stay on
+# allow_management: requesting gloves is not approving requisitions.
+allow_all       = RoleChecker(["driver", "walker", "trainer", "trainee", "captain", "dispatch", "management", "admin"])
 allow_management = RoleChecker(["management", "admin"])
 
 

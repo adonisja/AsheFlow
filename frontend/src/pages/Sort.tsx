@@ -1257,7 +1257,7 @@ export default function SortPage() {
         axiosClient.get<TruckAssignment[]>('/assignments/', { params: { date: today } }),
         axiosClient.get<{ zones: ZonePolygon[] }>(`/sort/${today}`),
         axiosClient.get<{ centroids: Centroid[] }>(`/sort/${today}/centroids`),
-        axiosClient.get<CompanyZone | null>('/sort/company-zone'),
+        axiosClient.get<CompanyZone | null>('/company-zones'),
         axiosClient.get<ApiTruck[]>('/trucks/'),
         axiosClient.get<OutlierTotesResponse>(`/sort/${today}/outlier-totes`),
       ]);

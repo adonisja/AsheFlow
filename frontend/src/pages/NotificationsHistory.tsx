@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   Bell, CheckCircle2, XCircle, AlertTriangle, Info, MapPin,
-  RefreshCw, Trash2, Check,
+  RefreshCw, Trash2, Check, ShieldAlert,
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
 import { useNotificationContext } from '../contexts/NotificationContext';
@@ -11,7 +11,30 @@ interface HistoryNotification extends Notification {
   expires_at: string | null;
 }
 
+/** Human names for the integration alerts (ADR-341 D5).
+ *
+ *  `labelForType` title-cases the raw type — "Discord Integration Failed" — which
+ *  reads as a system string rather than something that happened to this company.
+ */
+const FAILURE_LABELS: Record<string, string> = {
+  discord_integration_failed: 'Discord is down',
+  email_delivery_failed: 'Email delivery is failing',
+  identity_revocation_failed: 'Access revocation failed',
+};
+
 function iconForType(type: string) {
+  // ADR-341 D5 — BEFORE the suffix checks below. This chain is first-match-wins,
+  // so a future `..._failed_rejected` would otherwise take the _rejected branch
+  // and render as a routine denial. The ordering is load-bearing.
+  //
+  // identity_revocation_failed is DANGER, not warning: an offboarded employee
+  // who can still sign in (ADR-336 D2) is a different severity from an email
+  // that did not send.
+  if (type === 'identity_revocation_failed')
+    return <ShieldAlert className="w-4 h-4 text-danger shrink-0" />;
+  if (type.endsWith('_failed'))
+    return <AlertTriangle className="w-4 h-4 text-danger shrink-0" />;
+
   if (type.endsWith('_approved'))           return <CheckCircle2 className="w-4 h-4 text-success shrink-0" />;
   if (type.endsWith('_rejected'))           return <XCircle className="w-4 h-4 text-danger shrink-0" />;
   if (type === 'anchor_point_running_late') return <AlertTriangle className="w-4 h-4 text-warning shrink-0" />;
@@ -23,6 +46,8 @@ function iconForType(type: string) {
 }
 
 function labelForType(type: string): string {
+  // ADR-341 D5 — a recognisable name where we have one.
+  if (FAILURE_LABELS[type]) return FAILURE_LABELS[type];
   return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 

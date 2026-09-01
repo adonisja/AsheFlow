@@ -8,16 +8,45 @@ Usage (inside the celery_worker container):
     celery -A app.celery_app worker --beat --loglevel=info
 """
 
+import pkgutil
+
 from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import settings
 
+
+def _task_modules() -> list[str]:
+    """Every module under app/tasks/ (ADR-338).
+
+    This replaced a hand-maintained `include=[...]` list of 17 module paths.
+    That list is a silent foot-gun: a beat entry naming a module nobody imported
+    fails with NO error — the schedule fires, Celery has no task registered
+    under that name, and the work simply never happens. ADR-337's health check
+    hit exactly that, and the only reason it was caught is that someone went
+    looking at how registration works.
+
+    `celery.autodiscover_tasks` is the obvious answer and is the WRONG tool for
+    this layout: it looks for a fixed submodule name (`related_name="tasks"`) in
+    each listed package, so `autodiscover_tasks(["app"])` finds
+    `app/tasks/__init__.py` and stops. It never walks the 17 sibling modules.
+    It is designed for a `myapp/tasks.py`-per-app layout, which this is not.
+
+    Walking the package is what actually matches the structure. Import-time, so
+    a module that fails to import breaks startup LOUDLY rather than going
+    quietly missing at schedule time.
+    """
+    import app.tasks
+
+    return sorted(
+        f"app.tasks.{m.name}" for m in pkgutil.iter_modules(app.tasks.__path__)
+    )
+
 celery_app = Celery(
     "asheflow",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.cleanup", "app.tasks.training_deadlines", "app.tasks.dispatch_alerts", "app.tasks.eod_reminders", "app.tasks.adp_sync", "app.tasks.adp_timecard_sync", "app.tasks.adp_pay_period_sync", "app.tasks.adp_mismatch_detect", "app.tasks.adp_urgency_escalation", "app.tasks.failed_adp_writes", "app.tasks.enrich_manifest", "app.tasks.run_sort_task", "app.tasks.sort_rollup", "app.tasks.resolve_building_addresses"]
+    include=_task_modules(),
 )
 
 celery_app.conf.update(
@@ -36,8 +65,41 @@ celery_app.conf.beat_schedule = {
     # the mechanism, so the interval only bounds how long a dropped dispatch
     # stays invisible. A `pending` profile is excluded from routing lookups, so
     # the cost of the gap is a building the crew cannot see yet — not bad data.
+    # ADR-315 — fill PlaceType's geometry tier from GeoClient. Nightly because
+    # enrichment has no deadline: nothing downstream fails without it, and a
+    # zone bootstrapped today is fully enriched by tomorrow. Bounded batch, so
+    # a large zone is finished by the next run rather than one long job.
+    # ADR-317 D1 — surface a role whose Cognito group is missing or empty before
+    # a captain finds out by losing every tab. Reports, never enforces.
+    "check-role-directory-drift": {
+        "task": "app.tasks.role_directory.check_role_directory_drift",
+        "schedule": crontab(hour=5, minute=0),
+    },
+    "enrich-place-geometry": {
+        "task": "app.tasks.enrich_geometry.enrich_place_geometry",
+        "schedule": crontab(hour=4, minute=30),
+    },
     "resolve-building-addresses": {
         "task": "app.tasks.resolve_building_addresses.resolve_pending_addresses",
+        "schedule": crontab(minute="*/10"),
+    },
+    # ADR-337 — every 10 min. Every integration alert before this fired only
+    # when someone USED the integration, which is how a revoked Discord token
+    # crash-looped the bot for weeks and surfaced when a dispatcher reported
+    # that messages had stopped.
+    #
+    # Ten minutes is chosen against the cost of being wrong either way: a
+    # credential revoked at 09:00 is known by 09:10 rather than whenever someone
+    # next publishes, and three read-only calls per run is negligible. Tighter
+    # buys nothing — nobody rotates a token expecting sub-minute detection —
+    # and looser approaches "a dispatcher would have noticed first", which is
+    # the failure being fixed.
+    #
+    # It also CLEARS on success, which is what makes SES and Cognito alerts
+    # self-closing (ADR-336's Open item): they have no natural heartbeat of
+    # their own, so without this they sat on the board until tidied by hand.
+    "check-integration-health": {
+        "task": "app.tasks.integration_health.check_integration_health",
         "schedule": crontab(minute="*/10"),
     },
     # 03:00 AM Eastern — quiet period, low API traffic

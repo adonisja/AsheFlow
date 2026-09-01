@@ -97,11 +97,33 @@ def apply_resolution(db: Session, bp: BuildingProfile) -> None:
 
 
 def decay_all(db: Session) -> int:
-    """Nightly decay across all building profiles. Returns rows touched.
-    Global maintenance job (all companies), like the existing cleanup tasks."""
+    """Nightly decay across full-mode building profiles. Returns rows touched.
+
+    ADR-293: scoped to companies with `operating_mode='full'`, NOT all companies.
+
+    The decay rate is calibrated against daily delivery evidence refreshing the score.
+    In workforce mode there are no delivery rows, so accrual drops by orders of
+    magnitude while decay would continue at full rate — every score would fade to zero
+    unopposed and real operational intelligence would be erased by a background job
+    nobody is watching. The building does not become less troublesome; only our record
+    of it does.
+
+    Freezing is the honest state: a rate tuned for evidence that stopped arriving has
+    no correct value. Scores hold at their last delivery-informed value and decay
+    resumes if the tenant returns to full mode.
+    """
+    from app.services.company_config import full_mode_company_ids
+
+    full_mode = full_mode_company_ids(db)
+    if not full_mode:
+        return 0
+
     rows = (
         db.query(BuildingProfile)
-        .filter(BuildingProfile.troublesome_score > 0)
+        .filter(
+            BuildingProfile.troublesome_score > 0,
+            BuildingProfile.company_id.in_(full_mode),
+        )
         .all()
     )
     for bp in rows:

@@ -63,3 +63,72 @@ export const REATTEMPT_ROLES          = ['driver', 'trainer', 'captain'] as cons
 // for the reason _allow_delivery already records: they do not walk blocks or
 // assess buildings.
 export const TRUCK_BUILDINGS_ROLES    = ['walker', 'trainer', 'trainee', 'captain', 'dispatch'] as const;
+
+// ADR-291: entering tote addresses is route-lead work — a captain walks the
+// truck reading addresses off packages. Driver included because a solo driver
+// runs the truck when no captain is crewed; dispatch for station-side
+// correction. Walkers deliberately absent: they carry the routes this produces,
+// they do not define them.
+export const TOTE_ADDRESS_ROLES     = ['captain', 'driver', 'dispatch'] as const;
+
+/** ADR-297: who sees the workforce "My Route" tab.
+ *
+ * The people who WALK a route in workforce mode. Deliberately wider than
+ * WALKER_ROLES: a trainee walks their own route (phase 4 solo, ADR-145) and a
+ * trainer walks one like anyone else on a short-staffed day.
+ *
+ * Distinct from MY_ROUTE_TAB_ROLES, which is full mode's screen — a different
+ * shape (stops, not totes) gated on a different capability. */
+export const WORKFORCE_ROUTE_ROLES  = ['walker', 'trainee', 'trainer'] as const;
+
+
+/* ── Tab gates (ADR-317 D3) ────────────────────────────────────────────────
+ *
+ * The role + capability gate for every tab, keyed by tab key. `ALL_TABS` in
+ * navigation/index.tsx reads from here, and so does anything that LINKS to a
+ * tab — home-screen shortcuts especially.
+ *
+ * It lives in this module because this module imports nothing. Putting it in
+ * navigation/index.tsx would force any consumer to import that file, which
+ * imports every screen, which imports HomeScreen — a require cycle, and the
+ * comment on TabDef records what one of those already cost: a role constant
+ * `undefined` at import time, showing Field Ops to every role.
+ *
+ * WHY IT IS SHARED RATHER THAN RESTATED
+ * -------------------------------------
+ * HomeScreen's shortcut tiles used to carry their own copy of the role lists,
+ * and its own comment records the failure that caused: "a tile for a tab the
+ * role doesn't have silently no-ops on tap". FieldOps was given a guard when
+ * that happened; Schedule never was, so five roles (admin, dispatch,
+ * driver_trainee, field_supervisor, management) saw a Schedule tile that did
+ * nothing at all when tapped.
+ *
+ * Two lists drift. One list cannot. */
+export type TabGate = {
+  roles: readonly string[];
+  /** ADR-289 capability key. Absent = available in every mode. */
+  feature?: string;
+};
+
+export const TAB_GATES: Record<string, TabGate> = {
+  Home:            { roles: [] },
+  FieldOps:        { roles: FIELD_OPS_ROLES },
+  AnchorPoints:    { roles: ANCHOR_POINT_ROLES },
+  Training:        { roles: TRAINER_ROLES },
+  RouteSort:       { roles: ROUTE_SORT_ROLES,        feature: 'route_sort' },
+  MyRoute:         { roles: MY_ROUTE_TAB_ROLES,      feature: 'route_sort' },
+  Reattempts:      { roles: REATTEMPT_ROLES,         feature: 'package_rts' },
+  ToteAddresses:   { roles: TOTE_ADDRESS_ROLES,      feature: 'workforce_sort' },
+  WorkforceRoute:  { roles: WORKFORCE_ROUTE_ROLES,   feature: 'workforce_sort' },
+  TruckBuildings:  { roles: TRUCK_BUILDINGS_ROLES },
+  MyTraining:      { roles: TRAINEE_ROLES },
+  Walker:          { roles: WALKER_ROLES,            feature: 'route_sort' },
+  DriverSurvey:    { roles: DRIVER_SURVEY_ROLES },
+  Schedule:        { roles: SCHEDULE_ROLES },
+  SchChanges:      { roles: SCHEDULE_CHANGE_ROLES },
+  Incidents:       { roles: INCIDENT_ROLES },
+  Gear:            { roles: GEAR_ROLES },
+  Preferences:     { roles: PREFERENCES_ROLES },
+  Notifications:   { roles: [] },
+  Account:         { roles: [] },
+};

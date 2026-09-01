@@ -32,11 +32,21 @@ export interface NavItem {
   roles: Role[];
   /** Optional predicate for conditional visibility (e.g. trainer phase 4). */
   when?: (ctx: NavContext) => boolean;
+  /** ADR-289: capability key this tab needs. Absent = always available.
+   *  Checked against GET /companies/my-capabilities, NOT against operating_mode
+   *  directly — so a new mode does not require a client release.
+   *
+   *  This gates the TAB only. The route gate and the server (RequireMode → 404)
+   *  are the enforcement; hiding a tab is a UX decision, not a security one. */
+  feature?: string;
 }
 
 export interface NavContext {
   trainerPhase: number | null;
   hasActiveQuiz: boolean;
+  /** ADR-289: from AuthContext.hasFeature. Fails OPEN when capabilities are
+   *  unknown, so a transient API failure cannot blank out a working nav. */
+  hasFeature?: (key: string) => boolean;
 }
 
 // A captain crews a truck like the rest of field staff; what makes them a
@@ -74,10 +84,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/driver-surveys',        label: 'Driver Surveys',    icon: ClipboardList,  roles: ['admin', 'management'] },
   { path: '/feedback',              label: 'Feedback',          icon: MessageSquare,  roles: ['admin'] },
   { path: '/field-ops',             label: 'Field Ops',         icon: Shield,         roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
-  { path: '/field-packages',        label: 'Field Packages',    icon: Package,        roles: ['admin', 'dispatch', 'management'] },
+  { path: '/field-packages',        label: 'Field Packages',    icon: Package,        roles: ['admin', 'dispatch', 'management'], feature: 'package_intake' },
   { path: '/gear',                  label: 'Gear',              icon: ShoppingBag,    roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/incidents',             label: 'Incidents',         icon: AlertTriangle,  roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
-  { path: '/my-route',              label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'] },
+  { path: '/my-route',              label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'], feature: 'route_sort' },
   { path: '/my-training',           label: 'My Training',       icon: ClipboardCheck, roles: ['trainee'] },
   { path: '/my-quiz',               label: 'Quiz',              icon: ClipboardCheck, roles: ['trainee'], when: c => c.hasActiveQuiz },
   { path: '/phase4-observation',    label: 'Phase 4',           icon: ClipboardCheck, roles: ['admin', 'trainer'], when: c => c.trainerPhase === 4 },
@@ -86,11 +96,11 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/schedule',              label: 'Schedule',          icon: Calendar,       roles: ['admin', 'management', ...ALL_FIELD] },
   { path: '/schedule-changes',      label: 'Schedule Changes',  icon: RefreshCw,      roles: ['admin', 'dispatch', 'driver', 'trainer', 'trainee', 'walker', 'captain'] },
   { path: '/settings',              label: 'Settings',          icon: Settings,       roles: ['admin'] },
-  { path: '/sort',                  label: 'Station Sort',      icon: Route,          roles: ['admin', 'dispatch', 'driver'] },
+  { path: '/sort',                  label: 'Station Sort',      icon: Route,          roles: ['admin', 'dispatch', 'driver'], feature: 'station_sort' },
   // ADR-273: cross-run algorithm telemetry used to justify a tenant-wide tuning
   // change. Management+admin only — dispatch is not management (ADR-242).
-  { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'] },
-  { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'] },
+  { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'], feature: 'sort_metrics' },
+  { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'], feature: 'route_sort' },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
   // /trainer-dashboard has NO nav tab. It is a trainer's Dashboard landing
   // (homeRouteForGroups), so trainers reach it without one; the admin tab was
@@ -114,6 +124,8 @@ export function navItemsForGroups(groups: string[], ctx: NavContext): NavItem[] 
     .filter(item => {
       if (!item.roles.some(r => roleSet.has(r))) return false;
       if (item.when && !item.when(ctx)) return false;
+      // ADR-289: hide tabs whose feature this company does not have.
+      if (item.feature && ctx.hasFeature && !ctx.hasFeature(item.feature)) return false;
       return true;
     })
     // Sorted HERE rather than relying on the literal's order. The list was

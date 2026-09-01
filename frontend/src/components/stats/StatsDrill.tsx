@@ -270,7 +270,7 @@ function LineChart({ data, onPick }: { data: Bucket[]; onPick: (b: Bucket) => vo
  *  fault. Below two years, show the numbers and say when the chart arrives. */
 function LifetimeSummary({ years, lt, onPick }: {
   years: Bucket[];
-  lt: { delivered: number; trips: number };
+  lt: { delivered: number | null; trips: number };
   onPick: (b: Bucket) => void;
 }) {
   const best = years.reduce<Bucket | null>(
@@ -286,7 +286,8 @@ function LifetimeSummary({ years, lt, onPick }: {
     <div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {([
-          ['Delivered', lt.delivered.toLocaleString(), null],
+          // ADR-305: em-dash when the figure is not derivable, never 0.
+          ['Delivered', lt.delivered !== null ? lt.delivered.toLocaleString() : '—', null],
           ['Best year', best ? best.delivered.toLocaleString() : '—', null],
           ['Trips', lt.trips.toLocaleString(), null],
           [years.length === 1 ? 'Only year' : 'Span', span || '—', target],
@@ -629,7 +630,11 @@ export default function StatsDrill() {
         key: 'lifetime', label: 'Lifetime', short: 'All',
         start: first ? first.start : days[0]?.d ?? cursor.start,
         end:   last  ? last.end    : days[days.length - 1]?.d ?? cursor.end,
-        delivered: lt.delivered, rts: lt.rts,
+        // ADR-305: null coalesces to 0 ONLY here, because `neverLoaded` already
+        // reads delivered===0 && rts===0 as "no data" and renders the empty
+        // state. Not a fabricated figure — it routes into the same path an
+        // unloaded cursor takes. The DISPLAYED tile keeps the em-dash.
+        delivered: lt.delivered ?? 0, rts: lt.rts,
         damaged: lt.damaged, truckDamaged: lt.truck_damaged,
         missing: lt.missing, total: 0, effort: null, trend: null,
       });
@@ -656,7 +661,11 @@ export default function StatsDrill() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            ['Delivered', lt.delivered.toLocaleString()],
+            // ADR-305: null in workforce mode until a route is Flex-scanned.
+            // Em-dash, never 0 — the same treatment success_pct already gets,
+            // because "delivered nothing" is a different claim from "not
+            // measured yet".
+            ['Delivered', lt.delivered !== null ? lt.delivered.toLocaleString() : '—'],
             ['Success', lt.success_pct !== null ? `${lt.success_pct}%` : '—'],
             // TRIPS is a walker's measure: how many route runs they made. A
             // driver or captain runs the TRUCK, not their own routes, so the

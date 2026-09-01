@@ -200,7 +200,16 @@ def roll_up_sort_metrics(target_date: str | None = None) -> dict:
     db = SessionLocal()
     counts: dict[str, int] = {}
     try:
-        companies = db.query(Company).filter(Company.is_active.is_(True)).all()
+        # ADR-289: sort metrics roll up RouteSortRun telemetry, which only the package
+        # pipeline writes. A workforce tenant has no rows to roll up, so including them
+        # costs a query per company per night and reports a misleading zero.
+        from app.services.company_config import full_mode_company_ids
+        full_mode = full_mode_company_ids(db)
+
+        companies = [
+            c for c in db.query(Company).filter(Company.is_active.is_(True)).all()
+            if c.id in full_mode
+        ]
         for c in companies:
             try:
                 if target_date:

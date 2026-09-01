@@ -11,10 +11,7 @@ from fastapi.routing import APIRoute
 
 # dispatch.py is proprietary — present locally and on EC2, injected at deploy
 # time but absent from the public CI. Skip the whole module when it isn't there.
-try:
-    from app.routers.dispatch import router, allow_dispatch_mgmt
-except ImportError:
-    pytest.skip("proprietary dispatch router not available (CI skip)", allow_module_level=True)
+from app.routers.dispatch import router, allow_dispatch_mgmt
 
 
 def _route(path: str, method: str) -> APIRoute:

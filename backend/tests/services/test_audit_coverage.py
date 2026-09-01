@@ -58,6 +58,33 @@ _NO_AUDIT = {
     # heuristic because it is a POST (it has to be: the file is the body).
     # The write it precedes, confirm_bulk_profiles, IS audited.
     "building_profiles.py::preview_bulk_profiles",
+    # ADR-312 D4: deprecated delegations. They carry no logic of their own —
+    # each calls the moved handler in company_zones.py, which writes the audit.
+    # Auditing here too would double-log every zone edit for one release.
+    # REMOVE these four with the delegations themselves.
+    "sort.py::upsert_company_zone_deprecated",
+    "sort.py::upsert_company_zone_from_streets_deprecated",
+    "sort.py::upsert_company_zone_from_intersections_deprecated",
+    "sort.py::upsert_company_zone_from_corners_deprecated",
+    # ADR-290 D3: the same shape. It parses a BTR sheet and reports what was
+    # READ — no INSERT, no UPDATE, nothing persisted. POST only because the
+    # uploaded file is the body. Giving it no write path is precisely what
+    # forces an OCR read through a human before it can reach the database;
+    # test_preview_endpoint_has_no_write_path asserts that structurally.
+    # The write it precedes, confirm_btr_sheet, IS audited.
+    "btr_sheets.py::preview_btr_sheet",
+    # ADR-291 D9: a lookup, not a write. It geocodes an address the captain is
+    # holding and RANKS today's routes by block adjacency — no INSERT, no UPDATE.
+    # POST only because the address is a request body; a GET would put a customer
+    # address in the query string, the URL bar, and every access log (dim 7).
+    # test_route_lookup_writes_nothing asserts the absence structurally.
+    "workforce_routes.py::route_lookup",
+    # ADR-292 D4: an OCR read, not a write. It hands a photographed label to
+    # label_ingestor and returns the TBA it found — no INSERT, no UPDATE. POST
+    # only because the image is the body. Giving it no write path is exactly
+    # what forces a human to confirm the read before it reaches the database;
+    # test_scan_label_writes_nothing asserts that structurally.
+    "manual_returns.py::scan_label",
     "building_profiles.py::lock_building_profile",
     "building_profiles.py::set_operational_note",
     "building_profiles.py::submit_building_profile",

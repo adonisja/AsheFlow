@@ -38,7 +38,7 @@ from app.database import SessionLocal
 from app.models.building_profile import BuildingProfile
 from app.models.company import Company
 from app.services.derive_block_key import derive_block_key, ParsedBlock
-from app.tasks.enrich_manifest import _geoclient_normalise
+from app.services.address_resolver import resolve_address
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,22 @@ def resolve_pending_addresses() -> dict:
     db = SessionLocal()
     resolved = rejected = skipped = 0
     try:
+        # ADR-289: this is the highest-frequency task in the system (every 10 min,
+        # 144×/day). In workforce mode a tenant's building profiles are entered
+        # manually and already carry an address, so there is no pending queue to
+        # resolve — without this filter the task would scan and geocode on behalf of
+        # companies that structurally cannot produce that work.
+        from app.services.company_config import full_mode_company_ids
+        full_mode = full_mode_company_ids(db)
+        if not full_mode:
+            return {"resolved": 0, "rejected": 0, "skipped": 0}
+
         pending = (
             db.query(BuildingProfile)
-            .filter(BuildingProfile.address_status == "pending")
+            .filter(
+                BuildingProfile.address_status == "pending",
+                BuildingProfile.company_id.in_(full_mode),
+            )
             .limit(_BATCH)
             .all()
         )
@@ -73,7 +86,11 @@ def resolve_pending_addresses() -> dict:
                 boroughs[cid] = (company.geoclient_borough if company else None) or "manhattan"
 
             try:
-                geo = _geoclient_normalise(profile.normalised_address, borough=boroughs[cid])
+                # ADR-316 — PlaceType first. This task resolves BuildingProfile
+                # addresses one at a time with a session already open, which is
+                # exactly the shape the resolver wants.
+                geo = resolve_address(db, profile.normalised_address,
+                                      borough=boroughs[cid])
             except Exception:
                 # Network/transport failure is NOT the address's fault, so it
                 # must not be recorded as `rejected` — that would tell the

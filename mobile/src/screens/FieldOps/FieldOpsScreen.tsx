@@ -48,6 +48,7 @@ import { useTabSwitch } from '@navigation/index';
 import apiClient from '@api/client';
 import { spacing, radius, fontSize, fontWeight, shadow, duration, type ThemeColors } from '@theme/index';
 import { Button, Badge } from '@components/ui/primitives';
+import CrewRosterPanel from '@components/route/CrewRosterPanel';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function localToday(): string {
@@ -109,9 +110,15 @@ type ShiftState = {
   checkIn3: CheckInRecord | null;
   rtsReport: RTSReport | null;
   rtsSummary: RTSSummary | null;
+  /** ADR-307: the workforce counterpart. Populated only in workforce mode;
+   *  rtsSummary is populated only in full mode. Never both. */
+  dayTotals: WorkforceDayTotals | null;
   routesRemaining: number; // truck routes not yet completed — auto-fills check-ins
   crew: CrewMember[];
   rollCall: Record<string, string>; // employeeId → trainer roll-call status (seeds CI1)
+  /** ADR-319 — employeeId → route number, for the captain's roster. Workforce
+   *  mode only: full mode's /walker-routes response carries no assigned_to. */
+  routeByEmployee: Record<string, number>;
   // station return
   stationReturnArrived: boolean; stationReturnAt: string | null;
   stationHandoff: boolean;
@@ -142,12 +149,56 @@ type TruckRoster = {
   tote_count: number; checked_count: number;
   load_confirmed: boolean; confirmed_at: string | null; short_count: number;
 };
+
+// ADR-307 D1a. The workforce dock roster: the BTR sheet's totes joined to
+// ToteLoadCheck. A DIFFERENT SHAPE from TruckRoster, not a rename — full mode's
+// rosters come from TruckZone (the station sort's clustering output), which does
+// not exist without a manifest. Same question, different source.
+type WorkforceRosterTote = {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  amazon_route_name: string | null;
+  checked: boolean;
+  checked_by_name: string | null;
+  checked_at: string | null;
+};
+type WorkforceRoster = {
+  load_date: string;
+  truck_assignment_id: string;
+  btr_loading_zone: string | null;
+  totes: WorkforceRosterTote[];
+  total: number;
+  checked_count: number;
+  /** ADR-307 D1b: a COUNT, never a removal. Workforce mode has no per-package
+   *  address data, so a missing tote is a bag id and a colour — nothing about
+   *  what was inside it. */
+  unchecked_count: number;
+  /** No BTR sheet imported: the tote list is unknowable, which is a different
+   *  fact from "this truck has no totes". Never render an empty roster as the
+   *  second when this is true. */
+  no_sheet: boolean;
+};
 // ADR-193 D4 — whole-truck RTS rollup (handoff confirms + report prefill)
 type RTSSummaryRoute = {
   route_id: string; route_number: number; walker_name: string | null; route_status: string;
   handoff_exists: boolean; driver_confirmed_at: string | null; discrepancy_flagged: boolean;
   rts_count: number; missing_count: number;
 };
+// ADR-307 D1 / ADR-299 D4. The workforce counterpart to RTSSummary: a
+// truck-day rollup from OUR routes. A DIFFERENT shape — no per-route handoff
+// exists here — so it gets its own type rather than being coerced into
+// RTSSummary with empty fields.
+type WorkforceDayTotals = {
+  route_date: string;
+  truck_assignment_id: string;
+  routes_total: number;
+  routes_closed: number;
+  /** NULL while any closed route is unscanned — never a partial sum. */
+  packages_carried: number | null;
+  routes_missing_flex_count: number;
+};
+
 type RTSSummary = {
   routes: RTSSummaryRoute[]; reason_totals: Record<string, number>;
   total_rts: number; total_missing: number; unconfirmed_handoffs: number;
@@ -177,9 +228,11 @@ const EMPTY_SHIFT: ShiftState = {
   checkIn1: null, checkIn2: null, checkIn3: null,
   rtsReport: null,
   rtsSummary: null,
+  dayTotals: null,
   routesRemaining: 0,
   crew: [],
   rollCall: {},
+  routeByEmployee: {},
   stationReturnArrived: false, stationReturnAt: null,
   stationHandoff: false,
   eodDone: false, eodData: null,
@@ -538,7 +591,15 @@ const CI_TIMES = ['~11:15 AM', '~2:00 PM', '~4:00 PM', '~5:30 PM'];
 // ── Root screen ───────────────────────────────────────────────────────────────
 export default function FieldOpsScreen() {
   const c = useColors();
-  const { user, hasRole } = useAuth();
+  const { user, hasRole, hasFeature } = useAuth();
+  // ADR-307. `hasFeature` fails OPEN on unknown capabilities (see AuthContext):
+  // a driver on a flaky warehouse connection keeps the full-mode branch, and the
+  // server's 404 is what actually enforces the gate.
+  const stationSort = hasFeature('station_sort');
+  // ADR-319 D2 — `isDriver` becomes a BRANCH, not a gate. A captain used to
+  // reach this screen and match no render branch, getting a header over
+  // nothing. The driver's 19 steps are untouched below (ADR-307).
+  const isCaptain = hasRole('captain');
   const switchTab = useTabSwitch();
   const isDriver = hasRole('driver');
   const isWalker = hasRole('walker');
@@ -576,8 +637,17 @@ export default function FieldOpsScreen() {
       apiClient.get(`/notifications/${empId}?limit=10`, sig),
       // Confirmation status for today
       apiClient.get(`/dispatch/${today}/my-confirmation`, sig),
-      // ADR-181 dock flow — server scopes drivers to their own truck's roster
-      apiClient.get(`/sort/${today}/rosters`, sig),
+      // ADR-181 dock flow — server scopes drivers to their own truck's roster.
+      //
+      // ADR-307 D1: full mode reads TruckZone rosters (the station sort's
+      // clustering output); workforce mode reads the BTR sheet's totes. Not a
+      // renamed endpoint — a different source answering the driver's same
+      // question, "what should be on my truck?". The workforce URL needs a
+      // truck_assignment_id we do not have yet at this point, so it is fetched
+      // in a second pass below once /dispatch/{today} has resolved.
+      stationSort
+        ? apiClient.get(`/sort/${today}/rosters`, sig)
+        : Promise.resolve({ data: null }),
       // TruckAssignment id (for the RTS summary + handoff confirms)
       apiClient.get(`/dispatch/${today}`, sig),
       // Trainer's roll call for this truck — seeds the CI1 attendance defaults so
@@ -636,14 +706,64 @@ export default function FieldOpsScreen() {
 
     // Dock roster — driver-scoped server-side, so ours is the only entry.
     const rosterData = rosterRes.status === 'fulfilled' ? rosterRes.value.data : null;
-    const roster: TruckRoster | null = rosterData?.rosters?.[0] ?? null;
-    const rosterAvailable: boolean = !!rosterData?.roster_available && !!roster;
+    let roster: TruckRoster | null = rosterData?.rosters?.[0] ?? null;
+    let rosterAvailable: boolean = !!rosterData?.roster_available && !!roster;
 
     // TruckAssignment id for today's truck (RTS summary + handoff confirms).
     let taId: string | null = null;
     if (truckId && dispRes.status === 'fulfilled') {
       const tas: { truck_id: string; assignment_id?: string }[] = dispRes.value.data?.truck_assignments ?? [];
       taId = tas.find(t => t.truck_id === truckId)?.assignment_id ?? null;
+    }
+
+    // ADR-307 D1a — the workforce dock roster, fetched here because it is keyed
+    // by truck_assignment_id, which only exists after /dispatch/{today} resolves.
+    //
+    // Mapped onto TruckRoster so every render site below stays mode-agnostic.
+    // The fields workforce mode cannot fill are ABSENT-as-zero rather than
+    // invented: package_count and ov_count are 0 because the BTR sheet counts
+    // TOTES, not parcels — and per ADR-298 a parcel count that is really
+    // something else is worse than none.
+    let workforceRoster: WorkforceRoster | null = null;
+    if (!stationSort && taId) {
+      try {
+        const wr = await apiClient.get<WorkforceRoster>(
+          `/workforce/load-roster/${today}`,
+          { params: { truck_assignment_id: taId }, ...sig },
+        );
+        workforceRoster = wr.data;
+        if (!wr.data.no_sheet) {
+          roster = {
+            truck_id: truckId ?? '',
+            zone_label: wr.data.btr_loading_zone ?? '',
+            totes: wr.data.totes.map(t => ({
+              bag_id: t.bag_id,
+              package_count: 0,
+              ov_count: 0,
+              checked: t.checked,
+              checked_by_name: t.checked_by_name,
+              dock_tags: [],
+              pull_tbas: [],
+              rider_count: 0,
+            })),
+            tote_count: wr.data.total,
+            checked_count: wr.data.checked_count,
+            // ADR-307 D2: load confirmation is a station-sort artefact and has
+            // no workforce counterpart. Flagged false so the step renders its
+            // "not applicable" line rather than an actionable button.
+            load_confirmed: false,
+            confirmed_at: null,
+            // D1b: unchecked totes are a COUNT, not removals.
+            short_count: wr.data.unchecked_count,
+          };
+          rosterAvailable = true;
+        }
+      } catch {
+        // Left null: the step below renders "could not load", which is visible.
+        // Deliberately NOT `.catch(() => null)` swallowing into an empty panel
+        // (D3) — that pattern is why these steps went unnoticed for weeks.
+        workforceRoster = null;
+      }
     }
 
     // Manifest — needs truck_id
@@ -654,18 +774,65 @@ export default function FieldOpsScreen() {
     }
 
     // Whole-truck RTS rollup (ADR-193 D4) — only meaningful once on the road.
+    //
+    // ADR-307 D1/D3. Full mode reads /rts/summary (per-route handoff detail);
+    // workforce mode has no per-route handoff, so the equivalent question —
+    // "how did the day add up?" — is answered by day-totals (ADR-299 D4).
+    //
+    // The `.catch(() => null)` that used to wrap this is GONE. It swallowed a
+    // structural 404 into an empty panel, which is why these steps went
+    // unnoticed for weeks: a 500 gets reported, a silently blank section gets
+    // worked around. Branch on capability BEFORE calling.
     let rtsSummary: RTSSummary | null = null;
-    if (taId) {
-      const sRes = await apiClient.get(`/rts/summary/${taId}`).catch(() => null);
-      rtsSummary = sRes?.data ?? null;
+    let dayTotals: WorkforceDayTotals | null = null;
+    if (taId && stationSort) {
+      try {
+        const sRes = await apiClient.get(`/rts/summary/${taId}`, sig);
+        rtsSummary = sRes.data;
+      } catch {
+        rtsSummary = null;    // a real failure — the step renders "unavailable"
+      }
+    } else if (taId) {
+      try {
+        const dRes = await apiClient.get<WorkforceDayTotals>(
+          `/workforce/day-totals/${today}`,
+          { params: { truck_assignment_id: taId }, ...sig },
+        );
+        dayTotals = dRes.data;
+      } catch {
+        dayTotals = null;
+      }
     }
 
     // Routes still out (status != completed) — auto-fills the check-in routes-remaining.
+    //
+    // ADR-307 D1: /workforce/routes/{date} carries the same `status` field, so
+    // the count means the same thing in both modes.
     let routesRemaining = 0;
+    const routeByEmployee: Record<string, number> = {};
     if (taId) {
-      const rrRes = await apiClient.get(`/walker-routes/${taId}/routes`).catch(() => null);
-      const routeList: any[] = rrRes?.data ?? [];
-      routesRemaining = routeList.filter(r => r.status !== 'completed').length;
+      try {
+        const rrRes = stationSort
+          ? await apiClient.get(`/walker-routes/${taId}/routes`, sig)
+          : await apiClient.get(`/workforce/routes/${today}`,
+                                { params: { truck_assignment_id: taId }, ...sig });
+        const routeList: { status?: string; route_number?: number;
+                           assigned_to?: string | null }[] = rrRes.data ?? [];
+        routesRemaining = routeList.filter(r => r.status !== 'completed').length;
+        // ADR-319 D1 — the captain's roster answers "which route is this person
+        // on". WorkforceRouteOut already carries assigned_to; the count above
+        // was throwing it away. Full mode's /walker-routes shape has no such
+        // field, which is why the panel is workforce-only (D0).
+        if (!stationSort) {
+          for (const r of routeList) {
+            if (r.assigned_to && r.route_number != null) {
+              routeByEmployee[r.assigned_to] = r.route_number;
+            }
+          }
+        }
+      } catch {
+        routesRemaining = 0;
+      }
     }
 
 
@@ -687,9 +854,11 @@ export default function FieldOpsScreen() {
       checkIn1: ci1, checkIn2: ci2, checkIn3: ci3,
       rtsReport: rts,
       rtsSummary,
+      dayTotals,
       routesRemaining,
       crew,
       rollCall,
+      routeByEmployee,
       stationReturnArrived: !!retArr, stationReturnAt: retArr?.arrived_at ?? null,
       stationHandoff: !!handoff,
       eodDone: !!eodInsp,
@@ -742,7 +911,19 @@ export default function FieldOpsScreen() {
   const walkers = crew.filter(m => m.role === 'walker');
 
   // Truck loaded: roster-based check-off confirmed (ADR-181), or legacy manifest ack.
-  const loadDone = rosterAvailable ? !!roster?.load_confirmed : !!manifest;
+  //
+  // ADR-307 D2. Workforce mode has NO load confirmation — it is a station-sort
+  // artefact (ADR-181's per-truck lifecycle) and there is no station sort here.
+  // So the step completes when every tote on the BTR sheet has been ticked.
+  //
+  // Without this the driver is stuck at step 6 forever: `load_confirmed` is
+  // hardcoded false in the workforce mapping, so they could tick all 25 totes
+  // and never reach departure.
+  const loadDone = rosterAvailable
+    ? (stationSort
+        ? !!roster?.load_confirmed
+        : !!roster && roster.tote_count > 0 && roster.checked_count === roster.tote_count)
+    : !!manifest;
 
   const rtsApproved  = rtsReport?.status === 'rts_approved' || rtsReport?.status === 'approved';
   const rtsPending   = rtsReport?.status === 'pending';
@@ -802,7 +983,7 @@ export default function FieldOpsScreen() {
       node: <StepDockAssignment dockZone={dockZone} c={c} /> },
     { key: 'load', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived && !!dockZone,
       done: loadDone,
-      node: rosterAvailable ? <StepLoadTruck roster={roster!} onDone={reload} c={c} />
+      node: rosterAvailable ? <StepLoadTruck roster={roster!} onDone={reload} c={c} stationSort={stationSort} taId={shift.taId ?? null} />
                             : <StepManifest truckId={truckId} shift={shift} employeeId={employeeId} onDone={reload} c={c} /> },
     { key: 'depart', section: 'Station — Loading', reachable: !!fuelLog && !!stationLoadArrived && loadDone, done: !!departed,
       node: <StepDeparture employeeId={employeeId} shift={shift} onDone={reload} c={c} /> },
@@ -916,6 +1097,19 @@ export default function FieldOpsScreen() {
             <View style={s.backBtn} />
           )}
         </View>
+
+        {/* ADR-319 D0/D1 — the captain's body. Workforce-mode only: the route
+            column comes from WorkforceRouteOut.assigned_to, and full mode
+            assigns stops from a manifest instead (a separate design). */}
+        {isCaptain && !isDriver && !stationSort && (
+          <CrewRosterPanel
+            crew={shift.crew}
+            rollCall={shift.rollCall}
+            routeByEmployee={shift.routeByEmployee}
+            today={localToday()}
+            onChanged={reload}
+          />
+        )}
 
         {isDriver && allSteps.length > 0 && (() => {
           const secColor  = sectionColor(allSteps[cursor]?.section ?? '', c);
@@ -1313,7 +1507,16 @@ function StepStationArrival({ employeeId, shift, onDone, c }: { employeeId: stri
   );
 }
 
-function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () => void; c: ThemeColors }) {
+function StepLoadTruck({ roster, onDone, c, stationSort, taId }: {
+  roster: TruckRoster;
+  onDone: () => void;
+  c: ThemeColors;
+  // ADR-307 D1a. The check-off write differs by mode: full mode ticks a
+  // TruckZone tote roster, workforce mode ticks the BTR sheet's totes. Passed in
+  // rather than read from context here so the branch is visible at the call site.
+  stationSort: boolean;
+  taId: string | null;
+}) {
   const [togglingBag, setTogglingBag] = useState<string | null>(null);
   const [confirming,  setConfirming]  = useState(false);
   const [filter,      setFilter]      = useState('');
@@ -1347,7 +1550,21 @@ function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () 
     if (roster.load_confirmed || togglingBag) return;
     setTogglingBag(tote.bag_id);
     try {
-      await apiClient.post(`/sort/${localToday()}/totes/${tote.bag_id}/check`, { checked: !tote.checked });
+      // ADR-307 D1a: same operational act, two sources of truth about which
+      // totes exist. Both write the SAME ToteLoadCheck table, so a tenant that
+      // switches modes keeps one continuous history.
+      if (stationSort) {
+        await apiClient.post(
+          `/sort/${localToday()}/totes/${tote.bag_id}/check`,
+          { checked: !tote.checked },
+        );
+      } else {
+        if (!taId) return;
+        await apiClient.post(
+          `/workforce/load-roster/${localToday()}/totes/${tote.bag_id}/check`,
+          { truck_assignment_id: taId, checked: !tote.checked },
+        );
+      }
       onDone();
     } catch (e: unknown) { Alert.alert('Error', errorText(e, 'Could not update the tote.')); }
     finally { setTogglingBag(null); }
@@ -1465,12 +1682,27 @@ function StepLoadTruck({ roster, onDone, c }: { roster: TruckRoster; onDone: () 
         );
       })}
 
-      <View style={{ marginTop: spacing.md }}>
-        <Btn
-          label={unchecked > 0 ? `Confirm Load (${unchecked} unchecked)` : 'Confirm Load'}
-          onPress={confirmLoad} loading={confirming} c={c}
-        />
-      </View>
+      {/* ADR-307 D2. Load confirmation is a STATION-SORT artefact (ADR-181's
+          per-truck lifecycle) and has no workforce counterpart — the endpoint is
+          full-mode gated and would 404.
+
+          The step is not left blank: it says its own name. An absent capability
+          that explains itself is a different experience from one that looks
+          broken, which is the same rule ADR-294 D4 applies to a metric card. */}
+      {stationSort ? (
+        <View style={{ marginTop: spacing.md }}>
+          <Btn
+            label={unchecked > 0 ? `Confirm Load (${unchecked} unchecked)` : 'Confirm Load'}
+            onPress={confirmLoad} loading={confirming} c={c}
+          />
+        </View>
+      ) : (
+        <Text style={{ marginTop: spacing.md, fontSize: fontSize.xs, color: c.mutedForeground }}>
+          {unchecked > 0
+            ? `${unchecked} tote${unchecked === 1 ? '' : 's'} still unchecked. This step completes once every tote is ticked.`
+            : 'All totes checked. Load confirmation is part of the station sort, which this company does not run.'}
+        </Text>
+      )}
     </Card>
   );
 }

@@ -13,6 +13,7 @@ import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, getRoleColor, type ThemeColors, type FieldRole } from '@theme/index';
 import { useLayoutTransition } from '@hooks/useLayoutTransition';
 import { Badge, Button, Avatar } from '@components/ui/primitives';
+import { useMyTruck } from '../../hooks/useMyTruck';
 
 // The old-architecture LayoutAnimation opt-in was removed here: it is a no-op
 // under the New Architecture and logged a warning on every launch. See
@@ -209,13 +210,11 @@ export default function RouteSortScreen() {
     try {
       const eid = await fetchId();
       const disp = await apiClient.get(`/dispatch/${today}`);
-      const crews: Record<string, CrewMember[]> = disp.data?.assigned_crews ?? {};
-      const truckAssignments: { id?: string; truck_id: string }[] = disp.data?.truck_assignments ?? [];
-
-      const myTruckEntry = Object.entries(crews).find(([, members]) =>
-        members.some(m => m.employee_id === eid));
-      if (!myTruckEntry) { setTaId(null); return; }
-      const [myTruckId, myCrew] = myTruckEntry;
+      // ADR-331 — one implementation of "which truck am I on".
+      const mine = useMyTruck<CrewMember>(disp.data, eid);
+      if (!mine.truckId) { setTaId(null); return; }
+      const myTruckId = mine.truckId;
+      const myCrew = mine.crew;
       setCrew(myCrew);
       setViewerId(eid);
 
@@ -239,8 +238,7 @@ export default function RouteSortScreen() {
         } catch { /* best-effort */ }
       }
 
-      const ta: any = truckAssignments.find(t => t.truck_id === myTruckId);
-      const assignmentId = ta?.id ?? ta?.assignment_id ?? null;
+      const assignmentId = mine.assignmentId;
       if (!assignmentId) { setTaId(null); return; }
       setTaId(assignmentId);
 

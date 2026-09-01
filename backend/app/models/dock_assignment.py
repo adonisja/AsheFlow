@@ -9,8 +9,16 @@ class DockAssignment(Base):
     """Dispatch assigns a dock zone to a driver before the pre-trip inspection.
 
     One record per driver per date. Dispatch can update the zone by patching.
-    The driver sees this on their FieldOps page so they know where to pick up
-    their truck/packages at the station.
+    The driver sees this on their FieldOps page so they know where to collect
+    THE VEHICLE at the station.
+
+    NOT where the totes are staged. That is `BTRSheet.btr_loading_zone`
+    ("BTR31"), a different place in the same warehouse, denormalised onto
+    TruckAssignment beside this one (ADR-290 D4). An earlier version of this
+    docstring said "truck/packages", which read as though this one field covered
+    both — it does not, and that phrasing is what made a three-way distinction
+    (dock_zone / btr_loading_zone / TruckZone.zone_label) look like a two-way
+    one. See ADR-307's context section for the full table.
     """
     __tablename__ = "dock_assignments"
     __table_args__ = (

@@ -34,6 +34,16 @@ _BUILDING_LIBRARY_ALLOWED = {
     # file that transfers to the Library owner (ADR-237), so it is expected to
     # touch the model until that transfer happens.
     "app/routers/building_profile_library.py",
+    # The GEOMETRY write surface (ADR-314). Ground truth from the City — BIN,
+    # BBL, coordinates — is not a nomination and needs no promotion gate, so it
+    # follows segment_map.upsert_segments' precedent rather than
+    # promote_to_library's. It writes ONLY geometry columns; the disjoint-column
+    # invariant is asserted in test_adr314_place_geometry.py.
+    #
+    # It is NOT in client.py on purpose: that module is read-only ("WRITES ARE
+    # NOT HERE") and ADR-237 D5's nomination rule stays intact only while it
+    # stays that way.
+    "app/services/place_geometry.py",
 }
 
 _STREET_SEGMENT_ALLOWED = {

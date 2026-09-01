@@ -21,6 +21,18 @@ _REATTEMPTABLE_TYPES = {"no_access", "business_closed", "inclement_weather"}
 
 REATTEMPT_STATUSES = ("pending", "assigned", "attempted", "delivered", "failed_again")
 
+# ADR-292 D3: where the TBA on this record came from.
+#
+#   manifest — matched against an Amazon manifest, as full mode always has.
+#   manual   — typed or scanned by a captain in workforce mode, where there IS
+#              no manifest to match against.
+#
+# The TBA is REAL either way (D1): it is printed on the package in the walker's
+# hand. What is missing in workforce mode is the manifest, not the identifier —
+# which is why nothing here synthesises an id (D2). A synthetic id would be
+# unusable in a scorecard appeal, and Amazon can only act on a real TBA.
+PACKAGE_SOURCES = ("manifest", "manual")
+
 
 def is_reattemptable(rts_type: str) -> bool:
     return rts_type in _REATTEMPTABLE_TYPES
@@ -42,6 +54,11 @@ class RTSPackage(Base):
     route_id            = Column(UUID(as_uuid=True), ForeignKey("routes.id",            ondelete="CASCADE"), nullable=False, index=True)
     truck_assignment_id = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="CASCADE"), nullable=False, index=True)
     tba_number          = Column(String(50),  nullable=False)
+    # ADR-292 D3: manifest | manual. NOT NULL with a server_default — every
+    # existing row came from a manifest, so that is the truth for them rather
+    # than a placeholder, and a null could not distinguish "unknown provenance"
+    # from "never set".
+    source               = Column(String(20), nullable=False, server_default="manifest")
     normalised_address  = Column(String(200), nullable=True, index=True)
     rts_type            = Column(String(50),  nullable=False)
     rts_explanation     = Column(Text,        nullable=False)
@@ -78,6 +95,11 @@ class MissingPackage(Base):
     route_id            = Column(UUID(as_uuid=True), ForeignKey("routes.id",            ondelete="CASCADE"), nullable=False, index=True)
     truck_assignment_id = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="CASCADE"), nullable=False, index=True)
     tba_number          = Column(String(50),  nullable=False)
+    # ADR-292 D3: manifest | manual. NOT NULL with a server_default — every
+    # existing row came from a manifest, so that is the truth for them rather
+    # than a placeholder, and a null could not distinguish "unknown provenance"
+    # from "never set".
+    source               = Column(String(20), nullable=False, server_default="manifest")
     normalised_address  = Column(String(200), nullable=True, index=True)
     walker_id           = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
     walker_name         = Column(String(100), nullable=True)
@@ -158,6 +180,11 @@ class DamagedPackage(Base):
     company_id          = Column(UUID(as_uuid=True), nullable=False, index=True)
     route_date          = Column(Date,        nullable=False, index=True)
     tba_number          = Column(String(50),  nullable=False)
+    # ADR-292 D3: manifest | manual. NOT NULL with a server_default — every
+    # existing row came from a manifest, so that is the truth for them rather
+    # than a placeholder, and a null could not distinguish "unknown provenance"
+    # from "never set".
+    source               = Column(String(20), nullable=False, server_default="manifest")
     bag_id              = Column(String(50),  nullable=True)
     truck_assignment_id = Column(UUID(as_uuid=True), ForeignKey("truck_assignments.id", ondelete="SET NULL"), nullable=True)
     stage               = Column(String(20),  nullable=False)   # station_sort | truck_load | in_truck

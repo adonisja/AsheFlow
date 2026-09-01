@@ -48,6 +48,7 @@ export type GeneratedColors = {
   neutralLight:           string;
   border:                 string;
   borderStrong:           string;
+  swatchRing:             string;
   ring:                   string;
   tabBar:                 string;
   tabBarBorder:           string;
@@ -99,6 +100,7 @@ export const generatedLight: GeneratedColors = {
   neutralLight:           '#F3F4F7',
   border:                 '#DCDFE5',
   borderStrong:           '#B9BFCA',
+  swatchRing:             '#737B8C',
   ring:                   '#1795A1',
   tabBar:                 '#FFFFFF',
   tabBarBorder:           '#DCDFE5',
@@ -150,6 +152,7 @@ export const generatedDark: GeneratedColors = {
   neutralLight:           '#232843',
   border:                 '#323753',
   borderStrong:           '#4E5374',
+  swatchRing:             '#737B8C',
   ring:                   '#94E0F9',
   tabBar:                 '#151A32',
   tabBarBorder:           '#323753',

@@ -69,7 +69,14 @@ def test_resolution_dampens_not_zero():
     assert bp.troublesome_resolved_at is not None
 
 
-def test_decay_and_floor():
+def test_decay_and_floor(monkeypatch):
+    # ADR-289/293: decay_all now scopes to full-mode companies first. Stub that lookup
+    # so this test still isolates the decay MATHS; the scoping itself is covered by
+    # test_decay_skips_workforce_companies below.
+    monkeypatch.setattr(
+        "app.services.company_config.full_mode_company_ids",
+        lambda db: {"company-a"},
+    )
     hi = SimpleNamespace(troublesome_score=10.0)
     lo = SimpleNamespace(troublesome_score=0.05)   # below floor → snaps to 0
     db = MagicMock()
@@ -81,6 +88,28 @@ def test_decay_and_floor():
     assert n == 2
     assert abs(hi.troublesome_score - 10.0 * DECAY_PER_NIGHT) < 1e-9
     assert lo.troublesome_score == 0.0             # floored
+
+
+def test_decay_skips_workforce_companies(monkeypatch):
+    """ADR-293: with no full-mode tenant there is nothing to decay, and crucially
+    nothing is touched.
+
+    In workforce mode building intelligence is entered manually and no delivery
+    evidence refreshes the score. Decaying anyway would fade every score to zero
+    unopposed — erasing real intelligence via a background job nobody is watching.
+    """
+    monkeypatch.setattr(
+        "app.services.company_config.full_mode_company_ids", lambda db: set()
+    )
+    bp = SimpleNamespace(troublesome_score=10.0)
+    db = MagicMock()
+    q = MagicMock(); f = MagicMock(); f.filter.return_value = f
+    f.all.return_value = [bp]
+    q.filter.return_value = f
+    db.query.return_value = q
+
+    assert decay_all(db) == 0
+    assert bp.troublesome_score == 10.0, "a workforce tenant's score was decayed"
 
 
 def test_threshold_sane():

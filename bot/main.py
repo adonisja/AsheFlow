@@ -179,12 +179,60 @@ class AsheFlowBot(commands.Bot):
         except Exception as e:
             logger.error("Failed to lockdown channel %s: %s", channel_id, e)
 
-    async def trigger_finalize(self, dispatch_date: str, company_id: str) -> None:
+    async def trigger_finalize(
+        self, dispatch_date: str, company_id: str, truck_id: str | None = None
+    ) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
         if dispatch_cog is None:
             logger.error("Dispatch cog not loaded — cannot finalize.")
             return
-        await dispatch_cog.finalize_assignments(dispatch_date, company_id)
+        await dispatch_cog.finalize_assignments(dispatch_date, company_id, truck_id)
+
+    async def clear_day_messages(self, payload: dict) -> dict:
+        """Delete the Discord messages this system posted for a cleared day (ADR-328).
+
+        ONLY ids the backend recorded (D3). No history sweep: a bot matching on
+        message shape has unbounded delete authority over a customer's guild,
+        and one embed-format change makes it delete the wrong things. Recorded
+        ids are an exact, auditable set.
+
+        Returns per-message outcomes so the caller can audit what survived (D5)
+        rather than reporting a clean sweep it did not perform.
+        """
+        deleted, failed = 0, []
+
+        async def _drop(channel_id, message_id, label):
+            nonlocal deleted
+            if not channel_id or not message_id:
+                return
+            try:
+                ch = self.get_channel(int(channel_id)) or await self.fetch_channel(int(channel_id))
+                msg = await ch.fetch_message(int(message_id))
+                await msg.delete()
+                deleted += 1
+            except discord.NotFound:
+                # Already gone (someone tidied by hand) — the desired end state,
+                # not a failure.
+                pass
+            except discord.Forbidden:
+                failed.append(f"{label}: missing Manage Messages")
+            except Exception as e:
+                failed.append(f"{label}: {type(e).__name__}")
+
+        for entry in payload.get("crew_embeds") or []:
+            await _drop(entry.get("channel_id"), entry.get("message_id"),
+                        f"crew embed {entry.get('truck_name', '?')}")
+
+        await _drop(payload.get("drivers_channel_id"),
+                    payload.get("drivers_summary_message_id"), "drivers summary")
+        await _drop(payload.get("trainers_channel_id"),
+                    payload.get("trainers_summary_message_id"), "trainers summary")
+
+        logger.info(
+            "clear_day_messages: date=%s deleted=%d failed=%d",
+            payload.get("date"), deleted, len(failed),
+        )
+        return {"deleted": deleted, "failed": failed}
 
     async def trigger_hub_finalize(self, payload: dict) -> None:
         dispatch_cog = self.cogs.get("Dispatch")
@@ -335,17 +383,26 @@ async def handle_alert(request: web.Request) -> web.Response:
 
 
 async def handle_finalize(request: web.Request) -> web.Response:
-    """POST /internal/finalize  body: { "date": "YYYY-MM-DD", "company_id": "..." }"""
+    """POST /internal/finalize
+
+    body: { "date": "YYYY-MM-DD", "company_id": "...", "truck_id": "..."|null }
+
+    ADR-325 D1 — `truck_id` scopes the run to one truck; null/absent means the
+    whole day. It was absent from this contract while the backend had already
+    gained a per-truck finalize, so finalizing one truck posted a crew embed
+    into every truck's room.
+    """
     if not _check_secret(request):
         return web.Response(status=401, text="Unauthorized")
 
     data = await request.json()
     dispatch_date = data.get("date")
     company_id = data.get("company_id")
+    truck_id = data.get("truck_id")
     if not dispatch_date or not company_id:
         return web.Response(status=400, text="Missing date or company_id")
 
-    asyncio.create_task(bot.trigger_finalize(dispatch_date, company_id))
+    asyncio.create_task(bot.trigger_finalize(dispatch_date, company_id, truck_id))
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
@@ -597,6 +654,80 @@ async def handle_hub_finalize(request: web.Request) -> web.Response:
     return web.json_response({"status": "queued", "date": dispatch_date})
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    """GET /internal/health — is the bot actually usable? (ADR-337 D2)
+
+    Reports `discord_ready` from `bot.is_ready()`, NOT merely that this process
+    answered. The original incident is the argument: the container was running
+    and its hostname resolved while the bot crash-looped on
+    `LoginFailure: Improper token has been passed`. A liveness probe would have
+    reported healthy the entire time it was completely unable to send anything.
+
+    Unauthenticated on purpose — it exposes no data beyond "is the bot logged
+    in", and requiring the shared secret would make a health check fail for a
+    second, unrelated reason (a bad INTERNAL_SECRET), which is exactly the
+    ambiguity a health check exists to remove.
+    """
+    ready = False
+    try:
+        ready = bool(bot.is_ready())
+    except Exception:  # a bot that cannot answer this is not ready
+        ready = False
+
+    return web.json_response(
+        {"status": "ok" if ready else "degraded", "discord_ready": ready},
+        # 200 either way: the CALLER decides what to do with discord_ready.
+        # A 503 here would be indistinguishable from the bot being unreachable,
+        # collapsing "logged out" and "process down" into one signal — and those
+        # need different fixes.
+        status=200,
+    )
+
+
+async def handle_clear_day(request: web.Request) -> web.Response:
+    """POST /internal/clear-day  (ADR-328 D1)
+
+    body: {
+        "date", "company_id",
+        "crew_embeds": [{"channel_id": int, "message_id": int, "truck_name": str}],
+        "drivers_channel_id": int | null,  "drivers_summary_message_id": int | null,
+        "trainers_channel_id": int | null, "trainers_summary_message_id": int | null
+    }
+
+    Deletes ONLY the messages whose ids the backend recorded (D3) — never a
+    history sweep. The caller hands these over BEFORE deleting the rows that
+    hold them, because afterwards the ids no longer exist anywhere.
+
+    Runs inline rather than via create_task: the caller needs the per-message
+    outcome to audit what could not be removed (D5).
+    """
+    if not _check_secret(request):
+        return web.Response(status=401, text="Unauthorized")
+
+    data = await request.json()
+    dispatch_date = data.get("date")
+    company_id = data.get("company_id")
+    if not dispatch_date or not company_id:
+        return web.Response(status=400, text="Missing date or company_id")
+
+    # ADR-328 Dim 9 — this body drives message DELETION, so it is bounded even
+    # though it is behind INTERNAL_SECRET. A leaked secret should not turn into
+    # an unbounded delete loop over a customer's guild.
+    embeds = data.get("crew_embeds") or []
+    if not isinstance(embeds, list) or len(embeds) > 100:
+        return web.Response(status=400, text="crew_embeds must be a list of at most 100")
+    for e in embeds:
+        if not isinstance(e, dict):
+            return web.Response(status=400, text="crew_embeds entries must be objects")
+        for key in ("channel_id", "message_id"):
+            v = e.get(key)
+            if v is not None and not (isinstance(v, int) and 0 <= v < 2**63):
+                return web.Response(status=400, text=f"crew_embeds.{key} must be a snowflake")
+
+    result = await bot.clear_day_messages(data)
+    return web.json_response(result)
+
+
 async def handle_crew_embed_update(request: web.Request) -> web.Response:
     """POST /internal/crew-embed-update  (ADR-295 D3)
 
@@ -627,6 +758,8 @@ async def start_webhook_server() -> None:
     app.router.add_post("/internal/finalize",         handle_finalize)
     app.router.add_post("/internal/hub-finalize",     handle_hub_finalize)
     app.router.add_post("/internal/crew-embed-update", handle_crew_embed_update)
+    app.router.add_post("/internal/clear-day",        handle_clear_day)
+    app.router.add_get("/internal/health",            handle_health)
     app.router.add_post("/internal/role-sync",        handle_role_sync)
     app.router.add_post("/internal/swap",             handle_swap)
     app.router.add_post("/internal/alert",            handle_alert)

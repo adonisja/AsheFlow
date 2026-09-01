@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, DateTime, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -53,6 +53,28 @@ class StreetSegment(Base):
 
     # How we learned about it: 'package_address' (a package resolved here) or
     # 'connector_walk' (fetched to close a gap between two cross streets).
+
+    # ── Blockface span (ADR-314 D3 / ADR-303 D4) ─────────────────────────────
+    # "this segment runs from 400 to 448 W 36th St". A property of the SEGMENT:
+    # verified that three addresses on segment 0297696 all return the same
+    # 000002000AA..000098000AA, so per-address storage would duplicate one fact
+    # ~18 times (the measured mean addresses per block).
+    low_house_number    = Column(String(20),  nullable=True)
+    high_house_number   = Column(String(20),  nullable=True)
+    # route_sort rebuilds cross-street adjacency per sort; the only copy today
+    # lives on the ephemeral ToteAddress and is nulled each cycle.
+    first_cross_street  = Column(String(100), nullable=True)
+    second_cross_street = Column(String(100), nullable=True)
+    # ADR-316 — the blockface's two endpoints in NY State Plane feet. Segment
+    # geometry, not address geometry: three addresses on segment 0297696 all
+    # return identical values, so they join from here rather than repeating on
+    # every address. Their absence was the last reason a routing caller had to
+    # miss the cache and call GeoClient anyway.
+    x_low_address_end   = Column(Integer(), nullable=True)
+    y_low_address_end   = Column(Integer(), nullable=True)
+    x_high_address_end  = Column(Integer(), nullable=True)
+    y_high_address_end  = Column(Integer(), nullable=True)
+
     source            = Column(String(20), nullable=False, server_default="package_address")
 
     # last_seen_at is the staleness signal: every sort re-touches its segments, so

@@ -63,6 +63,18 @@ class BuildingProfile(Base):
     # sits in the table looking like intelligence while matching no stop —
     # indistinguishable from a building nobody has visited.
     address_status      = Column(String(20), nullable=False, server_default="pending", index=True)
+    # ADR-314 D0 — the join key to PlaceType, and nothing else. Ground truth
+    # (bbl, zip, cross streets, span) lives on the Library because it is
+    # identical for every tenant; storing it here would mean N enrichments
+    # returning N identical answers.
+    bin                 = Column(String(20), nullable=True, index=True)
+    # ADR-293 D3 — "route" | "manual". How this profile was collected, not how
+    # true it is. Full mode accrues in context at a completed stop (ADR-277);
+    # workforce mode has no stops, so someone types an address they remembered,
+    # which biases the sample toward the memorable. Provenance lets a later
+    # analysis account for that.
+    collection_source   = Column(String(20), nullable=False,
+                                 server_default="route", index=True)
     geo_grc             = Column(String(10), nullable=True)     # Geosupport return code on rejection
     geo_message         = Column(String(200), nullable=True)    # human-readable reason, shown on the retry form
 

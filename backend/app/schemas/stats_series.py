@@ -57,12 +57,19 @@ class LifetimeTotalsOut(BaseModel):
     A 'lifetime' total that silently meant 'the last 24 months' would be a lie,
     so these are computed separately.
     """
-    delivered: int = 0
+    # ADR-305: Optional because workforce mode returns None when NO route has
+    # been Flex-scanned — an empty set has no derived delivered figure, and 0
+    # would read as "delivered nothing". Always an int in full mode.
+    delivered: Optional[int] = 0
     rts: int = 0
     missing: int = 0
     damaged: int = 0
     truck_damaged: int = 0
     trips: int = 0
+    # ADR-305 D3. Workforce mode: routes with no Flex count, excluded from BOTH
+    # delivered and attempted. > 0 means these figures cover a subset of the
+    # walker's routes and the client must say so.
+    routes_excluded_unscanned: int = 0
     # Null, never 0.0, when nothing has been attempted: "no data" and "0%
     # success" are different facts and must not render identically.
     success_pct: Optional[float] = None

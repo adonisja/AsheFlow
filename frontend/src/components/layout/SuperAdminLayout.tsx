@@ -1,11 +1,14 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Shield, Building2, LogOut, UserCircle2 } from 'lucide-react';
+import { Shield, Building2, LogOut, UserCircle2, ShieldAlert } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
 
 const NAV = [
   { to: '/superadmin/companies', label: 'Companies',  icon: Building2  },
+  // ADR-340 — the heartbeat (ADR-337) detects a revoked credential within ten
+  // minutes and wrote it to a board nobody could reach. This is the reader.
+  { to: '/superadmin/alerts',    label: 'Alerts',     icon: ShieldAlert },
   { to: '/superadmin/account',   label: 'My Account', icon: UserCircle2 },
 ];
 
