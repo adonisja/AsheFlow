@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SesSendFromAsheflowDomain",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail",
+        "ses:SendRawEmail",
+        "ses:SendTemplatedEmail"
+      ],
+      "Resource": "arn:aws:ses:us-east-2:586794453404:identity/asheflow.com"
+    },
+    {
+      "Sid": "SesQuotaReadForHealthProbe",
+      "Effect": "Allow",
+      "Action": "ses:GetSendQuota",
+      "Resource": "*"
+    }
+  ]
+}

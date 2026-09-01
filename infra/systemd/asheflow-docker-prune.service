@@ -1,0 +1,14 @@
+[Unit]
+Description=Reclaim Docker build cache (ADR-347)
+Documentation=file:///home/ubuntu/AsheFlow/docs/runbooks/prod-backups.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Build cache ONLY. Not `system prune`, which would also remove images and
+# volumes -- a stopped-but-needed image is not garbage, and a dangling volume
+# may be a database. Staging accumulated 4.6GB of cache and reached 76% full;
+# every deploy rebuilds and adds more.
+ExecStart=/usr/bin/docker builder prune -af --filter until=168h
+TimeoutStartSec=600

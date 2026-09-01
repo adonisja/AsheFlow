@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TextractSyncDocumentText",
+      "Effect": "Allow",
+      "Action": [
+        "textract:DetectDocumentText",
+        "textract:AnalyzeDocument"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
