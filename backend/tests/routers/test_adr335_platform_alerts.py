@@ -132,13 +132,22 @@ def test_one_call_alerts_both_audiences():
 
 # ── D5: the endpoints ────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("fn", ["list_platform_alerts", "resolve_platform_alert"])
-def test_the_endpoints_are_super_admin_only(fn):
+@pytest.mark.parametrize("fn,gate", [
+    # ADR-343 D1 widened the READ to platform_support: support must be able to
+    # diagnose an outage. The guarantee this test protects is unchanged — no
+    # COMPANY role reaches either endpoint.
+    ("list_platform_alerts", "get_platform_staff"),
+    # The write stays owner-only: ADR-335 D3 has alerts resolve THEMSELVES when
+    # the condition ends, so a human resolve asserts "I have decided this is
+    # over" — a claim about infrastructure (ADR-343 D3).
+    ("resolve_platform_alert", "get_super_admin"),
+])
+def test_the_endpoints_are_platform_gated(fn, gate):
     """Never RoleChecker — a company admin must not read another tenant's
     incidents, and a platform alert has no tenant to check against."""
     sig = inspect.signature(getattr(P, fn))
     deps = [str(p.default) for p in sig.parameters.values() if p.default is not inspect._empty]
-    assert any("get_super_admin" in d for d in deps), f"{fn} is not super-admin gated"
+    assert any(gate in d for d in deps), f"{fn} is not gated by {gate}"
     assert not any("RoleChecker" in d for d in deps)
 
 
