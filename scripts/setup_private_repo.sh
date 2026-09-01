@@ -73,16 +73,30 @@ echo "Public branch:  $CURRENT_BRANCH"
 echo "Private branch: $PRIVATE_BRANCH"
 echo "Cloning private repo to: $TMP_DIR"
 
+# --depth 1 --progress: this sync only ever mirrors the WORKING TREE (rsync
+# --delete against $PUBLIC_ROOT) and commits one commit on top — nothing here
+# reads git log, rev-list or a parent commit, so 366 commits of history is pure
+# transfer cost on every single push. Measured 2026-09-01: full 76s / 14M vs
+# shallow 44s / 12M. Pushing from a shallow clone is fine (verified against the
+# real remote, both on an existing branch and on a fresh `checkout -B` one).
+#
+# --progress matters as much as --depth: the hook prints "Cloning private repo
+# to: ..." and then goes silent for the whole transfer, which reads as a hang.
+# It is not — it is ~100 KB/s of clone. Show the bytes moving.
+CLONE_OPTS=(--depth 1 --progress)
+
 if $INIT_MODE; then
-  git clone "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+  # INIT_MODE seeds a brand-new private repo, which pushes every branch; a
+  # shallow clone cannot do that, so this one path keeps full history.
+  git clone --progress "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
 else
   # A feature branch may not have a private counterpart yet — branch it off staging
   # (the closest baseline) so the first sync of a new feature branch succeeds.
-  if git clone -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private" 2>/dev/null; then
+  if git clone "${CLONE_OPTS[@]}" -b "$PRIVATE_BRANCH" "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private" 2>/dev/null; then
     echo "Cloned existing private branch: $PRIVATE_BRANCH"
   else
     echo "Private branch '$PRIVATE_BRANCH' does not exist yet — creating it off staging."
-    git clone -b staging "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
+    git clone "${CLONE_OPTS[@]}" -b staging "$PRIVATE_REPO" "$TMP_DIR/AsheFlow-private"
     git -C "$TMP_DIR/AsheFlow-private" checkout -B "$PRIVATE_BRANCH"
   fi
 fi
