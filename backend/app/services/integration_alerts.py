@@ -31,6 +31,20 @@ DISCORD_INTEGRATION_FAILED = "discord_integration_failed"
 EMAIL_DELIVERY_FAILED = "email_delivery_failed"
 IDENTITY_REVOCATION_FAILED = "identity_revocation_failed"
 
+# ADR-344 D5 — not an integration, but the same shape: a platform-wide
+# condition only a super admin can act on, and one nobody sees unless it is
+# surfaced. A cron job logging to a file is how the previous backup gap went
+# unnoticed for the life of the deployment.
+BACKUP_FAILED = "backup_failed"
+
+# Says what is now untrue — the recovery point is stale — rather than naming the
+# step that failed. "pg_dump exited 1" does not tell an operator what is at risk.
+BACKUP_FAILED_MESSAGE = (
+    "The nightly database backup did not complete. Recovery is only possible "
+    "back to the last successful backup, so any data written since then is "
+    "unprotected until this is fixed."
+)
+
 EMAIL_DOWN_MESSAGE = (
     "Outbound email is failing (AWS SES). Registration credentials, invites and "
     "password resets are not reaching recipients until it is restored."
