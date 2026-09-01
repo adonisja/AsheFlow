@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OreCertificateObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::asheflow-ore-certificates-staging/ore-certificates/*"
+    },
+    {
+      "Sid": "OreCertificateListForSweep",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::asheflow-ore-certificates-staging",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "ore-certificates/*"
+        }
+      }
+    },
+    {
+      "Sid": "OreCertificateKmsUse",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:us-east-2:586794453404:key/8c76dc07-3e35-4f7e-a870-fbea333bb8e7"
+    }
+  ]
+}

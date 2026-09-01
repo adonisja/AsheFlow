@@ -21,10 +21,7 @@
         "cognito-idp:ListGroups",
         "cognito-idp:DescribeUserPool"
       ],
-      "Resource": [
-        "arn:aws:cognito-idp:us-east-2:586794453404:userpool/us-east-2_SvVO2ofAb",
-        "arn:aws:cognito-idp:us-east-2:586794453404:userpool/us-east-2_AYHjejPis"
-      ]
+      "Resource": "arn:aws:cognito-idp:us-east-2:586794453404:userpool/us-east-2_SvVO2ofAb"
     }
   ]
 }
