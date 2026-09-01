@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the AsheFlow database backup nightly at 03:00 UTC (ADR-344)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+# Catch up a run missed while the box was down -- cron would silently skip it.
+Persistent=true
+# Avoid every environment hitting S3 on the same second.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
