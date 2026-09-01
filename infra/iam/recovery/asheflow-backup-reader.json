@@ -7,7 +7,8 @@
       "Action": "s3:ListBucket",
       "Resource": [
         "arn:aws:s3:::asheflow-db-backups",
-        "arn:aws:s3:::asheflow-db-backups-dr"
+        "arn:aws:s3:::asheflow-db-backups-dr",
+        "arn:aws:s3:::asheflow-db-backups-locked"
       ]
     },
     {
@@ -19,7 +20,8 @@
       ],
       "Resource": [
         "arn:aws:s3:::asheflow-db-backups/*",
-        "arn:aws:s3:::asheflow-db-backups-dr/*"
+        "arn:aws:s3:::asheflow-db-backups-dr/*",
+        "arn:aws:s3:::asheflow-db-backups-locked/*"
       ]
     },
     {
@@ -56,7 +58,9 @@
         "arn:aws:s3:::asheflow-db-backups",
         "arn:aws:s3:::asheflow-db-backups/*",
         "arn:aws:s3:::asheflow-db-backups-dr",
-        "arn:aws:s3:::asheflow-db-backups-dr/*"
+        "arn:aws:s3:::asheflow-db-backups-dr/*",
+        "arn:aws:s3:::asheflow-db-backups-locked",
+        "arn:aws:s3:::asheflow-db-backups-locked/*"
       ]
     }
   ]

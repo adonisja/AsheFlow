@@ -3,12 +3,23 @@
   "Rules": [
     {
       "ID": "replicate-all-backups-to-us-west-2",
-      "Priority": 0,
+      "Priority": 1,
       "Status": "Enabled",
       "Filter": {},
       "DeleteMarkerReplication": { "Status": "Disabled" },
       "Destination": {
         "Bucket": "arn:aws:s3:::asheflow-db-backups-dr",
+        "StorageClass": "STANDARD_IA"
+      }
+    },
+    {
+      "ID": "replicate-all-backups-to-locked-vault",
+      "Priority": 2,
+      "Status": "Enabled",
+      "Filter": {},
+      "DeleteMarkerReplication": { "Status": "Disabled" },
+      "Destination": {
+        "Bucket": "arn:aws:s3:::asheflow-db-backups-locked",
         "StorageClass": "STANDARD_IA"
       }
     }

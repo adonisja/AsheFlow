@@ -25,9 +25,13 @@
       "Effect": "Allow",
       "Action": [
         "s3:ReplicateObject",
-        "s3:ReplicateTags"
+        "s3:ReplicateTags",
+        "s3:ObjectOwnerOverrideToBucketOwner"
       ],
-      "Resource": "arn:aws:s3:::asheflow-db-backups-dr/*"
+      "Resource": [
+        "arn:aws:s3:::asheflow-db-backups-dr/*",
+        "arn:aws:s3:::asheflow-db-backups-locked/*"
+      ]
     }
   ]
 }
