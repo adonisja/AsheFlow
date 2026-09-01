@@ -214,8 +214,11 @@ def resolve_address(
 
     borough = _company_borough(db, company_id)
     try:
-        from app.tasks.enrich_manifest import _geoclient_normalise
-        geo = _geoclient_normalise(raw_address, borough=borough)
+        # ADR-316 — PlaceType first, GeoClient on a miss. Aliased because this
+        # module already has a `resolve_address` of its own (a different job:
+        # this one answers ownership, that one answers geometry).
+        from app.services.address_resolver import resolve_address as _resolve_geo
+        geo = _resolve_geo(db, raw_address, borough=borough)
     except Exception as exc:
         # Network, timeout, malformed upstream payload. Ownership stays
         # undecidable and the package escalates — never a 500 at the edge.

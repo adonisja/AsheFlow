@@ -10,6 +10,7 @@ import apiClient from '@api/client';
 import { useColors } from '@contexts/ThemeContext';
 import { useTabSwitch } from '@navigation/index';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useMyTruck } from '../../hooks/useMyTruck';
 
 type Notification = {
   id: string;
@@ -155,16 +156,10 @@ type DispatchModalProps = {
   c: ThemeColors;
 };
 
-function extractTruckName(message: string): string | null {
-  const m = message.match(/\b([A-Z]{2,4}[-\s]?\d{1,4}[A-Z]?)\b/) ??
-            message.match(/truck\s+([^\s,]+)/i) ??
-            message.match(/assigned to\s+([^\s,.]+)/i);
-  return m ? m[1] : null;
-}
-
 function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: DispatchModalProps) {
   const [status,         setStatus]         = useState<ConfirmationStatus>(null);
   const [dispatchPhase,  setDispatchPhase]  = useState<'planned' | 'active' | 'completed' | null>(null);
+  const [truckName,      setTruckName]      = useState<string | null>(null);
   const [loading,        setLoading]        = useState(true);
   const [acting,         setActing]         = useState<'confirming' | 'declining' | null>(null);
   const submitting = useRef(false);
@@ -194,13 +189,55 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
       }
 
       if (dispatchResult.status === 'fulfilled') {
-        const wf: string = dispatchResult.value.data?.workflow_status ?? '';
-        if (wf === 'finalized')  setDispatchPhase('completed');
-        else if (wf === 'published') setDispatchPhase('active');
-        else setDispatchPhase('planned');
+        // ADR-330 D1 — THIS member's truck, not the day.
+        //
+        // `workflow_status` is the day's furthest-along status: 'finalized' the
+        // moment ANY truck completes. Reading it here closed the confirm window
+        // on the phone of every crew member on every OTHER truck, and relabelled
+        // them "No Response Recorded" — which reads as though they failed to
+        // reply. Measured on staging: 19 Eagle crew locked out because Falcon
+        // was finalized.
+        //
+        // TodayAssignmentScreen already does this correctly; so do FieldOps,
+        // Reattempt, RouteSort and DriverSurvey. This screen was the one that
+        // took the pre-aggregated field because it was already in the payload.
+        const data = dispatchResult.value.data;
+        // ADR-331 — one implementation of "which truck am I on". The hook
+        // returns THIS truck's status and deliberately does not surface the
+        // day's workflow_status, so the ADR-330 bug is unexpressible here.
+        const mine = useMyTruck(data, userId);
+        setTruckName(mine.truckName);
+
+        if (mine.status === 'completed') setDispatchPhase('completed');
+        else if (mine.status === 'active') setDispatchPhase('active');
+        else if (mine.status === 'planned') setDispatchPhase('planned');
+        else {
+          // ADR-330 D2 — the member's own truck could not be resolved.
+          //
+          // Two different unknowns, and they must not share a default:
+          //
+          //  * the DAY has no dispatch at all ('none', ADR-274) -> 'planned'.
+          //    Nothing has been published, so there is nothing to confirm and
+          //    "planned" is the honest state.
+          //  * the day HAS dispatch but this member's truck is unresolvable
+          //    (crew list still loading, member removed) -> 'active', i.e.
+          //    leave the window OPEN.
+          //
+          // A wrong "closed" silently strips someone's ability to respond and
+          // then labels them "No Response Recorded" — it blames them for the
+          // bug. A wrong "open" shows a button that may 409: visible,
+          // recoverable, honest. Asymmetric failure modes; default to the one
+          // the user can recover from.
+          const wf: string = data?.workflow_status ?? '';
+          if (wf === 'none' || wf === '') setDispatchPhase('planned');
+          else setDispatchPhase('active');
+        }
       }
     }).finally(() => setLoading(false));
-  }, [notif?.id, notif?.dispatch_date]);
+    // ADR-330 — userId is now read inside (to find the member's own truck), so
+    // it belongs in the deps: without it a modal opened before the id resolves
+    // keeps a phase derived from an empty userId and never recomputes.
+  }, [notif?.id, notif?.dispatch_date, userId]);
 
   const respond = useCallback(async (choice: 'confirmed' | 'declined') => {
     if (!notif?.dispatch_date || submitting.current) return;
@@ -240,7 +277,9 @@ function DispatchConfirmationModal({ notif, userId, onClose, onResponded, c }: D
     : '';
 
   const cleanMessage = notif?.message ? stripMarkdown(notif.message) : '';
-  const truckName = cleanMessage ? extractTruckName(cleanMessage) : null;
+  // ADR-332 D2 — the real name from the payload. The regex this replaced
+  // parsed the notification MESSAGE and rendered "Truck the" against
+  // "assigned to the hub (Atlas)".
 
   // The confirmation window is open only during the 'active' dispatch phase.
   // Past-date and finalized dispatches are read-only regardless of status.

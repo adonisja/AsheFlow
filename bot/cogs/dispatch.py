@@ -205,6 +205,45 @@ def _fit_name(name: str, width: int) -> str:
     return name[: width - 1] + "…"
 
 
+def _day_trucks_summary(assigned_crews, truck_map, confirmations, ap_by_truck, zones_by_truck):
+    """Build the summary rows for EVERY truck on the day (ADR-327 D3).
+
+    The finalize loop builds `trucks_summary` from the ADR-325-scoped crews, so
+    it holds only the truck being finalized. The day summaries claim to describe
+    the date — their titles say so — and editing a standing message with a
+    single-truck payload would silently drop trucks finalized earlier.
+    """
+    rows = []
+    for tid, full_crew in assigned_crews.items():
+        info = truck_map.get(tid, {})
+        rows.append({
+            "truck_name": info.get("name", f"Truck {tid[:8]}"),
+            "crew": [
+                m for m in full_crew
+                if confirmations.get(m["employee_id"], "pending") == "confirmed"
+            ],
+            "ap": ap_by_truck.get(tid, 0),
+            "zones": zones_by_truck.get(tid, []),
+            "anchor_point": info.get("initial_anchor_display_address"),
+        })
+    return rows
+
+
+def _captain_lines(trucks_summary) -> list[str]:
+    """One line per truck that has a captain (ADR-256, ADR-332 D5).
+
+    Extracted so the finalize path and any future caller build the roster the
+    same way — the captains post is a standing per-day message like the other
+    two summaries.
+    """
+    lines = []
+    for truck in trucks_summary:
+        caps = [m["name"] for m in truck.get("crew", []) if m.get("role") == "captain"]
+        if caps:
+            lines.append(f"**{truck.get('truck_name', 'Truck')}:** `{caps[0]}`")
+    return lines
+
+
 def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
     """Embed posted to #drivers-chat after finalization.
 
@@ -253,8 +292,19 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
 # Helper: build the #trainers-chat pairing embed
 # ---------------------------------------------------------------------------
 
-async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
-    """One embed listing every truck with trainers and/or trainees for the day."""
+async def _build_trainers_chat_embed(
+    trucks_data: list[dict], dispatch_date: str,
+) -> tuple[discord.Embed, bool]:
+    """One embed listing every truck with trainers and/or trainees for the day.
+
+    Returns (embed, has_pairings). ADR-334 D2 — the BUILDER reports emptiness
+    rather than the caller inferring it from a representation detail.
+
+    The caller used to test `if embed.fields:`. This builder renders its table
+    into `description` and calls `add_field` zero times, so that guard was
+    permanently false and the trainer summary was suppressed on every path from
+    ADR-327 until ADR-334 — including when there WERE pairings.
+    """
     embed = discord.Embed(
         title=f"Trainer Pairings — {dispatch_date}",
         color=0x57F287,  # green
@@ -323,14 +373,15 @@ async def _build_trainers_chat_embed(trucks_data: list[dict], dispatch_date: str
                     _day(trainee),
                 ))
 
-    if len(rows) > 2:
+    has_pairings = len(rows) > 2
+    if has_pairings:
         embed.description = "\n".join(rows)
         if unpaired_count:
             embed.set_footer(text=f"{unpaired_count} trainee(s) without a trainer — fix in Dispatch.")
     else:
         embed.description = "No trainer–trainee pairings on today's dispatch."
 
-    return embed
+    return embed, has_pairings
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +448,14 @@ class DispatchCog(commands.Cog, name="Dispatch"):
             color=discord.Color.blurple(),
         )
         await drivers_channel.send(embed=header)
+
+        # ADR-332 D4/D6 — publishing changes the day's state, so the standing
+        # summaries are brought up to date here too. ADR-327 wired the upsert
+        # into the bulk finalize only, so a published-but-not-finalized day left
+        # the summaries showing nothing at all.
+        await self._refresh_day_summaries(
+            guild=guild, cfg=cfg, dispatch_date=dispatch_date, company_id=company_id,
+        )
 
         dm_failures: list[str] = []
 
@@ -511,7 +570,126 @@ class DispatchCog(commands.Cog, name="Dispatch"):
     # PHASE 2 — Finalization
     # ------------------------------------------------------------------
 
-    async def finalize_assignments(self, dispatch_date: str, company_id: str) -> None:
+    async def _refresh_day_summaries(self, *, guild, cfg, dispatch_date, company_id):
+        """Bring all three standing day summaries up to date (ADR-332 D4/D5).
+
+        ADR-327 gave the summaries receipts but wired the upsert into the BULK
+        finalize only. `publish_assignments` still bare-sent, and
+        `hub_finalize_truck` — the per-truck path actually in use — posted no
+        summary at all, which is why DispatchDaySummary had zero rows on staging
+        after a full day of publishes and a per-truck finalize.
+
+        Fetches the day's own state rather than taking a caller-scoped roster:
+        a standing per-day message edited with one truck's payload silently
+        drops the others (ADR-327 D3).
+
+        Never raises — a summary is reporting, and must not fail an operation
+        that has already posted crews and cannot be undone.
+        """
+        try:
+            dispatch = await api.get_dispatch(dispatch_date)
+            confs = await api.get_confirmations(dispatch_date)
+            trucks = await api.get_trucks()
+        except Exception as e:
+            logger.warning("refresh_day_summaries: could not fetch day state: %s", e)
+            return
+
+        truck_map = {str(t["id"]): t for t in (trucks or [])}
+        day = _day_trucks_summary(
+            dispatch.get("assigned_crews", {}) or {},
+            truck_map,
+            (confs or {}).get("confirmations", {}) or {},
+            dispatch.get("ap_by_truck", {}) or {},
+            dispatch.get("zones_by_truck", {}) or {},
+        )
+
+        try:
+            recorded = await api.get_day_summary(dispatch_date) or {}
+        except Exception as e:
+            logger.warning("refresh_day_summaries: could not read receipts: %s", e)
+            recorded = {}
+
+        drivers_channel = guild.get_channel(cfg.drivers_channel_id) if cfg.drivers_channel_id else None
+        if drivers_channel:
+            await self._upsert_summary(
+                channel=drivers_channel,
+                embed=_build_drivers_chat_embed(day, dispatch_date),
+                message_id=recorded.get("drivers_summary_message_id"),
+                dispatch_date=dispatch_date, kind="drivers",
+            )
+
+        trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
+        if trainers_channel:
+            embed, has_pairings = await _build_trainers_chat_embed(day, dispatch_date)
+            # ADR-327 D1 — silence when there is nothing to say.
+            # ADR-334 D1/D2 — ask the BUILDER. This tested `embed.fields`, which
+            # this builder never populates (it renders into `description`), so
+            # the guard was permanently false and suppressed every trainer post.
+            if has_pairings:
+                await self._upsert_summary(
+                    channel=trainers_channel,
+                    embed=embed,
+                    message_id=recorded.get("trainers_summary_message_id"),
+                    dispatch_date=dispatch_date, kind="trainers",
+                )
+
+        captains_channel = guild.get_channel(cfg.captains_channel_id) if cfg.captains_channel_id else None
+        if captains_channel:
+            lines = _captain_lines(day)
+            if lines:
+                await self._upsert_summary(
+                    channel=captains_channel,
+                    embed=discord.Embed(
+                        title=f"Captains — {dispatch_date}",
+                        description="\n".join(lines),
+                        color=0x5865F2,
+                    ),
+                    message_id=recorded.get("captains_summary_message_id"),
+                    dispatch_date=dispatch_date, kind="captains",
+                )
+
+    async def _upsert_summary(self, *, channel, embed, message_id, dispatch_date, kind):
+        """Edit the standing day summary, or post one and record its id (ADR-327 D2).
+
+        Mirrors ADR-295 D2's crew-embed handling, including its most important
+        branch: a message that no longer exists in Discord must fall back to
+        posting a fresh one and re-recording, or a channel someone tidied by
+        hand breaks the summary permanently.
+
+        Never raises — a summary is reporting, and must not fail a finalize that
+        has already posted crews and cannot be undone.
+        """
+        try:
+            if message_id:
+                try:
+                    msg = await channel.fetch_message(int(message_id))
+                    await msg.edit(embed=embed)
+                    logger.info("day summary (%s): edited %s", kind, message_id)
+                    return
+                except discord.NotFound:
+                    logger.info(
+                        "day summary (%s): message %s is gone — reposting", kind, message_id
+                    )
+                except discord.Forbidden:
+                    logger.warning(
+                        "day summary (%s): no permission to edit %s — reposting", kind, message_id
+                    )
+
+            msg = await channel.send(embed=embed)
+            try:
+                await api.record_day_summary(dispatch_date, kind, msg.id)
+                logger.info("day summary (%s): posted %s and recorded", kind, msg.id)
+            except Exception as e:
+                # Non-fatal, exactly as ADR-295 D2 reasons about the crew embed:
+                # losing the receipt costs the ability to EDIT next time, which
+                # is far better than failing a finalize over bookkeeping.
+                logger.warning("day summary (%s): posted but could not record id: %s", kind, e)
+        except Exception as e:
+            logger.error("day summary (%s): failed entirely: %s", kind, e, exc_info=True)
+
+    async def finalize_assignments(
+        self, dispatch_date: str, company_id: str, truck_id: str | None = None
+    ) -> None:
         """Post finalized assignments to truck channels and #drivers-chat."""
         cfg = await get_guild_config(company_id)
         if cfg is None or not cfg.is_configured:
@@ -550,6 +728,35 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         if not assigned_crews:
             await drivers_channel.send(f"No dispatch found for `{dispatch_date}` — nothing to finalize.")
             return
+
+        # ADR-325 D2 — scope to the finalized truck. The backend's per-truck
+        # finalize sends truck_id; without honouring it this loop posts a crew
+        # embed into EVERY truck's room, and the ones that were not finalized
+        # render an empty roster — which reads to a walker as "you have no crew"
+        # rather than "this was a mistake".
+        #
+        # An unknown truck_id must NOT fall through to the whole day. That
+        # silent widening from "one truck" to "all trucks" is exactly this bug,
+        # and posting six embeds is the worst response to an inconsistency.
+        # ADR-327 D3 — keep the unscoped set: the DAY summary needs every truck,
+        # while the crew embeds below are scoped to one (ADR-325).
+        assigned_crews_all = dict(assigned_crews)
+
+        if truck_id:
+            if truck_id not in assigned_crews:
+                logger.error(
+                    "finalize_assignments: truck %s not in assigned_crews for %s — "
+                    "refusing to fall back to the whole day.", truck_id, dispatch_date,
+                )
+                await report_error(
+                    f"Finalize named truck `{truck_id}` but it has no crew on "
+                    f"`{dispatch_date}` — nothing was posted."
+                )
+                return
+            assigned_crews = {truck_id: assigned_crews[truck_id]}
+            logger.info(
+                "finalize_assignments: scoped to truck %s for %s", truck_id, dispatch_date,
+            )
 
         trucks_summary: list[dict] = []
         channel_errors: list[str]  = []
@@ -649,7 +856,30 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 except Exception:
                     pass
 
-        await drivers_channel.send(embed=_build_drivers_chat_embed(trucks_summary, dispatch_date))
+        # ADR-327 D3 — the DAY summaries describe the whole day, not just the
+        # truck this call finalized. `trucks_summary` is scoped by ADR-325 (one
+        # crew embed, one room), so summarising from it would silently drop
+        # trucks finalized earlier. Two different questions, two scopes.
+        day_summary = [
+            t for t in _day_trucks_summary(
+                assigned_crews_all, truck_map, confirmations, ap_by_truck, zones_by_truck
+            )
+        ]
+
+        # ADR-327 D2 — edit the standing summary instead of stacking a new one.
+        recorded = {}
+        try:
+            recorded = await api.get_day_summary(dispatch_date) or {}
+        except Exception as e:
+            logger.warning("finalize_assignments: could not read day-summary receipts: %s", e)
+
+        await self._upsert_summary(
+            channel=drivers_channel,
+            embed=_build_drivers_chat_embed(day_summary, dispatch_date),
+            message_id=recorded.get("drivers_summary_message_id"),
+            dispatch_date=dispatch_date,
+            kind="drivers",
+        )
 
         # Post trainer↔trainee pairings to #trainers-chat if configured
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
@@ -660,10 +890,35 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         )
         if trainers_channel:
             try:
-                embed = await _build_trainers_chat_embed(trucks_summary, dispatch_date)
-                logger.info("finalize_assignments: trainer embed built, has_fields=%d", len(embed.fields))
-                await trainers_channel.send(embed=embed)
-                logger.info("finalize_assignments: trainer pairings posted to #trainers-chat")
+                embed, has_pairings = await _build_trainers_chat_embed(day_summary, dispatch_date)
+                # ADR-334 — logged has_fields=%d against a builder that never sets
+                # fields, so this printed 0 forever and read as "nothing to
+                # report" during the ADR-327 investigation. Log the real signal.
+                logger.info(
+                    "finalize_assignments: trainer embed built, has_pairings=%s",
+                    has_pairings,
+                )
+                # ADR-327 D1 — a summary with nothing to say is not posted. The
+                # captains block below has always had this guard; the trainer
+                # block never did, so it announced "No trainer-trainee pairings"
+                # on every finalize. A channel where most posts are empty is a
+                # channel whose real posts get skimmed past.
+                #
+                # ADR-334 — this was `if embed.fields:`, which this builder
+                # never populates, so the guard was permanently FALSE and
+                # suppressed the post even when pairings existed. The builder
+                # now reports its own emptiness.
+                if has_pairings:
+                    await self._upsert_summary(
+                        channel=trainers_channel,
+                        embed=embed,
+                        message_id=recorded.get("trainers_summary_message_id"),
+                        dispatch_date=dispatch_date,
+                        kind="trainers",
+                    )
+                    logger.info("finalize_assignments: trainer pairings posted to #trainers-chat")
+                else:
+                    logger.info("finalize_assignments: no pairings — nothing posted to #trainers-chat")
             except Exception as e:
                 logger.error("finalize_assignments: failed to post trainer pairings: %s", e, exc_info=True)
                 await drivers_channel.send(f"⚠️ Failed to post trainer pairings to #trainers-chat: {e}")
@@ -678,11 +933,10 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         # shape as #trainers-chat above.
         captains_channel = guild.get_channel(cfg.captains_channel_id) if cfg.captains_channel_id else None
         if captains_channel:
-            captain_lines = []
-            for truck in trucks_summary:
-                caps = [m["name"] for m in truck.get("crew", []) if m.get("role") == "captain"]
-                if caps:
-                    captain_lines.append(f"**{truck.get('truck_name', 'Truck')}:** `{caps[0]}`")
+            # ADR-332 D5 — built from the DAY, not the ADR-325-scoped truck, for
+            # the same reason as the other two summaries (ADR-327 D3): a standing
+            # roster edited with a single truck's payload drops the others.
+            captain_lines = _captain_lines(day_summary)
             if captain_lines:
                 try:
                     embed = discord.Embed(
@@ -690,7 +944,16 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                         description="\n".join(captain_lines),
                         color=0x5865F2,
                     )
-                    await captains_channel.send(embed=embed)
+                    # ADR-332 D5 — edited in place like the other two. The
+                    # empty-guard above is KEPT: an upsert must not turn "no
+                    # captains today" into a posted empty embed (ADR-327 D1).
+                    await self._upsert_summary(
+                        channel=captains_channel,
+                        embed=embed,
+                        message_id=recorded.get("captains_summary_message_id"),
+                        dispatch_date=dispatch_date,
+                        kind="captains",
+                    )
                 except Exception as e:
                     logger.error("finalize_assignments: failed to post captains: %s", e, exc_info=True)
             else:
@@ -982,6 +1245,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
                 await discord_user.send(embed=final_embed)
             except Exception:
                 pass
+
+        # ADR-332 D4 — THE gap the operator reported. This per-truck path posted
+        # a crew embed and nothing else, so #drivers-chat, #trainers-chat and
+        # #captains never reflected a truck finalizing individually. ADR-327's
+        # receipts existed but nothing on this path ever wrote them, which is
+        # why DispatchDaySummary had zero rows after a full day's work.
+        await self._refresh_day_summaries(
+            guild=guild, cfg=cfg, dispatch_date=dispatch_date, company_id=company_id,
+        )
 
         logger.info("hub_finalize_truck complete: truck=%s date=%s crew=%d", truck_name, dispatch_date, len(crew))
 

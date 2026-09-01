@@ -76,7 +76,14 @@ export default function ScorecardEntry() {
           delta: i.delta,
           evidence: {
             rts_reasons: crossCheck.rts_evidence,
+            // ADR-301: whichever side actually has a number. Workforce mode
+            // reports carried parcels, not deliveries, and null when no route
+            // that week had a recorded count — an appeal must not cite a
+            // figure we do not hold.
             our_delivered: crossCheck.our_delivered,
+            our_carried: crossCheck.our_carried,
+            routes_unrecorded: crossCheck.routes_unrecorded,
+            precision: crossCheck.precision,
             our_rts: crossCheck.our_rts,
             our_missing: crossCheck.our_missing,
             week_start: crossCheck.week_start,
@@ -189,8 +196,25 @@ export default function ScorecardEntry() {
         <div className="card space-y-3">
           <h2 className="text-sm font-bold text-foreground">Cross-check vs our records</h2>
           <p className="text-xs text-muted-foreground">
-            Week {crossCheck.week} · our data: {crossCheck.our_delivered} delivered · {crossCheck.our_rts} RTS · {crossCheck.our_missing} missing
+            Week {crossCheck.week} · our data:{' '}
+            {crossCheck.our_delivered != null
+              ? `${crossCheck.our_delivered} delivered`
+              : crossCheck.our_carried != null
+                ? `${crossCheck.our_carried} carried`
+                : '— no parcel count recorded'}{' '}
+            · {crossCheck.our_rts} RTS · {crossCheck.our_missing} missing
           </p>
+          {crossCheck.routes_unrecorded > 0 && (
+            <p className="text-xs text-warning">
+              {crossCheck.routes_unrecorded} route(s) this week have no Flex parcel
+              count recorded, so the comparison is withheld rather than estimated.
+            </p>
+          )}
+          {crossCheck.precision_note && (
+            <p className="text-xs text-muted-foreground italic">
+              {crossCheck.precision_note}
+            </p>
+          )}
           <div className="space-y-2">
             {crossCheck.items.map(it => (
               <div key={it.metric}

@@ -78,6 +78,14 @@ export default function ScreenShell({
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.content}
+        // Without this, the first tap while a keyboard is open is consumed by
+        // dismissing it — so a "Save" button under the keyboard needs two taps
+        // and reads as unresponsive. Every screen in this shell has the bug the
+        // moment it grows an input.
+        keyboardShouldPersistTaps="handled"
+        // Let the keyboard close when the user scrolls away from a field, which
+        // is the iOS convention for a long form.
+        keyboardDismissMode="on-drag"
         refreshControl={
           onRefresh
             ? <RefreshControl refreshing={refreshing ?? false} onRefresh={onRefresh} tintColor={c.primary} />

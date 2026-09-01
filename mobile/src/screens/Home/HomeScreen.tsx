@@ -10,7 +10,7 @@ import { useTabSwitch } from '@navigation/index';
 // NOT from @navigation/index — that would be a require cycle (index imports
 // this screen), which evaluates the constant as undefined and broke the
 // role filter silently. See @navigation/roles.
-import { FIELD_OPS_ROLES } from '@navigation/roles';
+import { FIELD_OPS_ROLES, TAB_GATES } from '@navigation/roles';
 import { useColors } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
 import {
@@ -51,20 +51,27 @@ const roleBadgeTone: Record<string, 'slate' | 'teal' | 'gold' | 'info' | 'neutra
   driver: 'slate', walker: 'teal', trainer: 'gold', trainee: 'info',
 };
 
-// Quick-action definitions — key matches tab key in navigation.
-// `roles` must mirror the tab's role gate (navigation/index.tsx): a tile for
-// a tab the role doesn't have silently no-ops on tap (Field Ops showed for
-// trainers/trainees/walkers but only drivers have the tab).
-const QUICK_ACTIONS: { key: string; label: string; icon: string; roles?: readonly string[] }[] = [
-  { key: 'FieldOps',      label: 'Field Ops',    icon: '🔧', roles: FIELD_OPS_ROLES },
-  { key: 'Schedule',      label: 'Schedule',     icon: '📅' },
-  { key: 'Notifications', label: 'Inbox',        icon: '🔔' },
-  { key: 'Account',       label: 'Account',      icon: '👤' },
-];
+// Quick-action definitions. `key` names a tab, and the gate is INHERITED from
+// TAB_GATES rather than restated here (ADR-317 D3).
+//
+// It used to be restated, and the comment that stood here recorded the result:
+// "a tile for a tab the role doesn't have silently no-ops on tap". FieldOps was
+// given a guard when that happened; Schedule never was, so admin, dispatch,
+// driver_trainee, field_supervisor and management all saw a Schedule tile that
+// did nothing when tapped. Two lists drift; one cannot.
+//
+// `satisfies` makes an unknown key a compile error, so a typo cannot ship a
+// permanently dead tile.
+const QUICK_ACTIONS = [
+  { key: 'FieldOps',      label: 'Field Ops', icon: '🔧' },
+  { key: 'Schedule',      label: 'Schedule',  icon: '📅' },
+  { key: 'Notifications', label: 'Inbox',     icon: '🔔' },
+  { key: 'Account',       label: 'Account',   icon: '👤' },
+] satisfies { key: keyof typeof TAB_GATES; label: string; icon: string }[];
 
 export default function HomeScreen() {
   const c          = useColors();
-  const { user }   = useAuth();
+  const { user, hasFeature } = useAuth();
   const navigation = useNavigation<any>();
   const switchTab  = useTabSwitch();
 
@@ -231,9 +238,15 @@ export default function HomeScreen() {
 
         {/* ── Quick actions ── */}
         <View style={s.quickRow}>
-          {QUICK_ACTIONS.filter(a =>
-            !a.roles || a.roles.some(r => user?.groups?.includes(r)),
-          ).map(action => (
+          {QUICK_ACTIONS.filter(a => {
+            // The SAME predicate visibleTabs uses (navigation/index.tsx), so a
+            // tile cannot outlive its tab: a shortcut whose destination is
+            // filtered out must not render (ADR-317 D2).
+            const gate = TAB_GATES[a.key];
+            const roleOk = gate.roles.length === 0
+              || gate.roles.some(r => user?.groups?.includes(r));
+            return roleOk && (!gate.feature || hasFeature(gate.feature));
+          }).map(action => (
             <TouchableOpacity
               key={action.key}
               style={[s.quickBtn, { backgroundColor: c.card, borderColor: c.border }]}

@@ -22,10 +22,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-try:
-    from app.routers.rts import _is_elevated_for_route
-except ImportError:
-    pytest.skip("proprietary rts deps not available (CI skip)", allow_module_level=True)
+from app.routers.rts import _is_elevated_for_route
 
 _CID = uuid.uuid4()
 _OWN_TRUCK = uuid.uuid4()

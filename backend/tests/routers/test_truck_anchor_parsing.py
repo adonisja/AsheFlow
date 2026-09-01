@@ -5,10 +5,7 @@ the endpoint's 422 paths and manual verification against GeoClient v2.
 """
 import pytest
 
-try:
-    from app.routers.trucks import _parse_intersection_input
-except ImportError:
-    pytest.skip("trucks router not importable", allow_module_level=True)
+from app.routers.trucks import _parse_intersection_input
 
 
 @pytest.mark.parametrize("raw,expected", [

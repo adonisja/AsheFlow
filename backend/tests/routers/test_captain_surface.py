@@ -71,11 +71,22 @@ class TestCaptainHasATabSurface:
         # registry references them. A tuple nothing uses grants nothing.
         t = _tuples()
         nav = NAV.read_text(encoding="utf-8")
+        roles_src = ROLES.read_text(encoding="utf-8")
+
+        # ADR-317 D3 — the gate moved out of ALL_TABS into TAB_GATES, so that
+        # ONE list feeds both the tabs and anything linking to them. The
+        # invariant here is unchanged: a role tuple must still reach a tab.
+        gates = re.search(r"export const TAB_GATES[^=]*=\s*\{(.*?)\n\};",
+                          roles_src, re.S)
+        assert gates, "TAB_GATES not found — the nav gate map moved again"
+        gate_of = {
+            m.group(1): m.group(2)
+            for m in re.finditer(r"(\w+):\s*\{\s*roles:\s*(\[\]|\w+)", gates.group(1))
+        }
         labels = [
             m.group(2)
-            for m in re.finditer(r"key: '(\w+)',\s*label: '([^']*)'[^}]*?roles: (\w+)",
-                                 nav, re.S)
-            if m.group(3) in t and "captain" in t[m.group(3)]
+            for m in re.finditer(r"key: '(\w+)',\s*label: '([^']*)'", nav)
+            if (rc := gate_of.get(m.group(1))) and rc in t and "captain" in t[rc]
         ]
         assert len(labels) >= 8, (
             f"captain resolves to only {len(labels)} tabs ({labels}) — the role "

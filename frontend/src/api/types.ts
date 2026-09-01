@@ -228,6 +228,55 @@ export interface FinalizeResponse {
   status: string;
   date: string;
   captainless_trucks: string[];
+  /** ADR-288 D2 — "finalized" is ambiguous when some trucks were already done. */
+  trucks_finalized: number;
+  trucks_skipped: number;
+  /** ADR-324 D1 — the finalize SUCCEEDED and Discord did not.
+   *
+   * Discord is a secondary surface: crews are notified in-app regardless, so an
+   * outage no longer fails the request. This flag is the only signal that the
+   * Discord post never went out — a 200 alone looks completely clean.
+   */
+  discord_failed: boolean;
+}
+
+/** DELETE /dispatch/{date} (ADR-328).
+ *
+ * Was 204. It now reports whether the day was also retracted from Discord:
+ * the database clear can succeed while messages stay visible to the crew, and
+ * that is the version people act on.
+ */
+export interface ClearDispatchResponse {
+  date: string;
+  assignments_cleared: number;
+  discord_cleared: boolean;
+  /** Named, not counted — "crew embed Eagle: missing Manage Messages". */
+  discord_failures: string[];
+}
+
+/** GET /platform/alerts (ADR-335, surfaced by ADR-340).
+ *
+ * An infrastructure condition only a super admin can fix. Keyed on the
+ * INCIDENT, not a reader: `company_id` is null for a platform-wide fault (a
+ * Discord outage is one incident across every tenant), and `is_resolved`
+ * closes when the integration answers again rather than when someone clicks.
+ */
+export interface PlatformAlert {
+  id: string;
+  alert_type: string;
+  /** null = platform-wide, affecting every tenant. */
+  company_id: string | null;
+  message: string;
+  severity: string;
+  is_resolved: boolean;
+  /** "47 occurrences, still failing" is a different picture from "an alert exists". */
+  occurrence_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  resolved_at: string | null;
+  /** null on a self-resolve — that null is what distinguishes "the condition
+   *  ended" from "a person dismissed it". */
+  resolved_by_email: string | null;
 }
 
 export interface UnavailableStaff {
@@ -731,6 +780,11 @@ export interface CommitSortResponse {
   packages_dropped: number;
   dropped_tbas: string[];
   unassigned_misroutes: MisroutedPackageOut[];
+  /** ADR-304 D3: packages skipped because they are on a route this re-sort
+   *  retained (in progress or completed). NOT the same as dropped_tbas — these
+   *  are being delivered right now by someone. */
+  already_routed_tbas: string[];
+  retained_routes: number;
 }
 
 export interface WaveAssignmentEntry {
@@ -1472,11 +1526,27 @@ export interface ScorecardCrossCheck {
   week: string;
   week_start: string;
   week_end: string;
-  our_delivered: number;
+  /** Full mode only — a per-package count from DeliveryStop.
+   *  null in workforce mode, which never writes that table (ADR-301 D2). */
+  our_delivered: number | null;
+  /** Workforce mode — parcels CARRIED (captain-recorded per route), which is
+   *  not a delivery count. null when any route that week has no recorded
+   *  count: a partial sum understates what was carried and manufactures a
+   *  discrepancy in the direction that produces a bad appeal (ADR-301 D3).
+   *  Render null as "—", never 0. */
+  our_carried: number | null;
+  /** Routes in the week with no parcel count recorded. Non-zero with
+   *  our_carried === null is the partial-coverage case. */
+  routes_unrecorded: number;
   our_rts: number;
   our_missing: number;
   items: CrossCheckItem[];
   rts_evidence: { rts_type: string; count: number }[];
+  /** ADR-294 D5 / ADR-301 D5 — how precise our side of the comparison is.
+   *  An appeal built on a number of unstated precision is worse than no
+   *  appeal, so surface the note wherever the figures are shown. */
+  precision: 'per_package' | 'captain_reported';
+  precision_note: string | null;
 }
 
 // ── Dashboard DTOs — GENERATED from the backend OpenAPI schema ──────────────
@@ -1531,15 +1601,22 @@ export interface ManagementOperationalSummary {
   period: string;
   period_start: string;
   period_end: string;
-  total_packages_delivered: number;
-  total_packages_assigned: number;
+  // ADR-294: nullable. null = "this company has no package feed"; 0 = "the crew
+  // delivered nothing today". Rendering the second for the first is the failure
+  // this ADR exists to prevent — check package_metrics_available, not the value.
+  total_packages_delivered: number | null;
+  total_packages_assigned: number | null;
   total_paid_hours?: number | null;
   paid_hours_source: string;
   packages_per_hour?: number | null;
   avg_minutes_per_stop?: number | null;
   delivery_success_rate_pct?: number | null;
   rework_rate_pct?: number | null;
-  total_rework_count: number;
+  total_rework_count: number | null;
+  /** ADR-294 D2: false when this company has no package feed. */
+  package_metrics_available?: boolean;
+  /** e.g. "no_package_feed". Present only when the above is false. */
+  package_metrics_unavailable_reason?: string | null;
   routes_dispatched: number;
   routes_completed: number;
   completion_rate_pct?: number | null;
@@ -1772,6 +1849,32 @@ export interface DispatchPerformanceSummary {
   slowest_routes: SlowestRoute[];
   fastest_crew?: CrewPerformance | null;
   slowest_crew?: CrewPerformance | null;
+
+  /** ADR-298 D3. False in workforce mode: package-derived metrics do not apply.
+   *  Do NOT infer this from `baseline_minutes_per_package === null` — a
+   *  full-mode company with no completed routes in 30 days is also null. */
+  available: boolean;
+  unavailable_reason?: string | null;
+
+  /** ADR-298 D1 — the lean card, populated when `available` is false. All
+   *  package figures come from flex_package_count (the parcel count a captain
+   *  reads off Amazon Flex), never from package_count, which counts ADDRESSES
+   *  in workforce mode.
+   *
+   *  These are CARRIED metrics, not delivered ones: nothing in workforce mode
+   *  counts a delivery as it happens. Label them accordingly in the UI.
+   *  null means "not recorded / not applicable" — render an em-dash, never 0. */
+  routes_completed?: number | null;
+  packages_carried?: number | null;
+  mean_packages_per_route?: number | null;
+  mean_blocks_per_route?: number | null;
+  mean_totes_per_route?: number | null;
+  capacity_utilisation_pct?: number | null;
+  rts_per_100_carried?: number | null;
+  missing_per_100_carried?: number | null;
+  /** Closed routes with no Flex count yet. When > 0, packages_carried is null
+   *  rather than a partial sum that would report a smaller day. */
+  routes_missing_flex_count?: number | null;
 }
 
 export interface DispatchDashboardSummary {
@@ -1889,6 +1992,19 @@ export interface IndividualRosterResponse {
  *  on both sides; the shape was always known, the latitude was accidental. */
 export interface AppealEvidence {
   rts_reasons: { rts_type: string; count: number }[];
+  /** ADR-301. These were ALREADY sent by ScorecardEntry.tsx while the backend
+   *  model listed only rts_reasons under extra="forbid" — so every appeal
+   *  filed from the UI 422'd on five unrecognised keys. Kept nullable because
+   *  workforce mode has no per-package delivered count, and an unrecorded
+   *  parcel count yields null rather than a fabricated zero. */
+  our_delivered?: number | null;
+  our_carried?: number | null;
+  routes_unrecorded?: number | null;
+  precision?: 'per_package' | 'captain_reported' | null;
+  our_rts?: number | null;
+  our_missing?: number | null;
+  week_start?: string | null;
+  week_end?: string | null;
 }
 
 export interface AppealItemIn {
@@ -2332,7 +2448,11 @@ export interface StatsSeries {
 }
 
 export interface LifetimeTotals {
-  delivered: number;
+  /** ADR-305: NULL in workforce mode when no route has been Flex-scanned —
+   *  delivered is DERIVED there (carried − rts − missing), and an empty scanned
+   *  set has no figure. Render an em-dash, never 0: "delivered nothing" is a
+   *  different claim about a real person. Always a number in full mode. */
+  delivered: number | null;
   rts: number;
   missing: number;
   damaged: number;
@@ -2340,6 +2460,10 @@ export interface LifetimeTotals {
   trips: number;
   /** Null, never 0, when nothing has been attempted. */
   success_pct: number | null;
+  /** ADR-305 D3: routes with no Flex count, excluded from BOTH delivered and
+   *  attempted. > 0 means these figures cover a SUBSET of the walker's routes,
+   *  and the UI must say so — "93.9% over 2 of 3 routes", not a bare 93.9%. */
+  routes_excluded_unscanned: number;
 }
 
 /** Per calendar year, ALL TIME — computed server-side because the daily series

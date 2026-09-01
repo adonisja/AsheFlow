@@ -168,6 +168,17 @@ class Settings(BaseSettings):
     # sort is blocked rather than silently running on unusable data.
     geoclient_failure_threshold: float = 0.80
 
+    # NYC Open Data (Socrata) — AddressPoint enumeration for the zone bootstrap
+    # (ADR-303 D7/D8). The App Token is a RATE-LIMIT identifier for public data,
+    # not an authorisation grant: anonymous requests work but are throttled by IP.
+    # Token-optional on purpose — requiring it would make the feature untestable
+    # until one is registered. Get one at https://data.cityofnewyork.us (Sign in
+    # -> Developer Settings -> Create New App Token).
+    socrata_app_token: str = ""
+    # AddressPoint dataset id. Pinned rather than hardcoded so a dataset
+    # migration is a config change, not a code change.
+    socrata_addresspoint_dataset: str = "uf93-f8nk"
+
     # Fernet key for encrypting trainee credentials (flex email, clock-in code).
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     # Required — no default. Add CREDENTIAL_ENCRYPTION_KEY to .env locally; set via env var in staging/prod.

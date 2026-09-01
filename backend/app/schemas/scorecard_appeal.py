@@ -1,5 +1,5 @@
 """Scorecard appeal schemas (ADR-243)."""
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Literal, Optional
 from uuid import UUID
 
@@ -23,14 +23,36 @@ class AppealEvidence(BaseModel):
     unbounded-write one, and `Any` meant a typo in a key was stored rather than
     rejected.
 
-    `ScorecardEntry.tsx` is the only producer and sends exactly
-    `{rts_reasons: [...]}`, so the shape was already known — the latitude was
-    accidental, not required.
-
     `extra="forbid"`: an unrecognised key is a client bug worth a 422, not
     something to persist silently.
+
+    The fields below are what `ScorecardEntry.tsx` — the only producer —
+    actually sends. An earlier docstring claimed it sent "exactly
+    {rts_reasons: [...]}"; it never did, and typing the model to that claim
+    made EVERY appeal filed from the UI 422 on five extra keys. The lesson is
+    ADR-301's, arriving from the other direction: a description of a data
+    source is not evidence, whether it labels a response or a request. Verified
+    by constructing the client's real payload against this model.
+
+    All the numeric fields are Optional: workforce mode has no per-package
+    delivered count (ADR-301 D2), and a route with no recorded parcel count
+    yields None rather than a fabricated zero (D3). An appeal must be able to
+    say "we do not hold this figure" rather than assert one.
     """
     rts_reasons: List[RtsReasonEvidenceIn] = Field(default_factory=list, max_length=50)
+
+    # Full mode: per-package count from DeliveryStop. None in workforce mode.
+    our_delivered: Optional[int] = Field(default=None, ge=0)
+    # Workforce mode: parcels CARRIED, captain-recorded (ADR-301 D1/D2).
+    our_carried: Optional[int] = Field(default=None, ge=0)
+    # Routes that week with no recorded parcel count (ADR-301 D3).
+    routes_unrecorded: Optional[int] = Field(default=None, ge=0)
+    # How precise our side of the comparison is (ADR-294 D5 / ADR-301 D5).
+    precision: Optional[Literal["per_package", "captain_reported"]] = None
+    our_rts: Optional[int] = Field(default=None, ge=0)
+    our_missing: Optional[int] = Field(default=None, ge=0)
+    week_start: Optional[date] = None
+    week_end: Optional[date] = None
 
     model_config = ConfigDict(extra="forbid")
 

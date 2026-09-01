@@ -171,6 +171,7 @@ def null_expired_delivery_addresses() -> dict:
     from app.models.walker_route import Route, MisroutedPackageFlag
     from app.models.delivery_stop import DeliveryStop
     from app.models.rts import RTSPackage, MissingPackage, DamagedPackage
+    from app.models.tote_address import ToteAddress
 
     now = datetime.now(timezone.utc)
     cutoff_dt = now - timedelta(hours=hours)
@@ -228,6 +229,26 @@ def null_expired_delivery_addresses() -> dict:
             .filter(DamagedPackage.route_date < cutoff_date,
                     DamagedPackage.normalised_address.isnot(None))
             .update({DamagedPackage.normalised_address: None}, synchronize_session=False)
+        )
+
+        # ADR-291: captain-entered tote addresses are customer delivery addresses
+        # and inherit this purge like any other. Being typed by a captain rather
+        # than supplied by Amazon changes nothing about what they are.
+        #
+        # BOTH columns: raw_address is what the captain typed and is just as
+        # identifying as the normalised form. block_key survives deliberately —
+        # it is what the sort routes on and cannot reconstruct a house number.
+        counts["tote_addresses"] = (
+            db.query(ToteAddress)
+            .filter(
+                ToteAddress.entry_date < cutoff_date,
+                (ToteAddress.raw_address.isnot(None))
+                | (ToteAddress.normalised_address.isnot(None)),
+            )
+            .update(
+                {ToteAddress.raw_address: None, ToteAddress.normalised_address: None},
+                synchronize_session=False,
+            )
         )
 
         db.commit()

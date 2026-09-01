@@ -346,3 +346,42 @@ def get_company_config(db: Session, company_id: UUID) -> ResolvedConfig:
         scorecard_signsignal_rate_target  = row.scorecard_signsignal_rate_target,
         scorecard_dvic_target             = row.scorecard_dvic_target,
     )
+
+# ── Operating mode helpers (ADR-289) ─────────────────────────────────────────
+
+def full_mode_company_ids(db) -> set:
+    """company_ids whose tenant has an Amazon package feed (operating_mode='full').
+
+    For cross-tenant background tasks, which iterate rows rather than companies and
+    so cannot use the RequireMode request dependency. A task that reads package-path
+    data must filter to these, or it burns work on tenants that structurally cannot
+    produce that data — and, worse for `decay_troublesome_scores`, actively degrades
+    stored intelligence that nothing is refreshing (ADR-293).
+    """
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    rows = (
+        db.query(CompanyConfig.company_id)
+        .filter(CompanyConfig.operating_mode == MODE_FULL)
+        .all()
+    )
+    return {r[0] for r in rows}
+
+
+def is_full_mode(db, company_id) -> bool:
+    """Does this ONE company have a package feed (operating_mode='full')?
+
+    The request-path counterpart to `full_mode_company_ids`, which exists for
+    cross-tenant background tasks. A request already knows its company, so
+    loading every full-mode id to test one of them would be wasteful.
+    """
+    from app.models.company import CompanyConfig
+    from app.services.constants import MODE_FULL
+
+    cfg = (
+        db.query(CompanyConfig.operating_mode)
+        .filter(CompanyConfig.company_id == company_id)
+        .first()
+    )
+    return bool(cfg and cfg[0] == MODE_FULL)

@@ -1,10 +1,11 @@
 import { errorText } from '../utils/errorText';
+import { useErrorBanner } from '../hooks/useErrorBanner';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axiosClient from '../api/axiosClient';
 import { Truck, Users, AlertCircle, Play, GripVertical, Plus, Trash2, Phone, Mail, Info, ChevronDown, ChevronUp, RefreshCw, Send, CheckCircle2, XCircle, Clock, ArrowRightLeft } from 'lucide-react';
-import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse } from '../api/types';
+import type { UnavailableStaff, EmergencyPoolMember, DispatchResult, FinalizeResponse, ClearDispatchResponse } from '../api/types';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { getLocalYMD } from '../utils/date';
 import PreviousAssignments from '../components/PreviousAssignments';
@@ -128,6 +129,11 @@ function CurrentAssignments() {
   // ADR-256 D3: trucks that finalized without a captain. Warn-only for now —
   // enforcement lands once captains are staffed and assign_captains places them.
   const [captainlessTrucks, setCaptainlessTrucks] = useState<string[]>([]);
+  // ADR-324 D1 — finalize now succeeds when Discord is down, so a 200 is no
+  // longer proof the crews were posted there. This is the only signal.
+  const [discordFailed, setDiscordFailed] = useState(false);
+  // ADR-328 D5 — a clear that left Discord messages behind.
+  const [discordClearWarning, setDiscordClearWarning] = useState<string | null>(null);
   // hub state
   const [showHubModal, setShowHubModal] = useState(false);
   const [hubModalTruckId, setHubModalTruckId] = useState<string>('');
@@ -141,8 +147,11 @@ function CurrentAssignments() {
      muted until dispatch confirms or edits it.
 
      Publish applies an unconfirmed suggestion anyway (the backend resolves it),
-     so this UI is about VISIBILITY — which bays have actually been looked at —
-     not about whether the driver gets one. */
+     so this UI is about VISIBILITY — which bays have actually been looked at.
+
+     Since ADR-309 an EMPTY bay (no setting and no history to inherit) blocks the
+     bulk publish: `dockGate` below disables the button and the server 409s. A
+     suggested bay is still fine — it resolves to a real value. */
   const [dockDrafts, setDockDrafts] = useState<Record<string, string>>({});
   const [dockSuggest, setDockSuggest] = useState<Record<string, { prefill: string; recent: string[] }>>({});
   const [dockSaving, setDockSaving] = useState<string | null>(null);
@@ -437,6 +446,7 @@ function CurrentAssignments() {
           // did — meant the warning existed on the server and reached nobody.
           const captainless = res.data?.captainless_trucks ?? [];
           setCaptainlessTrucks(captainless);
+          setDiscordFailed(res.data?.discord_failed ?? false);
           await fetchDispatchData();
         } catch (err: unknown) {
           setError(errorText(err, 'Failed to post final assignments to Discord.'));
@@ -568,6 +578,13 @@ function CurrentAssignments() {
       setIsLoading(true);
       setError(null);
       const response = await axiosClient.get(`/dispatch/${selectedDate}`);
+
+      // ADR-341 — fetched alongside the day's data. Best-effort: a dispatcher
+      // must still see their board if this one call fails.
+      axiosClient
+        .get<{ discord_healthy: boolean; since: string | null }>('/dispatch/integration-status')
+        .then(r => setDiscordDown(r.data?.discord_healthy === false ? { since: r.data.since } : null))
+        .catch(() => { /* not worth an error banner — the board matters more */ });
       
       // Only null out dispatchData if there are genuinely no assignments AND no
       // workflow_status — an empty crew dict with a status means dispatch ran
@@ -781,7 +798,24 @@ function CurrentAssignments() {
         setIsLoading(true);
         setError(null);
         try {
-          await axiosClient.delete(`/dispatch/${selectedDate}`);
+          const res = await axiosClient.delete<ClearDispatchResponse>(
+            `/dispatch/${selectedDate}`,
+          );
+          // ADR-328 D5 — the clear can succeed in the database while leaving
+          // messages standing in Discord. Say so: the crew reads Discord, so a
+          // silent partial retraction is the version that misleads people.
+          const failures = res.data?.discord_failures ?? [];
+          if (res.data && res.data.discord_cleared === false) {
+            setDiscordClearWarning(
+              'The day was cleared, but Discord could not be reached — crew posts may still be visible there.',
+            );
+          } else if (failures.length > 0) {
+            setDiscordClearWarning(
+              `The day was cleared. These Discord messages could not be removed: ${failures.join('; ')}.`,
+            );
+          } else {
+            setDiscordClearWarning(null);
+          }
           setDispatchData(null);
           await fetchDispatchData();
         } catch (err: unknown) {
@@ -941,11 +975,15 @@ function CurrentAssignments() {
         closeDialog();
         setPublishingHubTruckId(truckId);
         setError(null);
+        // ADR-333 D2 — clear this truck's marker on a fresh attempt.
+        setTruckActionError(prev => { const n = { ...prev }; delete n[truckId]; return n; });
         try {
           await axiosClient.post(`/dispatch/trucks/${truckId}/publish`, { date: selectedDate });
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
         } catch (err: unknown) {
-          setError(errorText(err, `Failed to publish ${truckName}.`));
+          const msg = errorText(err, `Failed to publish ${truckName}.`);
+          setError(msg);
+          setTruckActionError(prev => ({ ...prev, [truckId]: 'Publish failed — see the message above.' }));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -969,6 +1007,7 @@ function CurrentAssignments() {
         closeDialog();
         setPublishingHubTruckId(truckId);
         setError(null);
+        setTruckActionError(prev => { const n = { ...prev }; delete n[truckId]; return n; });
         try {
           await axiosClient.post(
             `/dispatch/${selectedDate}/finalize?truck_id=${truckId}`, {},
@@ -976,6 +1015,7 @@ function CurrentAssignments() {
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
         } catch (err: unknown) {
           setError(errorText(err, `Failed to post ${truckName}'s final crew.`));
+          setTruckActionError(prev => ({ ...prev, [truckId]: 'Post final crew failed — see the message above.' }));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -1132,27 +1172,126 @@ function CurrentAssignments() {
   // the < 50% block too — this is UX, not the safety boundary.
   const FINALIZE_BLOCK = 0.5;
   const FINALIZE_WARN = 0.8;
+  /** How many NON-HUB trucks are still at each phase (ADR-320 D1).
+   *
+   *  The bulk buttons used to gate on `workflowStep`, which is the day's
+   *  furthest-along status — so publishing ONE truck made the whole day
+   *  "published" and the bulk button went dead for the five that never got
+   *  their DMs. ADR-288 fixed exactly this for the per-truck CARDS and left the
+   *  day-level buttons reading the collapsed value.
+   *
+   *  Hubs are excluded the same way `workflow_status` excludes them
+   *  (ADR-274/286), or a hub-only day would re-enable a button it should not.
+   *
+   *  The server already does the right thing with a mixed day —
+   *  publish_dispatch filters to `status == "planned"` — so this only stops the
+   *  client refusing to make the call. */
+  const phaseCounts = useMemo(() => {
+    const rows = (dispatchData?.truck_assignments || [])
+      .filter((a: any) => !a.is_hub);
+    return {
+      planned: rows.filter((a: any) => a.status === 'planned').length,
+      active:  rows.filter((a: any) => a.status === 'active').length,
+    };
+  }, [dispatchData]);
+
+  /** ADR-329 D1 — each truck's OWN status, for per-truck and per-member controls.
+   *
+   *  `workflowStep` is the day's furthest-along status: 'finalized' the moment
+   *  ANY truck completes. Gating a per-member control on it meant one finalized
+   *  truck hid the confirm button for every crew member on every truck still
+   *  waiting — measured on staging, 95 members across five active trucks.
+   *
+   *  Same defect ADR-320 fixed for the bulk buttons; the per-member gates were
+   *  not revisited. No new endpoint: `truck_assignments` already carries it. */
+  const truckStatuses = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const a of (dispatchData?.truck_assignments || []) as any[]) {
+      if (a?.truck_id) out[String(a.truck_id)] = a.status;
+    }
+    return out;
+  }, [dispatchData]);
+
+  /** Trucks with no bay, for the bulk publish gate (ADR-309 D4).
+   *
+   *  A truck resolves to a dock from an explicit setting OR an inherited
+   *  suggestion (ADR-274 D17) — `dockStateFor` already applies that precedence,
+   *  so a suggested-but-unconfirmed bay counts as HAVING one. What blocks is an
+   *  empty value: no setting and no history to inherit from.
+   *
+   *  This is a courtesy, not the enforcement — the server 409s regardless
+   *  (ADR-309 D1), which is what covers a stale tab or a second dispatcher.
+   *
+   *  Deliberately NOT applied to the per-truck publish: publishing one truck
+   *  whose dock is set is routine, and the hub usually leaves before the rest
+   *  (ADR-309 D3). */
+  const dockGate = useMemo(() => {
+    const missing = Object.keys(dispatchData?.assigned_crews || {})
+      .filter(id => !dockStateFor(id).value.trim())
+      .map(id => trucks[id]?.name || id)
+      .sort();
+    return { block: missing.length > 0, missing };
+  }, [dispatchData, dockDrafts, dockSuggest, trucks]);
+
+  /** ADR-339 D4 — the ADR-333 prototype, now shared.
+   *
+   *  Nine other pages had the same shape (Assets worst at ~1934 lines between
+   *  banner and furthest setError). Keeping a private copy here would mean two
+   *  implementations, and the one that diverges is the one nobody notices.
+   */
+  const errorRef = useErrorBanner(error);
+
+  /** ADR-341 D1 — is Discord delivering, before the dispatcher finds out by
+   *  clicking finalize? The heartbeat (ADR-337) knows up to ten minutes sooner.
+   *
+   *  A boolean, not the alert rows: a dispatcher can do exactly one thing with
+   *  this — stop expecting Discord posts. The board itself is super-admin-only.
+   */
+  const [discordDown, setDiscordDown] = useState<{ since: string | null } | null>(null);
+
+  /** ADR-333 D2 — which truck's action failed.
+   *
+   *  The banner carries the instruction; this carries the LOCATION. Reading the
+   *  banner means scrolling away from the card, and on a six-truck day "which
+   *  one?" is then ambiguous. Cleared on the next attempt for that truck.
+   */
+  const [truckActionError, setTruckActionError] = useState<Record<string, string>>({});
+
+
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
-    const live = workflowStep === 'published';
+    // ADR-329 D2 — the stats were already per-truck and were then multiplied by
+    // a DAY-level `live` flag, so one finalized truck collapsed block/warn to
+    // false and the under-50% pre-flight warning stopped working for every
+    // truck still awaiting confirmation. Each truck's own status decides
+    // whether it gates; a finalized truck drops out, correctly, because its
+    // crew is already committed.
     const truckStats = Object.entries(crews)
       .map(([truckId, crew]) => {
         const total = crew.length;
         const confirmed = crew.filter(m => confirmations[m.employee_id] === 'confirmed').length;
-        return { name: trucks[truckId]?.name || 'Unnamed truck', total, confirmed, rate: total ? confirmed / total : 1 };
+        return {
+          truckId,
+          name: trucks[truckId]?.name || 'Unnamed truck',
+          total, confirmed, rate: total ? confirmed / total : 1,
+        };
       })
-      .filter(t => t.total > 0);   // trucks with no crew don't gate
+      // trucks with no crew don't gate, and neither do trucks past confirmation
+      .filter(t => t.total > 0 && truckStatuses[t.truckId] === 'active');
 
+    // `live` is retained for the surrounding copy, but no longer multiplies the
+    // gate: it now means "is any truck still in its confirmation window".
+    const live = truckStats.length > 0;
     const below50 = truckStats.filter(t => t.rate < FINALIZE_BLOCK);
     const below80 = truckStats.filter(t => t.rate < FINALIZE_WARN);
     return {
       live,
       truckStats,
-      block: live && below50.length > 0,       // hard gate
-      warn: live && below50.length === 0 && below80.length > 0,  // soft gate
+      block: below50.length > 0,       // hard gate
+      warn: below50.length === 0 && below80.length > 0,  // soft gate
       below50, below80,
     };
-  }, [dispatchData, confirmations, trucks, workflowStep]);
+  }, [dispatchData, confirmations, trucks, truckStatuses]);
 
   // Hub trucks come from the TRUCK, not from a status (ADR-274).
   //
@@ -1248,6 +1387,31 @@ function CurrentAssignments() {
           )}
         </div>
 
+        {/* ADR-341 D4 — Discord is down, stated as its CONSEQUENCE.
+            "Discord integration failed" tells a dispatcher nothing they can use.
+            The two facts that matter are that crews ARE still being told
+            (ADR-324 D1 — the in-app path is unaffected) and not to wait for the
+            Discord post.
+
+            Sits directly above the action buttons rather than at the top of the
+            page: it is a precondition for those actions, and ADR-333 established
+            that a message far from the control it concerns is one nobody reads. */}
+        {discordDown && (
+          <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 flex gap-3 text-warning">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <p className="text-sm font-medium">
+              <span className="font-semibold">Discord is not delivering messages</span>
+              {discordDown.since && (
+                <span className="font-normal">
+                  {' '}(since {new Date(discordDown.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                </span>
+              )}
+              . Crews are still notified in the app — publish and finalize work as normal.
+              Discord posts and DMs will resume when it is restored.
+            </p>
+          </div>
+        )}
+
         {/* Row 3 — workflow actions */}
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -1264,20 +1428,33 @@ function CurrentAssignments() {
           </button>
           <button
             onClick={handlePublishToDiscord}
-            disabled={isPublishing || isLoading || workflowStep !== 'dispatched'}
+            disabled={isPublishing || isLoading || workflowStep === 'none'
+                      || phaseCounts.planned === 0 || dockGate.block}
             className="bg-success text-white hover:bg-success/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            title="DM each crew member their assignment and open the confirmation window"
+            title={dockGate.block
+              ? `Blocked — no dock set for ${dockGate.missing.join(', ')}. A driver with no bay has nowhere to collect their vehicle.`
+              : phaseCounts.planned === 0
+              ? 'Every truck has already been published'
+              : 'DM each crew member their assignment and open the confirmation window'}
           >
             {isPublishing ? (
               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
               <Send className="w-4 h-4" />
             )}
-            Publish Initial Confirmations to Discord
+            {/* ADR-320 D3 — say what pressing it will actually do. With a mixed
+                day the plain label overstates: an already-published truck is
+                skipped by the server, and a disabled button with no explanation
+                is what made this look broken rather than finished. */}
+            {phaseCounts.planned === 0
+              ? 'All trucks published'
+              : workflowStep === 'dispatched'
+              ? 'Publish Initial Confirmations to Discord'
+              : `Publish Remaining ${phaseCounts.planned} to Discord`}
           </button>
           <button
             onClick={handleFinalize}
-            disabled={isFinalizing || isLoading || workflowStep !== 'published' || confirmationGate.block}
+            disabled={isFinalizing || isLoading || phaseCounts.active === 0 || confirmationGate.block}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={confirmationGate.block
               ? 'Blocked — under 50% confirmed on at least one truck'
@@ -1301,7 +1478,7 @@ function CurrentAssignments() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-danger/50 bg-danger/10 p-4 flex gap-3 text-danger">
+        <div ref={errorRef} className="rounded-lg border border-danger/50 bg-danger/10 p-4 flex gap-3 text-danger">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <p className="text-sm font-medium">{error}</p>
         </div>
@@ -1346,6 +1523,50 @@ function CurrentAssignments() {
               </p>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ADR-328 D5 — the clear succeeded but Discord kept some posts. Named
+          rather than counted, so the manual cleanup is a 30-second job. */}
+      {discordClearWarning && (
+        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
+          <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
+            <AlertCircle className="w-4 h-4" />
+            Discord was not fully cleared
+          </h3>
+          <p className="text-sm text-warning pl-1">{discordClearWarning}</p>
+          <button
+            type="button"
+            onClick={() => setDiscordClearWarning(null)}
+            className="text-xs underline text-warning/80 hover:text-warning"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* ADR-324 D1 — Discord was unreachable and the finalize went through anyway.
+          Above the captainless banner because this one is not about a subset of
+          trucks: nothing reached Discord at all. Persistent and dismissible, not a
+          toast — a dispatcher who scrolls past it still needs to know the crews
+          were told in-app only. */}
+      {discordFailed && (
+        <div className="card space-y-2 border-warning border mb-4 bg-warning/5">
+          <h3 className="font-semibold text-warning flex items-center gap-2 text-sm uppercase tracking-wide">
+            <AlertCircle className="w-4 h-4" />
+            Discord did not receive the crew post
+          </h3>
+          <p className="text-sm text-warning pl-1">
+            The day was finalized and <span className="font-semibold">crews were notified in
+            the app</span> — only the Discord post failed. An administrator has been alerted.
+          </p>
+          <button
+            type="button"
+            onClick={() => setDiscordFailed(false)}
+            className="text-xs underline text-warning/80 hover:text-warning"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -1804,6 +2025,14 @@ function CurrentAssignments() {
                      const name = trucks[truckId]?.name || 'this truck';
                      return (
                    <div className="flex items-center gap-2 mb-3 flex-wrap">
+                       {/* ADR-333 D2 — which truck failed, kept next to the
+                           control that failed. The banner above carries the
+                           instruction; this carries the location. */}
+                       {truckActionError[truckId] && (
+                         <p className="w-full text-[10px] font-semibold text-danger">
+                           {truckActionError[truckId]}
+                         </p>
+                       )}
                        {st === 'planned' && (
                          <button
                            onClick={() => handlePublishHub(truckId)}
@@ -2090,7 +2319,18 @@ function CurrentAssignments() {
                                    const conf = confirmations[member.employee_id];
                                    if (conf === 'confirmed') return <CheckCircle2 className="w-4 h-4 text-success" aria-label="Confirmed" />;
                                    if (conf === 'declined')  return <XCircle className="w-4 h-4 text-danger" aria-label="Declined" />;
-                                   if (conf === 'pending' && isAdmin && workflowStep === 'published') {
+                                   // ADR-326 D3 — offer confirm for anyone NOT confirmed, not
+                                   // only 'pending'. A member with no confirmation row at all
+                                   // (publish skipped seeding — ADR-326 D1) has conf ===
+                                   // undefined, so gating on 'pending' rendered no control and
+                                   // left the crew unconfirmable from the UI. Absence is the
+                                   // state that most needs the button, not the one that needs
+                                   // it least.
+                                   // ADR-329 D1 — THIS truck's status, not the day's.
+                                   // workflowStep is 'finalized' the moment ANY truck
+                                   // completes, so one finalized truck hid this button
+                                   // for every member of every truck still waiting.
+                                   if (conf !== 'confirmed' && isAdmin && truckStatuses[truckId] === 'active') {
                                      return (
                                        <button
                                          onClick={() => handleConfirmEmployee(member.employee_id)}
@@ -2108,7 +2348,9 @@ function CurrentAssignments() {
                                    if (conf === 'pending') return <Clock className="w-4 h-4 text-warning" aria-label="Pending confirmation" />;
                                    return null;
                                  })()}
-                                 {(workflowStep === 'published' || workflowStep === 'finalized') && (
+                                 {/* ADR-329 D1 — per-truck, for the same reason. A transfer
+                                     is meaningful once THIS truck is published. */}
+                                 {(truckStatuses[truckId] === 'active' || truckStatuses[truckId] === 'completed') && (
                                    <button
                                      onClick={() => {
                                        setTransferModal({ employeeId: member.employee_id, employeeName: member.name || member.employee_id });

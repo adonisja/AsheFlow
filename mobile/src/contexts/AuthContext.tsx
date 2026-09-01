@@ -11,6 +11,7 @@ import { Linking } from 'react-native';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
 import { getValidIdToken, touchLastActive, clearTokens } from '../api/tokenRefresh';
+import apiClient from '../api/client';
 import { generatedLight } from '@theme/generated-colors';
 
 /** OAuth hosted-UI chrome. Theme-constant on purpose — see usage below. */
@@ -37,6 +38,14 @@ type AuthUser = {
   firstName: string;
 };
 
+/** What this company can do (ADR-289), from GET /companies/my-capabilities. */
+export type Capabilities = {
+  operating_mode: 'full' | 'workforce';
+  /** Feature keys. ABSENT = render no entry point for it. Clients gate on these
+   *  rather than on operating_mode, so a new mode needs no app release. */
+  features: string[];
+};
+
 type AuthContextType = {
   user: AuthUser | null;
   isLoading: boolean;
@@ -45,6 +54,12 @@ type AuthContextType = {
   signInWithProvider: (provider: 'Discord' | 'Google') => Promise<void>;
   signOut: () => Promise<void>;
   hasRole: (...roles: string[]) => boolean;
+  capabilities: Capabilities | null;
+  /** Fails OPEN when capabilities are unknown: a walker on a flaky van
+   *  connection must not lose their tabs, and the server enforces every gated
+   *  route anyway (RequireMode -> 404). A dead tab is recoverable; a blank app
+   *  mid-shift is not. */
+  hasFeature: (key: string) => boolean;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -52,6 +67,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser]         = useState<AuthUser | null>(null);
   const [isLoading, setLoading] = useState(true);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
 
   useEffect(() => { restoreSession(); }, []);
 
@@ -172,7 +188,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     await clearTokens();
     setUser(null);
+    setCapabilities(null);
   }, []);
+
+  // ADR-289: load once the user is known, for EVERY role — field staff need this
+  // to build their tabs as much as an admin does. A failure leaves it null, which
+  // hasFeature reads as "show everything".
+  useEffect(() => {
+    if (!user) { setCapabilities(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiClient.get<Capabilities>('/companies/my-capabilities');
+        if (!cancelled) setCapabilities(res.data);
+      } catch {
+        if (!cancelled) setCapabilities(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const hasFeature = useCallback(
+    (key: string) => (capabilities ? capabilities.features.includes(key) : true),
+    [capabilities],
+  );
 
   const hasRole = useCallback(
     (...roles: string[]) => roles.some(r => user?.groups.includes(r)),
@@ -183,6 +222,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={{
       user, isLoading, isAuthenticated: !!user,
       signIn, signInWithProvider, signOut, hasRole,
+      capabilities, hasFeature,
     }}>
       {children}
     </AuthContext.Provider>
@@ -197,6 +237,8 @@ const AUTH_FALLBACK: AuthContextType = {
   signInWithProvider: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signOut: async () => {},
   hasRole: () => false,
+  capabilities: null,
+  hasFeature: () => true,
 };
 
 export function useAuth() {

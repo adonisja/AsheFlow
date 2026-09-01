@@ -98,17 +98,30 @@ class ManagementOperationalSummary(BaseModel):
     period_start: date
     period_end: date
 
-    total_packages_delivered: int
-    total_packages_assigned: int
+    # ADR-294 D1/D2: Optional, NOT int-with-a-zero-default.
+    #
+    # Zero is a MEASUREMENT — "your crew delivered nothing today". Absence is a
+    # different statement — "this company has no package feed, so the question
+    # does not apply". A dispatcher acts on the first and ignores the second, and
+    # an int field cannot tell them apart. That conflation is the shape of the
+    # 2026-07-29 incident where 11 DTO fields returned fabricated data.
+    total_packages_delivered: Optional[int] = None
+    total_packages_assigned: Optional[int] = None
     total_paid_hours: Optional[float] = None
     paid_hours_source: str                       # flex_timesheets | departures | none
 
     packages_per_hour: Optional[float] = None
     avg_minutes_per_stop: Optional[float] = None
 
+    # D2: carry the reason. A client that infers "null means workforce mode"
+    # is wrong the first time a full-mode company legitimately has no
+    # deliveries yet today, so the cause is stated rather than guessed.
+    package_metrics_available: bool = True
+    package_metrics_unavailable_reason: Optional[str] = None
+
     delivery_success_rate_pct: Optional[float] = None
     rework_rate_pct: Optional[float] = None
-    total_rework_count: int
+    total_rework_count: Optional[int] = None
 
     routes_dispatched: int
     routes_completed: int
@@ -316,10 +329,21 @@ class DispatchFleetSnapshot(BaseModel):
     stops_planned: int
     stops_in_progress: int
     stops_completed: int
-    packages_delivered: int
+    # ADR-294 D1/D2: Optional, NOT int-with-a-zero-default.
+    #
+    # Zero is a MEASUREMENT — "your crew delivered nothing today". Absence is a
+    # different statement — "this company has no package feed, so the question
+    # does not apply". A dispatcher acts on the first and ignores the second, and
+    # an int field cannot tell them apart. That conflation is the shape of the
+    # 2026-07-29 incident where 11 DTO fields returned fabricated data.
+    packages_delivered: Optional[int] = None
 
     avg_packages_per_active_truck: Optional[float] = None
     avg_minutes_per_stop: Optional[float] = None
+
+    # D2 — see ManagementOperationalSummary.
+    package_metrics_available: bool = True
+    package_metrics_unavailable_reason: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -399,6 +423,33 @@ class DispatchPerformanceSummary(BaseModel):
     slowest_routes: List[SlowestRoute]
     fastest_crew: Optional[CrewPerformance] = None
     slowest_crew: Optional[CrewPerformance] = None
+
+    # ADR-298 D3. Carried AT THE CARD, not only on the totals: a client that
+    # infers unavailability from `baseline is None` will be wrong the first time
+    # a full-mode company legitimately has no completed routes in 30 days — a new
+    # tenant, or a Monday after a holiday.
+    available: bool = True
+    unavailable_reason: Optional[str] = None
+
+    # ADR-298 D1. The LEAN CARD: metrics workforce mode genuinely holds, all
+    # sourced from `flex_package_count` (the real parcel count a captain reads
+    # off Amazon Flex at scan time). `package_count` is never read here — in
+    # workforce mode it counts ADDRESSES.
+    #
+    # These are CARRIED metrics and the labels must say so. Nothing in workforce
+    # mode counts a delivery as it happens, so "packages per hour" here is a
+    # CARRYING rate, not a delivery rate; where a walker returns packages the two
+    # genuinely differ.
+    routes_completed: Optional[int] = None
+    packages_carried: Optional[int] = None
+    mean_packages_per_route: Optional[float] = None
+    mean_blocks_per_route: Optional[float] = None
+    mean_totes_per_route: Optional[float] = None
+    capacity_utilisation_pct: Optional[float] = None
+    rts_per_100_carried: Optional[float] = None
+    missing_per_100_carried: Optional[float] = None
+    # NULL until a captain records the Flex count; never 0 as a stand-in.
+    routes_missing_flex_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

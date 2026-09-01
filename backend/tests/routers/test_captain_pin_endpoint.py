@@ -14,12 +14,9 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-try:
-    from app.routers.dispatch import set_captain_pin
-    from app.schemas.dispatch import CaptainPinUpdate
-    from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
-except ImportError:
-    pytest.skip("proprietary dispatch deps not available (CI skip)", allow_module_level=True)
+from app.routers.dispatch import set_captain_pin
+from app.schemas.dispatch import CaptainPinUpdate
+from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
 
 from tests.conftest import make_employee, make_truck, SEED_COMPANY_ID
 

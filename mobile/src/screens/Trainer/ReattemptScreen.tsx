@@ -10,6 +10,7 @@ import { errorText } from '@api/errorText';
 import { useEmployeeId } from '@hooks/useEmployeeId';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useMyTruck } from '../../hooks/useMyTruck';
 
 /**
  * Reattempt management for drivers and captains (ROUTE_SORT_ROLES).
@@ -103,17 +104,12 @@ export default function ReattemptScreen() {
     try {
       const eid = await fetchId();
       const disp = await apiClient.get(`/dispatch/${today}`);
-      const crews: Record<string, CrewMember[]> = disp.data?.assigned_crews ?? {};
-      const truckAssignments: { id?: string; assignment_id?: string; truck_id: string }[] = disp.data?.truck_assignments ?? [];
+      // ADR-331 — one implementation of "which truck am I on".
+      const mine = useMyTruck<CrewMember>(disp.data, eid);
+      if (!mine.truckId) { setTaId(null); return; }
+      setCrew(mine.crew.filter(m => m.role !== 'driver'));
 
-      const myTruckEntry = Object.entries(crews).find(([, members]) =>
-        members.some(m => m.employee_id === eid));
-      if (!myTruckEntry) { setTaId(null); return; }
-      const [myTruckId, myCrew] = myTruckEntry;
-      setCrew(myCrew.filter(m => m.role !== 'driver'));
-
-      const ta = truckAssignments.find(t => t.truck_id === myTruckId);
-      const assignmentId = ta?.id ?? ta?.assignment_id ?? null;
+      const assignmentId = mine.assignmentId;
       if (!assignmentId) { setTaId(null); return; }
       setTaId(assignmentId);
 

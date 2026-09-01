@@ -12,11 +12,8 @@ from datetime import date
 
 import pytest
 
-try:
-    from app.services.assign_captains import assign_captains, _familiarisation_weights
-    from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
-except ImportError:
-    pytest.skip("proprietary dispatch deps not available (CI skip)", allow_module_level=True)
+from app.services.assign_captains import assign_captains, _familiarisation_weights
+from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
 
 from tests.conftest import make_employee, make_truck, make_relationship, SEED_COMPANY_ID
 

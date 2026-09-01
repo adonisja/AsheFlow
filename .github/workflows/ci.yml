@@ -87,6 +87,18 @@ jobs:
       - name: Shared web/mobile copies are identical
         run: python scripts/check_shared_copies.py
 
+      # ADR-289 gates package-coupled routers on operating_mode. A tab that
+      # renders but whose calls all 404 is worse than a missing tab — and three
+      # shipped that way before anyone noticed, each found by a person using the
+      # app rather than by a test. An earlier hand audit missed two of them by
+      # checking only the tab component; the calls were one import deeper.
+      #
+      # Walks the transitive import tree of every nav entry. Known findings are
+      # in the script's BASELINE with the ADR that fixes each, so a NEW one still
+      # fails the build.
+      - name: Ungated tabs cannot reach full-mode endpoints
+        run: python scripts/check_mode_gated_tabs.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit
@@ -323,6 +335,62 @@ jobs:
 
           print(f"All {len(mods)} routers import cleanly against the public models.")
           EOF
+
+      # ADR-311 — a suite that SHRINKS is a failure, even when every test passes.
+      #
+      # The proprietary routers/services are gitignored and copied in from
+      # AsheFlow-private above. When tests guarded that import with
+      # `pytest.skip(allow_module_level=True)`, a broken or stale private pull
+      # silently dropped 167 tests and CI still exited 0 — measured, not
+      # hypothetical. The guards are gone (a missing module is now a collection
+      # error), but nothing stopped a future one being added, and the same
+      # green-while-blind failure would return.
+      #
+      # This floor is the backstop: it counts what pytest actually collected and
+      # fails if the suite quietly got smaller, whatever the cause — a new skip
+      # guard, a private pull that no-op'd, a directory that stopped collecting.
+      # Raise MIN_TESTS when the suite grows; never lower it to make CI pass.
+      - name: Assert the suite did not silently shrink
+        working-directory: backend
+        env:
+          MIN_TESTS: "2700"
+          APP_ENV: test
+          DATABASE_URL: "sqlite:///:memory:"
+          REDIS_URL: redis://localhost:6379/0
+          AWS_REGION: us-east-1
+          AWS_COGNITO_USER_POOL_ID: us-east-1_TESTPOOL
+          AWS_COGNITO_APP_CLIENT_ID: test-client-id
+          INTERNAL_SECRET: ci-test-secret-not-real
+          CREDENTIAL_ENCRYPTION_KEY: ${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
+        run: |
+          # Collection output kept, not discarded: a module that fails to import
+          # is the most likely cause of a shrunken suite, and 2>/dev/null hid
+          # exactly that on this step's first run.
+          OUT=$(python -m pytest tests/ -q --collect-only 2>&1) || true
+          COLLECTED=$(printf '%s' "$OUT" | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
+          if [ -z "$COLLECTED" ]; then
+            echo "::error::Could not determine the collected test count — pytest collection itself failed."
+            printf '%s\n' "$OUT" | tail -30
+            exit 1
+          fi
+          if printf '%s' "$OUT" | grep -qE "error(s)? during collection"; then
+            echo "::error::Collection errors — some modules did not import."
+            printf '%s\n' "$OUT" | grep -E "^ERROR|error(s)? during collection" | head -20
+            exit 1
+          fi
+          echo "collected: $COLLECTED (floor: $MIN_TESTS)"
+          if [ "$COLLECTED" -lt "$MIN_TESTS" ]; then
+            echo "::error::Test suite shrank: $COLLECTED collected, expected >= $MIN_TESTS."
+            echo "Something is silently not running. Most likely causes:"
+            echo "  1. A pytest.skip(allow_module_level=True) guard was added — see ADR-311."
+            echo "     Proprietary modules are pulled from AsheFlow-private BEFORE pytest runs,"
+            echo "     so a failed import is a real failure and must not be skipped."
+            echo "  2. The AsheFlow-private pull failed or synced a stale branch."
+            echo "  3. A test directory stopped being collected."
+            echo "Do NOT lower MIN_TESTS to make this pass."
+            grep -rn "allow_module_level" tests/ || true
+            exit 1
+          fi
 
       - name: Run tests
         working-directory: backend

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -41,6 +42,22 @@ router = APIRouter(prefix="/roll-call", tags=["roll-call"])
 
 # ADR-256: captain leads the truck; field_supervisor oversees the road.
 _allow_field     = RoleChecker(["driver", "trainer", "dispatch", "management", "admin", "captain", "field_supervisor"])
+
+# ADR-306. DELIBERATELY WIDER than `_allow_field` above, which omits `trainee`
+# and `walker`.
+#
+# This gate is for AP arrival — the crew member tapping "I've arrived" — and the
+# people who do that most are precisely the two roles `_allow_field` leaves out.
+# Reusing it would have locked out the endpoint's primary users while looking
+# like a tidy consolidation; caught by diffing the two gates before the move.
+#
+# Not `FIELD_ROLES` from services.constants either: that tuple documents itself
+# as having no importers because `employees.py` shadows it, so importing it here
+# would create a second source of truth for a security boundary.
+_allow_ap_arrival = RoleChecker([
+    "walker", "trainee", "trainer", "driver", "captain",
+    "dispatch", "management", "admin", "field_supervisor",
+])
 _allow_dispatch  = RoleChecker(["dispatch", "management", "admin"])
 
 DEFAULT_LATE_WINDOW = 20  # minutes — used when CompanyConfig.late_window_minutes is NULL
@@ -739,3 +756,114 @@ def _build_summary_entries(
             notes            = rc.notes if rc else None,
         ))
     return entries
+
+
+# ── AP arrival (ADR-306) ──────────────────────────────────────────────────────
+
+class ApArrivalIn(BaseModel):
+    """ADR-306 D2. Was `body: dict` with an unvalidated `.get()` straight into a
+    query filter — an untyped payload at the trust boundary (CLAUDE.md dim 9).
+
+    `UUID` not `str`, so a malformed id is a 422 at the boundary rather than
+    reaching SQLAlchemy. `extra="forbid"` so a mistyped key is a client bug worth
+    a 422, not a silently ignored field.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    truck_assignment_id: UUID
+
+
+@router.post("/ap-arrival")
+def confirm_ap_arrival(
+    body: ApArrivalIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_ap_arrival),
+    db: Session = Depends(get_db),
+):
+    """The crew member confirms physical arrival at the anchor point.
+
+    Flow: crew member taps "I've arrived" -> ap_arrived_at stamps AND a roll-call
+    record is written in the same action (ADR-199 D1 — roll-call happens at the
+    AP, so the arrival tap IS the roll-call). For a trainee, the PAIRED trainer
+    (from dispatch, never user-selected) is then notified and runs the 1.5x
+    rebalance from AP Sort.
+
+    MOVED HERE FROM `walker_routes.py` (ADR-306). That router is registered under
+    `_full_mode`, so this 404'd in workforce mode and the button did nothing —
+    despite the endpoint having no package coupling whatsoever. It stamps crew
+    presence and calls `upsert_arrival_roll_call`, which lives in THIS file. It
+    was in the package router by history, not design.
+    """
+    ta_id = body.truck_assignment_id
+
+    member = db.query(AssignmentMember).join(
+        TruckAssignment, TruckAssignment.id == AssignmentMember.assignment_id,
+    ).filter(
+        AssignmentMember.assignment_id == ta_id,
+        AssignmentMember.employee_id == caller.id,
+        AssignmentMember.company_id == caller.company_id,
+        TruckAssignment.company_id == caller.company_id,
+    ).first()
+    if not member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="You are not on this truck assignment.")
+
+    if member.ap_arrived_at is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Arrival already confirmed.")
+
+    ta = db.query(TruckAssignment).filter(
+        TruckAssignment.id == ta_id,
+        TruckAssignment.company_id == caller.company_id,
+    ).first()
+    if not ta:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Truck assignment not found.")
+
+    member.ap_arrived_at = datetime.now(timezone.utc)
+
+    # ADR-199 D1: the arrival tap IS the roll-call. Write the attendance record
+    # in the same action, deriving status via the shared ADR-198 logic. Idempotent
+    # — never overrides a status a driver/dispatch already set for today.
+    #
+    # Now a same-module call rather than a cross-router import (ADR-306).
+    roll_call_row = upsert_arrival_roll_call(
+        db=db,
+        employee_id=caller.id,
+        target_date=ta.date,
+        company_id=caller.company_id,
+        submitted_by_id=caller.id,
+    )
+
+    trainer_notified = False
+    if member.role == "trainee" and member.paired_trainer_id:
+        db.add(Notification(
+            employee_id=member.paired_trainer_id,
+            company_id=caller.company_id,
+            type="trainee_arrived",
+            message=(
+                f"\U0001F4CD {caller.name} confirmed arrival at the anchor point — "
+                f"open AP Sort to run the paired rebalance."
+            ),
+        ))
+        trainer_notified = True
+
+    db.flush()
+    write_audit(
+        db=db, company_id=caller.company_id, actor_id=caller.id,
+        action_type="route.ap_arrival_confirmed", target_table="assignment_members",
+        target_id=str(member.id),
+        detail={
+            "role": member.role,
+            "trainer_notified": trainer_notified,
+            "roll_call_status": roll_call_row.status if roll_call_row else "preexisting",
+        },
+    )
+    db.commit()
+    return {
+        "arrived_at": member.ap_arrived_at.isoformat(),
+        "trainer_notified": trainer_notified,
+        "roll_call_status": roll_call_row.status if roll_call_row else None,
+        "detail": "Your trainer has been notified — they'll run the rebalance."
+                  if trainer_notified else "Arrival recorded.",
+    }

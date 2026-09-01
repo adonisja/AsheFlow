@@ -10,7 +10,7 @@
     "",
     "Do not hand-edit. Run --baseline after genuinely removing literals."
   ],
-  "total": 184,
+  "total": 176,
   "files": {
     "frontend/src/components/CrewStatusPanel.tsx": 13,
     "frontend/src/components/OperatingZoneMap.tsx": 6,
@@ -35,24 +35,20 @@
     "mobile/src/components/ui/BrandIcons.tsx": 4,
     "mobile/src/components/ui/primitives.tsx": 1,
     "mobile/src/contexts/AuthContext.tsx": 1,
-    "mobile/src/screens/AnchorPoints/AnchorPointsScreen.tsx": 1,
     "mobile/src/screens/Auth/LoginScreen.tsx": 3,
     "mobile/src/screens/DriverSurvey/DriverSurveyScreen.tsx": 1,
     "mobile/src/screens/FieldOps/FieldOpsScreen.tsx": 4,
     "mobile/src/screens/Gear/GearRequestsScreen.tsx": 9,
     "mobile/src/screens/Home/HomeScreen.tsx": 1,
-    "mobile/src/screens/LocationProfiles/LocationProfilesScreen.tsx": 1,
-    "mobile/src/screens/Notifications/NotificationsScreen.tsx": 2,
-    "mobile/src/screens/Preferences/PreferencesScreen.tsx": 1,
+    "mobile/src/screens/Notifications/NotificationsScreen.tsx": 1,
     "mobile/src/screens/Profile/MyScorecardScreen.tsx": 2,
-    "mobile/src/screens/Schedule/ScheduleScreen.tsx": 1,
     "mobile/src/screens/ScheduleChanges/ScheduleChangesScreen.tsx": 2,
     "mobile/src/screens/Trainee/GraduationQuizScreen.tsx": 2,
-    "mobile/src/screens/Trainee/MyRouteScreen.tsx": 3,
+    "mobile/src/screens/Trainee/MyRouteScreen.tsx": 2,
     "mobile/src/screens/Trainee/TraineeTodayScreen.tsx": 1,
     "mobile/src/screens/Trainer/Phase4Screen.tsx": 2,
-    "mobile/src/screens/Trainer/ReattemptScreen.tsx": 3,
-    "mobile/src/screens/Trainer/RouteSortScreen.tsx": 2,
+    "mobile/src/screens/Trainer/ReattemptScreen.tsx": 2,
+    "mobile/src/screens/Trainer/RouteSortScreen.tsx": 1,
     "mobile/src/screens/Trainer/TrainerTodayScreen.tsx": 2
   }
 }

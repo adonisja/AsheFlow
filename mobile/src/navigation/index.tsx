@@ -1,4 +1,4 @@
-import React, { useState, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import {
   NavigationContainer,
 } from '@react-navigation/native';
@@ -39,15 +39,20 @@ import ReattemptScreen          from '@screens/Trainer/ReattemptScreen';
 // screen importing back from here evaluates the constant as undefined).
 // Re-exported for existing imports within this file's consumers.
 export * from './roles';
+import { TAB_GATES } from './roles';
 import {
   FIELD_OPS_ROLES, ANCHOR_POINT_ROLES, PREFERENCES_ROLES, SCHEDULE_ROLES,
   SCHEDULE_CHANGE_ROLES, INCIDENT_ROLES, TRAINER_ROLES, TRAINEE_ROLES,
   WALKER_ROLES, ROUTE_SORT_ROLES, DRIVER_SURVEY_ROLES,
   GEAR_ROLES, MY_ROUTE_TAB_ROLES, REATTEMPT_ROLES, TRUCK_BUILDINGS_ROLES,
+  TOTE_ADDRESS_ROLES,
+  WORKFORCE_ROUTE_ROLES,
 } from './roles';
 import GearRequestsScreen from '@screens/Gear/GearRequestsScreen';
 import MyRouteTabScreen from '@screens/Trainee/MyRouteScreen';
 import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
+import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
+import MyWorkforceRouteScreen from '@screens/Walker/MyWorkforceRouteScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -89,27 +94,51 @@ type TabDef = {
   icon: string;
   roles: readonly string[];
   component: React.ComponentType<any>;
+  /** ADR-289: capability key this tab needs, checked against
+   *  GET /companies/my-capabilities. Absent = always available.
+   *
+   *  Deliberately NOT in navigation/roles.ts. That module imports nothing on
+   *  purpose — constants there once lived here and created a require cycle that
+   *  made a role constant `undefined` at import time, showing Field Ops to every
+   *  role. Mode is a second filter applied at RENDER (see visibleTabs), never
+   *  folded into the role constants. */
+  feature?: string;
 };
 
 const ALL_TABS: TabDef[] = [
-  { key: 'Home',            label: 'Home',            icon: '🏠', roles: [],                     component: HomeNavigator },
-  { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', roles: FIELD_OPS_ROLES,         component: FieldOpsScreen },
-  { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', roles: ANCHOR_POINT_ROLES,      component: AnchorPointTab },
-  { key: 'Training',        label: 'Training',         icon: '📋', roles: TRAINER_ROLES,           component: TrainerNavigator },
-  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', roles: ROUTE_SORT_ROLES,         component: RouteSortNavigator },
-  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', roles: MY_ROUTE_TAB_ROLES,       component: MyRouteTabScreen },
-  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', roles: REATTEMPT_ROLES,           component: ReattemptScreen },
-  { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', roles: TRUCK_BUILDINGS_ROLES,   component: TruckBuildingsScreen },
-  { key: 'MyTraining',      label: 'My Training',      icon: '📚', roles: TRAINEE_ROLES,           component: TraineeNavigator },
-  { key: 'Walker',          label: 'Walker',           icon: '🚶', roles: WALKER_ROLES,            component: WalkerDashboard },
-  { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', roles: DRIVER_SURVEY_ROLES,     component: DriverSurveyScreen },
-  { key: 'Schedule',        label: 'Schedule',         icon: '📅', roles: SCHEDULE_ROLES,          component: ScheduleScreen },
-  { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', roles: SCHEDULE_CHANGE_ROLES,   component: ScheduleChangesScreen },
-  { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', roles: INCIDENT_ROLES,          component: IncidentsScreen },
-  { key: 'Gear',            label: 'Gear',             icon: '🎒', roles: GEAR_ROLES,              component: GearRequestsScreen },
-  { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', roles: PREFERENCES_ROLES,       component: PreferencesScreen },
-  { key: 'Notifications',   label: 'Notifications',    icon: '🔔', roles: [],                      component: NotificationsScreen },
-  { key: 'Account',         label: 'Account',          icon: '👤', roles: [],                      component: MyAccountScreen },
+  { key: 'Home',            label: 'Home',            icon: '🏠', component: HomeNavigator, ...TAB_GATES['Home'] },
+  { key: 'FieldOps',        label: 'Field Ops',        icon: '🔧', component: FieldOpsScreen, ...TAB_GATES['FieldOps'] },
+  { key: 'AnchorPoints',    label: 'Anchor Point',     icon: '📍', component: AnchorPointTab, ...TAB_GATES['AnchorPoints'] },
+  { key: 'Training',        label: 'Training',         icon: '📋', component: TrainerNavigator, ...TAB_GATES['Training'] },
+  { key: 'RouteSort',       label: 'Route Sort',       icon: '🗺️', component: RouteSortNavigator, ...TAB_GATES['RouteSort'] },
+  { key: 'MyRoute',         label: 'My Route',         icon: '🧭', component: MyRouteTabScreen, ...TAB_GATES['MyRoute'] },
+  { key: 'Reattempts',      label: 'Reattempts',       icon: '🔁', component: ReattemptScreen, ...TAB_GATES['Reattempts'] },
+  // ADR-291: the workforce sort's INPUT. Gated on `workforce_sort`, so it is
+  // absent for a full-mode tenant — there the manifest supplies this and a
+  // captain typing addresses by hand would be duplicate, contradictory work.
+  { key: 'ToteAddresses',   label: 'Tote Addresses',   icon: '📮', component: ToteAddressScreen, ...TAB_GATES['ToteAddresses'] },
+  // ADR-297: the workforce sort's OUTPUT, for the person who walks it. Same
+  // capability gate as the input above, because they are two ends of one
+  // pipeline — a tenant with a package feed gets full mode's MyRoute instead,
+  // which is a different screen (stops, not totes) on a different gate.
+  { key: 'WorkforceRoute',  label: 'My Route',         icon: '🧭', component: MyWorkforceRouteScreen, ...TAB_GATES['WorkforceRoute'] },
+  { key: 'TruckBuildings',  label: 'Buildings',        icon: '🏢', component: TruckBuildingsScreen, ...TAB_GATES['TruckBuildings'] },
+  { key: 'MyTraining',      label: 'My Training',      icon: '📚', component: TraineeNavigator, ...TAB_GATES['MyTraining'] },
+  // ADR-289. Full-mode only: every sub-tab under it (My Route, Found) calls
+  // endpoints registered under `_full_mode` — /rts/stops, /rts/packages,
+  // /packages/intake — so in workforce mode the server 404s all of them and the
+  // controls are dead. The workforce equivalent is the WorkforceRoute tab.
+  //
+  // A walker's own numbers live in Account (My Stats + Scorecard), not here.
+  { key: 'Walker',          label: 'Walker',           icon: '🚶', component: WalkerDashboard, ...TAB_GATES['Walker'] },
+  { key: 'DriverSurvey',   label: 'Survey',           icon: '📊', component: DriverSurveyScreen, ...TAB_GATES['DriverSurvey'] },
+  { key: 'Schedule',        label: 'Schedule',         icon: '📅', component: ScheduleScreen, ...TAB_GATES['Schedule'] },
+  { key: 'SchChanges',      label: 'Change Requests',  icon: '🔄', component: ScheduleChangesScreen, ...TAB_GATES['SchChanges'] },
+  { key: 'Incidents',       label: 'Incidents',        icon: '⚠️', component: IncidentsScreen, ...TAB_GATES['Incidents'] },
+  { key: 'Gear',            label: 'Gear',             icon: '🎒', component: GearRequestsScreen, ...TAB_GATES['Gear'] },
+  { key: 'Preferences',     label: 'Preferences',      icon: '⚙️', component: PreferencesScreen, ...TAB_GATES['Preferences'] },
+  { key: 'Notifications',   label: 'Notifications',    icon: '🔔', component: NotificationsScreen, ...TAB_GATES['Notifications'] },
+  { key: 'Account',         label: 'Account',          icon: '👤', component: MyAccountScreen, ...TAB_GATES['Account'] },
 ];
 
 // ── Home stack navigator ──────────────────────────────────────────────────────
@@ -233,10 +262,14 @@ const tabBarStyles = (c: ThemeColors) => StyleSheet.create({
 
 // ── Main app shell ────────────────────────────────────────────────────────────
 function MainShell() {
-  const { hasRole } = useAuth();
+  const { hasRole, hasFeature } = useAuth();
 
+  // Two independent filters: ROLE (who you are) then FEATURE (what this company
+  // has, ADR-289). hasFeature fails open while capabilities are unknown, so a
+  // slow or failed call leaves the tabs intact rather than emptying the app.
   const visibleTabs = ALL_TABS.filter(t =>
-    t.roles.length === 0 || hasRole(...t.roles)
+    (t.roles.length === 0 || hasRole(...t.roles)) &&
+    (!t.feature || hasFeature(t.feature))
   );
 
   const [activeKey, setActiveKey] = useState(visibleTabs[0]?.key ?? 'Home');
@@ -246,6 +279,16 @@ function MainShell() {
     const target = key === 'NotificationsTab' ? 'Notifications' : key;
     setActiveKey(target);
   }, []);
+
+  // ADR-289: capabilities arrive AFTER the first render, so a tab that was
+  // visible on mount can disappear a moment later. Without this the tab bar
+  // highlights nothing while ActiveScreen silently falls back to Home — the
+  // user sees the Home screen with no tab selected and no idea why.
+  useEffect(() => {
+    if (visibleTabs.length && !visibleTabs.some(t => t.key === activeKey)) {
+      setActiveKey(visibleTabs[0].key);
+    }
+  }, [visibleTabs, activeKey]);
 
   const ActiveScreen = visibleTabs.find(t => t.key === activeKey)?.component ?? HomeNavigator;
 

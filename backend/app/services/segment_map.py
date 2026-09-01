@@ -79,6 +79,20 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             "lat":               s.get("lat"),
             "lng":               s.get("lng"),
             "source":            s.get("source") or SOURCE_PACKAGE,
+            # ADR-314 D3 — the blockface span and its bounding cross streets.
+            # A property of the SEGMENT, not of each address on it: three
+            # addresses on segment 0297696 all return the same
+            # 000002000AA..000098000AA, so per-address storage would duplicate
+            # one fact ~18 times (the measured mean addresses per block_key).
+            "low_house_number":    s.get("low_house_number"),
+            "high_house_number":   s.get("high_house_number"),
+            "first_cross_street":  s.get("first_cross_street"),
+            "second_cross_street": s.get("second_cross_street"),
+            # ADR-316 — blockface endpoints, same ownership reasoning as above.
+            "x_low_address_end":   s.get("x_low_address_end"),
+            "y_low_address_end":   s.get("y_low_address_end"),
+            "x_high_address_end":  s.get("x_high_address_end"),
+            "y_high_address_end":  s.get("y_high_address_end"),
         })
 
     stmt = pg_insert(StreetSegment).values(payload)
@@ -89,6 +103,27 @@ def upsert_segments(db: Session, segments: Iterable[dict]) -> int:
             # partial lookup must not blank out good data.
             "from_lion_node_id": stmt.excluded.from_lion_node_id,
             "to_lion_node_id":   stmt.excluded.to_lion_node_id,
+            # COALESCE, not straight assignment: enrichment supplies the span
+            # and a later package-driven upsert does not, so a plain overwrite
+            # would blank it out on the next sort. Same reasoning as the
+            # topology comment above, which is why it sits here rather than in
+            # a second writer.
+            "low_house_number":    func.coalesce(
+                stmt.excluded.low_house_number, StreetSegment.low_house_number),
+            "high_house_number":   func.coalesce(
+                stmt.excluded.high_house_number, StreetSegment.high_house_number),
+            "first_cross_street":  func.coalesce(
+                stmt.excluded.first_cross_street, StreetSegment.first_cross_street),
+            "second_cross_street": func.coalesce(
+                stmt.excluded.second_cross_street, StreetSegment.second_cross_street),
+            "x_low_address_end":  func.coalesce(
+                stmt.excluded.x_low_address_end, StreetSegment.x_low_address_end),
+            "y_low_address_end":  func.coalesce(
+                stmt.excluded.y_low_address_end, StreetSegment.y_low_address_end),
+            "x_high_address_end": func.coalesce(
+                stmt.excluded.x_high_address_end, StreetSegment.x_high_address_end),
+            "y_high_address_end": func.coalesce(
+                stmt.excluded.y_high_address_end, StreetSegment.y_high_address_end),
             "last_seen_at":      func.now(),
         },
     )
@@ -264,3 +299,19 @@ def load_adjacency(db: Session, segment_ids: Iterable[str]) -> dict[str, set[str
         for a in shared:
             adj.setdefault(a, set()).update(shared - {a})
     return adj
+
+
+def by_segment_id(db: Session, segment_id: str):
+    """One segment by its LION id, or None.
+
+    Here rather than in a caller because this module owns every read and write
+    of `street_segments` (ADR-237 D2) — the boundary test rejects a second
+    module naming the model, and it caught exactly that during ADR-316.
+    """
+    if not segment_id:
+        return None
+    return (
+        db.query(StreetSegment)
+        .filter(StreetSegment.segment_id == segment_id)
+        .first()
+    )

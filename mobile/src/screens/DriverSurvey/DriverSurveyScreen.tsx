@@ -9,6 +9,7 @@ import apiClient from '@api/client';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
+import { useMyTruck } from '../../hooks/useMyTruck';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,13 +144,22 @@ export default function DriverSurveyScreen() {
           // Resolve assignment info for the display header (truck/driver)
           try {
             const dispatchRes = await apiClient.get(`/dispatch/${todayStr}`);
-            const myMember = (dispatchRes.data?.truck_assignments ?? [])
-              .flatMap((ta: any) =>
-                (ta.members ?? []).map((m: any) => ({ ...m, truck: ta.truck_name, driver_name: ta.driver_name ?? null }))
-              )
-              .find((m: any) => m.employee_id === employeeId);
-            if (myMember) {
-              setAssignment({ truck_name: myMember.truck, driver_name: myMember.driver_name });
+            // ADR-332 — this header had NEVER rendered. It flatMapped over
+            // `ta.members` and read `ta.truck_name` / `ta.driver_name`, none of
+            // which the payload carried, so every access optional-chained to
+            // undefined and the block silently produced nothing.
+            //
+            // truck_name is now a real field (D1), and the driver is a crew
+            // MEMBER with a role — discoverable from assigned_crews, which is
+            // why D3 declined to add `driver_name` to a row describing a
+            // vehicle. useMyTruck resolves both.
+            const mine = useMyTruck<any>(dispatchRes.data, employeeId);
+            if (mine.truckId) {
+              const driver = mine.crew.find((m: any) => m.role === 'driver');
+              setAssignment({
+                truck_name: mine.truckName,
+                driver_name: driver?.name ?? null,
+              });
             }
           } catch {
             // non-fatal — assignment header just won't show

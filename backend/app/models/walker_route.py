@@ -53,6 +53,22 @@ class Route(Base):
     # element or the whole list for those.
     stops                 = Column(MutableList.as_mutable(JSONB()), nullable=True)
     package_count         = Column(Integer(), nullable=False, default=0)
+    # ADR-291 D11: the count a captain read off Amazon Flex while the walker
+    # scanned this route's totes.
+    #
+    # WHY package_count ALONE IS WRONG IN WORKFORCE MODE. route_sort derives
+    # package_count as sum(len(t.packages)) — and a workforce "package" is one
+    # captain-entered ADDRESS, not a parcel. A route holding one tote with three
+    # addresses reports 3 while the tote physically carries fifty. Dashboards and
+    # assignment history both read package_count, so left alone that understates
+    # real throughput by an order of magnitude.
+    #
+    # NULL means "not recorded yet", never zero. Zero is a measurement — a route
+    # that genuinely carried nothing — and conflating the two is the ADR-294
+    # failure this codebase already paid for once.
+    flex_package_count    = Column(Integer(), nullable=True)
+    flex_count_recorded_by   = Column(UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    flex_count_recorded_at   = Column(DateTime(timezone=True), nullable=True)
 
     # Capacity in half-slots (scale ×2: standard=12, heavy=8, paired=18/12)
     slot_cost             = Column(Integer(), nullable=False, default=0)
@@ -102,6 +118,18 @@ class Route(Base):
     # does not meet an undocumented value:
     #   covered
     closed_reason         = Column(String(30), nullable=True)
+    # ADR-291 D7: half-slots this route carries ABOVE its capacity_limit.
+    #
+    # Workforce mode allows a route to overflow — a captain judging the load by
+    # eye is the authority there, not a computed lock. Recording the amount is
+    # what keeps it visible: ADR-273's whole diagnosis is that routes closing for
+    # unrecorded reasons are invisible in production, and a silent overflow is
+    # the same failure wearing a different name.
+    #
+    # 0 on every full-mode route (the capacity lock is enforced there) and on
+    # rows predating the column, so a non-zero value always means a deliberate
+    # workforce overflow.
+    overflow_half_slots   = Column(Integer(), nullable=False, server_default="0")
     # The decision record this route came from. No FK: RouteSortRun outlives the
     # Route (re-sort deletes routes, never runs), so a FK would either block the
     # delete or cascade away the telemetry we are keeping.
