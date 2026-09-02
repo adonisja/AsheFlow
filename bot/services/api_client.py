@@ -57,7 +57,21 @@ class AsheFlowClient:
     # ------------------------------------------------------------------
 
     async def _refresh_token(self) -> None:
-        """Authenticate against Cognito and cache the IdToken."""
+        """Authenticate against Cognito and cache the IdToken.
+
+        Cognito returns EITHER an ``AuthenticationResult`` OR a
+        ``ChallengeName`` plus a ``Session`` — never both. This read the former
+        unconditionally, so any challenge raised ``KeyError:
+        'AuthenticationResult'``: no indication of what Cognito actually wanted,
+        in a log nobody is watching, an hour after the change that caused it
+        (ADR-362).
+
+        A bot cannot answer a challenge. There is nobody to read a code out of an
+        authenticator app, and a new password would have to be persisted
+        somewhere it can find again. So the goal here is not to survive one —
+        it is to say precisely what happened, because the fix is always
+        operational.
+        """
         try:
             client = boto3.client("cognito-idp", region_name=settings.aws_region)
             resp = client.initiate_auth(
@@ -68,13 +82,65 @@ class AsheFlowClient:
                 },
                 ClientId=settings.aws_cognito_client_id,
             )
-            self._token = resp["AuthenticationResult"]["IdToken"]
-            # IdToken expires in 1 hour; refresh 5 minutes early
-            self._token_expiry = datetime.now(timezone.utc) + timedelta(minutes=55)
-            logger.info("Bot Cognito token refreshed.")
         except ClientError as e:
             logger.error("Failed to authenticate bot with Cognito: %s", e)
             raise
+
+        challenge = resp.get("ChallengeName")
+        if challenge:
+            # Named individually: "which challenge" determines who fixes it and
+            # how, and a generic message sends someone reading it to the wrong
+            # place.
+            remedy = {
+                "NEW_PASSWORD_REQUIRED": (
+                    "the account is in FORCE_CHANGE_PASSWORD. Reset it with "
+                    "admin-set-user-password --permanent."
+                ),
+                "SOFTWARE_TOKEN_MFA": (
+                    "the account has TOTP enrolled. A bot cannot produce a code; "
+                    "clear it with admin-set-user-mfa-preference."
+                ),
+                "EMAIL_OTP": (
+                    "the account has email MFA enabled. A bot has no inbox; "
+                    "clear it with admin-set-user-mfa-preference."
+                ),
+                "SELECT_MFA_TYPE": (
+                    "the account has more than one MFA factor enrolled. Clear "
+                    "them with admin-set-user-mfa-preference."
+                ),
+                "MFA_SETUP": (
+                    "the pool requires MFA and the account has no factor. A bot "
+                    "cannot enrol one — see docs/TODO-mfa-service-account.md."
+                ),
+            }.get(challenge, "this challenge has no automated path.")
+
+            logger.error(
+                "Bot Cognito sign-in was challenged with %s and cannot continue: %s "
+                "Username=%s. Until this is cleared, every bot API call will fail.",
+                challenge, remedy, settings.bot_username,
+            )
+            raise RuntimeError(
+                f"Bot authentication requires {challenge}, which a service "
+                f"account cannot satisfy. {remedy}"
+            )
+
+        result = resp.get("AuthenticationResult") or {}
+        token = result.get("IdToken")
+        if not token:
+            # Neither branch. A response shape we do not know is worth saying
+            # out loud rather than crashing on a subscript.
+            logger.error(
+                "Bot Cognito sign-in returned neither tokens nor a challenge; "
+                "keys=%s", sorted(resp.keys()),
+            )
+            raise RuntimeError(
+                "Bot authentication returned an unexpected response from Cognito."
+            )
+
+        self._token = token
+        # IdToken expires in 1 hour; refresh 5 minutes early
+        self._token_expiry = datetime.now(timezone.utc) + timedelta(minutes=55)
+        logger.info("Bot Cognito token refreshed.")
 
     async def _ensure_token(self) -> str:
         if datetime.now(timezone.utc) >= self._token_expiry:
