@@ -55,3 +55,4 @@ from app.models.route_sort_run import RouteSortRun, RouteSortDaily   # ADR-273: 
 from app.models.btr_sheet import BTRSheet, BTRRoute, BTRBag, BTROVZone   # ADR-290: Amazon BTR sheet
 from app.models.tote_address import ToteAddress   # ADR-291: captain-entered tote geography
 from app.models.crew_pin import CrewPin, CrewPinMember
+from app.models.truck_pin import TruckPin

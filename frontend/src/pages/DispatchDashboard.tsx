@@ -54,7 +54,7 @@ export default function DispatchDashboard() {
   return (
     <div className="space-y-6 animate-slide-up">
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
-        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments'], ['pins', 'Crew Pins']] as [DispatchTab, string][])
+        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments'], ['pins', 'Pinning']] as [DispatchTab, string][])
           .map(([k, label]) => (
             <button
               key={k}
