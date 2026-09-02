@@ -46,11 +46,40 @@ export type Capabilities = {
   features: string[];
 };
 
+/** A Cognito challenge that sign-in stopped on (ADR-362).
+ *
+ *  Cognito returns EITHER `AuthenticationResult` OR a `ChallengeName` plus a
+ *  `Session`, never both. This client read `AuthenticationResult` unconditionally
+ *  and so threw a TypeError on every challenge — including the
+ *  NEW_PASSWORD_REQUIRED one a field user hits with a temporary password, which
+ *  made that a live bug well before any MFA work.
+ *
+ *  `session` is single-use and short-lived: each RespondToAuthChallenge returns a
+ *  fresh one, so the caller must pass back whatever the LAST response carried. */
+export type AuthChallenge = {
+  name:
+    | 'NEW_PASSWORD_REQUIRED'
+    | 'SOFTWARE_TOKEN_MFA'
+    | 'EMAIL_OTP'
+    | 'SELECT_MFA_TYPE'
+    | 'MFA_SETUP';
+  session: string;
+  username: string;
+  /** Which factors the account has, when Cognito asks the user to choose. */
+  options?: string[];
+  /** Where an emailed code went, e.g. "e***@e***.com". Cognito redacts it. */
+  destination?: string;
+};
+
 type AuthContextType = {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  signIn: (username: string, password: string) => Promise<void>;
+  /** Resolves to a challenge when one is required, otherwise null. */
+  signIn: (username: string, password: string) => Promise<AuthChallenge | null>;
+  /** Answer the challenge signIn returned. Resolves to the NEXT challenge when
+   *  Cognito chains them (choosing a factor, then entering its code). */
+  respondToChallenge: (challenge: AuthChallenge, answer: string) => Promise<AuthChallenge | null>;
   signInWithProvider: (provider: 'Discord' | 'Google') => Promise<void>;
   signOut: () => Promise<void>;
   hasRole: (...roles: string[]) => boolean;
@@ -91,33 +120,98 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signIn = useCallback(async (username: string, password: string) => {
+  /** POST one Cognito Identity Provider action. */
+  const cognito = useCallback(async (target: string, body: object) => {
     const res = await fetch(COGNITO_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-amz-json-1.1',
-        'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+        'X-Amz-Target': `AWSCognitoIdentityProviderService.${target}`,
       },
-      body: JSON.stringify({
-        AuthFlow:       'USER_PASSWORD_AUTH',
-        ClientId:       CLIENT_ID,
-        AuthParameters: { USERNAME: username, PASSWORD: password },
-      }),
+      body: JSON.stringify(body),
     });
-
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.message ?? data.__type ?? 'Sign in failed');
     }
-
-    const { AuthenticationResult } = data;
-    await storeTokens(AuthenticationResult);
-    const base = buildUserFromToken(AuthenticationResult.IdToken);
-    setUser(base);
-    resolveFirstName(AuthenticationResult.IdToken, base.firstName).then(firstName =>
-      setUser(prev => prev ? { ...prev, firstName } : prev)
-    );
+    return data;
   }, []);
+
+  /** Finish a sign-in, or hand back the challenge that is blocking it.
+   *
+   *  ADR-362 — Cognito returns EITHER AuthenticationResult OR ChallengeName,
+   *  never both. Reading the former unconditionally is what made any challenge
+   *  a TypeError here. */
+  const settle = useCallback(
+    async (data: any, username: string): Promise<AuthChallenge | null> => {
+      if (data.ChallengeName) {
+        const params = data.ChallengeParameters ?? {};
+        return {
+          name: data.ChallengeName,
+          session: data.Session,
+          // Cognito echoes the resolved username for aliased sign-ins (email
+          // instead of the username). Answering with what the user typed fails
+          // when they differ, so prefer the echo.
+          username: params.USER_ID_FOR_SRP ?? username,
+          options: params.MFAS_CAN_CHOOSE
+            ? JSON.parse(params.MFAS_CAN_CHOOSE)
+            : undefined,
+          destination: params.CODE_DELIVERY_DESTINATION,
+        };
+      }
+
+      const { AuthenticationResult } = data;
+      if (!AuthenticationResult?.IdToken) {
+        // Neither branch: a Cognito response shape we do not know. Say so
+        // rather than crashing on a property of undefined.
+        throw new Error('Sign in did not complete. Please try again.');
+      }
+      await storeTokens(AuthenticationResult);
+      const base = buildUserFromToken(AuthenticationResult.IdToken);
+      setUser(base);
+      resolveFirstName(AuthenticationResult.IdToken, base.firstName).then(firstName =>
+        setUser(prev => prev ? { ...prev, firstName } : prev)
+      );
+      return null;
+    },
+    [],
+  );
+
+  const signIn = useCallback(async (username: string, password: string) => {
+    const data = await cognito('InitiateAuth', {
+      AuthFlow:       'USER_PASSWORD_AUTH',
+      ClientId:       CLIENT_ID,
+      AuthParameters: { USERNAME: username, PASSWORD: password },
+    });
+    return settle(data, username);
+  }, [cognito, settle]);
+
+  const respondToChallenge = useCallback(
+    async (challenge: AuthChallenge, answer: string) => {
+      // Each challenge names its own answer key; a wrong key is a 400 that reads
+      // like a bad code.
+      const responses: Record<string, string> = { USERNAME: challenge.username };
+      switch (challenge.name) {
+        case 'NEW_PASSWORD_REQUIRED':  responses.NEW_PASSWORD  = answer; break;
+        case 'SOFTWARE_TOKEN_MFA':     responses.SOFTWARE_TOKEN_MFA_CODE = answer; break;
+        case 'EMAIL_OTP':              responses.EMAIL_OTP_CODE = answer; break;
+        case 'SELECT_MFA_TYPE':        responses.ANSWER = answer; break;
+        default:
+          throw new Error(`Unsupported sign-in step: ${challenge.name}`);
+      }
+
+      const data = await cognito('RespondToAuthChallenge', {
+        ClientId:          CLIENT_ID,
+        ChallengeName:     challenge.name,
+        Session:           challenge.session,
+        ChallengeResponses: responses,
+      });
+      // Chained on purpose: SELECT_MFA_TYPE resolves to another challenge
+      // (the code for the chosen factor) rather than to tokens.
+      return settle(data, challenge.username);
+    },
+    [cognito, settle],
+  );
 
   const signInWithProvider = useCallback(async (provider: 'Discord' | 'Google') => {
     const authUrl = buildHostedUiUrl(provider);
@@ -221,7 +315,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, isLoading, isAuthenticated: !!user,
-      signIn, signInWithProvider, signOut, hasRole,
+      signIn, respondToChallenge, signInWithProvider, signOut, hasRole,
       capabilities, hasFeature,
     }}>
       {children}
@@ -234,6 +328,7 @@ const AUTH_FALLBACK: AuthContextType = {
   isLoading: true,
   isAuthenticated: false,
   signIn: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
+  respondToChallenge: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signInWithProvider: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signOut: async () => {},
   hasRole: () => false,
