@@ -1,4 +1,8 @@
 import { errorText } from '../utils/errorText';
+// ADR-357 — pins live beside the board they affect: a crew pin only means
+// anything in the context of an assignment, and a separate page would hide the
+// one screen that explains why a crew keeps landing together.
+import CrewPins from './CrewPins';
 import { useErrorBanner } from '../hooks/useErrorBanner';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -36,7 +40,7 @@ function availabilityOf(
   return hit.reason === 'time_off_request' ? 'pto' : 'scheduled_off';
 }
 
-type DispatchTab = 'current' | 'previous';
+type DispatchTab = 'current' | 'previous' | 'pins';
 
 /** Tab shell (ADR-268).
 
@@ -50,7 +54,7 @@ export default function DispatchDashboard() {
   return (
     <div className="space-y-6 animate-slide-up">
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
-        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments']] as [DispatchTab, string][])
+        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments'], ['pins', 'Crew Pins']] as [DispatchTab, string][])
           .map(([k, label]) => (
             <button
               key={k}
@@ -66,7 +70,9 @@ export default function DispatchDashboard() {
           ))}
       </div>
 
-      {tab === 'current' ? <CurrentAssignments /> : <PreviousAssignments />}
+      {tab === 'current' && <CurrentAssignments />}
+      {tab === 'previous' && <PreviousAssignments />}
+      {tab === 'pins' && <CrewPins />}
     </div>
   );
 }
@@ -749,13 +755,52 @@ function CurrentAssignments() {
   };
 
   // True swap (ADR-210): exchange two employees' trucks in one gesture (drop A onto B).
-  const swapTwo = async (empA: string, truckA: string, empB: string, truckB: string) => {
+  //
+  // ONE call, not two. `PATCH /dispatch/assign` already performs the whole
+  // exchange for a one-per-truck role (ADR-321): it parks the member occupying
+  // the destination slot as `walker` — a role outside the WHERE clause of both
+  // partial unique indexes — moves the incoming member in, then moves the parked
+  // one back to the vacated source, all in a single transaction.
+  //
+  // Sending a second call for B was the bug behind "… is already assigned to this
+  // truck with this role. Reassignment rejected." Call 1 had ALREADY moved B, so
+  // call 2 asked to move B where B now was, and the backend correctly refused it
+  // as a no-op. The swap had in fact succeeded; the error was the redundant
+  // follow-up, which also left the UI showing failure on a completed change.
+  //
+  // Two calls are worse than one even when they work: they are two transactions,
+  // so an interruption between them strands a crew member on the wrong truck.
+  // ONE_PER_TRUCK mirrors the backend's `_ONE_PER_TRUCK_ROLES`. Only these roles
+  // have a partial unique index, so only these get the displacement above; for
+  // every other role the backend moves A and leaves B where they are, and a
+  // single call would silently half-complete the swap.
+  const ONE_PER_TRUCK = new Set(['driver', 'captain']);
+
+  const swapTwo = async (
+    empA: string,
+    truckA: string,
+    empB: string,
+    truckB: string,
+    roleB?: string,
+  ) => {
     if (truckA === truckB) return;
     setIsLoading(true);
     try {
-      // Move A to B's truck, then B to A's — sequential so the second sees A gone.
-      await axiosClient.patch('/dispatch/assign', { employee_id: empA, date: selectedDate, new_truck_id: truckB });
-      await axiosClient.patch('/dispatch/assign', { employee_id: empB, date: selectedDate, new_truck_id: truckA });
+      await axiosClient.patch('/dispatch/assign', {
+        employee_id: empA,
+        date: selectedDate,
+        new_truck_id: truckB,
+      });
+      // B only rides along when the backend displaced them out of a
+      // one-per-truck slot. Otherwise move them explicitly — by then A has
+      // vacated truckA, so this is a plain move, not a contended one.
+      if (!roleB || !ONE_PER_TRUCK.has(roleB)) {
+        await axiosClient.patch('/dispatch/assign', {
+          employee_id: empB,
+          date: selectedDate,
+          new_truck_id: truckA,
+        });
+      }
       await fetchDispatchData();
     } catch (err: unknown) {
       setError(errorText(err, 'Failed to swap the two employees.'));
@@ -2204,7 +2249,7 @@ function CurrentAssignments() {
                                    return;
                                  }
                                  if (draggedTruck === truckId) return; // same truck, nothing to swap
-                                 swapTwo(draggedId, draggedTruck, member.employee_id, truckId);
+                                 swapTwo(draggedId, draggedTruck, member.employee_id, truckId, member.role);
                                }}
                                /* Either overlay needs the card lifted above its
                                   siblings, or the popover renders behind the

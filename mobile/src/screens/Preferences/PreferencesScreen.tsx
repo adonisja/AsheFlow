@@ -51,11 +51,20 @@ type WalkerProfile = {
 
 type CrewMate = { id: string; name: string; role: string };
 
-// ── Limits (mirrors backend FAV_LIMITS) ───────────────────────────────────────
+// ── Limits (mirrors backend FAV_LIMITS — ADR-353) ─────────────────────────────
+// Kept in step with `FAV_LIMITS` in backend/app/routers/employee_relationships.py
+// by test_adr353_mobile_mirror_matches_the_backend. It must be a mirror, not an
+// approximation: this table decides what the UI OFFERS, while the backend decides
+// what it ACCEPTS, so any drift shows the user a choice that 409s on submit.
+//
+// This copy had gone stale in exactly that way — it predated the captain role
+// entirely (no `captain` row, and trainer→trainer 1 where the backend said 0), so
+// captains saw no options and trainers were offered a fav the server refused.
 const FAV_LIMITS: Record<string, Record<string, number>> = {
-  driver:  { driver: 0, trainer: 1, walker: 2 },
-  trainer: { driver: 1, trainer: 1, walker: 2 },
-  walker:  { driver: 1, trainer: 1, walker: 2 },
+  driver:  { driver: 0, captain: 2, trainer: 1, walker: 2 },
+  captain: { driver: 2, captain: 0, trainer: 1, walker: 2 },
+  trainer: { driver: 1, captain: 1, walker: 1 },
+  walker:  { driver: 2, captain: 2, walker: 1 },
 };
 
 function favLimitFor(myRole: string, targetRole: string): number {

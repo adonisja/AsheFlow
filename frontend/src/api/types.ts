@@ -646,6 +646,45 @@ export interface EmployeeRelationship {
   relationship_type: 'fav' | 'ban';
 }
 
+// ---------------------------------------------------------------------------
+// Crew pins (ADR-357)
+// ---------------------------------------------------------------------------
+
+/** A member held to the pin's driver. The driver is NOT a member — they are the
+ *  anchor, stored on the pin itself. */
+export interface CrewPinMember {
+  employee_id: string;
+  name?: string | null;
+  role?: string | null;
+}
+
+export interface CrewPin {
+  id: string;
+  name: string;
+  driver_id: string;
+  driver_name?: string | null;
+  is_active: boolean;
+  /** Why the pin was deactivated — set automatically when a ban is created
+   *  between two of its members, so a dispatcher does not have to guess. */
+  inactive_reason?: string | null;
+  created_at: string;
+  members: CrewPinMember[];
+}
+
+/** Mirrors CrewPinCreate. `member_ids` is capped at 30 server-side; a longer
+ *  list is a data-entry error rather than a request. */
+export interface CrewPinCreatePayload {
+  name: string;
+  driver_id: string;
+  member_ids: string[];
+}
+
+export interface CrewPinUpdatePayload {
+  name?: string;
+  member_ids?: string[];
+  is_active?: boolean;
+}
+
 export interface AssignmentChangeRequest {
   id: string;
   requested_date: string;
