@@ -123,6 +123,7 @@ class CompanyConfig(Base):
     # silently change dispatch for every company that ever tuned one. NULL here
     # means "use the platform default" (see preference_tiers.DEFAULT_TARGETS).
     dispatch_target_oneway_weak     = Column(Float, nullable=True)   # default 0.22
+    dispatch_target_oneway_trainer  = Column(Float, nullable=True)   # default 0.25
     dispatch_target_oneway_captain  = Column(Float, nullable=True)   # default 0.28
     dispatch_target_oneway_driver   = Column(Float, nullable=True)   # default 0.33
     dispatch_target_mutual_weak     = Column(Float, nullable=True)   # default 0.45
@@ -274,6 +275,7 @@ class CompanyConfig(Base):
         CheckConstraint("dispatch_mutual_bonus     IS NULL OR (dispatch_mutual_bonus     BETWEEN 0 AND 1)", name="ck_company_configs_mutual_bonus"),
         CheckConstraint("dispatch_tridirectional_bonus IS NULL OR (dispatch_tridirectional_bonus BETWEEN 0 AND 1)", name="ck_company_configs_tridirectional_bonus"),
         CheckConstraint("dispatch_target_oneway_weak IS NULL OR (dispatch_target_oneway_weak >= 0 AND dispatch_target_oneway_weak < 1)", name="ck_company_configs_target_oneway_weak"),
+        CheckConstraint("dispatch_target_oneway_trainer IS NULL OR (dispatch_target_oneway_trainer >= 0 AND dispatch_target_oneway_trainer < 1)", name="ck_company_configs_target_oneway_trainer"),
         CheckConstraint("dispatch_target_oneway_captain IS NULL OR (dispatch_target_oneway_captain >= 0 AND dispatch_target_oneway_captain < 1)", name="ck_company_configs_target_oneway_captain"),
         CheckConstraint("dispatch_target_oneway_driver IS NULL OR (dispatch_target_oneway_driver >= 0 AND dispatch_target_oneway_driver < 1)", name="ck_company_configs_target_oneway_driver"),
         CheckConstraint("dispatch_target_mutual_weak IS NULL OR (dispatch_target_mutual_weak >= 0 AND dispatch_target_mutual_weak < 1)", name="ck_company_configs_target_mutual_weak"),

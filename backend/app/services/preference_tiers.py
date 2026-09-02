@@ -24,7 +24,8 @@ _STRONG_ROLES = ("driver", "captain")
 
 # ADR-356 D2. Ordered weakest to strongest; the STRONGEST match wins (D3).
 DEFAULT_TARGETS: dict[str, float] = {
-    "oneway_weak":    0.22,   # walker or trainer favours you
+    "oneway_weak":    0.22,   # a walker favours you
+    "oneway_trainer": 0.25,   # a trainer favours you
     "oneway_captain": 0.28,
     "oneway_driver":  0.33,
     "mutual_weak":    0.45,   # both favour each other, neither is driver/captain
@@ -41,6 +42,7 @@ _TIER_ORDER = (
     "mutual_weak",
     "oneway_driver",
     "oneway_captain",
+    "oneway_trainer",
     "oneway_weak",
 )
 
@@ -131,6 +133,8 @@ def resolve_tier(
         return "oneway_driver"
     if "captain" in expressed:
         return "oneway_captain"
+    if "trainer" in expressed:
+        return "oneway_trainer"
     if expressed:
         return "oneway_weak"
     return None

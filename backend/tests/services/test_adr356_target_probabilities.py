@@ -100,8 +100,20 @@ def test_the_expressors_role_picks_the_tier():
     """ADR-355 D2 carried forward — a driver's pick outranks a walker's."""
     assert resolve_tier(expressed_by_roles=["driver"], mutual_roles=[]) == "oneway_driver"
     assert resolve_tier(expressed_by_roles=["captain"], mutual_roles=[]) == "oneway_captain"
+    assert resolve_tier(expressed_by_roles=["trainer"], mutual_roles=[]) == "oneway_trainer"
     assert resolve_tier(expressed_by_roles=["walker"], mutual_roles=[]) == "oneway_weak"
-    assert resolve_tier(expressed_by_roles=["trainer"], mutual_roles=[]) == "oneway_weak"
+
+    # Full seniority order: driver > captain > trainer > walker. A trainer and a
+    # walker shared `oneway_weak` until this tier was added, so a trainer's
+    # preference carried no more weight than a walker's.
+    ranks = [
+        DEFAULT_TARGETS[resolve_tier(expressed_by_roles=[r], mutual_roles=[])]
+        for r in ("driver", "captain", "trainer", "walker")
+    ]
+    assert ranks == sorted(ranks, reverse=True), (
+        f"seniority order broken: {ranks}"
+    )
+    assert len(set(ranks)) == 4, "each role must have a distinct one-way strength"
     assert resolve_tier(expressed_by_roles=[], mutual_roles=[]) is None
 
 
