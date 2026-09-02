@@ -1,4 +1,8 @@
 import { errorText } from '../utils/errorText';
+// ADR-357 — pins live beside the board they affect: a crew pin only means
+// anything in the context of an assignment, and a separate page would hide the
+// one screen that explains why a crew keeps landing together.
+import CrewPins from './CrewPins';
 import { useErrorBanner } from '../hooks/useErrorBanner';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -36,7 +40,7 @@ function availabilityOf(
   return hit.reason === 'time_off_request' ? 'pto' : 'scheduled_off';
 }
 
-type DispatchTab = 'current' | 'previous';
+type DispatchTab = 'current' | 'previous' | 'pins';
 
 /** Tab shell (ADR-268).
 
@@ -50,7 +54,7 @@ export default function DispatchDashboard() {
   return (
     <div className="space-y-6 animate-slide-up">
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
-        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments']] as [DispatchTab, string][])
+        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments'], ['pins', 'Crew Pins']] as [DispatchTab, string][])
           .map(([k, label]) => (
             <button
               key={k}
@@ -66,7 +70,9 @@ export default function DispatchDashboard() {
           ))}
       </div>
 
-      {tab === 'current' ? <CurrentAssignments /> : <PreviousAssignments />}
+      {tab === 'current' && <CurrentAssignments />}
+      {tab === 'previous' && <PreviousAssignments />}
+      {tab === 'pins' && <CrewPins />}
     </div>
   );
 }
