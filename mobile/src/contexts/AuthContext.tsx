@@ -10,6 +10,13 @@ import InAppBrowser from 'react-native-inappbrowser-reborn';
 import { Linking } from 'react-native';
 import { Platform } from 'react-native';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ASHEFLOW_API_URL, ASHEFLOW_LAN_IP, COGNITO_OAUTH_DOMAIN, COGNITO_REDIRECT_URI } from '@env';
+import {
+  signIn as amplifySignIn,
+  confirmSignIn as amplifyConfirmSignIn,
+  signOut as amplifySignOut,
+  fetchAuthSession,
+  rememberDevice,
+} from 'aws-amplify/auth';
 import { getValidIdToken, touchLastActive, clearTokens } from '../api/tokenRefresh';
 import apiClient from '../api/client';
 import { generatedLight } from '@theme/generated-colors';
@@ -120,97 +127,92 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  /** POST one Cognito Identity Provider action. */
-  const cognito = useCallback(async (target: string, body: object) => {
-    const res = await fetch(COGNITO_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-amz-json-1.1',
-        'X-Amz-Target': `AWSCognitoIdentityProviderService.${target}`,
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.message ?? data.__type ?? 'Sign in failed');
+  /* ADR-362 phase 2 — Amplify drives the sign-in protocol now.
+     Hand-rolled InitiateAuth was fine while sign-in was one round trip. Device
+     tracking ends that: a REMEMBERED device returns a DEVICE_SRP_AUTH challenge
+     rather than tokens, and answering it needs a full SRP-6a handshake. Owning
+     that crypto in JS is how you get a bug that either fails open or locks every
+     walker out of their route.
+
+     The token layer below is deliberately NOT Amplify's. tokenRefresh.ts holds a
+     12-hour inactivity limit that is a field-ops rule, not an auth-library
+     concept, and api/client.ts reads those keys. Amplify establishes the
+     session; we mirror its tokens into the storage that already exists. */
+  const adoptSession = useCallback(async (): Promise<null> => {
+    const { tokens } = await fetchAuthSession();
+    const idToken = tokens?.idToken?.toString();
+    const accessToken = tokens?.accessToken?.toString();
+    if (!idToken || !accessToken) {
+      throw new Error('Sign in did not complete. Please try again.');
     }
-    return data;
+    await storeTokens({ IdToken: idToken, AccessToken: accessToken });
+    const base = buildUserFromToken(idToken);
+    setUser(base);
+    resolveFirstName(idToken, base.firstName).then(firstName =>
+      setUser(prev => prev ? { ...prev, firstName } : prev)
+    );
+    return null;
   }, []);
 
-  /** Finish a sign-in, or hand back the challenge that is blocking it.
-   *
-   *  ADR-362 — Cognito returns EITHER AuthenticationResult OR ChallengeName,
-   *  never both. Reading the former unconditionally is what made any challenge
-   *  a TypeError here. */
-  const settle = useCallback(
-    async (data: any, username: string): Promise<AuthChallenge | null> => {
-      if (data.ChallengeName) {
-        const params = data.ChallengeParameters ?? {};
-        return {
-          name: data.ChallengeName,
-          session: data.Session,
-          // Cognito echoes the resolved username for aliased sign-ins (email
-          // instead of the username). Answering with what the user typed fails
-          // when they differ, so prefer the echo.
-          username: params.USER_ID_FOR_SRP ?? username,
-          options: params.MFAS_CAN_CHOOSE
-            ? JSON.parse(params.MFAS_CAN_CHOOSE)
-            : undefined,
-          destination: params.CODE_DELIVERY_DESTINATION,
-        };
+  /** Map an Amplify next-step onto the challenge the login screen renders. */
+  const toChallenge = useCallback(
+    (step: any, username: string): AuthChallenge | null => {
+      switch (step?.signInStep) {
+        case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED':
+          return { name: 'NEW_PASSWORD_REQUIRED', session: '', username };
+        case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE':
+          return { name: 'SOFTWARE_TOKEN_MFA', session: '', username };
+        case 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE':
+          return {
+            name: 'EMAIL_OTP', session: '', username,
+            destination: step?.codeDeliveryDetails?.destination,
+          };
+        case 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION':
+          return {
+            name: 'SELECT_MFA_TYPE', session: '', username,
+            options: step?.allowedMFATypes ?? [],
+          };
+        case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP':
+          return { name: 'MFA_SETUP', session: '', username };
+        default:
+          return null;
       }
-
-      const { AuthenticationResult } = data;
-      if (!AuthenticationResult?.IdToken) {
-        // Neither branch: a Cognito response shape we do not know. Say so
-        // rather than crashing on a property of undefined.
-        throw new Error('Sign in did not complete. Please try again.');
-      }
-      await storeTokens(AuthenticationResult);
-      const base = buildUserFromToken(AuthenticationResult.IdToken);
-      setUser(base);
-      resolveFirstName(AuthenticationResult.IdToken, base.firstName).then(firstName =>
-        setUser(prev => prev ? { ...prev, firstName } : prev)
-      );
-      return null;
     },
     [],
   );
 
   const signIn = useCallback(async (username: string, password: string) => {
-    const data = await cognito('InitiateAuth', {
-      AuthFlow:       'USER_PASSWORD_AUTH',
-      ClientId:       CLIENT_ID,
-      AuthParameters: { USERNAME: username, PASSWORD: password },
+    // A stale Amplify session makes signIn throw UserAlreadyAuthenticated
+    // rather than starting a new sign-in.
+    try { await amplifySignOut(); } catch { /* nothing to sign out of */ }
+
+    const res = await amplifySignIn({
+      username,
+      password,
+      options: { authFlowType: 'USER_PASSWORD_AUTH' },
     });
-    return settle(data, username);
-  }, [cognito, settle]);
+    if (res.isSignedIn) return adoptSession();
+    const next = toChallenge(res.nextStep, username);
+    if (next) return next;
+    throw new Error(
+      `This account needs a sign-in step this app does not support yet (${res.nextStep?.signInStep}).`,
+    );
+  }, [adoptSession, toChallenge]);
 
   const respondToChallenge = useCallback(
     async (challenge: AuthChallenge, answer: string) => {
-      // Each challenge names its own answer key; a wrong key is a 400 that reads
-      // like a bad code.
-      const responses: Record<string, string> = { USERNAME: challenge.username };
-      switch (challenge.name) {
-        case 'NEW_PASSWORD_REQUIRED':  responses.NEW_PASSWORD  = answer; break;
-        case 'SOFTWARE_TOKEN_MFA':     responses.SOFTWARE_TOKEN_MFA_CODE = answer; break;
-        case 'EMAIL_OTP':              responses.EMAIL_OTP_CODE = answer; break;
-        case 'SELECT_MFA_TYPE':        responses.ANSWER = answer; break;
-        default:
-          throw new Error(`Unsupported sign-in step: ${challenge.name}`);
+      const res = await amplifyConfirmSignIn({ challengeResponse: answer });
+      if (res.isSignedIn) {
+        // Trust this device so the next sign-in skips the challenge (ADR-362 D4).
+        // Best-effort: a failure here costs an extra prompt, never a blocked
+        // sign-in, so it must not reject the session that already succeeded.
+        try { await rememberDevice(); } catch { /* re-prompt next time */ }
+        return adoptSession();
       }
-
-      const data = await cognito('RespondToAuthChallenge', {
-        ClientId:          CLIENT_ID,
-        ChallengeName:     challenge.name,
-        Session:           challenge.session,
-        ChallengeResponses: responses,
-      });
-      // Chained on purpose: SELECT_MFA_TYPE resolves to another challenge
-      // (the code for the chosen factor) rather than to tokens.
-      return settle(data, challenge.username);
+      // Amplify chains: choosing a factor resolves to the challenge for its code.
+      return toChallenge(res.nextStep, challenge.username);
     },
-    [cognito, settle],
+    [adoptSession, toChallenge],
   );
 
   const signInWithProvider = useCallback(async (provider: 'Discord' | 'Google') => {
@@ -386,11 +388,16 @@ async function exchangeCodeForTokens(code: string): Promise<{
 async function storeTokens(tokens: {
   AccessToken: string;
   IdToken: string;
-  RefreshToken: string;
+  /** Absent for an Amplify-driven sign-in: Amplify keeps the refresh token in
+   *  its own storage and does not expose it. tokenRefresh falls back to
+   *  fetchAuthSession when this key is missing. */
+  RefreshToken?: string;
 }) {
   await AsyncStorage.setItem('asheflow_access_token',  tokens.AccessToken);
   await AsyncStorage.setItem('asheflow_id_token',      tokens.IdToken);
-  await AsyncStorage.setItem('asheflow_refresh_token', tokens.RefreshToken);
+  if (tokens.RefreshToken) {
+    await AsyncStorage.setItem('asheflow_refresh_token', tokens.RefreshToken);
+  }
   await touchLastActive();
 }
 

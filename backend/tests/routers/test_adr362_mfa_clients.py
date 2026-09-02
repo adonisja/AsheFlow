@@ -30,44 +30,64 @@ def _read(p: Path) -> str:
 
 
 class TestMobileHandlesAChallenge:
-    def test_the_result_is_not_read_before_checking_for_a_challenge(self):
+    """Phase 2 moved mobile onto Amplify, so these pin the BEHAVIOUR rather than
+    the raw protocol.
+
+    The original bug — reading `AuthenticationResult` before checking for a
+    `ChallengeName`, and so throwing a TypeError on the temporary-password step
+    — is now structurally impossible: Amplify returns `isSignedIn` plus a
+    `nextStep` and never hands back a half-parsed response. What still has to
+    hold is that every challenge reaches the user as a prompt instead of an
+    error, which is what these assert.
+    """
+
+    def test_a_challenge_is_never_treated_as_a_completed_sign_in(self):
         src = _read(MOBILE_AUTH)
-        idx = src.index("const settle")
-        window = src[idx: idx + 1600]
-        assert "if (data.ChallengeName)" in window, (
-            "sign-in must branch on ChallengeName BEFORE touching "
-            "AuthenticationResult, which Cognito omits on a challenge"
+        idx = src.index("const signIn = useCallback")
+        window = src[idx: idx + 900]
+        # Presence is not enough: an unguarded `return adoptSession()` leaves
+        # `res.isSignedIn` sitting further down the function and a substring
+        # check still passes. Pin the GUARD, and that it precedes the adoption.
+        assert "if (res.isSignedIn) return adoptSession();" in window, (
+            "sign-in must adopt a session ONLY when Amplify says it completed; "
+            "an unguarded adoptSession() swallows every challenge"
         )
-        # The guard must come first, or the TypeError is back.
-        assert window.index("ChallengeName") < window.index("AuthenticationResult"), (
-            "AuthenticationResult is read before the challenge check"
+        assert window.index("res.isSignedIn") < window.index("adoptSession()"), (
+            "the session is adopted before the completion check"
+        )
+        assert "toChallenge(res.nextStep" in window, (
+            "a nextStep must become a challenge the login screen can render"
         )
 
-    def test_a_missing_result_is_an_error_not_a_crash(self):
+    def test_an_unknown_step_is_an_error_not_a_silent_success(self):
         src = _read(MOBILE_AUTH)
-        assert "AuthenticationResult?.IdToken" in src, (
-            "an unknown response shape must not crash on a property of undefined"
+        idx = src.index("const signIn = useCallback")
+        window = src[idx: idx + 1100]
+        assert "throw new Error" in window, (
+            "an unrecognised sign-in step must say so rather than falling "
+            "through as if signed in"
         )
 
-    def test_every_challenge_maps_to_its_own_answer_key(self):
-        """A wrong key is a 400 that reads to the user like a bad code."""
+    def test_a_session_without_tokens_is_an_error_not_a_crash(self):
         src = _read(MOBILE_AUTH)
-        for name, key in [
-            ("NEW_PASSWORD_REQUIRED", "NEW_PASSWORD"),
-            ("SOFTWARE_TOKEN_MFA", "SOFTWARE_TOKEN_MFA_CODE"),
-            ("EMAIL_OTP", "EMAIL_OTP_CODE"),
-        ]:
-            assert f"responses.{key}" in src, f"{name} has no answer key"
-
-    def test_the_session_is_carried_back(self):
-        src = _read(MOBILE_AUTH)
-        # Scope to the respondToChallenge function rather than a byte window:
-        # the call and its Session argument are ~40 lines apart.
-        idx = src.index("const respondToChallenge")
-        body = src[idx: idx + 2000]
-        assert "RespondToAuthChallenge" in body and "Session:" in body, (
-            "RespondToAuthChallenge without the Session is rejected by Cognito"
+        assert "tokens?.idToken?.toString()" in src, (
+            "optional chaining is what stops a property-of-undefined crash"
         )
+        idx = src.index("const adoptSession")
+        assert "throw new Error" in src[idx: idx + 700], (
+            "an empty session must raise a readable error"
+        )
+
+    def test_every_mfa_step_maps_to_a_prompt(self):
+        """The four Amplify steps that must reach the user, not an error box."""
+        src = _read(MOBILE_AUTH)
+        for step in (
+            "CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED",
+            "CONFIRM_SIGN_IN_WITH_TOTP_CODE",
+            "CONFIRM_SIGN_IN_WITH_EMAIL_CODE",
+            "CONTINUE_SIGN_IN_WITH_MFA_SELECTION",
+        ):
+            assert step in src, f"{step} has no mapping, so it surfaces as an error"
 
     def test_the_login_screen_prompts_instead_of_erroring(self):
         src = _read(MOBILE_LOGIN)
