@@ -35,10 +35,10 @@ DEFAULT_TARGETS: dict[str, float] = {
     # on their paired trainee; anything else is an ordinary good pairing.
     "mutual_weak":          0.45,   # neither half is a driver or captain
     "mutual_lead_crew":     0.55,   # driver or captain paired with anyone else
-    "mutual_driver_trainer": 0.62,  # driver <-> trainer
-    "mutual_driver_captain": 0.68,  # driver <-> captain -- the strongest pair
-    "tridirectional": 0.70,   # six favours among driver + captain + walker
-    "trio_plus":      0.80,   # trio, and a trainer favours the candidate too
+    "mutual_driver_trainer": 0.60,  # driver <-> trainer
+    "mutual_driver_captain": 0.65,  # driver <-> captain -- the strongest pair
+    "tridirectional": 0.80,   # six favours among driver + captain + walker
+    "trio_plus":      0.88,   # trio, and a trainer favours the candidate too
 }
 
 # Highest first — resolution returns on the first match (D3).
