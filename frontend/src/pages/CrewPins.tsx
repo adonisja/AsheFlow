@@ -17,6 +17,28 @@ import type { CrewPin, Employee, Truck, TruckPin, Weekday } from '../api/types';
  *  The screen has to carry that distinction, because "pinned" and "preferred"
  *  look identical in a list. Hence the explicit anchor labelling and the
  *  inactive-reason callout rather than a bare disabled state. */
+/* Roles that can actually be on a truck — the same six AssignmentMember.role
+   accepts. dispatch, management, admin and field_supervisor are excluded
+   because they cannot hold a crew slot at all, so offering them is offering a
+   choice the assignment model will never honour.
+   Ordered by how a dispatcher reads a crew, not alphabetically. */
+const CREW_ROLE_ORDER = ['captain', 'trainer', 'trainee', 'driver_trainee', 'walker'] as const;
+const CREW_ROLES = new Set<string>(CREW_ROLE_ORDER);
+
+/** Field crew only, grouped and ordered by role. */
+function crewCandidates(employees: Employee[], exclude?: (e: Employee) => boolean) {
+  return employees
+    .filter(e => CREW_ROLES.has(e.role) && !(exclude?.(e) ?? false))
+    .sort((a, b) =>
+      CREW_ROLE_ORDER.indexOf(a.role as typeof CREW_ROLE_ORDER[number]) -
+      CREW_ROLE_ORDER.indexOf(b.role as typeof CREW_ROLE_ORDER[number]) ||
+      a.name.localeCompare(b.name));
+}
+
+const SELECT_CLASS =
+  'w-full border border-input rounded-xl px-3 py-2 text-sm bg-background ' +
+  'focus:ring-1 focus:ring-primary focus:border-primary outline-none';
+
 export default function CrewPins() {
   const [pins, setPins] = useState<CrewPin[]>([]);
   const [truckPins, setTruckPins] = useState<TruckPin[]>([]);
@@ -252,11 +274,32 @@ function CrewPinForm({
   // The anchor cannot also be a member — the server strips it, but offering it
   // invites the question "did that work?".
   const candidates = useMemo(
-    () => employees
-      .filter(e => e.id !== driverId && e.role !== 'driver')
-      .sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name)),
+    () => crewCandidates(employees, e => e.id === driverId || e.role === 'driver'),
     [employees, driverId],
   );
+
+  const byRole = useMemo(() => {
+    const groups = new Map<string, Employee[]>();
+    for (const e of candidates) {
+      const g = groups.get(e.role);
+      if (g) g.push(e); else groups.set(e.role, [e]);
+    }
+    return groups;
+  }, [candidates]);
+
+  const chosen = (role: string) =>
+    memberIds.filter(id => employees.find(e => e.id === id)?.role === role).length;
+
+  /* Composition rules, stated where the choice is made rather than enforced
+     silently: exactly one captain leads the truck, walkers do the route, and
+     trainers are optional because a crew without a trainee needs none. */
+  const RULES: Record<string, string> = {
+    captain: 'choose 1',
+    trainer: 'optional',
+    trainee: 'optional',
+    driver_trainee: 'optional',
+    walker: 'choose 1 or more',
+  };
 
   const submit = async () => {
     setSaving(true);
@@ -280,58 +323,81 @@ function CrewPinForm({
   return (
     <div className="border border-border rounded-xl p-4 space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="text-sm">
-          <span className="block mb-1 font-medium">Crew name</span>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Crew name
+          </label>
           <input
             value={name}
             onChange={e => setName(e.target.value)}
             maxLength={80}
             placeholder="A Team"
-            className="w-full rounded-lg border border-border bg-background px-3 py-2"
+            className={SELECT_CLASS}
           />
-        </label>
-        <label className="text-sm">
-          <span className="block mb-1 font-medium">Driver (anchor)</span>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Driver (anchor)
+          </label>
           <select
             value={driverId}
             onChange={e => setDriverId(e.target.value)}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2"
+            className={SELECT_CLASS}
           >
             <option value="">Select a driver…</option>
             {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
-        </label>
+        </div>
       </div>
 
-      <div>
-        <p className="text-sm font-medium mb-1.5">Crew members</p>
-        <div className="flex flex-wrap gap-1.5 max-h-56 overflow-y-auto">
-          {candidates.map(e => {
-            const on = memberIds.includes(e.id);
-            return (
-              <button
-                key={e.id}
-                type="button"
-                onClick={() => toggle(e.id)}
-                aria-pressed={on}
-                className={`text-xs rounded-lg px-2 py-1 border transition-colors ${
-                  on ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'
-                }`}
-              >
-                {e.name}
-                <span className={`uppercase ml-1.5 text-[10px] ${on ? 'opacity-80' : 'text-muted-foreground'}`}>
-                  {e.role}
+      {/* Grouped by role rather than one flat list. A crew is built role by role
+          — one captain, then walkers — and a single alphabetical list of 80
+          names makes that impossible to see. The role tag on each chip becomes
+          redundant once they are grouped, so it is dropped. */}
+      <div className="space-y-3">
+        <p className="text-sm font-medium">Crew members</p>
+        {CREW_ROLE_ORDER.filter(r => (byRole.get(r) ?? []).length > 0).map(role => {
+          const people = byRole.get(role) ?? [];
+          const n = chosen(role);
+          return (
+            <div key={role}>
+              <div className="flex items-baseline gap-2 mb-1.5">
+                <span className="text-xs font-semibold uppercase tracking-wide">
+                  {role.replace('_', ' ')}s
                 </span>
-              </button>
-            );
-          })}
-        </div>
+                <span className="text-[11px] text-muted-foreground">
+                  {RULES[role] ?? 'optional'}
+                  {n > 0 && ` — ${n} selected`}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+                {people.map(e => {
+                  const on = memberIds.includes(e.id);
+                  return (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => toggle(e.id)}
+                      aria-pressed={on}
+                      className={`text-xs rounded-lg px-2 py-1 border transition-colors ${
+                        on ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent'
+                      }`}
+                    >
+                      {e.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="flex items-center gap-2">
         <button
           onClick={submit}
-          disabled={saving || !name.trim() || !driverId}
+          disabled={saving || !name.trim() || !driverId || chosen('captain') > 1}
+          title={chosen('captain') > 1 ? 'A truck has one captain' : undefined}
           className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Create crew pin'}
@@ -476,10 +542,13 @@ function TruckPinForm({
   const [days, setDays] = useState<Weekday[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const sorted = useMemo(
-    () => employees.slice().sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name)),
-    [employees],
-  );
+  // Field crew only, and drivers included here: unlike a crew pin (where the
+  // driver is the anchor and cannot also be a member), a truck pin can hold a
+  // DRIVER to their truck — that is the case that forced seating before
+  // assign_drivers (ADR-358 D3).
+  const sorted = useMemo(() => crewCandidates(employees).concat(
+    employees.filter(e => e.role === 'driver').sort((a, b) => a.name.localeCompare(b.name)),
+  ), [employees]);
 
   const submit = async () => {
     setSaving(true);
@@ -503,12 +572,14 @@ function TruckPinForm({
   return (
     <div className="border border-border rounded-xl p-4 space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="text-sm">
-          <span className="block mb-1 font-medium">Employee</span>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Employee
+          </label>
           <select
             value={employeeId}
             onChange={e => setEmployeeId(e.target.value)}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2"
+            className={SELECT_CLASS}
           >
             <option value="">Select someone…</option>
             {sorted.map(e => (
@@ -516,22 +587,24 @@ function TruckPinForm({
               // (ADR-358 D2), and a missing name reads as a bug while a disabled
               // one with a reason reads as a rule.
               <option key={e.id} value={e.id} disabled={crewPinnedIds.has(e.id)}>
-                {e.name} ({e.role}){crewPinnedIds.has(e.id) ? ' — in a crew pin' : ''}
+                {e.name} ({e.role.replace('_', ' ')}){crewPinnedIds.has(e.id) ? ' — in a crew pin' : ''}
               </option>
             ))}
           </select>
-        </label>
-        <label className="text-sm">
-          <span className="block mb-1 font-medium">Truck</span>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Truck
+          </label>
           <select
             value={truckId}
             onChange={e => setTruckId(e.target.value)}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2"
+            className={SELECT_CLASS}
           >
             <option value="">Select a truck…</option>
             {trucks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
-        </label>
+        </div>
       </div>
 
       <div>
