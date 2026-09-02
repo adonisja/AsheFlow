@@ -229,7 +229,7 @@ const NotificationBanner: React.FC = () => {
                     ? <CheckCircle2 className="w-4 h-4" />
                     : <XCircle className="w-4 h-4" />
                   }
-                  {response === 'confirmed' ? 'Confirmed' : 'Declined'} — response recorded.
+                  {response === 'confirmed' ? 'Confirmed' : 'Declined'}. Response recorded.
                 </div>
               ) : !windowOpen ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">

@@ -29,7 +29,7 @@ export function errorText(e: unknown, fallback: string): string {
       return 'The request timed out. Check your connection and try again.';
     }
     if (err?.code === 'ERR_NETWORK' || err?.message === 'Network Error') {
-      return "Couldn't reach the server. Check your connection and try again — the action was not completed.";
+      return "Couldn't reach the server. The action was not completed. Check your connection and try again.";
     }
   }
 

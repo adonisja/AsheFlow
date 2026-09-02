@@ -601,7 +601,7 @@ export default function WalkerPerformance() {
               <div className="flex items-center gap-2 mb-3">
                 <AlertTriangle className="w-4 h-4 text-danger" />
                 <h2 className="text-sm font-semibold text-danger">At-Risk ({atRisk.length})</h2>
-                <span className="text-xs text-subtle ml-1">peer grade or return rate — consider a review</span>
+                <span className="text-xs text-subtle ml-1">peer grade or return rate · consider a review</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {atRisk.map(w => (

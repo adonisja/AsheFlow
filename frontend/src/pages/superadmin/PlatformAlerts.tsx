@@ -224,7 +224,7 @@ export default function PlatformAlerts() {
                     {a.is_resolved && (
                       a.resolved_by_email
                         ? ` by ${a.resolved_by_email}`
-                        : ' automatically — the integration recovered'
+                        : ' automatically, once the integration recovered'
                     )}
                   </p>
                 </div>

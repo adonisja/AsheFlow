@@ -112,7 +112,7 @@ export default function CaptainDashboard() {
           <h3 className="text-base font-medium text-foreground">No truck assigned today</h3>
           <p className="text-sm text-subtle mt-1 max-w-sm mx-auto">
             You are not on a crew for {today}. Dispatch assigns captains on the
-            Assignments board — this page fills in once you are placed.
+            Assignments board. This page fills in once you are placed.
           </p>
         </div>
       </div>
@@ -177,7 +177,7 @@ export default function CaptainDashboard() {
         <Card title="Routes" icon={RouteIcon} to="/walker-sort" navigate={navigate}
               hint={routes.length ? `${done}/${routes.length} complete` : 'not committed'}>
           {routes.length === 0 ? (
-            <Empty text="No routes committed yet — commit the sort on AP Sort." />
+            <Empty text="No routes committed yet. Commit the sort on AP Sort." />
           ) : (
             <Stat rows={[
               ['Committed', routes.length],
@@ -190,7 +190,7 @@ export default function CaptainDashboard() {
         <Card title="Station Load" icon={Boxes} to="/walker-sort" navigate={navigate}
               hint={roster?.load_confirmed ? 'confirmed' : 'not confirmed'}>
           {!roster ? (
-            <Empty text="No roster yet — it appears after the station sort." />
+            <Empty text="No roster yet. It appears after the station sort." />
           ) : (
             <Stat rows={[
               ['Totes', roster.tote_count],

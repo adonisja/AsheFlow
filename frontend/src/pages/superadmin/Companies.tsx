@@ -367,7 +367,7 @@ function CompanyRow({
             >
               {bootstrapResult.invite_sent
                 ? <><CheckCircle2 className="w-3.5 h-3.5" /> Invite sent to {bootstrapResult.email}</>
-                : <><AlertTriangle className="w-3.5 h-3.5" /> Admin created but email delivery failed — retry to resend</>
+                : <><AlertTriangle className="w-3.5 h-3.5" /> Admin created but email delivery failed. Retry to resend.</>
               }
             </div>
           ) : (

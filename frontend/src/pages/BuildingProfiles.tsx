@@ -160,9 +160,9 @@ function verifyHint(p: BuildingProfileResponse): string {
 /** Why this caller cannot confirm. Absent reason = they can. */
 function verifyBlockedText(p: BuildingProfileResponse): string | null {
   switch (p.verify_blocked_reason) {
-    case 'own_submission':       return 'You submitted this — someone else must confirm it';
+    case 'own_submission':       return 'You submitted this, so someone else must confirm it';
     case 'already_verified':     return 'You already confirmed this';
-    case 'awaiting_signoff':     return 'The field agrees — a captain or dispatch signs this off';
+    case 'awaiting_signoff':     return 'The field agrees. A captain or dispatch signs this off';
     case 'not_a_field_verifier': return 'Only people who walk the blocks can confirm a building';
     default:                 return null;
   }
@@ -536,7 +536,7 @@ function ProfileCard({ profile, canLock, canAnchor, onVerify, onNote, onLock, on
           ) : canAnchor && (
             <div className="flex items-center gap-1.5 p-2 bg-accent/30 rounded-lg">
               <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-              <p className="text-xs text-muted-foreground">No initial anchor point set — feeds sort pipeline and AP workflow.</p>
+              <p className="text-xs text-muted-foreground">No initial anchor point set. Feeds the sort pipeline and AP workflow.</p>
             </div>
           )}
 

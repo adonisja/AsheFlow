@@ -167,7 +167,7 @@ export default function DispatchView() {
             <h2 className="text-lg font-semibold text-foreground">Dispatch Portal</h2>
           </div>
           <p className="text-sm text-subtle leading-relaxed mb-4">
-            Operational hub — run dispatch, manage assignments, and coordinate daily field activity.
+            Operational hub. Run dispatch, manage assignments, and coordinate daily field activity.
           </p>
           <div className="grid grid-cols-1 gap-3">
             {quickLinks.map(link => (

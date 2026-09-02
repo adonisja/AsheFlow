@@ -313,7 +313,7 @@ export default function Account() {
                       <li>Advanced → turn on <span className="text-foreground">Developer Mode</span></li>
                       <li>Right-click your own name or avatar</li>
                       <li>Choose <span className="text-foreground">Copy User ID</span></li>
-                      <li className="list-none pt-1">It's a 17–20 digit number — not your username.</li>
+                      <li className="list-none pt-1">It's a 17–20 digit number, not your username.</li>
                     </ol>
                   )}
 
@@ -403,7 +403,7 @@ export default function Account() {
         <>
           <p className="text-xs text-muted-foreground">
             AsheFlow's record of your deliveries. Amazon's own weekly assessment
-            is under Scorecard — the two are measured separately and can differ.
+            is under Scorecard. The two are measured separately and can differ.
           </p>
           <StatsDrill />
         </>

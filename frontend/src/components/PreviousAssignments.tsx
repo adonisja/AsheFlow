@@ -180,7 +180,7 @@ export default function PreviousAssignments() {
           onChange={(e) => setDay(e.target.value)}
           className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none"
         />
-        <span className="text-xs text-subtle">Read-only — this day has already run.</span>
+        <span className="text-xs text-subtle">Read-only. This day has already run.</span>
       </div>
 
       {error && (

@@ -60,7 +60,7 @@ export default function ReturnsManifestPrint() {
         </button>
         {pending > 0 && (
           <span style={{ fontSize: 13, color: '#b91c1c', fontWeight: 600 }}>
-            ⚠ {pending} unit(s) not yet confirmed removed — manifest marks them PENDING
+            ⚠ {pending} unit(s) not yet confirmed removed · manifest marks them PENDING
           </span>
         )}
       </div>
@@ -72,7 +72,7 @@ export default function ReturnsManifestPrint() {
         </h1>
         <p style={{ margin: '4px 0 0', fontSize: 13 }}>
           {niceDate} · {data.removals.length} unit{data.removals.length === 1 ? '' : 's'} ·{' '}
-          <strong>{totalPkgs} package{totalPkgs === 1 ? '' : 's'}</strong> returned to station — not in our delivery area
+          <strong>{totalPkgs} package{totalPkgs === 1 ? '' : 's'}</strong> returned to station, not in our delivery area
         </p>
       </div>
 

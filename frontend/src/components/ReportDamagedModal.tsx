@@ -63,8 +63,8 @@ export default function ReportDamagedModal({
         </div>
 
         <p className="text-xs text-muted-foreground mb-4">
-          For damage found before a route exists — pull the package from the flow and
-          dispatch will follow up. Damage discovered at delivery goes through RTS instead.
+          For damage found before a route exists. Pulls the package from the
+          flow, and dispatch will follow up. Damage discovered at delivery goes through RTS instead.
         </p>
 
         {error && (

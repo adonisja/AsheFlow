@@ -569,7 +569,7 @@ function AssignForm() {
         {ocrLines.length > 0 && (
           <div className="mt-3 pt-3 border-t border-border">
             <p className="text-xs text-muted-foreground mb-1.5">
-              Read from the label — click a line to use it:
+              Read from the label. Click a line to use it:
             </p>
             <div className="flex flex-wrap gap-1.5">
               {ocrLines.map((line, i) => (
@@ -685,7 +685,7 @@ function AssignForm() {
              deliver another carrier's package. It leaves via the removal
              custody chain (ADR-176) instead. */
           <p className="text-xs text-warning">
-            Not ours to deliver — this address is outside the delivery zone.
+            Not ours to deliver. This address is outside the delivery zone.
             Assigning will open a removal and start the custody chain.
           </p>
         ) : routePreview?.assessment?.candidates?.length ? (
@@ -707,7 +707,7 @@ function AssignForm() {
                  "cannot accept" and would otherwise look like a dead end. */
               <p className="text-xs text-warning">
                 Every route near this address has already left. Assigning will
-                still place it — radio the walker so they know it is coming.
+                still place it. Radio the walker so they know it is coming.
               </p>
             )}
             <ul className="space-y-1.5">
@@ -770,14 +770,14 @@ function AssignForm() {
           <p className="text-xs text-warning">
             {routePreview.assessment?.decidable === false
               ? routePreview.assessment?.zone_reason === 'no_boundary'
-                ? 'No delivery zone is configured, so ownership cannot be confirmed — an admin needs to set one. Assign by hand to deliver it today.'
-                : 'Could not confirm this address, so ownership is unverified — check the spelling, or assign the route by hand.'
+                ? 'No delivery zone is configured, so ownership cannot be confirmed. An admin needs to set one. Assign by hand to deliver it today.'
+                : 'Could not confirm this address, so ownership is unverified. Check the spelling, or assign the route by hand.'
               : routePreview.assessment?.routes_exist === false
                 /* Not a routing failure — the day has not been sorted. Saying
                    "no route is near" would send dispatch hunting a routing
                    problem that is really a not-yet-run sort (ADR-260). */
                 ? 'No routes have been built for today yet. Run the sort, then assign this package.'
-                : 'No route within two blocks of this address — pick one by hand, or send it to dispatch review.'}
+                : 'No route within two blocks of this address. Pick one by hand, or send it to dispatch review.'}
           </p>
         ) : null}
       </div>
