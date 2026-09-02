@@ -63,12 +63,18 @@ function PreferenceAnalytics() {
 
   const empMap = useMemo(() => Object.fromEntries(emps.map(e => [e.id, e])), [emps]);
 
-  const favs = useMemo(() => rels.filter(r => r.relationship_type === 'fav'), [rels]);
-  const bans = useMemo(() => rels.filter(r => r.relationship_type === 'ban'), [rels]);
+  /* ADR-361 — the admin aggregate endpoint returns dispatch separations too.
+     They share a table with bans and are NOT bans: nobody asserted them about
+     anybody, and surfacing one here would report a dispatcher's decision as a
+     statement two employees made about each other. Everything on this page
+     counts from `prefs`, never from the raw rows. */
+  const prefs = useMemo(() => rels.filter(r => r.relationship_type !== 'sep'), [rels]);
+  const favs = useMemo(() => prefs.filter(r => r.relationship_type === 'fav'), [prefs]);
+  const bans = useMemo(() => prefs.filter(r => r.relationship_type === 'ban'), [prefs]);
 
   // KPIs
   const fieldStaff = useMemo(() => emps.filter(e => FIELD_ROLES.includes(e.role)), [emps]);
-  const staffWithPrefs = useMemo(() => new Set(rels.map(r => r.employee_id)).size, [rels]);
+  const staffWithPrefs = useMemo(() => new Set(prefs.map(r => r.employee_id)).size, [prefs]);
   const coveragePct = fieldStaff.length > 0 ? Math.round((staffWithPrefs / fieldStaff.length) * 100) : 0;
 
   // Mutual bans
@@ -95,7 +101,9 @@ function PreferenceAnalytics() {
       m[src] = {};
       for (const tgt of roles) m[src][tgt] = { favs: 0, bans: 0 };
     }
-    for (const r of rels) {
+    // `prefs`, not `rels`: the else-branch below counts anything that is not a
+    // fav as a ban, so a separation would land in the ban column.
+    for (const r of prefs) {
       const src = empMap[r.employee_id]?.role;
       const tgt = empMap[r.target_employee_id]?.role;
       if (src && tgt && m[src]?.[tgt]) {
@@ -104,7 +112,7 @@ function PreferenceAnalytics() {
       }
     }
     return m;
-  }, [rels, empMap]);
+  }, [prefs, empMap]);
 
   // Most favoured / most banned
   const favCounts = useMemo(() => {

@@ -31,6 +31,14 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     example: 'Tuesday and Thursday on Truck 4. The rest of the week is ordinary dispatch.',
     note: 'A pin does not reserve the truck. If the pinned person is off, the truck is dispatched as usual.',
   },
+  separation: {
+    title: 'Separations',
+    summary: 'Keeps two people off the same crew, without telling either of them.',
+    detail:
+      'A separation has the same effect as a ban: dispatch will not place these two together. The difference is who it belongs to. A ban is the employee\'s own statement and shows in their preferences. A separation is your decision about them, so it appears in neither person\'s list and does not use up either of their two bans.',
+    example: 'Two walkers who feed each other\'s worst habits on a route. Separate them, and neither sees anything change.',
+    note: 'Only dispatch, management and admin can see separations. If either person is in a pinned crew with the other, that pin is deactivated automatically.',
+  },
   shift_start: {
     title: 'Shift Start Time',
     summary: 'When drivers are expected to arrive at the offsite for the start of their shift.',

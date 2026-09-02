@@ -8,12 +8,13 @@ export interface EmployeeOffDay {
   status: 'pending' | 'approved' | 'rejected';
 }
 
-export interface EmployeeRelationship {
-  id: string;
-  employee_id: string;
-  target_employee_id: string;
-  relationship_type: 'fav' | 'ban';
-}
+/* Re-exported, not redeclared. This file carried a second copy of the
+   interface, and widening relationship_type in types.ts for ADR-361 left the
+   two disagreeing — tsc pointed at Preferences.tsx, which imports from HERE.
+   types.ts is hand-maintained with no codegen, so a duplicate is a drift
+   waiting to happen; one definition means the next change lands everywhere. */
+import type { EmployeeRelationship } from './types';
+export type { EmployeeRelationship };
 
 // API CALLS
 export const getOffDays = async (employeeId: string) => {
