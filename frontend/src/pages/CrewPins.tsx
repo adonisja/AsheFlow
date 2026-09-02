@@ -868,13 +868,6 @@ function SeparationSection({
             </button>
           }
         />
-        {/* Stated here rather than only in the drawer. Someone scanning this
-            page needs to know these are invisible to the crew before they read
-            the list, not after they wonder why nobody has mentioned one. */}
-        <p className="text-sm text-muted-foreground mt-2">
-          Neither person is told. A separation does not appear in their preferences
-          and does not use up either of their two bans.
-        </p>
       </div>
 
       {adding && (
