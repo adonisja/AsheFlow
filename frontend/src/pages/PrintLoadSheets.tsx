@@ -119,7 +119,7 @@ function Sheet({ roster, date, accent, finalized }: {
           Driver: <strong>{roster.driver_name ?? '____________________'}</strong>
           {!finalized && (
             <span style={{ color: '#b91c1c', fontWeight: 700, fontSize: 11, marginLeft: 12 }}>
-              ⚠ PRELIMINARY — loading not finalized when printed
+              ⚠ PRELIMINARY · loading not finalized when printed
             </span>
           )}
         </div>
@@ -139,7 +139,7 @@ function Sheet({ roster, date, accent, finalized }: {
       {(roster.incoming.length > 0 || roster.outgoing.length > 0) && (
         <div style={{ margin: '0 0 12px', border: '2px solid #d97706', borderRadius: 6, overflow: 'hidden' }}>
           <div style={{ background: '#fef3c7', padding: '4px 10px', fontSize: 12, fontWeight: 800, letterSpacing: '0.05em' }}>
-            ⇄ STATION TRANSFERS — complete before departure
+            ⇄ STATION TRANSFERS · complete before departure
           </div>
           <div style={{ padding: '6px 10px', fontSize: 13 }}>
             {roster.incoming.map(t => (
@@ -166,7 +166,7 @@ function Sheet({ roster, date, accent, finalized }: {
       {ovZones.size > 0 && (
         <div style={{ margin: '0 0 12px' }}>
           <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.05em', marginBottom: 4 }}>
-            OV PICKUP BY ZONE <span style={{ fontWeight: 400, color: '#666' }}>— collect at each zone, then match to bags below</span>
+            OV PICKUP BY ZONE <span style={{ fontWeight: 400, color: '#666' }}>· collect at each zone, then match to bags below</span>
           </div>
           <table style={{ maxWidth: 460 }}>
             <thead>
@@ -204,7 +204,7 @@ function Sheet({ roster, date, accent, finalized }: {
 
       {/* 3. Bag checklist, aisle by aisle in dock-walk order */}
       <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.05em', marginBottom: 4 }}>
-        BAG CHECKLIST <span style={{ fontWeight: 400, color: '#666' }}>— walk the dock in order</span>
+        BAG CHECKLIST <span style={{ fontWeight: 400, color: '#666' }}>· walk the dock in order</span>
       </div>
       <table>
         <thead>
@@ -242,7 +242,7 @@ function Sheet({ roster, date, accent, finalized }: {
                   <td style={{ border: '1px solid #bbb', padding: '4px 6px', fontSize: 11, fontWeight: 700, color: outgoing ? '#b91c1c' : incoming ? '#166534' : '#111' }}>
                     {t.transfer && (incoming
                       ? `⬅ from ${t.transfer.from_truck_name}`
-                      : `➡ to ${t.transfer!.to_truck_name} — DO NOT LOAD`)}
+                      : `➡ to ${t.transfer!.to_truck_name} · DO NOT LOAD`)}
                   </td>
                 </tr>
               );
@@ -295,7 +295,7 @@ export default function PrintLoadSheets() {
         </button>
         <span style={{ fontSize: 13, color: '#666' }}>
           {date} · one sheet per truck · transfers → OV zones → aisle-by-aisle checklist
-          {!data.loading_finalized && ' · ⚠ loading not finalized — sheets are marked PRELIMINARY'}
+          {!data.loading_finalized && ' · ⚠ loading not finalized, so sheets are marked PRELIMINARY'}
         </span>
       </div>
       {data.rosters.filter(r => !truckFilter || r.truck_id === truckFilter).map(r => (
