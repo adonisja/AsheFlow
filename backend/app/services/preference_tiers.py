@@ -28,8 +28,15 @@ DEFAULT_TARGETS: dict[str, float] = {
     "oneway_trainer": 0.25,   # a trainer favours you
     "oneway_captain": 0.28,
     "oneway_driver":  0.33,
-    "mutual_weak":    0.45,   # both favour each other, neither is driver/captain
-    "mutual_strong":  0.55,   # mutual, including a driver or captain
+    # Mutual pairs are ranked by WHICH TWO ROLES bonded, not merely by whether a
+    # crew lead is involved. The driver and captain jointly control and organise
+    # the truck, so their bond has the largest effect on the day's outcome; a
+    # driver-trainer bond means less friction for the trainer, who can then focus
+    # on their paired trainee; anything else is an ordinary good pairing.
+    "mutual_weak":          0.45,   # neither half is a driver or captain
+    "mutual_lead_crew":     0.55,   # driver or captain paired with anyone else
+    "mutual_driver_trainer": 0.62,  # driver <-> trainer
+    "mutual_driver_captain": 0.68,  # driver <-> captain -- the strongest pair
     "tridirectional": 0.70,   # six favours among driver + captain + walker
     "trio_plus":      0.80,   # trio, and a trainer favours the candidate too
 }
@@ -38,7 +45,9 @@ DEFAULT_TARGETS: dict[str, float] = {
 _TIER_ORDER = (
     "trio_plus",
     "tridirectional",
-    "mutual_strong",
+    "mutual_driver_captain",
+    "mutual_driver_trainer",
+    "mutual_lead_crew",
     "mutual_weak",
     "oneway_driver",
     "oneway_captain",
@@ -105,6 +114,7 @@ def resolve_tier(
     *,
     expressed_by_roles: Iterable[str],
     mutual_roles: Iterable[str],
+    candidate_role: Optional[str] = None,
     has_trio: bool = False,
     trainer_also_favs: bool = False,
 ) -> Optional[str]:
@@ -113,7 +123,10 @@ def resolve_tier(
     Args:
         expressed_by_roles: roles of everyone whose one-way favourite points at
             this pairing — the role of the EXPRESSOR, per ADR-355 D2.
-        mutual_roles: roles involved in any reciprocated pair.
+        mutual_roles: roles of the PLACED members in any reciprocated pair.
+        candidate_role: the candidate's own role — the other half of every pair.
+            Without it driver<->captain and driver<->walker are indistinguishable,
+            since both arrive as mutual_roles=["driver"].
         has_trio: all six favourites exist among driver + captain + candidate.
         trainer_also_favs: a trainer on this truck also favours the candidate.
 
@@ -128,7 +141,15 @@ def resolve_tier(
     if has_trio:
         return "tridirectional"
     if mutual:
-        return "mutual_strong" if mutual & set(_STRONG_ROLES) else "mutual_weak"
+        # Both halves of the pair, so the specific bond can be ranked.
+        pairs = {frozenset((candidate_role, r)) for r in mutual if candidate_role}
+        if frozenset(("driver", "captain")) in pairs:
+            return "mutual_driver_captain"
+        if frozenset(("driver", "trainer")) in pairs:
+            return "mutual_driver_trainer"
+        if mutual & set(_STRONG_ROLES) or (candidate_role in _STRONG_ROLES):
+            return "mutual_lead_crew"
+        return "mutual_weak"
     if "driver" in expressed:
         return "oneway_driver"
     if "captain" in expressed:

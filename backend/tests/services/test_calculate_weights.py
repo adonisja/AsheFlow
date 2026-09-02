@@ -97,7 +97,7 @@ def _driver_fan_weight(db):
 def _mutual_weight(db):
     """Weight a mutual pair including a driver produces in the same fixture."""
     from app.services.preference_tiers import DEFAULT_TARGETS, weight_for_target
-    return weight_for_target(DEFAULT_TARGETS["mutual_strong"], 2)
+    return weight_for_target(DEFAULT_TARGETS["mutual_lead_crew"], 2)
 
 
 class TestBannedTrucks:
