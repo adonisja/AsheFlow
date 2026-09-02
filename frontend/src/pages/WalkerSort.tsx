@@ -231,7 +231,7 @@ function MisrouteResolveModal({ routeId, flagId, tbaNumber, routes, suggestedRou
           <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 flex items-center justify-between gap-2">
             <div className="text-xs">
               <span className="font-semibold text-foreground">Belongs on #{suggested.route_number}</span>
-              <span className="text-muted-foreground"> · {suggested.executor?.name ?? 'unassigned'} — covers this block</span>
+              <span className="text-muted-foreground"> · {suggested.executor?.name ?? 'unassigned'} · covers this block</span>
             </div>
             {destRouteId !== suggested.id ? (
               <button
@@ -1136,8 +1136,8 @@ function TruckSortPanel({
             </p>
             <p className="text-xs text-muted-foreground">
               {state.phase === 'idle'        && 'Not committed'}
-              {state.phase === 'committed'   && `${state.routes.length} routes · ${pkgCount} pkgs — awaiting distribution`}
-              {state.phase === 'distributed' && `${state.routes.length} routes assigned — awaiting arrival confirm`}
+              {state.phase === 'committed'   && `${state.routes.length} routes · ${pkgCount} pkgs · awaiting distribution`}
+              {state.phase === 'distributed' && `${state.routes.length} routes assigned · awaiting arrival confirm`}
               {state.phase === 'arrived'     && `${state.routes.length} routes · rebalance complete`}
             </p>
           </div>
@@ -1227,7 +1227,7 @@ function TruckSortPanel({
                   {state.packages_dropped > 0 && (
                     <div className="flex items-center gap-1.5 text-xs text-warning">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                      {state.packages_dropped} package{state.packages_dropped === 1 ? '' : 's'} dropped — TBAs not found in enriched manifest.
+                      {state.packages_dropped} package{state.packages_dropped === 1 ? '' : 's'} dropped. These TBAs were not found in the enriched manifest.
                     </div>
                   )}
                 </div>
@@ -1398,7 +1398,7 @@ function TruckSortPanel({
                           {' + '}
                           {walkers.find(w => w.id === pairStatus.traineeId)?.name ?? 'Trainee'}
                         </p>
-                        <p className="text-muted-foreground mt-0.5">Paired at dispatch — rebalance expands their route to 1.5×.</p>
+                        <p className="text-muted-foreground mt-0.5">Paired at dispatch. Rebalance expands their route to 1.5×.</p>
                       </div>
                       {pairStatus.arrivedAt ? (
                         <span className="text-xs font-semibold text-success shrink-0">
@@ -1422,7 +1422,7 @@ function TruckSortPanel({
                   </>
                 ) : (
                   <p className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-surface">
-                    No trainer–trainee pair on this truck today — the rebalance step doesn't apply.
+                    No trainer–trainee pair on this truck today, so the rebalance step doesn't apply.
                   </p>
                 )}
               </div>
@@ -1432,7 +1432,7 @@ function TruckSortPanel({
             {state.rebalanceResult && !state.rebalanceResult.sort_not_yet_committed && (
               <div className="space-y-1.5 p-3 bg-success/5 border border-success/20 rounded-xl">
                 <p className="text-xs font-semibold uppercase tracking-widest text-success flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Rebalance complete — capacity {state.rebalanceResult.paired_capacity_limit} half-slots
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Rebalance complete · capacity {state.rebalanceResult.paired_capacity_limit} half-slots
                 </p>
                 {state.rebalanceResult.absorbed_route_numbers.length > 0 && (
                   <p className="text-xs text-muted-foreground">
@@ -1449,7 +1449,7 @@ function TruckSortPanel({
             {state.rebalanceResult?.sort_not_yet_committed && (
               <div className="p-3 bg-info/5 border border-info/20 rounded-xl">
                 <p className="text-xs text-muted-foreground">
-                  Arrival recorded — paired capacity will apply when sort is committed.
+                  Arrival recorded. Paired capacity applies once the sort is committed.
                 </p>
               </div>
             )}

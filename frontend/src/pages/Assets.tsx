@@ -303,7 +303,7 @@ function EmployeeModal({ initial = {}, onSave, onClose, isCreate, allowedRoles =
                   />
                 </div>
                 {discordError && <p className="text-xs text-danger mt-1">{discordError}</p>}
-                {!form.discord_id && <p className="text-xs text-muted-foreground mt-1">Leave blank if unknown — employee can link via registration.</p>}
+                {!form.discord_id && <p className="text-xs text-muted-foreground mt-1">Leave blank if unknown. The employee can link theirs during registration.</p>}
               </div>
             )}
 
@@ -1222,7 +1222,7 @@ function TruckAnchorModal({
           <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
           <p className="text-[11px] text-muted-foreground">Address: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
           <p className="text-[11px] text-muted-foreground">Intersection (preferred): <span className="font-mono text-foreground">W 28 ST &amp; 9 AVE</span> · <span className="font-mono text-foreground">28th St and 9th Ave</span></p>
-          <p className="text-[11px] text-muted-foreground">Intersections pin the corner itself — territory boundaries then fall midway between anchors.</p>
+          <p className="text-[11px] text-muted-foreground">Intersections pin the corner itself. Territory boundaries then fall midway between anchors.</p>
         </div>
 
         {hasAnchor && (
@@ -1367,7 +1367,7 @@ function TruckAnchor2Modal({
           <p className="text-[11px] font-medium text-muted-foreground">Format guide (GeoClient compatible)</p>
           <p className="text-[11px] text-muted-foreground">Address: <span className="font-mono text-foreground">411 W 36 ST</span> · <span className="font-mono text-foreground">250 BROADWAY</span></p>
           <p className="text-[11px] text-muted-foreground">Intersection (preferred): <span className="font-mono text-foreground">W 28 ST &amp; 9 AVE</span> · <span className="font-mono text-foreground">28th St and 9th Ave</span></p>
-          <p className="text-[11px] text-muted-foreground">Intersections pin the corner itself — territory boundaries then fall midway between anchors.</p>
+          <p className="text-[11px] text-muted-foreground">Intersections pin the corner itself. Territory boundaries then fall midway between anchors.</p>
         </div>
 
         {hasAnchor2 && (
@@ -1985,7 +1985,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
       ) : !zone && !editing ? (
         <div className="flex items-center gap-2 p-3 bg-warning/5 border border-warning/20 rounded-xl text-xs text-warning">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-          No operating zone configured — overflow detection is disabled.
+          No operating zone configured. Overflow detection is disabled.
         </div>
       ) : null}
 
@@ -2016,7 +2016,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
                 Click anywhere on the map to place vertices. Drag markers to adjust. Minimum 3 points.
                 {drawnCorners.length >= 3 && (
                   <span className="ml-1 text-success font-medium">
-                    {drawnCorners.length} vertices ready — click "Save zone" to confirm.
+                    {drawnCorners.length} vertices ready. Click "Save zone" to confirm.
                   </span>
                 )}
               </p>
@@ -2081,7 +2081,7 @@ function CompanyZoneCard({ isAdmin }: { isAdmin: boolean }) {
                 <p className="text-[11px] font-medium text-muted-foreground">Format guide</p>
                 <p className="text-[11px] text-muted-foreground">Streets: <span className="font-mono text-foreground">W 23 ST</span>, <span className="font-mono text-foreground">FULTON ST</span></p>
                 <p className="text-[11px] text-muted-foreground">Avenues: <span className="font-mono text-foreground">6 AVE</span>, <span className="font-mono text-foreground">12 AVE</span>, <span className="font-mono text-foreground">BROADWAY</span></p>
-                <p className="text-[11px] text-muted-foreground">List vertices in order around the perimeter — the polygon closes automatically.</p>
+                <p className="text-[11px] text-muted-foreground">List vertices in order around the perimeter. The polygon closes automatically.</p>
               </div>
             </div>
           )}
@@ -2228,7 +2228,7 @@ function SystemTab() {
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>
               {result.deleted === 0
-                ? 'No notifications matched — nothing deleted.'
+                ? 'No notifications matched, so nothing was deleted.'
                 : `Deleted ${result.deleted} notification${result.deleted !== 1 ? 's' : ''} older than ${result.cutoff}.`}
             </span>
           </div>
