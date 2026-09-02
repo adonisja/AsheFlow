@@ -40,7 +40,11 @@ function availabilityOf(
   return hit.reason === 'time_off_request' ? 'pto' : 'scheduled_off';
 }
 
-type DispatchTab = 'current' | 'previous' | 'pins';
+/* 'rules' rather than 'pins': the tab began as two pin axes and now also holds
+   separations, which are the inverse of a pin. The key is component-local (no
+   URL, no storage), so it is free to rename and worth renaming — a stale
+   identifier is how a screen's name drifts from its contents. */
+type DispatchTab = 'current' | 'previous' | 'rules';
 
 /** Tab shell (ADR-268).
 
@@ -54,7 +58,14 @@ export default function DispatchDashboard() {
   return (
     <div className="space-y-6 animate-slide-up">
       <div className="flex items-center gap-1 bg-accent rounded-xl p-1 text-sm w-fit">
-        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments'], ['pins', 'Pinning']] as [DispatchTab, string][])
+        {/* "Crew Rules", not "Pinning": the tab holds crew pins, truck pins AND
+            separations, and a separation is the opposite of a pin. Not
+            "Recommendations" either — these are applied BEFORE the draw at 100%,
+            where a favourite is a weight capped at 88% (ADR-356/357). A
+            dispatcher who reads them as advice will assume dispatch weighed a
+            pin and chose otherwise, and hand-edit a board that was already
+            correct. */}
+        {([['current', 'Current Assignments'], ['previous', 'Previous Assignments'], ['rules', 'Crew Rules']] as [DispatchTab, string][])
           .map(([k, label]) => (
             <button
               key={k}
@@ -72,7 +83,7 @@ export default function DispatchDashboard() {
 
       {tab === 'current' && <CurrentAssignments />}
       {tab === 'previous' && <PreviousAssignments />}
-      {tab === 'pins' && <CrewPins />}
+      {tab === 'rules' && <CrewPins />}
     </div>
   );
 }
