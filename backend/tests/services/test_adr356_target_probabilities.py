@@ -66,8 +66,14 @@ def test_the_stated_targets_hold_on_a_real_fleet(n):
     Only from five trucks up — below that the baseline exceeds the weakest tier
     and the ladder is rescaled to stay ordered, which necessarily moves the top.
     """
-    assert _p(weight_for_target(0.70, n), n) == pytest.approx(0.70, abs=1e-6)
-    assert _p(weight_for_target(0.80, n), n) == pytest.approx(0.80, abs=1e-6)
+    # Read from the ladder, never restated: these targets are tuning values the
+    # operator changes (0.70 -> 0.80 on 2026-09-02), and a literal here would
+    # have to be chased every time.
+    for tier in ("tridirectional", "trio_plus"):
+        target = DEFAULT_TARGETS[tier]
+        assert _p(weight_for_target(target, n), n) == pytest.approx(target, abs=1e-6), (
+            f"{tier} does not reach its stated target at {n} trucks"
+        )
 
 
 def test_a_target_of_one_is_rejected_not_clamped():

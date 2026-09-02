@@ -128,10 +128,10 @@ class CompanyConfig(Base):
     dispatch_target_oneway_driver   = Column(Float, nullable=True)   # default 0.33
     dispatch_target_mutual_weak     = Column(Float, nullable=True)   # default 0.45
     dispatch_target_mutual_lead_crew     = Column(Float, nullable=True)   # default 0.55
-    dispatch_target_mutual_driver_trainer = Column(Float, nullable=True) # default 0.62
-    dispatch_target_mutual_driver_captain = Column(Float, nullable=True) # default 0.68
-    dispatch_target_tridirectional  = Column(Float, nullable=True)   # default 0.70
-    dispatch_target_trio_plus       = Column(Float, nullable=True)   # default 0.80
+    dispatch_target_mutual_driver_trainer = Column(Float, nullable=True) # default 0.60
+    dispatch_target_mutual_driver_captain = Column(Float, nullable=True) # default 0.65
+    dispatch_target_tridirectional  = Column(Float, nullable=True)   # default 0.80
+    dispatch_target_trio_plus       = Column(Float, nullable=True)   # default 0.88
     dispatch_consecutive_penalty    = Column(Float, nullable=True)   # default 0.05
     dispatch_weight_cap             = Column(Float, nullable=True)   # default 0.85
 
