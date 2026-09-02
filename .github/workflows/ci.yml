@@ -43,6 +43,10 @@ env:
   PROD_COGNITO_CLIENT_ID: 4r8tjkjs01e2b930qtqd12vdmf
   STAGING_COGNITO_POOL_ID: us-east-2_SvVO2ofAb
   STAGING_COGNITO_CLIENT_ID: 3hjkvuirnaadus65slhm2ja37d
+  # The four *_VITE_AWS_{POOL,CLIENT}_ID secrets these replaced were deleted
+  # 2026-09-01, after PR #22 shipped this block to prod. A missing secret
+  # resolves to an EMPTY STRING rather than failing, so if a pool id ever goes
+  # blank in a build, look here first -- not at the secrets store.
 
 jobs:
   # ── 0. DESIGN TOKENS ───────────────────────────────────────────────────────

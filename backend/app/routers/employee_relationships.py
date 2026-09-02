@@ -10,6 +10,7 @@ from app.services.audit import write_audit
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
+from app.services.seat_crew_pins import nullify_pins_for_ban
 from app.schemas.employee_relationship import EmployeeRelationshipResponse, EmployeeRelationshipCreate
 
 
@@ -44,22 +45,27 @@ def create_employee_relationship(
         HTTPException(400): If an employee attempts to relate to themselves.
         HTTPException(409): If a limit is exceeded or the relationship already exists.
     """
-    # How many favs each role may hold, per target role (ADR-256).
+    # How many favs each role may hold, per target role (ADR-353, superseding the
+    # ADR-256 table).
     #
-    # A missing key means ZERO, not unlimited — the lookup below defaults to 0. The
-    # gaps are deliberate:
-    #   driver→driver, captain→captain: one per truck, so the preference is meaningless.
-    #   trainer→walker, walker→trainer: a trainer no longer supervises walkers on the
-    #     truck (D5 moved route-lead authority to the captain), so neither side has
-    #     the contact that made the preference mean anything.
-    #   walker→walker is 1, down from 2 — a staffing-constraint call, not a
-    #     hierarchy one. Existing rows above the cap are not deleted; they simply
-    #     block new ones.
+    # A missing key means ZERO, not unlimited — the lookup below defaults to 0.
+    # The two remaining gaps are deliberate and are NOT oversights:
+    #   driver→driver, captain→captain: one per truck, so the preference is
+    #     meaningless (ADR-256's reasoning, unchanged).
+    #   walker→trainer: the two roles rarely affect each other's day, and the pair
+    #     is not needed by the tridirectional trio (ADR-353 D2).
+    #
+    # NAMING THE GAPS MATTERS. ADR-256 removed trainer→walker for a defensible
+    # reason and did not notice that perform_tridirectional_check required it —
+    # the bonus became unreachable and stayed that way, silently. A cap of 0 is a
+    # decision about every consumer of that pair, not just about the UI.
+    #
+    # Existing rows above a cap are not deleted; caps gate NEW rows only.
     FAV_LIMITS = {
-        "driver":  {"driver": 0, "captain": 1, "trainer": 1, "walker": 2},
-        "captain": {"driver": 1, "captain": 0, "trainer": 1, "walker": 2},
-        "trainer": {"driver": 1, "captain": 1},
-        "walker":  {"driver": 1, "captain": 1, "walker": 1},
+        "driver":  {"driver": 0, "captain": 2, "trainer": 1, "walker": 2},
+        "captain": {"driver": 2, "captain": 0, "trainer": 1, "walker": 2},
+        "trainer": {"driver": 1, "captain": 1, "walker": 1},
+        "walker":  {"driver": 2, "captain": 2, "walker": 1},
     }
 
     # Ownership — field staff can only create relationships for themselves
@@ -149,6 +155,32 @@ def create_employee_relationship(
     )
     db.add(db_relationship)
     db.flush()
+
+    # ADR-357 D4 — a ban between two pinned crew members nullifies their pin.
+    # Done at CREATION rather than at dispatch time so the dispatcher learns now,
+    # instead of discovering at 4am that a crew silently stopped being a crew.
+    if employee_relationship.relationship_type == "ban":
+        nullified = nullify_pins_for_ban(
+            db,
+            caller.company_id,
+            db_employee.id,
+            db_target.id,
+        )
+        for pin in nullified:
+            write_audit(
+                db=db,
+                company_id=caller.company_id,
+                actor_id=caller.id,
+                action_type="crew_pin.auto_deactivated",
+                target_table="crew_pins",
+                target_id=str(pin.id),
+                detail={
+                    "reason": "ban_between_members",
+                    "employee_id": str(db_employee.id),
+                    "target_employee_id": str(db_target.id),
+                },
+            )
+
     # The delete side is audited (ADR-132 DP-3/DP-5) and the clear side now is
     # too (D13) — create was the remaining hole, so a relationship could appear
     # with no record and be removed with one.

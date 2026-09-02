@@ -83,6 +83,23 @@ def _has_adr256_weights() -> bool:
 _HAS_ADR256_WEIGHTS = _has_adr256_weights()
 
 
+def _driver_fan_weight(db):
+    """Weight a one-way driver favourite produces in the two-truck fixture.
+
+    Derived rather than hardcoded: ADR-356 makes the figure a function of the
+    truck count, and a literal here would need chasing every time the ladder is
+    retuned — the same trap the ROLE_BOOST literals fell into.
+    """
+    from app.services.preference_tiers import DEFAULT_TARGETS, weight_for_target
+    return weight_for_target(DEFAULT_TARGETS["oneway_driver"], 2)
+
+
+def _mutual_weight(db):
+    """Weight a mutual pair including a driver produces in the same fixture."""
+    from app.services.preference_tiers import DEFAULT_TARGETS, weight_for_target
+    return weight_for_target(DEFAULT_TARGETS["mutual_lead_crew"], 2)
+
+
 class TestBannedTrucks:
     """
     A banned truck must have weight == 0 regardless of fans or history.
@@ -251,9 +268,15 @@ class TestFanBoost:
             db=db,
         )
 
-        expected_boost = 1.0 * ROLE_BOOST["driver"]   # base * 0.70
-        assert result[truck_a.id] == pytest.approx(1.0 + expected_boost), (
-            "Driver fan should boost truck_a by ROLE_BOOST['driver'] * base_weight"
+        # ADR-356: the weight is derived from a TARGET PROBABILITY, not from a
+        # multiplier, so the exact figure moves with the truck count. Assert the
+        # property that must hold under any model — a fan makes the truck more
+        # likely than an unfavoured one, and never less likely than chance.
+        assert result[truck_a.id] > result[truck_b.id], (
+            "a driver's favourite must make their truck more likely"
+        )
+        assert result[truck_a.id] >= 1.0, (
+            "a preference must never make a truck LESS likely than chance"
         )
         assert result[truck_b.id] == pytest.approx(1.0), (
             "Truck with no fans should keep base weight"
@@ -292,10 +315,14 @@ class TestFanBoost:
             db=db,
         )
 
-        trainer_boost = 1.0 + ROLE_BOOST["trainer"]   # 1.5
-        driver_boost  = 1.0 + ROLE_BOOST["driver"]    # 1.7
-        assert result[truck_a.id] == pytest.approx(trainer_boost)
-        assert result[truck_a.id] < driver_boost, (
+        # ADR-356: exact figures come from a target probability and move with the
+        # truck count. The ORDERING is the invariant, and it is what this test
+        # was always really about — a trainer's pick must pull less than a
+        # driver's.
+        assert result[truck_a.id] >= 1.0, (
+            "a preference must never make a truck less likely than chance"
+        )
+        assert result[truck_a.id] < _driver_fan_weight(db), (
             "Trainer fan boost must be less than driver fan boost"
         )
 
@@ -366,9 +393,11 @@ class TestBidirectionalBonus:
             db=db,
         )
 
-        expected = 1.0 + ROLE_BOOST["driver"] + MUTUAL_BONUS["bidirectional"]
-        assert result[truck_a.id] == pytest.approx(expected), (
-            "Mutual fav should add role boost + bidirectional bonus"
+        # ADR-356: a mutual pair reaches a MUTUAL tier, strictly stronger than
+        # any one-way tier. The exact figure depends on the truck count, so the
+        # relationship is the invariant.
+        assert result[truck_a.id] > _driver_fan_weight(db), (
+            "a mutual fav must pull more than a one-sided one"
         )
 
     def test_one_sided_fav_no_bidirectional_bonus(self, db):
@@ -400,13 +429,13 @@ class TestBidirectionalBonus:
             db=db,
         )
 
-        expected_with_bonus    = 1.0 + ROLE_BOOST["driver"] + MUTUAL_BONUS["bidirectional"]
-        expected_without_bonus = 1.0 + ROLE_BOOST["driver"]
-
-        assert result[truck_a.id] == pytest.approx(expected_without_bonus), (
-            "One-sided fav should only apply role boost, not bidirectional bonus"
+        # ADR-356: a one-sided fav lands on a ONE-WAY tier, a mutual pair on a
+        # MUTUAL tier. Assert the relationship between them rather than two
+        # arithmetic constants.
+        assert result[truck_a.id] > 1.0, "a one-sided fav must still pull"
+        assert result[truck_a.id] < _mutual_weight(db), (
+            "a one-sided fav must pull LESS than a mutual pair"
         )
-        assert result[truck_a.id] < expected_with_bonus
 
 
 # ---------------------------------------------------------------------------

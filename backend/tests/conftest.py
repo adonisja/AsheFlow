@@ -45,6 +45,7 @@ from app.models.dispatch_confirmation import DispatchConfirmation
 from app.models.company import Company, CompanyConfig
 from app.models.shift_session import ShiftSession
 from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
+from app.models.crew_pin import CrewPin, CrewPinMember
 from app.models.graduation_quiz import GraduationQuiz
 
 # graduation_quizzes uses JSONB (PostgreSQL-specific) in the ORM model so we
@@ -97,6 +98,8 @@ DISPATCH_TABLES = [
     ShiftSession.__table__,
     CaptainTruckFamiliarity.__table__,   # ADR-256
     DispatchConfirmation.__table__,      # ADR-267 — the emergency pool reads declines
+    CrewPin.__table__,                   # ADR-357
+    CrewPinMember.__table__,             # ADR-357
     _graduation_quizzes_sqlite,
 ]
 
