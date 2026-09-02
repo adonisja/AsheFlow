@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays } from 'lucide-react';
+import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
+import SelectMenu, { type SelectOption } from '../components/ui/SelectMenu';
 import type { CrewPin, Employee, Truck, TruckPin, Weekday } from '../api/types';
 
 /** Crew pins (ADR-357).
@@ -22,7 +23,10 @@ import type { CrewPin, Employee, Truck, TruckPin, Weekday } from '../api/types';
    because they cannot hold a crew slot at all, so offering them is offering a
    choice the assignment model will never honour.
    Ordered by how a dispatcher reads a crew, not alphabetically. */
-const CREW_ROLE_ORDER = ['captain', 'trainer', 'trainee', 'driver_trainee', 'walker'] as const;
+/* Trainees are excluded from BOTH pin axes. A trainee rides with the trainer
+   they are paired to (ADR-210 moves them together), so pinning one independently
+   fights the pairing rather than expressing a preference. */
+const CREW_ROLE_ORDER = ['captain', 'trainer', 'walker'] as const;
 const CREW_ROLES = new Set<string>(CREW_ROLE_ORDER);
 
 /** Field crew only, grouped and ordered by role. */
@@ -296,8 +300,6 @@ function CrewPinForm({
   const RULES: Record<string, string> = {
     captain: 'choose 1',
     trainer: 'optional',
-    trainee: 'optional',
-    driver_trainee: 'optional',
     walker: 'choose 1 or more',
   };
 
@@ -339,14 +341,13 @@ function CrewPinForm({
           <label className="block text-xs font-medium text-muted-foreground mb-1">
             Driver (anchor)
           </label>
-          <select
+          <SelectMenu
             value={driverId}
-            onChange={e => setDriverId(e.target.value)}
-            className={SELECT_CLASS}
-          >
-            <option value="">Select a driver…</option>
-            {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
+            onChange={setDriverId}
+            placeholder="Select a driver…"
+            ariaLabel="Driver (anchor)"
+            options={drivers.map(d => ({ value: d.id, label: d.name }))}
+          />
         </div>
       </div>
 
@@ -542,13 +543,55 @@ function TruckPinForm({
   const [days, setDays] = useState<Weekday[]>([]);
   const [saving, setSaving] = useState(false);
 
-  // Field crew only, and drivers included here: unlike a crew pin (where the
-  // driver is the anchor and cannot also be a member), a truck pin can hold a
-  // DRIVER to their truck — that is the case that forced seating before
-  // assign_drivers (ADR-358 D3).
-  const sorted = useMemo(() => crewCandidates(employees).concat(
-    employees.filter(e => e.role === 'driver').sort((a, b) => a.name.localeCompare(b.name)),
-  ), [employees]);
+  /* Field crew only, grouped by role, drivers first.
+     Drivers ARE included here: unlike a crew pin (where the driver is the anchor
+     and cannot also be a member), a truck pin can hold a driver to their truck —
+     the case that forced seating before assign_drivers (ADR-358 D3). */
+  const employeeOptions = useMemo<SelectOption[]>(() => {
+    const groups: [string, Employee[]][] = [
+      ['Drivers', employees.filter(e => e.role === 'driver')],
+      ...CREW_ROLE_ORDER.map(r => [
+        `${r.charAt(0).toUpperCase()}${r.slice(1)}s`,
+        employees.filter(e => e.role === r),
+      ] as [string, Employee[]]),
+    ];
+    const out: SelectOption[] = [];
+    for (const [label, people] of groups) {
+      if (people.length === 0) continue;
+      out.push({ value: `header-${label}`, label, header: true });
+      for (const e of people.slice().sort((a, b) => a.name.localeCompare(b.name))) {
+        out.push({
+          value: e.id,
+          label: e.name,
+          // Disabled rather than hidden: the server refuses these with a 409
+          // (ADR-358 D2). A missing name reads as a bug; a disabled one with a
+          // reason reads as a rule.
+          disabled: crewPinnedIds.has(e.id),
+          hint: crewPinnedIds.has(e.id) ? 'in a crew pin' : undefined,
+        });
+      }
+    }
+    return out;
+  }, [employees, crewPinnedIds]);
+
+  /* Hubs are marked, not hidden. A hub is never auto-dispatched (ADR-274) and is
+     staffed by hand, so pinning someone to one is legitimate but unusual — the
+     dispatcher should see which it is before choosing, not discover it later. */
+  const truckOptions = useMemo<SelectOption[]>(
+    () => trucks
+      .filter(t => t.is_active !== false)
+      .slice()
+      .sort((a, b) => Number(a.is_hub ?? false) - Number(b.is_hub ?? false) || a.name.localeCompare(b.name))
+      .map(t => ({
+        value: t.id,
+        label: t.name,
+        icon: t.is_hub
+          ? <Warehouse className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+          : <TruckIcon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />,
+        hint: t.is_hub ? 'hub' : undefined,
+      })),
+    [trucks],
+  );
 
   const submit = async () => {
     setSaving(true);
@@ -576,34 +619,25 @@ function TruckPinForm({
           <label className="block text-xs font-medium text-muted-foreground mb-1">
             Employee
           </label>
-          <select
+          <SelectMenu
             value={employeeId}
-            onChange={e => setEmployeeId(e.target.value)}
-            className={SELECT_CLASS}
-          >
-            <option value="">Select someone…</option>
-            {sorted.map(e => (
-              // Disabled rather than hidden: the server returns 409 for these
-              // (ADR-358 D2), and a missing name reads as a bug while a disabled
-              // one with a reason reads as a rule.
-              <option key={e.id} value={e.id} disabled={crewPinnedIds.has(e.id)}>
-                {e.name} ({e.role.replace('_', ' ')}){crewPinnedIds.has(e.id) ? ' — in a crew pin' : ''}
-              </option>
-            ))}
-          </select>
+            onChange={setEmployeeId}
+            placeholder="Select someone…"
+            ariaLabel="Employee"
+            options={employeeOptions}
+          />
         </div>
         <div>
           <label className="block text-xs font-medium text-muted-foreground mb-1">
             Truck
           </label>
-          <select
+          <SelectMenu
             value={truckId}
-            onChange={e => setTruckId(e.target.value)}
-            className={SELECT_CLASS}
-          >
-            <option value="">Select a truck…</option>
-            {trucks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+            onChange={setTruckId}
+            placeholder="Select a truck…"
+            ariaLabel="Truck"
+            options={truckOptions}
+          />
         </div>
       </div>
 
