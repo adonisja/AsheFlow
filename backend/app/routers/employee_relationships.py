@@ -10,6 +10,7 @@ from app.services.audit import write_audit
 from app.api.deps import RoleChecker, get_caller_employee
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
+from app.services.seat_crew_pins import nullify_pins_for_ban
 from app.schemas.employee_relationship import EmployeeRelationshipResponse, EmployeeRelationshipCreate
 
 
@@ -154,6 +155,32 @@ def create_employee_relationship(
     )
     db.add(db_relationship)
     db.flush()
+
+    # ADR-357 D4 — a ban between two pinned crew members nullifies their pin.
+    # Done at CREATION rather than at dispatch time so the dispatcher learns now,
+    # instead of discovering at 4am that a crew silently stopped being a crew.
+    if employee_relationship.relationship_type == "ban":
+        nullified = nullify_pins_for_ban(
+            db,
+            caller.company_id,
+            db_employee.id,
+            db_target.id,
+        )
+        for pin in nullified:
+            write_audit(
+                db=db,
+                company_id=caller.company_id,
+                actor_id=caller.id,
+                action_type="crew_pin.auto_deactivated",
+                target_table="crew_pins",
+                target_id=str(pin.id),
+                detail={
+                    "reason": "ban_between_members",
+                    "employee_id": str(db_employee.id),
+                    "target_employee_id": str(db_target.id),
+                },
+            )
+
     # The delete side is audited (ADR-132 DP-3/DP-5) and the clear side now is
     # too (D13) — create was the remaining hole, so a relationship could appear
     # with no record and be removed with one.
