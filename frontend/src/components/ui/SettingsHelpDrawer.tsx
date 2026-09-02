@@ -15,6 +15,22 @@ interface HelpEntry {
 }
 
 const HELP_CONTENT: Record<string, HelpEntry> = {
+  crew_pin: {
+    title: 'Crew Pins',
+    summary: 'A pinned crew rides together every day the driver is dispatched.',
+    detail:
+      'A favourite only makes a truck more likely. A pin is applied before assignment runs, so the members are placed on the driver\'s truck directly. The driver is the anchor: the crew follows whichever truck the driver is given. If the driver is not dispatched that day, the pin does not apply and the members are assigned normally.',
+    example: 'Pin a captain, a trainer and three walkers to one driver. They ride together whenever that driver works.',
+    note: 'A ban between two members deactivates the pin automatically. The roster is kept so you can reactivate it once the conflict is resolved.',
+  },
+  truck_pin: {
+    title: 'Truck Pins',
+    summary: 'Holds one person to one truck on the days they work it.',
+    detail:
+      'A crew pin follows a driver. A truck pin holds someone to the truck itself, on named weekdays only. On any other day the pin does nothing and the person is assigned normally. A person can hold a crew pin or a truck pin, not both.',
+    example: 'Tuesday and Thursday on Truck 4. The rest of the week is ordinary dispatch.',
+    note: 'A pin does not reserve the truck. If the pinned person is off, the truck is dispatched as usual.',
+  },
   shift_start: {
     title: 'Shift Start Time',
     summary: 'When drivers are expected to arrive at the offsite for the start of their shift.',

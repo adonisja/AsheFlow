@@ -132,6 +132,11 @@ jobs:
       - name: Cognito ids are centralised
         run: python scripts/check_cognito_centralised.py
 
+      # A product that reads as machine-written loses the operator's trust in
+      # the screen. Baselined, so this fails only on NEW instances (ADR-359).
+      - name: No AI-tell prose in user-facing strings
+        run: python scripts/check_ui_prose.py
+
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:
     name: Dependency CVE audit

@@ -685,6 +685,35 @@ export interface CrewPinUpdatePayload {
   is_active?: boolean;
 }
 
+/** A person held to a specific truck on one weekday (ADR-358).
+ *
+ *  The OTHER pin axis. A CrewPin binds people to a driver and follows wherever
+ *  that driver is drawn; a TruckPin binds a person to a truck on the days they
+ *  actually work it. A person may hold one axis or the other, never both — the
+ *  server returns 409 from either endpoint. */
+export interface TruckPin {
+  id: string;
+  employee_id: string;
+  employee_name?: string | null;
+  employee_role?: string | null;
+  truck_id: string;
+  truck_name?: string | null;
+  day_of_week: Weekday;
+  created_at: string;
+}
+
+export type Weekday =
+  | 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday'
+  | 'Friday' | 'Saturday' | 'Sunday';
+
+/** Mirrors TruckPinCreate. One POST creates one row per day, so `days` must
+ *  carry at least one entry — a pin with no days would be inert forever. */
+export interface TruckPinCreatePayload {
+  employee_id: string;
+  truck_id: string;
+  days: Weekday[];
+}
+
 export interface AssignmentChangeRequest {
   id: string;
   requested_date: string;
