@@ -126,7 +126,7 @@ function outcomeSummary(r: PackageIntakeResponse): { tone: 'ok' | 'warn' | 'bad'
     case 'removal':
       return {
         tone: 'bad',
-        text: 'Outside the company zone — logged as a removal for return to the station.',
+        text: 'Outside the company zone. Logged as a removal for return to the station.',
       };
     default:
       return {
@@ -134,7 +134,7 @@ function outcomeSummary(r: PackageIntakeResponse): { tone: 'ok' | 'warn' | 'bad'
         text: r.reason === 'no_coords' || r.reason === 'no_boundary'
           ? 'Address could not be placed. Correct it and try again, or create a removal.'
           : r.assessment?.routes_exist === false
-            ? 'No routes have been built for today yet — run the sort, then assign this.'
+            ? 'No routes have been built for today yet. Run the sort, then assign this.'
             : 'No route is near enough to take this. Assign one by hand or send it to dispatch.',
       };
   }
@@ -376,7 +376,7 @@ function AssignForm() {
       // message — so "the OCR service is down" and "OCR read your label
       // but found no tracking number" were indistinguishable.
       if (r.warnings?.includes('ocr_unavailable')) {
-        setScanNote('Label reading is unavailable right now — enter the details by hand.');
+        setScanNote('Label reading is unavailable right now. Enter the details by hand.');
       } else if (r.needs_manual_entry) {
         const missing = [
           r.warnings?.includes('no_tba_found') ? 'tracking number' : null,
@@ -384,18 +384,18 @@ function AssignForm() {
         ].filter(Boolean).join(' or ');
         setScanNote(
           missing
-            ? `Could not find the ${missing} on this label — check the lines below or type it in.`
-            : 'Could not read the whole label — fill in the rest by hand.',
+            ? `Could not find the ${missing} on this label. Check the lines below or type it in.`
+            : 'Could not read the whole label. Fill in the rest by hand.',
         );
       } else if (r.confidence !== null && r.confidence < 0.85) {
         // A confident-looking wrong read is the failure that matters, so a
         // shaky score asks for eyes rather than staying silent.
-        setScanNote('Low-confidence read — check both fields before assigning.');
+        setScanNote('Low-confidence read. Check both fields before assigning.');
       } else {
         setScanNote('Read from the label. Check it before assigning.');
       }
     } catch {
-      setScanNote('Scan unavailable — enter the details by hand.');
+      setScanNote('Scan unavailable. Enter the details by hand.');
     } finally {
       setScanning(false);
       // In `finally`, not the try: a scan that FAILS is precisely when the

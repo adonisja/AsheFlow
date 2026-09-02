@@ -535,7 +535,7 @@ function RouteCard({
                 return route.block_keys.map(k => strayBlocks.has(k) ? (
                   <span
                     key={k}
-                    title="Carried by accident — a flagged misroute rides in this route's totes; not part of its territory"
+                    title="Carried by accident. A flagged misroute rides in this route's totes; not part of its territory"
                     className="inline-flex items-center gap-1 px-2 py-0.5 bg-warning/10 border border-dashed border-warning/40 rounded text-xs text-muted-foreground font-mono line-through"
                   >
                     <MapPin className="w-2.5 h-2.5 text-warning" />{k}
@@ -558,7 +558,7 @@ function RouteCard({
               )}
               {injuryStatus && route.effort_class === 'heavy' && (
                 <span className="text-warning flex items-center gap-1">
-                  <ShieldAlert className="w-3 h-3" /> {assignee?.name} is {injuryStatus} — consider reassigning
+                  <ShieldAlert className="w-3 h-3" /> {assignee?.name} is {injuryStatus}. Consider reassigning
                 </span>
               )}
             </div>
@@ -814,7 +814,7 @@ function WavePoolPanel({
       )}
 
       {unassigned_routes.length === 0 && returned_walkers.length === 0 && (
-        <p className="text-xs text-muted-foreground py-1">No walkers returned yet — pool is empty.</p>
+        <p className="text-xs text-muted-foreground py-1">No walkers returned yet. The pool is empty.</p>
       )}
 
       <button
