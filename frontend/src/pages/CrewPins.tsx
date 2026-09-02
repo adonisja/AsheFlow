@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse } from 'lucide-react';
+import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse, HelpCircle } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import SelectMenu, { type SelectOption } from '../components/ui/SelectMenu';
+import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 import type { CrewPin, Employee, Truck, TruckPin, Weekday } from '../api/types';
 
 /** Crew pins (ADR-357).
@@ -71,23 +72,35 @@ function PersonChip({ name, role, tone = 'default' }: {
   );
 }
 
-/** Section heading — one level below the page, above the cards. */
-function SectionHeader({ icon, title, blurb, action }: {
-  icon: ReactNode; title: string; blurb: string; action: ReactNode;
+/** Section heading, one level below the page and above the cards.
+ *
+ *  The explanation lives behind the help pin rather than in a paragraph under
+ *  the title. Three lines of prose above every section pushes the actual content
+ *  down the page and is read once, on the first visit. The drawer holds more
+ *  detail than a blurb can and is there when someone needs it. */
+function SectionHeader({ icon, title, helpKey, onHelp, action }: {
+  icon: ReactNode;
+  title: string;
+  helpKey: string;
+  onHelp: (k: string) => void;
+  action: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 flex-wrap">
-      <div className="min-w-0">
-        <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
-          <span className="grid place-items-center w-7 h-7 rounded-lg bg-accent text-muted-foreground">
-            {icon}
-          </span>
-          {title}
-        </h2>
-        <p className="text-sm text-muted-foreground max-w-2xl mt-1.5 leading-relaxed">
-          {blurb}
-        </p>
-      </div>
+    <div className="flex items-center justify-between gap-4 flex-wrap">
+      <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+        <span className="grid place-items-center w-7 h-7 rounded-lg bg-accent text-muted-foreground">
+          {icon}
+        </span>
+        {title}
+        <button
+          type="button"
+          onClick={() => onHelp(helpKey)}
+          aria-label={`What are ${title.toLowerCase()}?`}
+          className="text-muted-foreground/60 hover:text-primary transition-colors"
+        >
+          <HelpCircle className="w-4 h-4" />
+        </button>
+      </h2>
       {action}
     </div>
   );
@@ -113,6 +126,7 @@ export default function CrewPins() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [helpKey, setHelpKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -190,7 +204,8 @@ export default function CrewPins() {
       <SectionHeader
         icon={<Pin className="w-4 h-4" />}
         title="Crew Pins"
-        blurb="A pinned crew rides together every day the driver is dispatched. Unlike a favourite, which only makes a truck more likely, a pin is applied before assignment — the members are placed on the driver's truck directly."
+        helpKey="crew_pin"
+        onHelp={setHelpKey}
         action={
           <button
             onClick={() => setCreating(true)}
@@ -236,6 +251,7 @@ export default function CrewPins() {
           easier to understand when both are visible than when the second is a
           409 from a screen you cannot see. */}
       <TruckPinSection
+        onHelp={setHelpKey}
         truckPins={truckPins}
         trucks={trucks}
         employees={employees}
@@ -244,6 +260,8 @@ export default function CrewPins() {
         onSaved={load}
         onError={setError}
       />
+
+      <SettingsHelpDrawer fieldKey={helpKey} onClose={() => setHelpKey(null)} />
     </div>
   );
 }
@@ -272,7 +290,7 @@ function PinCard({
           </div>
           <p className="text-sm text-muted-foreground mt-1">
             Anchored to <span className="font-medium text-foreground">{pin.driver_name ?? 'a driver'}</span>
-            {' '}— the crew follows whichever truck they are assigned.
+            . The crew follows whichever truck they are assigned.
           </p>
         </div>
 
@@ -440,7 +458,7 @@ function CrewPinForm({
                 </span>
                 <span className="text-[11px] text-muted-foreground">
                   {RULES[role] ?? 'optional'}
-                  {n > 0 && ` — ${n} selected`}
+                  {n > 0 && `, ${n} selected`}
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
@@ -490,8 +508,9 @@ const WEEKDAYS: Weekday[] = [
 ];
 
 function TruckPinSection({
-  truckPins, trucks, employees, crewPinnedIds, onDelete, onSaved, onError,
+  truckPins, trucks, employees, crewPinnedIds, onDelete, onSaved, onError, onHelp,
 }: {
+  onHelp: (k: string) => void;
   truckPins: TruckPin[];
   trucks: Truck[];
   employees: Employee[];
@@ -531,7 +550,8 @@ function TruckPinSection({
         <SectionHeader
           icon={<TruckIcon className="w-4 h-4" />}
           title="Truck Pins"
-          blurb="For crew who work a specific truck on specific days. A crew pin follows a driver; a truck pin holds someone to the truck itself. A person can have one or the other, not both."
+          helpKey="truck_pin"
+          onHelp={onHelp}
           action={
             <button
               onClick={() => setAdding(true)}
