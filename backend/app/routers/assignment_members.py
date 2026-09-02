@@ -98,10 +98,18 @@ def create_assignment_member(
     ).all()
 
     for existing in existing_members:
-        if check_ban_relationship(assignment_member.employee_id, existing.employee_id, db):
+        # Covers a ban and a dispatch separation alike (ADR-361). The message
+        # stays deliberately vague about which: a separation is invisible to the
+        # employees, and naming it here would leak it back through an error.
+        if check_ban_relationship(
+            assignment_member.employee_id,
+            existing.employee_id,
+            db,
+            company_id=caller.company_id,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Employee is banned from someone already on this assignment"
+                detail="Employee cannot be assigned alongside someone already on this assignment"
             )
 
     # Step 4 — all checks passed, insert the member
