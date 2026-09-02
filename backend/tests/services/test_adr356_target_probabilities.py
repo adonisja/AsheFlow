@@ -118,8 +118,43 @@ def test_the_expressors_role_picks_the_tier():
 
 
 def test_a_mutual_pair_outranks_any_one_way():
-    assert resolve_tier(expressed_by_roles=["driver"], mutual_roles=["driver"]) == "mutual_strong"
-    assert resolve_tier(expressed_by_roles=["walker"], mutual_roles=["walker"]) == "mutual_weak"
+    assert resolve_tier(
+        expressed_by_roles=["driver"], mutual_roles=["driver"], candidate_role="walker"
+    ) == "mutual_lead_crew"
+    assert resolve_tier(
+        expressed_by_roles=["walker"], mutual_roles=["walker"], candidate_role="walker"
+    ) == "mutual_weak"
+
+
+def test_mutual_pairs_are_ranked_by_which_two_roles_bonded():
+    """driver<->captain > driver<->trainer > driver<->walker.
+
+    All three collapsed to one 55% tier until the candidate's own role was
+    passed in: driver<->captain and driver<->walker both arrive as
+    mutual_roles=["driver"], so without the other half they are indistinguishable.
+    """
+    def tier(candidate, placed):
+        return resolve_tier(
+            expressed_by_roles=[placed], mutual_roles=[placed], candidate_role=candidate
+        )
+
+    assert tier("captain", "driver") == "mutual_driver_captain"
+    assert tier("trainer", "driver") == "mutual_driver_trainer"
+    assert tier("walker", "driver") == "mutual_lead_crew"
+    assert tier("walker", "trainer") == "mutual_weak"
+
+    # Symmetric — the bond is the pair, not the direction of assignment.
+    assert tier("driver", "captain") == "mutual_driver_captain"
+    assert tier("driver", "trainer") == "mutual_driver_trainer"
+
+    ranked = [
+        DEFAULT_TARGETS[tier("captain", "driver")],
+        DEFAULT_TARGETS[tier("trainer", "driver")],
+        DEFAULT_TARGETS[tier("walker", "driver")],
+        DEFAULT_TARGETS[tier("walker", "trainer")],
+    ]
+    assert ranked == sorted(ranked, reverse=True), f"bond order broken: {ranked}"
+    assert len(set(ranked)) == 4, "each bond must have a distinct strength"
 
 
 def test_config_overrides_the_platform_default():

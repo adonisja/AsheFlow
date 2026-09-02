@@ -127,7 +127,9 @@ class CompanyConfig(Base):
     dispatch_target_oneway_captain  = Column(Float, nullable=True)   # default 0.28
     dispatch_target_oneway_driver   = Column(Float, nullable=True)   # default 0.33
     dispatch_target_mutual_weak     = Column(Float, nullable=True)   # default 0.45
-    dispatch_target_mutual_strong   = Column(Float, nullable=True)   # default 0.55
+    dispatch_target_mutual_lead_crew     = Column(Float, nullable=True)   # default 0.55
+    dispatch_target_mutual_driver_trainer = Column(Float, nullable=True) # default 0.62
+    dispatch_target_mutual_driver_captain = Column(Float, nullable=True) # default 0.68
     dispatch_target_tridirectional  = Column(Float, nullable=True)   # default 0.70
     dispatch_target_trio_plus       = Column(Float, nullable=True)   # default 0.80
     dispatch_consecutive_penalty    = Column(Float, nullable=True)   # default 0.05
@@ -279,7 +281,9 @@ class CompanyConfig(Base):
         CheckConstraint("dispatch_target_oneway_captain IS NULL OR (dispatch_target_oneway_captain >= 0 AND dispatch_target_oneway_captain < 1)", name="ck_company_configs_target_oneway_captain"),
         CheckConstraint("dispatch_target_oneway_driver IS NULL OR (dispatch_target_oneway_driver >= 0 AND dispatch_target_oneway_driver < 1)", name="ck_company_configs_target_oneway_driver"),
         CheckConstraint("dispatch_target_mutual_weak IS NULL OR (dispatch_target_mutual_weak >= 0 AND dispatch_target_mutual_weak < 1)", name="ck_company_configs_target_mutual_weak"),
-        CheckConstraint("dispatch_target_mutual_strong IS NULL OR (dispatch_target_mutual_strong >= 0 AND dispatch_target_mutual_strong < 1)", name="ck_company_configs_target_mutual_strong"),
+        CheckConstraint("dispatch_target_mutual_lead_crew IS NULL OR (dispatch_target_mutual_lead_crew >= 0 AND dispatch_target_mutual_lead_crew < 1)", name="ck_company_configs_target_mutual_lead_crew"),
+        CheckConstraint("dispatch_target_mutual_driver_trainer IS NULL OR (dispatch_target_mutual_driver_trainer >= 0 AND dispatch_target_mutual_driver_trainer < 1)", name="ck_company_configs_target_mutual_driver_trainer"),
+        CheckConstraint("dispatch_target_mutual_driver_captain IS NULL OR (dispatch_target_mutual_driver_captain >= 0 AND dispatch_target_mutual_driver_captain < 1)", name="ck_company_configs_target_mutual_driver_captain"),
         CheckConstraint("dispatch_target_tridirectional IS NULL OR (dispatch_target_tridirectional >= 0 AND dispatch_target_tridirectional < 1)", name="ck_company_configs_target_tridirectional"),
         CheckConstraint("dispatch_target_trio_plus IS NULL OR (dispatch_target_trio_plus >= 0 AND dispatch_target_trio_plus < 1)", name="ck_company_configs_target_trio_plus"),
         CheckConstraint("dispatch_consecutive_penalty IS NULL OR (dispatch_consecutive_penalty  BETWEEN 0 AND 1)", name="ck_company_configs_consecutive_penalty"),
