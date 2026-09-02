@@ -98,7 +98,7 @@ function InspectionPanel({ employeeId, onComplete }: { employeeId: string; onCom
       {submitted && submittedData ? (
         <div className={`p-4 rounded-xl border text-sm space-y-3 ${submittedData.has_failures ? 'bg-destructive/10 border-destructive/30' : 'bg-success/10 border-success/30'}`}>
           <p className={`font-semibold ${submittedData.has_failures ? 'text-destructive' : 'text-success'}`}>
-            {submittedData.has_failures ? 'Inspection submitted — failures noted. Report to management.' : 'Inspection complete — all items passed.'}
+            {submittedData.has_failures ? 'Inspection submitted with failures noted. Report to management.' : 'Inspection complete. All items passed.'}
           </p>
           <div className="grid grid-cols-2 gap-1">
             {Object.entries(submittedData.items).map(([k, pass]) => (
@@ -870,7 +870,7 @@ function TruckAPCard({ employeeId, refreshTrigger = 0 }: { employeeId: string; r
         {isDeparting && ap.expected_departure_at && (
           <div className="flex items-center gap-1.5 text-xs text-warning font-medium mt-1">
             <Navigation className="w-3 h-3" />
-            Departing at <span className="ml-0.5">{fmt(ap.expected_departure_at)}</span> — catch a ride if you need one
+            Departing at <span className="ml-0.5">{fmt(ap.expected_departure_at)}</span>. Catch a ride if you need one.
           </div>
         )}
         {isDeparted && ap.actual_departed_at && (
@@ -991,7 +991,7 @@ function AdminFieldOpsView() {
           <h1 className="page-title flex items-center gap-2">
             <MapPin className="w-5 h-5 text-primary" /> Field Operations
           </h1>
-          <p className="text-subtle mt-1">Today's field activity — check-ins, departures, inspections, and fuel.</p>
+          <p className="text-subtle mt-1">Today's field activity: check-ins, departures, inspections, and fuel.</p>
         </div>
         <button onClick={load} className="btn-ghost text-muted-foreground flex items-center gap-2 text-sm">
           <BarChart2 className="w-4 h-4" /> Refresh
@@ -1363,7 +1363,7 @@ function AnchorPointPanel({ employeeId }: { employeeId: string }) {
         <div className="space-y-2">
           <p className="text-sm text-subtle">No anchor point set for today.</p>
           {!myTruckId && (
-            <p className="text-xs text-warning">No truck assignment found — check in first.</p>
+            <p className="text-xs text-warning">No truck assignment found. Check in first.</p>
           )}
           <a href="/anchor-points" className="btn-primary text-sm w-full flex items-center justify-center gap-2">
             <MapPin className="w-4 h-4" /> Set Anchor Point

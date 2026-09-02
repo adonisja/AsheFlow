@@ -51,7 +51,7 @@ export default function ApPullsPanel({ date }: { date: string }) {
       <div className="flex items-center gap-2">
         <PackageX className="w-4 h-4 text-danger" />
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-          AP returns — out-of-zone packages coming back from walkers
+          AP returns · out-of-zone packages coming back from walkers
         </p>
       </div>
       {error && (

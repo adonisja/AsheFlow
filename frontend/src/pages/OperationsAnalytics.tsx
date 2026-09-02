@@ -233,7 +233,7 @@ export default function OperationsAnalytics() {
       {(data.missing_weeks?.length ?? 0) > 0 && (
         <div className="flex items-start gap-2 px-4 py-2.5 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm">
           <CircleAlert className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>No scorecard recorded for {data.missing_weeks?.join(', ')} — the trend has gaps.</span>
+          <span>No scorecard recorded for {data.missing_weeks?.join(', ')}. The trend has gaps.</span>
         </div>
       )}
 

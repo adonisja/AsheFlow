@@ -117,7 +117,7 @@ export default function MyScorecardPanel() {
           different sources. */}
       <p className="text-xs text-muted-foreground">
         Amazon's weekly assessment of your work. My Stats is AsheFlow's own
-        record — the two are measured separately and can differ.
+        record. The two are measured separately and can differ.
       </p>
 
       {(data.focus_now ?? []).length > 0 && (

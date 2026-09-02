@@ -278,7 +278,7 @@ function PreferenceAnalytics() {
         <div className="flex items-center gap-2 border-b border-border pb-3 mb-4">
           <AlertTriangle className="w-5 h-5 text-danger" />
           <h2 className="text-base font-semibold text-foreground">Mutual Conflicts</h2>
-          <span className="ml-auto text-xs text-subtle">Hard dispatch constraints — both parties ban each other</span>
+          <span className="ml-auto text-xs text-subtle">Hard dispatch constraints: both parties ban each other</span>
         </div>
         {mutualBans.length === 0 ? (
           <div className="text-center py-8 opacity-60">

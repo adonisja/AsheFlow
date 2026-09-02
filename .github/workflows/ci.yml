@@ -132,10 +132,14 @@ jobs:
       - name: Cognito ids are centralised
         run: python scripts/check_cognito_centralised.py
 
-      # A product that reads as machine-written loses the operator's trust in
-      # the screen. Baselined, so this fails only on NEW instances (ADR-359).
-      - name: No AI-tell prose in user-facing strings
-        run: python scripts/check_ui_prose.py
+      # House style for operator-facing copy: two clauses joined by a dash
+      # usually want a full stop. Someone reading an error mid-incident parses
+      # two short sentences faster. This began as an "AI-tell" detector, which
+      # did not survive checking -- the em-dash claim has no empirical support
+      # and 11 of 12 vocabulary patterns never fired once (ADR-360 supersedes
+      # ADR-359). Baselined, so it fails only on NEW instances.
+      - name: Operator copy style
+        run: python scripts/check_ui_copy_style.py
 
   # ── 1. SECURITY AUDIT ──────────────────────────────────────────────────────
   audit:

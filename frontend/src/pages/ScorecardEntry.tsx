@@ -133,7 +133,7 @@ export default function ScorecardEntry() {
     } catch (err: any) {
       const msg = errorText(err, 'Could not parse the scorecard.');
       setError(err?.response?.status === 503
-        ? 'Auto-parse is unavailable here — enter the scorecard manually below.'
+        ? 'Auto-parse is unavailable here. Enter the scorecard manually below.'
         : msg);
     } finally { setParsing(false); }
   };
@@ -301,7 +301,7 @@ export default function ScorecardEntry() {
         </div>
         <div className="flex-1">
           <p className="text-sm font-medium text-foreground">{parsing ? 'Reading scorecard…' : 'Upload scorecard image'}</p>
-          <p className="text-xs text-muted-foreground">Auto-fills the fields below — review, then save. Or fill them manually.</p>
+          <p className="text-xs text-muted-foreground">Auto-fills the fields below. Review, then save, or fill them in manually.</p>
         </div>
         <input type="file" accept="image/*,.pdf" onChange={onUpload} disabled={parsing} className="hidden" />
       </label>

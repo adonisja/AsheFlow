@@ -123,7 +123,7 @@ export default function Register() {
     }
     const digits = phone.replace(/\D/g, '');
     if (tokenInfo?.phone_last4 && !digits.endsWith(tokenInfo.phone_last4)) {
-      setFieldError(`Phone number doesn't match — it should end in ···${tokenInfo.phone_last4}.`);
+      setFieldError(`Phone number doesn't match. It should end in ···${tokenInfo.phone_last4}.`);
       return;
     }
 
@@ -315,7 +315,7 @@ export default function Register() {
                   {discordId.trim() && !/^\d{17,20}$/.test(discordId.trim()) && (
                     <p className="text-xs text-danger">Must be a numeric snowflake ID (17-20 digits only).</p>
                   )}
-                  <p className="text-xs text-subtle">Your numeric Discord user ID — used for dispatch notifications.</p>
+                  <p className="text-xs text-subtle">Your numeric Discord user ID, used for dispatch notifications.</p>
                 </div>
 
                 {/* Phone */}

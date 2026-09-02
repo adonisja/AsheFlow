@@ -458,7 +458,7 @@ function PeriodPanels({ extras, attendance }: {
                         flex items-center gap-1.5">
             <MapPin className="w-3.5 h-3.5" /> Hardest blocks
             <span className="normal-case tracking-normal text-muted-foreground/70">
-              — most returns for the work done
+              · most returns for the work done
             </span>
           </p>
           {blocks.length === 0 ? (
@@ -819,7 +819,7 @@ export default function StatsDrill() {
                               : level === 'year' ? 'month' : 'year'}
                 {!(level === 'lifetime' && charted.length < 2) && (
                   <span className="ml-1.5 normal-case tracking-normal text-muted-foreground/70">
-                    — click {level === 'year' ? 'a month' : 'a bar'} to zoom in
+                    · click {level === 'year' ? 'a month' : 'a bar'} to zoom in
                   </span>
                 )}
               </p>

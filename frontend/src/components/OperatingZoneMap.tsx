@@ -316,7 +316,7 @@ export default function OperatingZoneMap(props: Props) {
             {vertices.length === 0 && 'Click on the map to place the first vertex'}
             {vertices.length === 1 && 'Click to add more vertices'}
             {vertices.length === 2 && 'Click to add more vertices (need at least 3)'}
-            {vertices.length >= 3  && `${vertices.length} vertices — drag markers to adjust, or click to add more`}
+            {vertices.length >= 3  && `${vertices.length} vertices. Drag markers to adjust, or click to add more.`}
           </div>
 
           <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto">

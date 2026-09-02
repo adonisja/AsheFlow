@@ -52,11 +52,11 @@ export default function WalkerApReturnsPanel({ date, bagIds }: { date: string; b
     <div className="rounded-2xl border border-danger/30 bg-danger/5 p-4 space-y-3">
       <div className="flex items-center gap-2">
         <PackageX className="w-4 h-4 text-danger shrink-0" />
-        <p className="text-sm font-semibold text-foreground">Return to driver — not deliveries</p>
+        <p className="text-sm font-semibold text-foreground">Return to driver, not deliveries</p>
       </div>
       <p className="text-xs text-muted-foreground">
-        These packages are outside the company's delivery area. Do not deliver them —
-        hand them to your driver at the anchor point.
+        These packages are outside the company's delivery area. Do not deliver
+        them. Hand them to your driver at the anchor point.
       </p>
       {error && (
         <div className="p-2.5 text-xs text-danger bg-danger/10 border border-danger/20 rounded-xl">{error}</div>
@@ -75,7 +75,7 @@ export default function WalkerApReturnsPanel({ date, bagIds }: { date: string; b
                   <CheckCircle2 className="w-3.5 h-3.5" /> received by driver
                 </span>
               ) : st === 'handed_over' ? (
-                <span className="text-[11px] text-warning font-semibold shrink-0">handed over — awaiting driver</span>
+                <span className="text-[11px] text-warning font-semibold shrink-0">handed over · awaiting driver</span>
               ) : (
                 <button
                   disabled={busy}

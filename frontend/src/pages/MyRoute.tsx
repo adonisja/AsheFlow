@@ -604,7 +604,7 @@ export default function MyRoute() {
             <div>
               <p className="font-semibold text-foreground">Confirm your arrival</p>
               <p className="text-sm text-muted-foreground">
-                You're paired with trainer on route #{pairedRoute.route_number}. Tap below once you're at the truck — this triggers the sort rebalance.
+                You're paired with trainer on route #{pairedRoute.route_number}. Tap below once you're at the truck. This triggers the sort rebalance.
               </p>
             </div>
           </div>
@@ -628,7 +628,7 @@ export default function MyRoute() {
           </div>
           <div className="text-xs text-muted-foreground space-y-1">
             {arrivalResult.sort_not_yet_committed ? (
-              <p>Sort not yet committed — capacity will be set when routes are finalized.</p>
+              <p>Sort not yet committed. Capacity is set when routes are finalized.</p>
             ) : (
               <>
                 <p>Paired capacity: {arrivalResult.paired_capacity_limit} slots</p>
@@ -639,7 +639,7 @@ export default function MyRoute() {
                   <p>Trimmed routes: #{arrivalResult.trimmed_route_numbers.join(', #')}</p>
                 )}
                 {arrivalResult.absorbed_route_numbers.length === 0 && arrivalResult.trimmed_route_numbers.length === 0 && (
-                  <p>No absorption needed — route is within paired capacity.</p>
+                  <p>No absorption needed. The route is within paired capacity.</p>
                 )}
               </>
             )}

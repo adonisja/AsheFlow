@@ -148,7 +148,13 @@ class TestFrontendPollsForHubs:
         )
 
     def test_ready_copy_does_not_tell_a_hub_to_run_the_sort(self, page: str):
-        assert "the hub crew can commit their route sort now" in page, (
+        # Case-insensitive on purpose. What this pins is that a hub is pointed
+        # at committing its route sort rather than at "run sort below"; whether
+        # the phrase opens a sentence or follows a dash is copy editing, and
+        # ADR-360's pass changed exactly that (". The hub crew ..."). A
+        # case-sensitive match turns every such edit into a red build for a
+        # reason unrelated to what the test is protecting.
+        assert "the hub crew can commit their route sort now" in page.lower(), (
             "the ready banner still says 'run sort below', which does nothing "
             "for a hub manifest"
         )
