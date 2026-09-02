@@ -349,7 +349,7 @@ export default function ManagementView() {
             <div>
               <p className="text-xs text-subtle uppercase tracking-wider mb-2">Stuck &gt;21 days</p>
               {efficiency.crew.stuck_trainees.length === 0 ? (
-                <p className="text-sm text-subtle">None — all trainees progressing.</p>
+                <p className="text-sm text-subtle">None. All trainees progressing.</p>
               ) : efficiency.crew.stuck_trainees.map(s => (
                 <div key={`${s.trainee_name}-${s.phase}`}
                      className="flex items-center justify-between p-2 mb-1.5 rounded-lg bg-warning/10 border border-warning/20">
@@ -697,7 +697,7 @@ export default function ManagementView() {
           <>
             <p className="text-xs text-subtle mb-4">
               How many inspections flagged each item as failed across all drivers and trucks this week.
-              A high fail rate signals a recurring mechanical issue — visit <a href="/vehicle-compliance" className="text-primary hover:underline">Vehicle Compliance</a> to see which trucks and drivers are responsible.
+              A high fail rate signals a recurring mechanical issue. Visit <a href="/vehicle-compliance" className="text-primary hover:underline">Vehicle Compliance</a> to see which trucks and drivers are responsible.
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               {inspectionFailures.failures.map((f: any) => (

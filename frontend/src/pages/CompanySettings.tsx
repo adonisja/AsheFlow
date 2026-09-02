@@ -151,7 +151,7 @@ const EFFORT_SCORING: FieldMeta[] = [
 // mixes floors and ceilings, and reading a DPMO row as higher-is-better is the
 // single most common scorecard misreading.
 const SCORECARD_QUALITY: FieldMeta[] = [
-  { key: 'scorecard_dcr_target', label: 'DCR Target (%)', type: 'float', description: 'Delivery Completion Rate. Higher is better — pass at or above this.', placeholder: '99.0', min: 0, max: 100, step: 0.1 },
+  { key: 'scorecard_dcr_target', label: 'DCR Target (%)', type: 'float', description: 'Delivery Completion Rate. Higher is better. Pass at or above this.', placeholder: '99.0', min: 0, max: 100, step: 0.1 },
   { key: 'scorecard_pod_target', label: 'POD Target (%)', type: 'float', description: 'Photo on Delivery usable-photo rate. Higher is better.', placeholder: '97.0', min: 0, max: 100, step: 0.1 },
   { key: 'scorecard_cc_target', label: 'Contact Compliance Target (%)', type: 'float', description: 'Required in-app customer contacts made. Higher is better.', placeholder: '98.0', min: 0, max: 100, step: 0.1 },
   { key: 'scorecard_cdf_target', label: 'CDF Target (%)', type: 'float', description: 'Customer Delivery Feedback positive rate. Higher is better.', placeholder: '84.9', min: 0, max: 100, step: 0.1 },
@@ -162,7 +162,7 @@ const SCORECARD_QUALITY: FieldMeta[] = [
 const SCORECARD_SAFETY: FieldMeta[] = [
   { key: 'scorecard_fico_target', label: 'FICO Target', type: 'int', description: 'Safe Driving Score, 100–850. Higher is better. Driver track only.', placeholder: '800', min: 100, max: 850 },
   { key: 'scorecard_dvic_target', label: 'DVIC Compliance Target (%)', type: 'float', description: 'Pre/post-trip inspections completed. Higher is better.', placeholder: '95.0', min: 0, max: 100, step: 0.1 },
-  { key: 'scorecard_speeding_rate_target', label: 'Speeding Rate Ceiling (per 100 trips)', type: 'float', description: 'LOWER is better — pass at or below this.', placeholder: '10.0', min: 0, max: 1000, step: 0.1 },
+  { key: 'scorecard_speeding_rate_target', label: 'Speeding Rate Ceiling (per 100 trips)', type: 'float', description: 'LOWER is better. Pass at or below this.', placeholder: '10.0', min: 0, max: 1000, step: 0.1 },
   { key: 'scorecard_signsignal_rate_target', label: 'Sign/Signal Rate Ceiling (per 100 trips)', type: 'float', description: 'Stop-light violations weigh ~10x a stop sign. LOWER is better.', placeholder: '15.0', min: 0, max: 1000, step: 0.1 },
 ];
 
@@ -461,7 +461,7 @@ function CheckInDeadlineEditor({ shiftStart, ncnsCutoff, onHelp }: {
 
       {ncnsNum === null && (
         <div className="p-2.5 rounded-lg bg-warning/10 border border-warning/20 text-xs text-warning">
-          Set the <strong>NCNS Cutoff</strong> (Attendance section) and save before adding check-ins — Check-In&nbsp;#1 can’t be earlier than it.
+          Set the <strong>NCNS Cutoff</strong> (Attendance section) and save before adding check-ins. Check-In&nbsp;#1 can’t be earlier than it.
         </div>
       )}
 
@@ -498,7 +498,7 @@ function CheckInDeadlineEditor({ shiftStart, ncnsCutoff, onHelp }: {
         <div className="flex items-end gap-2">
           <div className="flex-1">
             <label className="block text-xs font-medium text-foreground mb-1">
-              Add Check-in #{nextSeq} — minutes after shift start
+              Add Check-in #{nextSeq} · minutes after shift start
             </label>
             <input
               className="input-field"

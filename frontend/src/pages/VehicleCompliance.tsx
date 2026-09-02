@@ -498,7 +498,7 @@ export default function VehicleCompliance() {
                 </span>
               </div>
               <p className="text-xs text-subtle mb-4">
-                Each count shows how many pre-trip inspections flagged that item as failed — across all drivers and trucks — in the selected period. A high failure rate on a specific item (e.g. "Brakes — 5 failures, 25% fail rate") means 25% of all inspections submitted this period reported a brake issue, not that one truck has a brake problem. Use the heatmap below to identify which specific truck or driver the failures are concentrated on.
+                Each count shows how many pre-trip inspections flagged that item as failed, across all drivers and trucks, in the selected period. A high failure rate on a specific item (e.g. "Brakes: 5 failures, 25% fail rate") means 25% of all inspections submitted this period reported a brake issue, not that one truck has a brake problem. Use the heatmap below to identify which specific truck or driver the failures are concentrated on.
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                 {failureSummary.failures.map(f => (

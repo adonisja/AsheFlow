@@ -419,7 +419,7 @@ function DriverView() {
             <button onClick={() => setShowRelocate(false)} className="text-xs text-muted-foreground hover:text-foreground">Cancel</button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Moving to a new area? Set your updated AP — crew and dispatch will be notified. AP #{activeAP!.sequence} will be marked as relocated.
+            Moving to a new area? Set your updated AP. Crew and dispatch will be notified. AP #{activeAP!.sequence} will be marked as relocated.
           </p>
           <APForm
             hints={hints}
@@ -623,7 +623,7 @@ export default function AnchorPoints() {
         description={
           isDriver
             ? "Set your planned parking location before leaving the station. Confirm arrival on-site, and update if you relocate mid-day."
-            : "Monitor driver anchor point submissions — preliminary locations, arrivals, and mid-day relocations."
+            : "Monitor driver anchor point submissions: preliminary locations, arrivals, and mid-day relocations."
         }
       />
       {isDriver   && <DriverView />}

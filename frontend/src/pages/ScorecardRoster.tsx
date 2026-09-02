@@ -112,7 +112,7 @@ export default function ScorecardRoster() {
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
           <span>
             {count(data.employees_without_scorecards)} active field staff have no
-            scorecard in this window — they are absent from the list below, not
+            scorecard in this window. They are absent from the list below, not
             performing well.
           </span>
         </div>
@@ -178,7 +178,7 @@ export default function ScorecardRoster() {
             </table>
           </div>
           <p className="mt-3 text-xs text-subtle">
-            Sorted worst first — most flagged metrics, then declining standings.
+            Sorted worst first: most flagged metrics, then declining standings.
           </p>
         </div>
       )}

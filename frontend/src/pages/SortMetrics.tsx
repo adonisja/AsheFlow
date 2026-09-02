@@ -166,7 +166,7 @@ export default function SortMetrics() {
         <div className="rounded-xl border border-border bg-accent/30 px-4 py-6 text-center">
           <p className="text-sm text-foreground font-medium">No sort telemetry yet.</p>
           <p className="text-xs text-muted-foreground mt-1 max-w-lg mx-auto">
-            A row appears the morning after each committed sort — the rollup only writes
+            A row appears the morning after each committed sort. The rollup only writes
             completed days, so today never appears here.
           </p>
         </div>
@@ -176,7 +176,7 @@ export default function SortMetrics() {
         <div className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 flex gap-2.5">
           <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
           <div className="text-xs text-foreground/90 leading-relaxed">
-            <span className="font-semibold">Small sample — {truckDays} truck-days.</span>{' '}
+            <span className="font-semibold">Small sample · {truckDays} truck-days.</span>{' '}
             Read these as individual days, not as a trend. Sorts run every other day or so
             across the fleet, so a month is roughly {THIN_SAMPLE_TRUCK_DAYS * 4} truck-days.
           </div>
@@ -189,7 +189,7 @@ export default function SortMetrics() {
           <div className="text-xs text-foreground/90 leading-relaxed">
             <span className="font-semibold">This window spans more than one algorithm.</span>{' '}
             {versions.map(([v, n]) => `${v} (${n} truck-days)`).join(', ')}. Compare within a
-            version, not across the boundary — the totals below pool them.
+            version, not across the boundary. The totals below pool them.
           </div>
         </div>
       )}
@@ -244,7 +244,7 @@ export default function SortMetrics() {
 
           <p className="text-[11px] text-muted-foreground leading-relaxed max-w-3xl">
             <span className="font-semibold">Split</span> counts a block listed on more than one
-            route — how many walkers show up on it.{' '}
+            route: how many walkers show up on it.{' '}
             <span className="font-semibold">Orphan</span> counts a block on a route with no
             adjacent sibling block; it omits cross-street links, so it can over-report but never
             under-report. <span className="font-semibold">Min avg</span> covers only routes that

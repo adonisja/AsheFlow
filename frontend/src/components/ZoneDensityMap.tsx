@@ -203,7 +203,7 @@ export default function ZoneDensityMap({
         }
         if (layer.id === 'outlier-totes') {
           const t = object as OutlierToteMarker;
-          return { text: `Unplaced tote ${t.tote_id}\n${t.package_count} pkg(s) — needs dispatch` };
+          return { text: `Unplaced tote ${t.tote_id}\n${t.package_count} pkg(s) · needs dispatch` };
         }
         if (layer.id === 'centroids') {
           const c = object as Centroid;

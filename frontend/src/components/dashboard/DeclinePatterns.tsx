@@ -37,7 +37,7 @@ function GateNote({ slice }: { slice: DeclineSlice }) {
   return (
     <span
       className="text-xs text-subtle"
-      title={`Seen ${slice.occurrences} time${slice.occurrences === 1 ? '' : 's'} — not enough history for a rate yet`}
+      title={`Seen ${slice.occurrences} time${slice.occurrences === 1 ? '' : 's'}. Not enough history for a rate yet.`}
     >
       {slice.occurrences}× seen
     </span>

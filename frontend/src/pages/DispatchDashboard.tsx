@@ -427,7 +427,7 @@ function CurrentAssignments() {
     // Hard block (also enforced by the backend) — should be unreachable since the
     // button is disabled, but guard the handler too.
     if (confirmationGate.block) {
-      setError('Post Final Crews is blocked — under 50% confirmed on at least one truck.');
+      setError('Post Final Crews is blocked: under 50% confirmed on at least one truck.');
       return;
     }
     const lowNote = confirmationGate.warn
@@ -852,7 +852,7 @@ function CurrentAssignments() {
           const failures = res.data?.discord_failures ?? [];
           if (res.data && res.data.discord_cleared === false) {
             setDiscordClearWarning(
-              'The day was cleared, but Discord could not be reached — crew posts may still be visible there.',
+              'The day was cleared, but Discord could not be reached. Crew posts may still be visible there.',
             );
           } else if (failures.length > 0) {
             setDiscordClearWarning(
@@ -895,8 +895,8 @@ function CurrentAssignments() {
     // Blocking would leave no recovery from a published mistake, and silent
     // removal would leave people holding a shift that no longer exists.
     const notified = published && crewCount > 0
-      ? ` ${crewCount} crew member${crewCount === 1 ? ' was' : 's were'} already notified on Discord — `
-        + `removing will NOT tell them, so message them yourself.`
+      ? ` ${crewCount} crew member${crewCount === 1 ? ' was' : 's were'} already notified on Discord. `
+        + `Removing will NOT tell them, so message them yourself.`
       : '';
     openDialog({
       title: `Remove ${truckName}?`,
@@ -1028,7 +1028,7 @@ function CurrentAssignments() {
         } catch (err: unknown) {
           const msg = errorText(err, `Failed to publish ${truckName}.`);
           setError(msg);
-          setTruckActionError(prev => ({ ...prev, [truckId]: 'Publish failed — see the message above.' }));
+          setTruckActionError(prev => ({ ...prev, [truckId]: 'Publish failed. See the message above.' }));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -1060,7 +1060,7 @@ function CurrentAssignments() {
           await Promise.all([fetchDispatchData(), fetchConfirmations()]);
         } catch (err: unknown) {
           setError(errorText(err, `Failed to post ${truckName}'s final crew.`));
-          setTruckActionError(prev => ({ ...prev, [truckId]: 'Post final crew failed — see the message above.' }));
+          setTruckActionError(prev => ({ ...prev, [truckId]: 'Post final crew failed. See the message above.' }));
         } finally {
           setPublishingHubTruckId(null);
         }
@@ -1451,7 +1451,7 @@ function CurrentAssignments() {
                   {' '}(since {new Date(discordDown.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
                 </span>
               )}
-              . Crews are still notified in the app — publish and finalize work as normal.
+              . Crews are still notified in the app, and publish and finalize work as normal.
               Discord posts and DMs will resume when it is restored.
             </p>
           </div>
@@ -1477,7 +1477,7 @@ function CurrentAssignments() {
                       || phaseCounts.planned === 0 || dockGate.block}
             className="bg-success text-white hover:bg-success/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={dockGate.block
-              ? `Blocked — no dock set for ${dockGate.missing.join(', ')}. A driver with no bay has nowhere to collect their vehicle.`
+              ? `Blocked: no dock set for ${dockGate.missing.join(', ')}. A driver with no bay has nowhere to collect their vehicle.`
               : phaseCounts.planned === 0
               ? 'Every truck has already been published'
               : 'DM each crew member their assignment and open the confirmation window'}
@@ -1502,7 +1502,7 @@ function CurrentAssignments() {
             disabled={isFinalizing || isLoading || phaseCounts.active === 0 || confirmationGate.block}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={confirmationGate.block
-              ? 'Blocked — under 50% confirmed on at least one truck'
+              ? 'Blocked: under 50% confirmed on at least one truck'
               : 'Post confirmed crew lists to each truck channel and #drivers-chat'}
           >
             {isFinalizing ? (
@@ -1533,7 +1533,7 @@ function CurrentAssignments() {
         <div className="rounded-lg border border-warning/50 bg-warning/10 p-3 flex items-center gap-3 text-warning">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <p className="text-sm font-medium">
-            Confirmation data may be stale — the server hasn't responded to the last 3 polls. Check your connection or refresh manually.
+            Confirmation data may be stale. The server hasn't responded to the last 3 polls. Check your connection or refresh manually.
           </p>
           <button
             onClick={() => { setConfirmationsStale(false); fetchConfirmations(); }}
@@ -1603,7 +1603,7 @@ function CurrentAssignments() {
           </h3>
           <p className="text-sm text-warning pl-1">
             The day was finalized and <span className="font-semibold">crews were notified in
-            the app</span> — only the Discord post failed. An administrator has been alerted.
+            the app</span>. Only the Discord post failed, and an administrator has been alerted.
           </p>
           <button
             type="button"
@@ -1765,7 +1765,7 @@ function CurrentAssignments() {
                             </div>
                           </div>
                           <p className="text-[11px] text-subtle mt-1">
-                            Try them first — a decline is often negotiable. If not, pick a
+                            Try them first, because a decline is often negotiable. If not, pick a
                             replacement below.
                           </p>
                         </div>
@@ -1950,7 +1950,7 @@ function CurrentAssignments() {
                   <XCircle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
                   <div>
                     <p className="text-sm font-semibold text-danger">
-                      {declined.length} rejection{declined.length > 1 ? 's' : ''} — reassignment needed
+                      {declined.length} rejection{declined.length > 1 ? 's' : ''}, reassignment needed
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {declinedNames.join(', ')}
@@ -1973,7 +1973,7 @@ function CurrentAssignments() {
                   <p className="text-xs text-muted-foreground">
                     <span className="font-medium text-foreground">{pending}</span>{' '}
                     dock zone{pending === 1 ? '' : 's'} suggested from each truck&apos;s last run.
-                    They publish as-is — confirm to mark them checked.
+                    They publish as-is. Confirm to mark them checked.
                   </p>
                   <button
                     onClick={confirmAllSuggestedDocks}
@@ -2100,7 +2100,7 @@ function CurrentAssignments() {
                            className="flex items-center gap-1 shrink-0 whitespace-nowrap text-[10px] font-semibold bg-primary/15 text-primary hover:bg-primary/30 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                            title={quotaMet
                              ? `Post ${name}'s final crew to Discord`
-                             : `${confirmed}/${total} confirmed — at least 50% must confirm before posting the final crew`}
+                             : `${confirmed}/${total} confirmed. At least 50% must confirm before posting the final crew`}
                          >
                            {busy
                              ? <div className="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin" />
@@ -2189,7 +2189,7 @@ function CurrentAssignments() {
                                  ? 'border-dashed border-primary/40 text-muted-foreground italic'
                                  : 'border-border text-foreground'}`}
                              title={d.suggested && d.value
-                               ? `Suggested from this truck's last run — confirm or change it`
+                               ? `Suggested from this truck's last run. Confirm or change it`
                                : 'Bay this truck collects from'}
                            />
                            {/* Inside the field, so it cannot be pushed onto a
@@ -2284,7 +2284,7 @@ function CurrentAssignments() {
                                              className={`text-[9px] font-bold px-1 py-0.5 rounded tracking-wide ${
                                                pairedName ? 'bg-info/15 text-info hover:bg-info/30' : 'bg-warning/20 text-warning hover:bg-warning/40'
                                              } transition-colors`}
-                                             title={pairedName ? 'Paired trainer — click to switch' : 'No trainer — click to assign'}
+                                             title={pairedName ? 'Paired trainer, click to switch' : 'No trainer, click to assign'}
                                            >
                                              {pairedName ? `⇄ ${pairedName}` : '⚠ No trainer'}
                                            </button>
@@ -2542,7 +2542,7 @@ function CurrentAssignments() {
             <p className="text-xs text-subtle leading-relaxed">
               Creates a hub assignment for <strong>{selectedDate}</strong>.
               <br />
-              Hub crew is never assigned automatically — drag staff onto the hub,
+              Hub crew is never assigned automatically. Drag staff onto the hub,
               then <strong>Publish Hub</strong> to notify them.
             </p>
             {/* Selectable cards, not a native <select>. A company has one hub

@@ -282,7 +282,7 @@ export default function AdminDashboard() {
       <SectionHeader
         eyebrow="System"
         title={<span className="flex items-center gap-2"><Shield className="w-7 h-7 text-primary" />Admin Dashboard</span>}
-        description="System overview — employees, trucks, incidents, and training."
+        description="System overview: employees, trucks, incidents, and training."
         actions={
           <button onClick={fetchAll} className="btn-ghost flex items-center gap-2 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
@@ -417,7 +417,7 @@ export default function AdminDashboard() {
             </p>
           )}
           {confirmAllState === 'error' && (
-            <p className="text-xs text-danger font-medium mt-0.5">Failed — check console or retry.</p>
+            <p className="text-xs text-danger font-medium mt-0.5">Failed. Check the console, or retry.</p>
           )}
         </div>
         <button
@@ -552,7 +552,7 @@ export default function AdminDashboard() {
                     className="btn-primary flex items-center gap-2 text-sm"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    Looks good — upload for enrichment
+                    Looks good. Upload for enrichment
                   </button>
                   <button
                     onClick={handleDownloadManifest}
@@ -586,7 +586,7 @@ export default function AdminDashboard() {
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-sm text-success font-medium">
                   <CheckCircle2 className="w-4 h-4" />
-                  {uploadResult.package_count.toLocaleString()} packages accepted — enrichment running in background.
+                  {uploadResult.package_count.toLocaleString()} packages accepted. Enrichment is running in the background.
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Poll <span className="font-mono">GET /sort/manifest/{seedDate}/status</span> or go to the Sort page to monitor enrichment, then run the sort.
