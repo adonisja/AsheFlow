@@ -24,6 +24,7 @@ import { Lock, CheckCircle2, Mail, MessageSquare, ChevronDown, ChevronUp } from 
 import Avatar from '../components/ui/Avatar';
 import StatsDrill from '../components/stats/StatsDrill';
 import MyScorecardPanel from '../components/MyScorecardPanel';
+import SecurityPanel from '../components/SecurityPanel';
 
 type Tab = 'settings' | 'stats' | 'scorecard';
 
@@ -396,6 +397,10 @@ export default function Account() {
               </form>
             )}
           </div>
+
+          {/* ADR-362 — enrolment must exist before the PreAuthentication trigger
+              refuses anyone: its message names this page. */}
+          <SecurityPanel />
         </>
       )}
 
