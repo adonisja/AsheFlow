@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
@@ -42,6 +42,68 @@ function crewCandidates(employees: Employee[], exclude?: (e: Employee) => boolea
 const SELECT_CLASS =
   'w-full border border-input rounded-xl px-3 py-2 text-sm bg-background ' +
   'focus:ring-1 focus:ring-primary focus:border-primary outline-none';
+
+/* Shared surface treatment. The app's visual language is restrained —
+   shadow-sm, no gradients — so this stays inside it: the modernisation is
+   hierarchy and rhythm, not decoration borrowed from a different aesthetic. */
+const CARD =
+  'rounded-xl border border-border bg-card p-4 shadow-sm transition-colors hover:border-border/80';
+
+/** A person chip. Role is a separate muted span so the eye can scan names. */
+function PersonChip({ name, role, tone = 'default' }: {
+  name: string; role?: string | null; tone?: 'default' | 'lead';
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 text-xs rounded-lg pl-2 pr-2 py-1 border ${
+        tone === 'lead'
+          ? 'border-primary/30 bg-primary/10'
+          : 'border-border bg-accent/40'
+      }`}
+    >
+      <span className="font-medium">{name}</span>
+      {role && (
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          {role.replace('_', ' ')}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Section heading — one level below the page, above the cards. */
+function SectionHeader({ icon, title, blurb, action }: {
+  icon: ReactNode; title: string; blurb: string; action: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="min-w-0">
+        <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+          <span className="grid place-items-center w-7 h-7 rounded-lg bg-accent text-muted-foreground">
+            {icon}
+          </span>
+          {title}
+        </h2>
+        <p className="text-sm text-muted-foreground max-w-2xl mt-1.5 leading-relaxed">
+          {blurb}
+        </p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/** Empty state — dashed, so it reads as a slot rather than a broken card. */
+function EmptyState({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <div className="rounded-xl border border-dashed border-border bg-accent/20 p-8 text-center">
+      <div className="grid place-items-center w-10 h-10 rounded-xl bg-card mx-auto text-muted-foreground/60">
+        {icon}
+      </div>
+      <p className="mt-3 text-sm text-muted-foreground max-w-sm mx-auto">{children}</p>
+    </div>
+  );
+}
 
 export default function CrewPins() {
   const [pins, setPins] = useState<CrewPin[]>([]);
@@ -125,24 +187,19 @@ export default function CrewPins() {
       {/* ErrorBanner scrolls itself into view (ADR-339) — no per-page ref needed. */}
       <ErrorBanner message={error} />
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Pin className="w-5 h-5" /> Crew Pins
-          </h2>
-          <p className="text-sm text-muted-foreground max-w-2xl mt-1">
-            A pinned crew rides together every day the driver is dispatched. Unlike a
-            favourite, which only makes a truck more likely, a pin is applied before
-            assignment — the members are placed on the driver's truck directly.
-          </p>
-        </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
-        >
-          <Plus className="w-4 h-4" /> New crew
-        </button>
-      </div>
+      <SectionHeader
+        icon={<Pin className="w-4 h-4" />}
+        title="Crew Pins"
+        blurb="A pinned crew rides together every day the driver is dispatched. Unlike a favourite, which only makes a truck more likely, a pin is applied before assignment — the members are placed on the driver's truck directly."
+        action={
+          <button
+            onClick={() => setCreating(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium shadow-sm hover:opacity-90 transition-opacity"
+          >
+            <Plus className="w-4 h-4" /> New crew
+          </button>
+        }
+      />
 
       {creating && (
         <CrewPinForm
@@ -157,13 +214,10 @@ export default function CrewPins() {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : pins.length === 0 ? (
-        <div className="border border-border rounded-xl p-8 text-center">
-          <Pin className="w-8 h-8 mx-auto text-muted-foreground/40" />
-          <p className="mt-3 text-sm text-muted-foreground">
-            No crew pins yet. Pin a crew that works well together and they will be
-            assigned to the same truck automatically.
-          </p>
-        </div>
+        <EmptyState icon={<Pin className="w-5 h-5" />}>
+          No crew pins yet. Pin a crew that works well together and they will be
+          assigned to the same truck automatically.
+        </EmptyState>
       ) : (
         <div className="grid gap-3">
           {pins.map(pin => (
@@ -202,34 +256,41 @@ function PinCard({
   onDelete: (p: CrewPin) => void;
 }) {
   return (
-    <div className={`border rounded-xl p-4 ${pin.is_active ? 'border-border' : 'border-border/50 bg-muted/30'}`}>
+    <div className={`${CARD} ${pin.is_active ? '' : 'opacity-70 bg-accent/20'}`}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="font-semibold">{pin.name}</h3>
+            <h3 className="font-semibold tracking-tight">{pin.name}</h3>
             {!pin.is_active && (
-              <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground bg-accent rounded-md px-1.5 py-0.5">
                 Inactive
               </span>
             )}
+            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {pin.members.length} member{pin.members.length === 1 ? '' : 's'}
+            </span>
           </div>
-          <p className="text-sm text-muted-foreground mt-0.5">
+          <p className="text-sm text-muted-foreground mt-1">
             Anchored to <span className="font-medium text-foreground">{pin.driver_name ?? 'a driver'}</span>
             {' '}— the crew follows whichever truck they are assigned.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Delete is separated by a divider rather than sitting flush beside
+            Deactivate. They read as equal-weight controls otherwise, and only
+            one of them is destructive. */}
+        <div className="flex items-center gap-1">
           <button
             onClick={() => onToggle(pin, !pin.is_active)}
-            className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg border border-border hover:bg-accent"
+            className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             {pin.is_active ? <><X className="w-3.5 h-3.5" /> Deactivate</> : <><RotateCcw className="w-3.5 h-3.5" /> Reactivate</>}
           </button>
+          <span className="w-px h-5 bg-border mx-1" aria-hidden />
           <button
             onClick={() => onDelete(pin)}
             aria-label={`Delete ${pin.name}`}
-            className="p-1.5 rounded-lg border border-border text-danger hover:bg-danger/10"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -245,16 +306,27 @@ function PinCard({
         </div>
       )}
 
+      {/* Sorted by role, not by insertion. The screenshot showed
+          trainer/walker/walker/captain/walker — the captain is the route lead
+          and was buried in the middle of the list. */}
       <div className="mt-3 flex flex-wrap gap-1.5">
         {pin.members.length === 0 ? (
           <span className="text-sm text-muted-foreground">No members yet.</span>
         ) : (
-          pin.members.map(m => (
-            <span key={m.employee_id} className="text-xs bg-accent rounded-lg px-2 py-1">
-              {m.name ?? 'Unknown'}
-              {m.role && <span className="text-muted-foreground uppercase ml-1.5 text-[10px]">{m.role}</span>}
-            </span>
-          ))
+          pin.members
+            .slice()
+            .sort((a, b) =>
+              CREW_ROLE_ORDER.indexOf(a.role as typeof CREW_ROLE_ORDER[number]) -
+              CREW_ROLE_ORDER.indexOf(b.role as typeof CREW_ROLE_ORDER[number]) ||
+              (a.name ?? '').localeCompare(b.name ?? ''))
+            .map(m => (
+              <PersonChip
+                key={m.employee_id}
+                name={m.name ?? 'Unknown'}
+                role={m.role}
+                tone={m.role === 'captain' ? 'lead' : 'default'}
+              />
+            ))
         )}
       </div>
     </div>
@@ -434,7 +506,10 @@ function TruckPinSection({
      two rows. Grouped for display because "Marcus: Truck 4 on Tue, Thu" is the
      fact a dispatcher holds in their head — the rows are storage, not meaning. */
   const grouped = useMemo(() => {
-    const by = new Map<string, { pins: TruckPin[]; name: string; role: string; truck: string }>();
+    const hubIds = new Set(trucks.filter(t => t.is_hub).map(t => t.id));
+    const by = new Map<string, {
+      pins: TruckPin[]; name: string; role: string; truck: string; isHub: boolean;
+    }>();
     for (const p of truckPins) {
       const key = `${p.employee_id}|${p.truck_id}`;
       const hit = by.get(key);
@@ -444,30 +519,28 @@ function TruckPinSection({
         name: p.employee_name ?? 'Unknown',
         role: p.employee_role ?? '',
         truck: p.truck_name ?? 'Unknown truck',
+        isHub: hubIds.has(p.truck_id),
       });
     }
-    return [...by.values()];
-  }, [truckPins]);
+    return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [truckPins, trucks]);
 
   return (
     <section className="space-y-4 pt-2">
-      <div className="flex items-start justify-between gap-4 flex-wrap border-t border-border pt-6">
-        <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <TruckIcon className="w-5 h-5" /> Truck Pins
-          </h2>
-          <p className="text-sm text-muted-foreground max-w-2xl mt-1">
-            For crew who work a specific truck on specific days. A crew pin follows
-            a driver; a truck pin holds someone to the truck itself. A person can
-            have one or the other, not both.
-          </p>
-        </div>
-        <button
-          onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90"
-        >
-          <Plus className="w-4 h-4" /> Pin to truck
-        </button>
+      <div className="border-t border-border pt-6">
+        <SectionHeader
+          icon={<TruckIcon className="w-4 h-4" />}
+          title="Truck Pins"
+          blurb="For crew who work a specific truck on specific days. A crew pin follows a driver; a truck pin holds someone to the truck itself. A person can have one or the other, not both."
+          action={
+            <button
+              onClick={() => setAdding(true)}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium shadow-sm hover:opacity-90 transition-opacity"
+            >
+              <Plus className="w-4 h-4" /> Pin to truck
+            </button>
+          }
+        />
       </div>
 
       {adding && (
@@ -482,24 +555,35 @@ function TruckPinSection({
       )}
 
       {grouped.length === 0 ? (
-        <div className="border border-border rounded-xl p-8 text-center">
-          <CalendarDays className="w-8 h-8 mx-auto text-muted-foreground/40" />
-          <p className="mt-3 text-sm text-muted-foreground">
-            No truck pins yet.
-          </p>
-        </div>
+        <EmptyState icon={<CalendarDays className="w-5 h-5" />}>
+          No truck pins yet. Pin someone to a truck on the days they work it.
+        </EmptyState>
       ) : (
         <div className="grid gap-3">
           {grouped.map(g => (
-            <div key={`${g.name}-${g.truck}`} className="border border-border rounded-xl p-4">
+            <div key={`${g.name}-${g.truck}`} className={CARD}>
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
-                  <h3 className="font-semibold">
+                  <h3 className="font-semibold tracking-tight">
                     {g.name}
-                    {g.role && <span className="text-muted-foreground uppercase ml-2 text-[10px]">{g.role}</span>}
+                    {g.role && (
+                      <span className="text-muted-foreground uppercase ml-2 text-[10px] tracking-wide">
+                        {g.role.replace('_', ' ')}
+                      </span>
+                    )}
                   </h3>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    Held to <span className="font-medium text-foreground">{g.truck}</span>
+                  {/* The hub marker belongs HERE too, not only in the picker.
+                      "Held to Hub" reads as an ordinary truck otherwise, and a
+                      hub is never auto-dispatched (ADR-274). */}
+                  <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1.5">
+                    Held to
+                    {g.isHub && <Warehouse className="w-3.5 h-3.5" />}
+                    <span className="font-medium text-foreground">{g.truck}</span>
+                    {g.isHub && (
+                      <span className="text-[10px] uppercase tracking-wide bg-accent rounded-md px-1.5 py-0.5">
+                        hub
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -508,12 +592,18 @@ function TruckPinSection({
                   .slice()
                   .sort((a, b) => WEEKDAYS.indexOf(a.day_of_week) - WEEKDAYS.indexOf(b.day_of_week))
                   .map(p => (
-                    <span key={p.id} className="inline-flex items-center gap-1.5 text-xs bg-accent rounded-lg px-2 py-1">
-                      {p.day_of_week}
+                    /* Day chips are REMOVABLE and member chips are not, so they
+                       must not look identical — the × gets a hover affordance of
+                       its own rather than being a glyph inside a flat tag. */
+                    <span
+                      key={p.id}
+                      className="group inline-flex items-center gap-1 text-xs rounded-lg border border-border bg-accent/40 pl-2 pr-1 py-1"
+                    >
+                      <span className="font-medium">{p.day_of_week}</span>
                       <button
                         onClick={() => onDelete(p)}
                         aria-label={`Remove ${g.name} from ${g.truck} on ${p.day_of_week}`}
-                        className="text-muted-foreground hover:text-danger"
+                        className="grid place-items-center w-4 h-4 rounded text-muted-foreground hover:bg-danger/15 hover:text-danger transition-colors"
                       >
                         <X className="w-3 h-3" />
                       </button>
