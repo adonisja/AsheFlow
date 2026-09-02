@@ -237,7 +237,7 @@ function ToteRow({
       } ${tote.checked ? 'bg-success/5 opacity-60' : locked ? '' : 'hover:bg-accent/30'}`}
       title={
         locked
-          ? 'Loading confirmed — check-off is locked'
+          ? 'Loading confirmed, check-off is locked'
           : tote.checked && tote.checked_by_name ? `Checked by ${tote.checked_by_name}` : 'Tap row to check off'
       }
     >
@@ -263,7 +263,7 @@ function ToteRow({
         {(tote.rider_count ?? 0) > 0 && (
           <span
             className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase bg-accent text-muted-foreground"
-            title="Packages off this tote's home block — expected cross-walker handoffs at the AP"
+            title="Packages off this tote's home block. Expected cross-walker handoffs at the AP."
           >
             {tote.rider_count} AP handoff{tote.rider_count === 1 ? '' : 's'}
           </span>
@@ -438,7 +438,7 @@ function TruckSection({
             {mode === 'driver' && roster.load_confirmed && (
               <>
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-success">
-                  <CheckCheck className="w-3.5 h-3.5" /> Loading confirmed — handed off to dispatch
+                  <CheckCheck className="w-3.5 h-3.5" /> Loading confirmed, handed off to dispatch
                 </span>
                 <button
                   disabled={busy}
@@ -548,7 +548,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
       setData(res.data);
     } catch (e: unknown) {
       const detail = errorText(e, '') || undefined;
-      setError(detail ?? 'Action failed — refresh and try again.');
+      setError(detail ?? 'Action failed. Refresh and try again.');
     } finally {
       setBusy(false);
     }
