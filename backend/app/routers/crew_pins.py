@@ -20,6 +20,28 @@ router = APIRouter(prefix="/crew-pins", tags=["crew-pins"])
 allow_dispatch = RoleChecker(["dispatch", "management", "admin"])
 
 
+def _reject_if_truck_pinned(db: Session, company_id, employee_id, name: str | None) -> None:
+    """409 if this employee is pinned to a truck (ADR-358 D2)."""
+    from app.models.truck_pin import TruckPin
+
+    pin = (
+        db.query(TruckPin)
+        .filter(
+            TruckPin.company_id == company_id,
+            TruckPin.employee_id == employee_id,
+        )
+        .first()
+    )
+    if pin:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{name or 'That employee'} is pinned to a truck on {pin.day_of_week}. "
+                f"A person can be pinned to a driver or to a truck, not both."
+            ),
+        )
+
+
 def _to_response(db: Session, pin: CrewPin, company_id: UUID) -> CrewPinResponse:
     """Attach names so the UI never has to resolve ids itself."""
     ids = [pin.driver_id] + [m.employee_id for m in pin.members]
@@ -84,6 +106,11 @@ def create_crew_pin(
             detail=f"A crew pin's anchor must be a driver; {driver.name} is a {driver.role}.",
         )
 
+    # ADR-358 D2 — the two pin axes are mutually exclusive per person. Checked
+    # on BOTH endpoints: an invariant guarded at one door only is as strong as
+    # its weaker door.
+    _reject_if_truck_pinned(db, caller.company_id, driver.id, driver.name)
+
     # ADR-357 D6 — one active pin per driver. Two cannot both be honoured.
     existing = (
         db.query(CrewPin)
@@ -111,6 +138,14 @@ def create_crew_pin(
             raise HTTPException(
                 status_code=404, detail="One or more members were not found."
             )
+
+        for mid in set(member_ids):
+            who = (
+                db.query(Employee)
+                .filter(Employee.id == mid, Employee.company_id == caller.company_id)
+                .first()
+            )
+            _reject_if_truck_pinned(db, caller.company_id, mid, who.name if who else None)
 
         # An employee in two active pins is the same unresolvable conflict as two
         # pins on one driver, one layer down.
