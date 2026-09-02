@@ -51,6 +51,7 @@ PLATFORM_DEFAULTS: dict = {
     # existing tenant must keep resolving to NULL so it falls back to these
     # platform defaults rather than inheriting a stale multiplier.
     "dispatch_target_oneway_weak":      0.22,
+    "dispatch_target_oneway_trainer":   0.25,
     "dispatch_target_oneway_captain":   0.28,
     "dispatch_target_oneway_driver":    0.33,
     "dispatch_target_mutual_weak":      0.45,
