@@ -60,7 +60,7 @@ function AddFreightForm({ date, busy, onDone }: {
     <div className="w-full border border-border rounded-xl p-3 space-y-2 bg-card">
       <div className="flex items-center gap-2">
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Add mid-day freight</p>
-        <span className="text-[11px] text-muted-foreground">— routed to the best-fit truck by address</span>
+        <span className="text-[11px] text-muted-foreground">Routed to the best-fit truck by address</span>
       </div>
       {rows.map((r, i) => (
         <div key={i} className="flex items-center gap-2">
@@ -255,7 +255,7 @@ function ToteRow({
         {(tote.pull_tbas?.length ?? 0) > 0 && (
           <span
             className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase bg-danger text-white"
-            title={`Out-of-zone packages in this tote — pulled & returned at the AP: ${tote.pull_tbas!.join(', ')}`}
+            title={`Out-of-zone packages in this tote, pulled and returned at the AP: ${tote.pull_tbas!.join(', ')}`}
           >
             AP RETURN {tote.pull_tbas!.length}
           </span>
@@ -585,7 +585,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
         <Package className="w-4 h-4 inline mr-1.5" />
         Tote rosters appear here after the next sort run (zones from before roster
         persistence show counts only). A hub's totes come from its own manifest
-        instead — upload it on Station Sort and they appear here without a sort run.
+        instead. Upload it on Station Sort and they appear here without a sort run.
       </div>
     );
   }
@@ -605,7 +605,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
         <div className="flex items-center gap-2 p-3 bg-success/5 border border-success/20 rounded-xl text-sm">
           <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
           <span className="text-foreground font-medium">Loading finalized</span>
-          <span className="text-muted-foreground">— every tote checked, no pending transfers. AP Sort is working from physical truth.</span>
+          <span className="text-muted-foreground">Every tote checked, no pending transfers. AP Sort is working from physical truth.</span>
         </div>
       ) : (
         <div className="flex items-center gap-2 p-3 bg-warning/5 border border-warning/20 rounded-xl text-sm">
@@ -630,14 +630,14 @@ export default function ToteRosterPanel({ date, mode }: Props) {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-              Pending transfers — confirm the move or keep in place
+              Pending transfers: confirm the move or keep in place
             </p>
             <div className="flex-1" />
             {pending.size > 1 && (
               <button
                 disabled={busy}
                 onClick={onConfirmAll}
-                title="Keep any exceptions first — this confirms every remaining suggestion"
+                title="Keep any exceptions first. This confirms every remaining suggestion."
                 className="btn-primary text-xs px-3 py-1.5 disabled:opacity-50"
               >
                 Confirm all {pending.size} moves
@@ -676,7 +676,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
             <span className="text-foreground font-medium">
-              {unrouted.length} package{unrouted.length === 1 ? '' : 's'} not routed — assign manually
+              {unrouted.length} package{unrouted.length === 1 ? '' : 's'} not routed · assign manually
             </span>
             <div className="flex-1" />
             <button onClick={() => setUnrouted([])} className="text-muted-foreground hover:text-foreground text-[11px]">Dismiss</button>
