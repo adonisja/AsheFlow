@@ -58,6 +58,14 @@ TABULAR = re.compile(r"""['"]\s*—\s*['"]""")
 VALUE_GLOSS = re.compile(r"""\\?['"][^'"]{1,40}\\?['"]\s+—\s""")
 JSX_GLOSS = re.compile(r"""<(?:span|strong|code|b)\b[^>]*>[^<>]{1,40}</(?:span|strong|code|b)>\s+—\s""")
 
+# The same legend, where the value is a JSX expression rather than a literal:
+#   Damaged — {d.tba_number}          {g} — {GRADE_CONFIG[g].label}
+#   Gate {s.current_gate} — {GATE_NAMES[...]}
+# A dash between a short label and the value it names is doing typographic
+# work, not joining two clauses, so it is out of scope the same way a heading
+# with a qualifier is.
+EXPR_GLOSS = re.compile(r"""(?:\{[^{}]{1,60}\}|[A-Za-z][\w' ]{0,24})\s+—\s+\{""")
+
 # Only two patterns survive measurement. Eleven vocabulary patterns from the
 # first version ("delve", "seamless", "leverage", "robust", ...) had ZERO hits
 # across the entire frontend: they were internet folklore about AI writing, not
@@ -116,7 +124,9 @@ def scan() -> list[tuple[str, int, str, str]]:
             stripped = line.strip()
             if num in commented:
                 continue
-            probe = JSX_GLOSS.sub("", VALUE_GLOSS.sub("", TABULAR.sub("", line)))
+            probe = TABULAR.sub("", line)
+            for pat in (VALUE_GLOSS, JSX_GLOSS, EXPR_GLOSS):
+                probe = pat.sub("", probe)
             if "className" in probe:
                 probe = re.sub(r'className=(\{[^}]*\}|"[^"]*")', "", probe)
             for name, pat in PATTERNS.items():

@@ -612,7 +612,7 @@ export default function ToteRosterPanel({ date, mode }: Props) {
           <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
           <span className="text-foreground font-medium">Loading not finalized</span>
           <span className="text-muted-foreground">
-            — {data.pending_transfer_count} pending transfer{data.pending_transfer_count === 1 ? '' : 's'},{' '}
+            · {data.pending_transfer_count} pending transfer{data.pending_transfer_count === 1 ? '' : 's'},{' '}
             {data.unchecked_count} tote{data.unchecked_count === 1 ? '' : 's'} unchecked
             {(data.flagged_removal_count ?? 0) > 0 && (
               <>, {data.flagged_removal_count} station removal{data.flagged_removal_count === 1 ? '' : 's'} pending</>
