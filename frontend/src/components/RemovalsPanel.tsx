@@ -113,7 +113,7 @@ export default function RemovalsPanel({ date }: { date: string }) {
         {data.flagged_count > 0
           ? <>{data.flagged_count} out-of-zone unit{data.flagged_count === 1 ? '' : 's'} flagged. Not our delivery area.
               Whole totes are pulled at the dock; single packages are pulled by the crew at the anchor point.</>
-          : <>All {data.removed_count} out-of-zone unit{data.removed_count === 1 ? '' : 's'} pulled ({totalPkgs} packages) — ready for Amazon handback.</>}
+          : <>All {data.removed_count} out-of-zone unit{data.removed_count === 1 ? '' : 's'} pulled ({totalPkgs} packages). Ready for Amazon handback.</>}
       </div>
 
       {error && (

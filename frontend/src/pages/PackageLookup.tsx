@@ -173,7 +173,7 @@ export function PackageLookupPanel() {
       {tba.trim().length > 0 && tba.trim().length < MIN_CHARS && (
         <p className="text-xs text-subtle">
           {MIN_CHARS - tba.trim().length} more character
-          {MIN_CHARS - tba.trim().length === 1 ? '' : 's'} — a shorter suffix would
+          {MIN_CHARS - tba.trim().length === 1 ? '' : 's'}. A shorter suffix would
           match too many packages to be useful.
         </p>
       )}
