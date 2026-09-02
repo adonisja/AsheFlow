@@ -33,12 +33,22 @@ def _fav_limits() -> dict:
 
 
 def _trio_roles() -> list[str]:
-    """The three roles the check is actually called with, read from the call site."""
+    """The three roles the check is actually CALLED with.
+
+    Read from the perform_tridirectional_check call, not from every role name in
+    the function: ADR-356 added a `trio_plus` tier that also looks up trainers,
+    so scraping all role comparisons over-collects. The call's own arguments are
+    the only reliable source.
+    """
     src = inspect.getsource(CW.calculate_weights)
-    # e.g. captain_id = next((c["id"] ... if c["role"] == "captain"), None)
-    roles = re.findall(r'c\["role"\]\s*==\s*"(\w+)"', src)
-    # The walker is the candidate itself (employee_role == "walker"), not a lookup.
-    return sorted(set(roles) | {"walker"})
+    call = re.search(r"perform_tridirectional_check\(([^)]*)\)", src)
+    assert call, "perform_tridirectional_check is no longer called"
+    args = [a.strip() for a in call.group(1).split(",")]
+    roles = {a.replace("_id", "") for a in args if a.endswith("_id")}
+    # The third member is the candidate itself, passed as employee_id under the
+    # `employee_role == "walker"` guard.
+    roles.discard("employee")
+    return sorted(roles | {"walker"})
 
 
 def test_every_direction_in_the_trio_is_permitted():

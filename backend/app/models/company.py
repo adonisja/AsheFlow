@@ -115,6 +115,20 @@ class CompanyConfig(Base):
     captain_truck_rotation_days     = Column(Integer, nullable=True)  # default 5
     dispatch_mutual_bonus           = Column(Float, nullable=True)   # default 0.10
     dispatch_tridirectional_bonus   = Column(Float, nullable=True)   # default 0.20
+
+    # ADR-356 — preference strength as a TARGET PROBABILITY. The dispatch_weight_*
+    # and dispatch_*_bonus columns above are multipliers and flat adds; these are
+    # "how often should this happen". Both sets exist during the transition: a
+    # tenant's stored 0.70 is a MULTIPLIER, and reading it as a probability would
+    # silently change dispatch for every company that ever tuned one. NULL here
+    # means "use the platform default" (see preference_tiers.DEFAULT_TARGETS).
+    dispatch_target_oneway_weak     = Column(Float, nullable=True)   # default 0.22
+    dispatch_target_oneway_captain  = Column(Float, nullable=True)   # default 0.28
+    dispatch_target_oneway_driver   = Column(Float, nullable=True)   # default 0.33
+    dispatch_target_mutual_weak     = Column(Float, nullable=True)   # default 0.45
+    dispatch_target_mutual_strong   = Column(Float, nullable=True)   # default 0.55
+    dispatch_target_tridirectional  = Column(Float, nullable=True)   # default 0.70
+    dispatch_target_trio_plus       = Column(Float, nullable=True)   # default 0.80
     dispatch_consecutive_penalty    = Column(Float, nullable=True)   # default 0.05
     dispatch_weight_cap             = Column(Float, nullable=True)   # default 0.85
 
@@ -259,6 +273,13 @@ class CompanyConfig(Base):
         CheckConstraint("dispatch_weight_walker    IS NULL OR (dispatch_weight_walker    BETWEEN 0 AND 1)", name="ck_company_configs_weight_walker"),
         CheckConstraint("dispatch_mutual_bonus     IS NULL OR (dispatch_mutual_bonus     BETWEEN 0 AND 1)", name="ck_company_configs_mutual_bonus"),
         CheckConstraint("dispatch_tridirectional_bonus IS NULL OR (dispatch_tridirectional_bonus BETWEEN 0 AND 1)", name="ck_company_configs_tridirectional_bonus"),
+        CheckConstraint("dispatch_target_oneway_weak IS NULL OR (dispatch_target_oneway_weak >= 0 AND dispatch_target_oneway_weak < 1)", name="ck_company_configs_target_oneway_weak"),
+        CheckConstraint("dispatch_target_oneway_captain IS NULL OR (dispatch_target_oneway_captain >= 0 AND dispatch_target_oneway_captain < 1)", name="ck_company_configs_target_oneway_captain"),
+        CheckConstraint("dispatch_target_oneway_driver IS NULL OR (dispatch_target_oneway_driver >= 0 AND dispatch_target_oneway_driver < 1)", name="ck_company_configs_target_oneway_driver"),
+        CheckConstraint("dispatch_target_mutual_weak IS NULL OR (dispatch_target_mutual_weak >= 0 AND dispatch_target_mutual_weak < 1)", name="ck_company_configs_target_mutual_weak"),
+        CheckConstraint("dispatch_target_mutual_strong IS NULL OR (dispatch_target_mutual_strong >= 0 AND dispatch_target_mutual_strong < 1)", name="ck_company_configs_target_mutual_strong"),
+        CheckConstraint("dispatch_target_tridirectional IS NULL OR (dispatch_target_tridirectional >= 0 AND dispatch_target_tridirectional < 1)", name="ck_company_configs_target_tridirectional"),
+        CheckConstraint("dispatch_target_trio_plus IS NULL OR (dispatch_target_trio_plus >= 0 AND dispatch_target_trio_plus < 1)", name="ck_company_configs_target_trio_plus"),
         CheckConstraint("dispatch_consecutive_penalty IS NULL OR (dispatch_consecutive_penalty  BETWEEN 0 AND 1)", name="ck_company_configs_consecutive_penalty"),
         CheckConstraint("dispatch_weight_cap       IS NULL OR (dispatch_weight_cap       BETWEEN 0 AND 1)", name="ck_company_configs_weight_cap"),
     )

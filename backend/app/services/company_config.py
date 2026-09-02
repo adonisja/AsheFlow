@@ -47,6 +47,16 @@ PLATFORM_DEFAULTS: dict = {
     "captain_truck_rotation_days":      5,
     "dispatch_mutual_bonus":            0.10,
     "dispatch_tridirectional_bonus":    0.20,
+    # ADR-356 — target probabilities. Deliberately NOT in _REQUIRED_FIELDS: an
+    # existing tenant must keep resolving to NULL so it falls back to these
+    # platform defaults rather than inheriting a stale multiplier.
+    "dispatch_target_oneway_weak":      0.22,
+    "dispatch_target_oneway_captain":   0.28,
+    "dispatch_target_oneway_driver":    0.33,
+    "dispatch_target_mutual_weak":      0.45,
+    "dispatch_target_mutual_strong":    0.55,
+    "dispatch_target_tridirectional":   0.70,
+    "dispatch_target_trio_plus":        0.80,
     "dispatch_consecutive_penalty":     0.05,
     "dispatch_weight_cap":              0.85,
     "flag_threshold":                   1.0,
