@@ -162,6 +162,31 @@ class TestEveryEnforcementSiteCoversSeparations:
         assert set(BLOCKING_TYPES) == {"ban", "sep"}
 
 
+class TestTheAnalyticsPageDoesNotReportSeparationsAsBans:
+    """D8 — the admin aggregate endpoint DOES return separations by design.
+
+    That is fine for admin, and a trap for the page: its role matrix counts
+    `fav` and treats everything else as a ban, so a separation would be reported
+    as a statement two employees made about each other.
+    """
+
+    def test_the_preferences_page_filters_sep_before_counting(self):
+        page = (
+            Path(__file__).resolve().parents[3]
+            / "frontend" / "src" / "pages" / "Preferences.tsx"
+        ).read_text()
+        assert "r.relationship_type !== 'sep'" in page, (
+            "the page counts from the raw rows, so a dispatch separation is "
+            "reported as a ban between the two employees"
+        )
+        # The matrix's else-branch is the specific trap: not-a-fav becomes a ban.
+        idx = page.index("const matrix = useMemo(")
+        window = page[idx: idx + 900]
+        assert "for (const r of prefs)" in window, (
+            "the role matrix still iterates the unfiltered rows"
+        )
+
+
 class TestSeparationIsNotOverridable:
     def test_a_separation_is_never_walker_override_eligible(self):
         """ADR-361 D2 — a preference must not undo a management decision."""
