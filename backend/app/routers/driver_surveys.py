@@ -11,6 +11,7 @@ Endpoints:
   GET    /driver-surveys/{survey_id}/my-response trainer/walker  — check own response
 """
 
+import logging
 import os
 import threading
 from datetime import date, datetime, timezone, timedelta
@@ -41,6 +42,8 @@ from app.schemas.driver_survey import (
 from app.services.audit import write_audit
 from app.services.company_config import get_company_config
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/driver-surveys", tags=["driver-surveys"])
 
 allow_management = RoleChecker(["management", "admin"])
@@ -63,8 +66,15 @@ def _fire_discord_dm(discord_id: str, message: str) -> None:
                 headers={"X-Internal-Secret": secret},
                 timeout=5,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # A survey DM that never arrives is not worth failing the request
+            # over, but it must not vanish either: the driver simply never hears
+            # about the survey and nobody can tell why. Same treatment as the
+            # identical helper in employees.py, which was fixed and this one
+            # was missed.
+            logger.warning(
+                "driver-survey DM failed for discord_id=%s: %s", discord_id, exc
+            )
 
     threading.Thread(target=_run, daemon=True).start()
 

@@ -33,7 +33,18 @@ MIN_NOTE_CHARS = 8
 
 # [[target]] or [[target|label]]. Coordinate pairs like [[lng, lat]] appear inside
 # code samples and are not links.
-LINK = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]")
+#
+# The backslash in the alias branch is NOT optional. Inside a markdown table a
+# link must be written [[Target\|Alias]] or the pipe splits the cell, and the
+# previous pattern -- [^\]|]+? -- stopped at the pipe while KEEPING the escape,
+# so every table link resolved to "ADR-292-Manual-RTS-Entry\" and was reported
+# dangling. Five of them were, wrongly, for months.
+#
+# This is exactly the trap that produced the 2026-08-29 incident: a repair
+# script "fixed" the documents to satisfy the broken pattern and destroyed five
+# working links. The pattern was the bug both times. Match the escape here and
+# strip it, rather than ever touching the files.
+LINK = re.compile(r"\[\[([^\]|]+?)\\?(?:\|[^\]]*)?\]\]")
 
 
 def _targets_on_disk() -> set[str]:

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.employee import Employee
 from app.models.employee_relationship import EmployeeRelationship
+from app.services.check_ban import BLOCKING_TYPES  # ban + sep (ADR-361)
 from app.models.truck_pin import TruckPin
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,7 @@ def _banned_from(db: Session, employee_id: UUID, crew: list, company_id: UUID) -
         db.query(EmployeeRelationship)
         .filter(
             EmployeeRelationship.company_id == company_id,
-            EmployeeRelationship.relationship_type == "ban",
+            EmployeeRelationship.relationship_type.in_(BLOCKING_TYPES),
             or_(
                 and_(
                     EmployeeRelationship.employee_id == employee_id,
