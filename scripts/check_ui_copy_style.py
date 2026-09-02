@@ -137,7 +137,12 @@ def scan() -> list[tuple[str, int, str, str]]:
 
 def main() -> int:
     found = scan()
-    key = lambda h: f"{h[0]}:{h[1]}:{h[2]}"
+    # Keyed on the TEXT, not the line number. Keying on file:line meant any
+    # insertion above a known instance renumbered it and reported it as new --
+    # renaming one tab label flagged three untouched comments 200 lines below.
+    # A baseline that cries wolf on unrelated edits gets re-baselined blind,
+    # which is the failure it exists to prevent.
+    key = lambda h: f"{h[0]}:{h[2]}:{h[3]}"
 
     if "--update" in sys.argv:
         BASELINE.write_text(json.dumps(sorted(key(h) for h in found), indent=2) + "\n")
