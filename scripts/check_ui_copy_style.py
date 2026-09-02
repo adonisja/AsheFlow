@@ -51,9 +51,12 @@ BASELINE = ROOT / "scripts" / "ui_copy_style_baseline.json"
 # A lone em dash between quotes is an empty-cell placeholder, not prose.
 TABULAR = re.compile(r"""['"]\s*—\s*['"]""")
 
-# A quoted VALUE followed by a dash and its gloss is a key beside its
-# description. These render in a monospace box under an "Example" heading.
+# A VALUE followed by a dash and its gloss is a key beside its description,
+# not a sentence. Two renderings, both legends:
+#   "07:00" — drivers must be on-site by 7 AM      (quoted, in a mono box)
+#   <span className="font-medium">name</span> — full name (required)   (JSX)
 VALUE_GLOSS = re.compile(r"""\\?['"][^'"]{1,40}\\?['"]\s+—\s""")
+JSX_GLOSS = re.compile(r"""<(?:span|strong|code|b)\b[^>]*>[^<>]{1,40}</(?:span|strong|code|b)>\s+—\s""")
 
 # Only two patterns survive measurement. Eleven vocabulary patterns from the
 # first version ("delve", "seamless", "leverage", "robust", ...) had ZERO hits
@@ -113,7 +116,7 @@ def scan() -> list[tuple[str, int, str, str]]:
             stripped = line.strip()
             if num in commented:
                 continue
-            probe = VALUE_GLOSS.sub("", TABULAR.sub("", line))
+            probe = JSX_GLOSS.sub("", VALUE_GLOSS.sub("", TABULAR.sub("", line)))
             if "className" in probe:
                 probe = re.sub(r'className=(\{[^}]*\}|"[^"]*")', "", probe)
             for name, pat in PATTERNS.items():

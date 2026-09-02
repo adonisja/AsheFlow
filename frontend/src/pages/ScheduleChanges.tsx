@@ -416,7 +416,7 @@ const ScheduleChanges = () => {
           </label>
           {selectableDays().length === 0 ? (
             <p className="text-sm text-subtle italic">
-              {mode === 'add_day' ? 'No days are currently off — nothing to add back.' : 'All days are already off.'}
+              {mode === 'add_day' ? 'No days are currently off, so there is nothing to add back.' : 'All days are already off.'}
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">

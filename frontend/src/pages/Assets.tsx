@@ -537,7 +537,7 @@ function TruckModal({ initial = {}, onSave, onClose, isCreate }: TruckModalProps
             <span className="min-w-0">
               <span className="block text-sm font-medium text-foreground">Hub truck</span>
               <span className="block text-xs text-muted-foreground mt-0.5">
-                Never receives crew from dispatch — staff are placed by hand for
+                Never receives crew from dispatch. Staff are placed by hand for
                 intra-day assembly. Crew notifications post to the Discord channel above.
               </span>
             </span>

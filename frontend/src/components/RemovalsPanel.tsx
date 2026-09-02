@@ -37,7 +37,7 @@ function RemovalRow({ r, busy, onConfirm }: {
           </span>
         ) : apStage ? (
           <span className="text-[11px] text-warning font-semibold" title="Walker hands this to the driver at the anchor point; the driver confirms receipt on AP Sort">
-            {r.handoff_status === 'handed_over' ? 'handed over — awaiting driver' : 'walker→driver at AP'}
+            {r.handoff_status === 'handed_over' ? 'handed over · awaiting driver' : 'walker→driver at AP'}
           </span>
         ) : (
           <button
@@ -77,7 +77,7 @@ export default function RemovalsPanel({ date }: { date: string }) {
       setData(res.data);
     } catch (e: unknown) {
       const detail = errorText(e, '') || undefined;
-      setError(detail ?? 'Confirm failed — refresh and try again.');
+      setError(detail ?? 'Confirm failed. Refresh and try again.');
     } finally {
       setBusy(false);
     }
@@ -92,7 +92,7 @@ export default function RemovalsPanel({ date }: { date: string }) {
       <div className="flex items-center gap-2">
         <PackageX className="w-4 h-4 text-danger" />
         <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-          Out-of-zone removals — pull off the truck, return to Amazon
+          Out-of-zone removals: pull off the truck, return to Amazon
         </p>
         <div className="flex-1" />
         <a
@@ -111,7 +111,7 @@ export default function RemovalsPanel({ date }: { date: string }) {
           : 'bg-success/5 border-success/20 text-success'
       }`}>
         {data.flagged_count > 0
-          ? <>{data.flagged_count} out-of-zone unit{data.flagged_count === 1 ? '' : 's'} flagged — not our delivery area.
+          ? <>{data.flagged_count} out-of-zone unit{data.flagged_count === 1 ? '' : 's'} flagged. Not our delivery area.
               Whole totes are pulled at the dock; single packages are pulled by the crew at the anchor point.</>
           : <>All {data.removed_count} out-of-zone unit{data.removed_count === 1 ? '' : 's'} pulled ({totalPkgs} packages) — ready for Amazon handback.</>}
       </div>

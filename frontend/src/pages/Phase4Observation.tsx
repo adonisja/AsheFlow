@@ -145,7 +145,7 @@ export default function Phase4Observation() {
                 <CheckCircle2 className="w-14 h-14 mx-auto text-success" />
                 <p className="text-xl font-bold text-success">Passed</p>
                 <p className="text-sm text-muted-foreground">
-                  Score: {submitResult.score.toFixed(1)}% — {trainee?.name} has completed all 4 phases of training.
+                  Score: {submitResult.score.toFixed(1)}%. {trainee?.name} has completed all 4 phases of training.
                 </p>
               </>
             ) : (
@@ -153,7 +153,7 @@ export default function Phase4Observation() {
                 <AlertTriangle className="w-14 h-14 mx-auto text-danger" />
                 <p className="text-xl font-bold text-danger">Did Not Pass</p>
                 <p className="text-sm text-muted-foreground">
-                  Score: {submitResult.score.toFixed(1)}% — A remediation session has been scheduled.
+                  Score: {submitResult.score.toFixed(1)}%. A remediation session has been scheduled.
                   Management has been notified.
                 </p>
                 {submitResult.failed.length > 0 && (
@@ -196,7 +196,7 @@ export default function Phase4Observation() {
           </div>
           <div>
             <p className={`text-sm font-semibold ${scorePreview.would_pass ? 'text-success' : 'text-warning'}`}>
-              {scorePreview.would_pass ? 'Would pass at current state' : 'Would not pass — more items needed'}
+              {scorePreview.would_pass ? 'Would pass at current state' : 'Would not pass. More items needed'}
             </p>
             <p className="text-xs text-muted-foreground">
               {scorePreview.passed_mandatory}/{scorePreview.total_mandatory} mandatory items passed

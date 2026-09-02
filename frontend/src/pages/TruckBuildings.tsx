@@ -74,7 +74,7 @@ function StopRow({ stop }: { stop: TruckBuildingStop }) {
 
         {rejected && (
           <p className="mt-1 text-xs text-warning">
-            Address not found{p?.geo_message ? ` — ${p.geo_message}` : ''}. Edit it to retry.
+            Address not found{p?.geo_message ? `: ${p.geo_message}` : ''}. Edit it to retry.
           </p>
         )}
       </div>
@@ -175,7 +175,7 @@ export default function TruckBuildings() {
     <div className="space-y-4">
       <SectionHeader
         title="Buildings on my truck"
-        description="What your crew is walking into today — and what nobody has told us yet."
+        description="What your crew is walking into today, and what nobody has told us yet."
       />
 
       <div className="flex items-center gap-2">
