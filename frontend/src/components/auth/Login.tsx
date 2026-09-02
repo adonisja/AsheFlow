@@ -12,7 +12,18 @@ export default function Login() {
   const [newPassword,            setNewPassword]            = useState('');
   const [error,                  setError]                  = useState('');
   const [successMsg,             setSuccessMsg]             = useState('');
-  const [isNewPasswordRequired,  setIsNewPasswordRequired]  = useState(false);
+  /* ADR-362 — the step sign-in stopped on, if any.
+     This was a single `isNewPasswordRequired` boolean plus a catch-all that
+     rendered `Action required: CONFIRM_SIGN_IN_WITH_TOTP_CODE` and went no
+     further: a dead end for every challenge except the one it knew. */
+  const [challengeStep, setChallengeStep] = useState<
+    | 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED'
+    | 'CONFIRM_SIGN_IN_WITH_TOTP_CODE'
+    | 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE'
+    | 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION'
+    | null
+  >(null);
+  const [mfaOptions, setMfaOptions] = useState<string[]>([]);
   const [showPassword,           setShowPassword]           = useState(false);
   const [showNewPassword,        setShowNewPassword]        = useState(false);
 
@@ -37,34 +48,80 @@ export default function Login() {
     setError('');
     setSuccessMsg('');
 
+    /* Read whatever step Amplify reports and put the matching field on screen.
+       Amplify chains: choosing a factor resolves to the challenge for its code,
+       so this runs after confirmSignIn too. */
+    const advance = (response: { isSignedIn: boolean; nextStep?: { signInStep?: string; allowedMFATypes?: string[] } }) => {
+      const step = response.nextStep?.signInStep;
+      if (response.isSignedIn) { setChallengeStep(null); return checkAuth(); }
+
+      switch (step) {
+        case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED':
+          setChallengeStep(step);
+          setSuccessMsg('You are logging in with a temporary password. Please set a new permanent password.');
+          return;
+        case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE':
+          setChallengeStep(step);
+          setSuccessMsg('Enter the 6-digit code from your authenticator app.');
+          return;
+        case 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE':
+          setChallengeStep(step);
+          setSuccessMsg('We emailed you a sign-in code.');
+          return;
+        case 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION':
+          setChallengeStep(step);
+          setMfaOptions(response.nextStep?.allowedMFATypes ?? []);
+          setSuccessMsg('Choose how you want to confirm it is you.');
+          return;
+        default:
+          // Still a catch-all, but it now names a step nobody has implemented
+          // rather than one that was simply never handled.
+          setError(
+            step
+              ? `This account needs a sign-in step this app does not support yet (${step}). Contact your admin.`
+              : 'Sign in did not complete. Please try again.',
+          );
+      }
+    };
+
     try {
-      if (isNewPasswordRequired) {
-        const response = await confirmSignIn({ challengeResponse: newPassword });
-        if (response.isSignedIn) {
-          await checkAuth();
-        } else {
-          setError(`Action required: ${response.nextStep?.signInStep}`);
-        }
+      if (challengeStep) {
+        // One field serves every challenge: a new password, a 6-digit code, or
+        // a chosen factor. Amplify takes them all as challengeResponse.
+        await advance(await confirmSignIn({ challengeResponse: newPassword }));
+        setNewPassword('');
       } else {
-        const response = await signIn({
+        await advance(await signIn({
           username,
           password,
           options: { authFlowType: 'USER_PASSWORD_AUTH' },
-        });
-
-        if (response.nextStep?.signInStep === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') {
-          setIsNewPasswordRequired(true);
-          setSuccessMsg('You are logging in with a temporary password. Please set a new permanent password.');
-        } else if (response.isSignedIn) {
-          await checkAuth();
-        } else {
-          setError(`Action required: ${response.nextStep?.signInStep}`);
-        }
+        }));
       }
     } catch (err: any) {
       setError(err.message || 'Sign in failed. Check your credentials.');
     }
   };
+
+  const isNewPassword = challengeStep === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED';
+  const COPY: Record<string, { heading: string; sub: string; label: string; submit: string }> = {
+    CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED: {
+      heading: 'Update Password', sub: 'A new password is required to continue',
+      label: 'New Password', submit: 'Set new password',
+    },
+    CONFIRM_SIGN_IN_WITH_TOTP_CODE: {
+      heading: 'Enter your code', sub: 'From your authenticator app',
+      label: 'Authentication code', submit: 'Verify',
+    },
+    CONFIRM_SIGN_IN_WITH_EMAIL_CODE: {
+      heading: 'Check your email', sub: 'We sent you a sign-in code',
+      label: 'Emailed code', submit: 'Verify',
+    },
+    CONTINUE_SIGN_IN_WITH_MFA_SELECTION: {
+      heading: 'Choose a method', sub: 'How would you like to confirm it is you?',
+      label: 'Method', submit: 'Continue',
+    },
+  };
+  const copy = challengeStep ? COPY[challengeStep] : null;
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4 relative overflow-hidden bg-background">
@@ -94,12 +151,10 @@ export default function Login() {
 
         <div className="card-elevated p-8 backdrop-blur-sm bg-card/90">
           <h2 className="text-xl font-semibold text-center text-foreground mb-1">
-            {isNewPasswordRequired ? 'Update Password' : 'Welcome back'}
+            {copy ? copy.heading : 'Welcome back'}
           </h2>
           <p className="text-subtle text-center mb-8">
-            {isNewPasswordRequired
-              ? 'A new password is required to continue'
-              : 'Sign in to your AsheFlow account'}
+            {copy ? copy.sub : 'Sign in to your AsheFlow account'}
           </p>
 
           {error && (
@@ -115,28 +170,56 @@ export default function Login() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {isNewPasswordRequired ? (
+            {challengeStep === 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION' ? (
+              /* A choice between two factors is a pair of buttons, not a text
+                 field the user has to guess the spelling of. */
+              <div className="space-y-2">
+                {mfaOptions.map(opt => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => { setNewPassword(opt); }}
+                    className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
+                      newPassword === opt
+                        ? 'border-primary bg-primary/5 text-foreground'
+                        : 'border-border hover:bg-accent text-foreground'
+                    }`}
+                  >
+                    {opt === 'TOTP' ? 'Authenticator app' : opt === 'EMAIL' ? 'Emailed code' : opt}
+                  </button>
+                ))}
+              </div>
+            ) : challengeStep ? (
               <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">New Password</label>
+                <label className="block text-sm font-medium text-foreground mb-1.5">{copy!.label}</label>
                 <div className="relative">
                   {/* Deliberately no placeholder: a password input masks its value with
                       bullets, so a bullet PLACEHOLDER is indistinguishable from an
                       already-entered password — the user cannot tell if the field is
                       empty. Worse in dark mode, where the two sit closer in luminance. */}
+                  {/* A one-time code is not a secret to hide: masking it stops
+                      the user checking what they typed, and the eye toggle is
+                      noise. autoComplete="one-time-code" lets the browser and
+                      iOS offer it from the email or authenticator. */}
                   <input
-                    type={showNewPassword ? 'text' : 'password'}
+                    type={isNewPassword ? (showNewPassword ? 'text' : 'password') : 'text'}
+                    inputMode={isNewPassword ? undefined : 'numeric'}
+                    autoComplete={isNewPassword ? 'new-password' : 'one-time-code'}
+                    autoFocus
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
                     required
-                    className="input-field pr-10"
+                    className={isNewPassword ? 'input-field pr-10' : 'input-field'}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowNewPassword(v => !v)}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+                  {isNewPassword && (
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(v => !v)}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -177,12 +260,12 @@ export default function Login() {
             )}
 
             <button type="submit" className="btn-primary w-full mt-2">
-              {isNewPasswordRequired ? 'Set new password' : 'Sign in'}
+              {copy ? copy.submit : 'Sign in'}
             </button>
           </form>
 
           {/* Federation — for employees whose Cognito account is linked to Discord/Google */}
-          {!isNewPasswordRequired && (
+          {!challengeStep && (
             <div className="mt-8">
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
