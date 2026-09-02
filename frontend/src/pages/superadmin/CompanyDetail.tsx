@@ -127,7 +127,7 @@ interface ConfigFieldMeta {
 const CONFIG_SECTIONS: { heading: string; description?: string; fields: ConfigFieldMeta[] }[] = [
   {
     heading: 'Shift Timing',
-    description: 'Optional — used by check-in and scheduling features.',
+    description: 'Optional. Used by check-in and scheduling features.',
     fields: [
       { key: 'shift_start',   label: 'Shift Start',    type: 'time' },
       { key: 'shift_end',     label: 'Shift End',      type: 'time' },
@@ -175,7 +175,7 @@ const CONFIG_SECTIONS: { heading: string; description?: string; fields: ConfigFi
   {
     heading: 'Route Sort Tuning',
     description:
-      'Advanced. Blank means the algorithm default — these are not required, and a company ' +
+      'Advanced. Blank means the algorithm default. These are not required, and a company ' +
       'that never touches them sorts exactly as before. Change one at a time and read Sort ' +
       'Metrics before and after; the telemetry records which values produced which routes.',
     fields: [
@@ -418,7 +418,7 @@ function OperatingModeCard({
           <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
             <li>{copy.stops}</li>
             <li>{copy.keeps}</li>
-            <li><strong className="text-foreground">Nothing is deleted.</strong> Records from the other mode are kept and simply stop appearing.</li>
+            <li><strong className="text-foreground">Nothing is deleted.</strong> Records from the other mode are kept, and stop appearing.</li>
           </ul>
 
           {copy.warn && (
@@ -726,7 +726,7 @@ function EmployeeCard({ companyId }: { companyId: string }) {
             {summary.admins.length === 0 ? (
               <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/5 border border-warning/20">
                 <UserX className="w-4 h-4 text-warning shrink-0" />
-                <p className="text-sm text-warning">No admin bootstrapped yet — use the Bootstrap Admin action from the companies list.</p>
+                <p className="text-sm text-warning">No admin bootstrapped yet. Use the Bootstrap Admin action from the companies list.</p>
               </div>
             ) : (
               <div className="space-y-2">

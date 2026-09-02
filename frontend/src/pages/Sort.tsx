@@ -399,7 +399,7 @@ function ManifestUploadPanel({
         setPhase('ready');
         onReady(today);
       } else if (data.status === 'failed') {
-        setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
+        setErrorMsg(data.failed_reason ?? 'Enrichment failed. Re-upload, or contact your admin.');
         setPhase('error');
         setExpanded(true);
       }
@@ -437,7 +437,7 @@ function ManifestUploadPanel({
           if (!hubId) onReady(sortDate);
         } else if (data.status === 'failed') {
           stopPoll();
-          setErrorMsg(data.failed_reason ?? 'Enrichment failed — re-upload or contact your admin.');
+          setErrorMsg(data.failed_reason ?? 'Enrichment failed. Re-upload, or contact your admin.');
           setPhase('error');
         }
       } catch {
@@ -511,8 +511,8 @@ function ManifestUploadPanel({
       // A hub never runs the station sort, so "run sort below" would send the
       // dispatcher to a control that does nothing for this manifest (ADR-274 D15).
       hubTruckId
-        ? `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — the hub crew can commit their route sort now.`
-        : `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''} — run sort below.`
+        ? `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''}. The hub crew can commit their route sort now.`
+        : `${packageCount.toLocaleString()} packages ready${failedCount > 0 ? ` · ${failedCount} failed geocoding` : ''}. Run sort below.`
     ) :
                             (errorMsg ?? 'Upload failed.');
 
@@ -696,7 +696,7 @@ function ManifestUploadPanel({
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 {packageCount.toLocaleString()} packages enriched and ready.
                 {failedCount > 0 && (
-                  <span className="text-warning font-normal">({failedCount} failed geocoding — will be dropped from sort.)</span>
+                  <span className="text-warning font-normal">({failedCount} failed geocoding, and will be dropped from sort.)</span>
                 )}
               </div>
               {warnings.length > 0 && warnings.map((w, i) => (
@@ -890,7 +890,7 @@ function ManifestSortPanel({
     } else if (data.status === 'error') {
       const SENTINEL: Record<string, string> = {
         internal_error:    'Zone assignment failed due to an unexpected error. Retry or check worker logs.',
-        worker_unreachable: 'Sort worker did not pick up the task — Celery may be down. Contact your admin.',
+        worker_unreachable: 'Sort worker did not pick up the task. Celery may be down. Contact your admin.',
       };
       const raw = data.detail ?? '';
       setError(SENTINEL[raw] ?? (raw || 'Sort failed.'));
@@ -1006,7 +1006,7 @@ function ManifestSortPanel({
     : '';
 
   const headerSubtext =
-    phase === 'idle'         ? (manifestReady ? 'Manifest ready — assign packages to truck zones.' : 'Upload a manifest first to enable zone sort.')
+    phase === 'idle'         ? (manifestReady ? 'Manifest ready. Assign packages to truck zones.' : 'Upload a manifest first to enable zone sort.')
     : phase === 'running'    ? 'Assigning totes to truck zones…'
     : phase === 'done'       ? `Zones created: ${result?.zones_created ?? 0} · ${result?.package_count.toLocaleString()} packages sorted.${doneExtras ? ` · ${doneExtras}` : ''}`
     : (error ?? 'Sort failed.');
@@ -1195,7 +1195,7 @@ function CrewStationView({ today }: { today: string }) {
       <SectionHeader
         eyebrow="Station Loading"
         title="Tote check-off"
-        description={`Check your truck's totes onto the truck as they are staged — ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
+        description={`Check your truck's totes onto the truck as they are staged. ${new Date(today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`}
         actions={
           <button onClick={check} className="btn-ghost flex items-center gap-1.5 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
