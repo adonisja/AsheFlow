@@ -44,22 +44,27 @@ def create_employee_relationship(
         HTTPException(400): If an employee attempts to relate to themselves.
         HTTPException(409): If a limit is exceeded or the relationship already exists.
     """
-    # How many favs each role may hold, per target role (ADR-256).
+    # How many favs each role may hold, per target role (ADR-353, superseding the
+    # ADR-256 table).
     #
-    # A missing key means ZERO, not unlimited — the lookup below defaults to 0. The
-    # gaps are deliberate:
-    #   driver→driver, captain→captain: one per truck, so the preference is meaningless.
-    #   trainer→walker, walker→trainer: a trainer no longer supervises walkers on the
-    #     truck (D5 moved route-lead authority to the captain), so neither side has
-    #     the contact that made the preference mean anything.
-    #   walker→walker is 1, down from 2 — a staffing-constraint call, not a
-    #     hierarchy one. Existing rows above the cap are not deleted; they simply
-    #     block new ones.
+    # A missing key means ZERO, not unlimited — the lookup below defaults to 0.
+    # The two remaining gaps are deliberate and are NOT oversights:
+    #   driver→driver, captain→captain: one per truck, so the preference is
+    #     meaningless (ADR-256's reasoning, unchanged).
+    #   walker→trainer: the two roles rarely affect each other's day, and the pair
+    #     is not needed by the tridirectional trio (ADR-353 D2).
+    #
+    # NAMING THE GAPS MATTERS. ADR-256 removed trainer→walker for a defensible
+    # reason and did not notice that perform_tridirectional_check required it —
+    # the bonus became unreachable and stayed that way, silently. A cap of 0 is a
+    # decision about every consumer of that pair, not just about the UI.
+    #
+    # Existing rows above a cap are not deleted; caps gate NEW rows only.
     FAV_LIMITS = {
-        "driver":  {"driver": 0, "captain": 1, "trainer": 1, "walker": 2},
-        "captain": {"driver": 1, "captain": 0, "trainer": 1, "walker": 2},
-        "trainer": {"driver": 1, "captain": 1},
-        "walker":  {"driver": 1, "captain": 1, "walker": 1},
+        "driver":  {"driver": 0, "captain": 2, "trainer": 1, "walker": 2},
+        "captain": {"driver": 2, "captain": 0, "trainer": 1, "walker": 2},
+        "trainer": {"driver": 1, "captain": 1, "walker": 1},
+        "walker":  {"driver": 2, "captain": 2, "walker": 1},
     }
 
     # Ownership — field staff can only create relationships for themselves
