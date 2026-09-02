@@ -68,17 +68,50 @@ PATTERNS: dict[str, re.Pattern] = {
 }
 
 
-def _is_comment(stripped: str) -> bool:
-    return stripped.startswith(("//", "*", "/*", "{/*")) or stripped.endswith("*/}")
+def _comment_lines(text: str) -> set[int]:
+    """1-based line numbers falling inside a comment.
+
+    Tracking /* */ state matters more than it looks. Matching only lines that
+    START with a comment marker misses every continuation line of a block
+    comment whose body is not asterisk-prefixed:
+
+        /* Gates the Add button. Adding someone who is off, without
+           speaking to them, schedules a shift they never agreed to.   <-- missed
+         */
+
+    That single gap accounted for 78 of 297 baselined instances, and made
+    DispatchDashboard.tsx look like the worst file in the codebase (31) when it
+    actually has 5. Nearly every one was a prose em dash in an explanation,
+    which is exactly what this rule does not govern.
+    """
+    inside: set[int] = set()
+    in_block = False
+    for num, line in enumerate(text.split("\n"), 1):
+        stripped = line.strip()
+        if in_block:
+            inside.add(num)
+            if "*/" in line:
+                in_block = False
+            continue
+        # Strip string literals first: a "/*" inside a string opens nothing.
+        probe = re.sub(r"\"[^\"]*\"|'[^']*'|`[^`]*`", "", line)
+        if "/*" in probe and "*/" not in probe.split("/*", 1)[1]:
+            inside.add(num)
+            in_block = True
+        elif stripped.startswith(("//", "/*", "*", "{/*")) or stripped.endswith("*/}"):
+            inside.add(num)
+    return inside
 
 
 def scan() -> list[tuple[str, int, str, str]]:
     found = []
     for path in sorted(SRC.rglob("*.tsx")) + sorted(SRC.rglob("*.ts")):
         rel = str(path.relative_to(ROOT))
-        for num, line in enumerate(path.read_text(errors="ignore").split("\n"), 1):
+        text = path.read_text(errors="ignore")
+        commented = _comment_lines(text)
+        for num, line in enumerate(text.split("\n"), 1):
             stripped = line.strip()
-            if _is_comment(stripped):
+            if num in commented:
                 continue
             probe = VALUE_GLOSS.sub("", TABULAR.sub("", line))
             if "className" in probe:
