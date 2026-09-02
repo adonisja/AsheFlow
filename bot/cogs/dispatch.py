@@ -244,11 +244,23 @@ def _captain_lines(trucks_summary) -> list[str]:
     return lines
 
 
-def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> discord.Embed:
+def _build_drivers_chat_embed(
+    trucks_data: list[dict], dispatch_date: str,
+) -> tuple[discord.Embed, bool]:
     """Embed posted to #drivers-chat after finalization.
 
     Columns: Truck | Driver | Crew | Anchor Point
     Anchor Point is the truck's stored initial_anchor_display_address.
+
+    Returns (embed, has_trucks). ADR-334 D2 — the BUILDER reports emptiness
+    rather than the caller inferring it from a representation detail. With no
+    trucks the loop below never runs and the embed still carries a header row
+    and a separator, so it posts "Dispatch Finalized" above an empty table: a
+    green tick over nothing, which reads as a successful dispatch of zero
+    trucks rather than as a dispatch that produced nothing.
+
+    Testing `embed.fields` here would be the ADR-334 bug verbatim — this
+    builder renders into `description` and never calls `add_field`.
     """
     embed = discord.Embed(
         title=f"Dispatch Finalized — {dispatch_date}",
@@ -285,7 +297,7 @@ def _build_drivers_chat_embed(trucks_data: list[dict], dispatch_date: str) -> di
 
     embed.description = "\n".join(rows)
     embed.set_footer(text="Full crew details in each truck's channel.")
-    return embed
+    return embed, bool(trucks_data)
 
 
 # ---------------------------------------------------------------------------
@@ -611,12 +623,16 @@ class DispatchCog(commands.Cog, name="Dispatch"):
 
         drivers_channel = guild.get_channel(cfg.drivers_channel_id) if cfg.drivers_channel_id else None
         if drivers_channel:
-            await self._upsert_summary(
-                channel=drivers_channel,
-                embed=_build_drivers_chat_embed(day, dispatch_date),
-                message_id=recorded.get("drivers_summary_message_id"),
-                dispatch_date=dispatch_date, kind="drivers",
-            )
+            # ADR-327 D1 / ADR-334 D2 — ask the builder, same as the trainers
+            # and captains posts below.
+            embed, has_trucks = _build_drivers_chat_embed(day, dispatch_date)
+            if has_trucks:
+                await self._upsert_summary(
+                    channel=drivers_channel,
+                    embed=embed,
+                    message_id=recorded.get("drivers_summary_message_id"),
+                    dispatch_date=dispatch_date, kind="drivers",
+                )
 
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None
         if trainers_channel:
@@ -873,13 +889,15 @@ class DispatchCog(commands.Cog, name="Dispatch"):
         except Exception as e:
             logger.warning("finalize_assignments: could not read day-summary receipts: %s", e)
 
-        await self._upsert_summary(
-            channel=drivers_channel,
-            embed=_build_drivers_chat_embed(day_summary, dispatch_date),
-            message_id=recorded.get("drivers_summary_message_id"),
-            dispatch_date=dispatch_date,
-            kind="drivers",
-        )
+        embed, has_trucks = _build_drivers_chat_embed(day_summary, dispatch_date)
+        if has_trucks:
+            await self._upsert_summary(
+                channel=drivers_channel,
+                embed=embed,
+                message_id=recorded.get("drivers_summary_message_id"),
+                dispatch_date=dispatch_date,
+                kind="drivers",
+            )
 
         # Post trainer↔trainee pairings to #trainers-chat if configured
         trainers_channel = guild.get_channel(cfg.trainers_channel_id) if cfg.trainers_channel_id else None

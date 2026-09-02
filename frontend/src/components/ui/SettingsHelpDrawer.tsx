@@ -9,27 +9,98 @@ import { motion, AnimatePresence } from 'framer-motion';
 interface HelpEntry {
   title: string;
   summary: string;
-  detail: string;
+  /** Plain text, or ReactNode when a rule needs emphasis to be legible.
+   *
+   *  Two of these entries turn on a single word — "the pin does NOT apply", "on
+   *  the specified weekdays ONLY" — and a dispatcher skimming a paragraph reads
+   *  straight past it. Where that word carries the rule, it is marked. */
+  detail: string | React.ReactNode;
   example?: string;
-  note?: string;
+  note?: string | React.ReactNode;
+  /** Notes default to warning amber. `danger` is for a note describing something
+   *  that silently STOPS working — a deactivated crew pin looks identical to one
+   *  that never existed, so it earns the stronger colour. */
+  noteTone?: 'warning' | 'danger';
 }
 
 const HELP_CONTENT: Record<string, HelpEntry> = {
   crew_pin: {
     title: 'Crew Pins',
-    summary: 'A pinned crew rides together every day the driver is dispatched.',
-    detail:
-      'A favourite only makes a truck more likely. A pin is applied before assignment runs, so the members are placed on the driver\'s truck directly. The driver is the anchor: the crew follows whichever truck the driver is given. If the driver is not dispatched that day, the pin does not apply and the members are assigned normally.',
-    example: 'Pin a captain, a trainer and three walkers to one driver. They ride together whenever that driver works.',
-    note: 'A ban between two members deactivates the pin automatically. The roster is kept so you can reactivate it once the conflict is resolved.',
+    summary: 'A pinned crew works the same truck every day that the driver is dispatched.',
+    detail: (
+      <>
+        <p>
+          Pins are applied immediately after driver assignment runs, so the
+          members are placed on the driver's truck directly.
+        </p>
+        <p className="font-semibold text-foreground">The driver is the anchor</p>
+        <p>
+          If the driver is off that day, then the pin{' '}
+          <span className="text-danger font-semibold">does not</span> apply and
+          members are dispatched normally.
+        </p>
+      </>
+    ),
+    example:
+      'Pin a Captain, Trainer and two Walkers to a Driver. They always land on the truck that driver is assigned to, every time that driver is on shift.',
+    // Danger, not warning: a deactivated pin looks exactly like one that was
+    // never created, so the dispatcher gets no signal that a crew stopped
+    // being a crew.
+    noteTone: 'danger',
+    note: (
+      <>
+        <p>A ban between any two members deactivates this pin automatically.</p>
+        <p className="mt-1.5">
+          The roster is kept so you can reactivate the pin once the conflict is
+          resolved and the ban is removed.
+        </p>
+      </>
+    ),
   },
   truck_pin: {
     title: 'Truck Pins',
-    summary: 'Holds one person to one truck on the days they work it.',
-    detail:
-      'A crew pin follows a driver. A truck pin holds someone to the truck itself, on named weekdays only. On any other day the pin does nothing and the person is assigned normally. A person can hold a crew pin or a truck pin, not both.',
-    example: 'Tuesday and Thursday on Truck 4. The rest of the week is ordinary dispatch.',
-    note: 'A pin does not reserve the truck. If the pinned person is off, the truck is dispatched as usual.',
+    summary: 'Assigns the crew member to the specified truck on the days indicated.',
+    detail: (
+      <>
+        <p>
+          A truck pin holds the crew member to the truck itself, on the
+          specified weekdays{' '}
+          <span className="font-semibold text-foreground">only</span>.
+        </p>
+        <p>On any other day the person is assigned normally.</p>
+      </>
+    ),
+    example:
+      'Tom is pinned to the Hub on Tuesdays and Thursdays. If he is on shift Friday or Sunday, he is dispatched by the regular rules.',
+    note: (
+      <>
+        <p>A person can hold a crew pin or a truck pin but not both.</p>
+        <p className="mt-1.5">
+          A pin does not reserve the truck. If the pinned person is off, then
+          the truck is dispatched as usual.
+        </p>
+      </>
+    ),
+  },
+  separation: {
+    title: 'Separations',
+    summary: 'Keeps two people off the same crew, without telling either of them.',
+    detail: (
+      <>
+        <p>
+          Effectively works like a ban: dispatch will not place these two
+          members together.
+        </p>
+        <p>
+          The difference is that a separation is your decision about both
+          members, so it does not appear in either member's list and does not
+          use up either of their two bans.
+        </p>
+      </>
+    ),
+    example:
+      "Two walkers who feed each other's worst habits on a route. Separate them, and neither sees anything change.",
+    note: 'Only dispatch, management and admin can see separations. If either person is in a pinned crew with the other, that pin is deactivated automatically.',
   },
   shift_start: {
     title: 'Shift Start Time',
@@ -381,9 +452,9 @@ export default function SettingsHelpDrawer({ fieldKey, onClose }: SettingsHelpDr
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                       How it works
                     </p>
-                    <p className="text-sm text-foreground leading-relaxed">
+                    <div className="text-sm text-foreground leading-relaxed space-y-2">
                       {entry.detail}
-                    </p>
+                    </div>
                   </div>
 
                   {/* Example */}
@@ -398,11 +469,24 @@ export default function SettingsHelpDrawer({ fieldKey, onClose }: SettingsHelpDr
                     </div>
                   )}
 
-                  {/* Note */}
+                  {/* Note. Tone is per-entry: a note about something that
+                      silently stops working reads as advice in amber. */}
                   {entry.note && (
-                    <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
-                      <span className="text-warning text-xs font-bold mt-0.5">Note</span>
-                      <p className="text-xs text-foreground leading-relaxed">{entry.note}</p>
+                    <div
+                      className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 ${
+                        entry.noteTone === 'danger'
+                          ? 'border-danger/30 bg-danger/5'
+                          : 'border-warning/30 bg-warning/5'
+                      }`}
+                    >
+                      <span
+                        className={`text-xs font-bold mt-0.5 shrink-0 ${
+                          entry.noteTone === 'danger' ? 'text-danger' : 'text-warning'
+                        }`}
+                      >
+                        Note
+                      </span>
+                      <div className="text-xs text-foreground leading-relaxed">{entry.note}</div>
                     </div>
                   )}
                 </div>

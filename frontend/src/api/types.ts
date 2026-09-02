@@ -643,7 +643,12 @@ export interface EmployeeRelationship {
   id: string;
   employee_id: string;
   target_employee_id: string;
-  relationship_type: 'fav' | 'ban';
+  /** 'sep' is a dispatch separation (ADR-361), not something either employee
+   *  asserted. It reaches the client from ONE endpoint: the admin aggregate
+   *  `GET /employee-relationships/`. The per-employee read excludes it, so a
+   *  field-facing screen never sees one. Anything counting preferences must
+   *  filter it out first — see the `prefs` memo in Preferences.tsx. */
+  relationship_type: 'fav' | 'ban' | 'sep';
 }
 
 // ---------------------------------------------------------------------------
@@ -2593,4 +2598,17 @@ export interface PeriodExtras {
   /** False for driver/captain: blocks come from the stop's executor and a
    *  driver does not carry, so HIDE the panel rather than render it empty. */
   blocks_apply: boolean;
+}
+
+/** A dispatch separation (ADR-361).
+ *
+ *  Two people dispatch will not pair. Same hard block as a ban, but it belongs
+ *  to dispatch rather than to either employee, so it never appears in either of
+ *  their preference lists and does not consume their own 2-ban allowance. */
+export interface Separation {
+  id: string;
+  employee_id: string;
+  target_employee_id: string;
+  employee_name: string | null;
+  target_employee_name: string | null;
 }

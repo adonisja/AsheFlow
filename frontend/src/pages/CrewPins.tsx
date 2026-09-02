@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse, HelpCircle } from 'lucide-react';
+import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse, HelpCircle, UserMinus } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import SelectMenu, { type SelectOption } from '../components/ui/SelectMenu';
 import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
-import type { CrewPin, Employee, Truck, TruckPin, Weekday } from '../api/types';
+import type { CrewPin, Employee, Separation, Truck, TruckPin, Weekday } from '../api/types';
 
 /** Crew pins (ADR-357).
  *
@@ -121,6 +121,7 @@ function EmptyState({ icon, children }: { icon: ReactNode; children: ReactNode }
 export default function CrewPins() {
   const [pins, setPins] = useState<CrewPin[]>([]);
   const [truckPins, setTruckPins] = useState<TruckPin[]>([]);
+  const [separations, setSeparations] = useState<Separation[]>([]);
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,14 +132,16 @@ export default function CrewPins() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [pinRes, truckPinRes, empRes, truckRes] = await Promise.all([
+      const [pinRes, truckPinRes, sepRes, empRes, truckRes] = await Promise.all([
         axiosClient.get<CrewPin[]>('/crew-pins'),
         axiosClient.get<TruckPin[]>('/truck-pins'),
+        axiosClient.get<Separation[]>('/separations/'),
         axiosClient.get<Employee[]>('/employees/'),
         axiosClient.get<Truck[]>('/trucks/'),
       ]);
       setPins(pinRes.data);
       setTruckPins(truckPinRes.data);
+      setSeparations(sepRes.data);
       setEmployees(empRes.data.filter(e => e.is_active));
       setTrucks(truckRes.data);
       setError(null);
@@ -184,6 +187,15 @@ export default function CrewPins() {
       await load();
     } catch (err: unknown) {
       setError(errorText(err, 'Could not delete the truck pin.'));
+    }
+  };
+
+  const removeSeparation = async (sep: Separation) => {
+    try {
+      await axiosClient.delete(`/separations/${sep.id}`);
+      await load();
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not lift the separation.'));
     }
   };
 
@@ -257,6 +269,18 @@ export default function CrewPins() {
         employees={employees}
         crewPinnedIds={crewPinnedIds}
         onDelete={removeTruckPin}
+        onSaved={load}
+        onError={setError}
+      />
+
+      {/* Last of the three, and deliberately so: the two pin axes are what a
+          dispatcher comes to this page to do, and a separation is the rarer,
+          heavier action. Reading order matches frequency of use. */}
+      <SeparationSection
+        onHelp={setHelpKey}
+        separations={separations}
+        employees={employees}
+        onDelete={removeSeparation}
         onSaved={load}
         onError={setError}
       />
@@ -780,6 +804,226 @@ function TruckPinForm({
           className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Pin to truck'}
+        </button>
+        <button onClick={onCancel} className="px-3 py-2 rounded-lg border border-border text-sm">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── Separations (ADR-361) ──────────────────────────────────────────────────
+   The inverse of a pin, and deliberately the same visual language: a pin says
+   "always together", a separation says "never together", and a dispatcher
+   reading this page should see them as two settings of one dial rather than as
+   unrelated features.
+
+   One thing this section must carry that the pin sections do not: a separation
+   is INVISIBLE to both people in it. That is the whole point of the feature and
+   also its main hazard — a dispatcher who forgets it will read an odd roster as
+   a bug. So the invisibility is stated on the section itself, not left to the
+   help drawer, and the empty state says it too. */
+function SeparationSection({
+  separations, employees, onHelp, onSaved, onDelete, onError,
+}: {
+  separations: Separation[];
+  employees: Employee[];
+  onHelp: (k: string) => void;
+  onSaved: () => Promise<void> | void;
+  onDelete: (s: Separation) => void;
+  onError: (m: string) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+
+  const rows = useMemo(
+    () => separations
+      .slice()
+      .sort((a, b) =>
+        (a.employee_name ?? '').localeCompare(b.employee_name ?? '') ||
+        (a.target_employee_name ?? '').localeCompare(b.target_employee_name ?? '')),
+    [separations],
+  );
+
+  const roleOf = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of employees) m.set(e.id, e.role);
+    return m;
+  }, [employees]);
+
+  return (
+    <section className="space-y-4 pt-2">
+      <div className="border-t border-border pt-6">
+        <SectionHeader
+          icon={<UserMinus className="w-4 h-4" />}
+          title="Separations"
+          helpKey="separation"
+          onHelp={onHelp}
+          action={
+            <button
+              onClick={() => setAdding(true)}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium shadow-sm hover:opacity-90 transition-opacity"
+            >
+              <Plus className="w-4 h-4" /> Separate two people
+            </button>
+          }
+        />
+      </div>
+
+      {adding && (
+        <SeparationForm
+          employees={employees}
+          separations={separations}
+          onCancel={() => setAdding(false)}
+          onSaved={async () => { setAdding(false); await onSaved(); }}
+          onError={onError}
+        />
+      )}
+
+      {rows.length === 0 ? (
+        <EmptyState icon={<UserMinus className="w-5 h-5" />}>
+          No separations. Dispatch will pair anyone whose own bans allow it.
+        </EmptyState>
+      ) : (
+        <div className="grid gap-3">
+          {rows.map(sep => (
+            <div key={sep.id} className={CARD}>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                {/* Two chips either side of a "kept apart" marker. Reusing
+                    PersonChip keeps a separated pair reading like a crew roster
+                    with the relationship inverted, which is what it is. */}
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <PersonChip
+                    name={sep.employee_name ?? 'Unknown'}
+                    role={roleOf.get(sep.employee_id)}
+                  />
+                  <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <UserMinus className="w-3.5 h-3.5" />
+                    kept apart
+                  </span>
+                  <PersonChip
+                    name={sep.target_employee_name ?? 'Unknown'}
+                    role={roleOf.get(sep.target_employee_id)}
+                  />
+                </div>
+                <button
+                  onClick={() => onDelete(sep)}
+                  aria-label={`Lift the separation between ${sep.employee_name ?? 'this employee'} and ${sep.target_employee_name ?? 'the other'}`}
+                  className="grid place-items-center w-8 h-8 rounded-lg text-muted-foreground hover:bg-danger/15 hover:text-danger transition-colors shrink-0"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SeparationForm({
+  employees, separations, onCancel, onSaved, onError,
+}: {
+  employees: Employee[];
+  separations: Separation[];
+  onCancel: () => void;
+  onSaved: () => void;
+  onError: (m: string) => void;
+}) {
+  const [employeeId, setEmployeeId] = useState('');
+  const [targetId, setTargetId] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  /* Drivers included alongside the crew roles. A separation is about two people
+     never sharing a truck, and a driver shares a truck with everyone on it —
+     excluding them would leave out the pairing most worth preventing. */
+  const optionsFor = useCallback((other: string): SelectOption[] => {
+    const groups: [string, Employee[]][] = [
+      ['Drivers', employees.filter(e => e.role === 'driver')],
+      ...CREW_ROLE_ORDER.map(r => [
+        `${r.charAt(0).toUpperCase()}${r.slice(1)}s`,
+        employees.filter(e => e.role === r),
+      ] as [string, Employee[]]),
+    ];
+    // Already-separated pairs are disabled with a reason rather than hidden,
+    // matching the truck-pin picker: the server answers a duplicate with a 409,
+    // and a name that silently vanishes reads as a bug.
+    const paired = new Set<string>();
+    if (other) {
+      for (const s of separations) {
+        if (s.employee_id === other) paired.add(s.target_employee_id);
+        if (s.target_employee_id === other) paired.add(s.employee_id);
+      }
+    }
+    const out: SelectOption[] = [];
+    for (const [label, people] of groups) {
+      const list = people.filter(e => e.id !== other);
+      if (list.length === 0) continue;
+      out.push({ value: `header-${label}`, label, header: true });
+      for (const e of list.slice().sort((a, b) => a.name.localeCompare(b.name))) {
+        out.push({
+          value: e.id,
+          label: e.name,
+          disabled: paired.has(e.id),
+          hint: paired.has(e.id) ? 'already separated' : undefined,
+        });
+      }
+    }
+    return out;
+  }, [employees, separations]);
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await axiosClient.post('/separations/', {
+        employee_id: employeeId,
+        target_employee_id: targetId,
+      });
+      onSaved();
+    } catch (err: unknown) {
+      onError(errorText(err, 'Could not create the separation.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="border border-border rounded-xl p-4 space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Person
+          </label>
+          <SelectMenu
+            value={employeeId}
+            onChange={setEmployeeId}
+            placeholder="Select someone…"
+            ariaLabel="Person"
+            options={optionsFor(targetId)}
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">
+            Kept apart from
+          </label>
+          <SelectMenu
+            value={targetId}
+            onChange={setTargetId}
+            placeholder="Select someone…"
+            ariaLabel="Kept apart from"
+            options={optionsFor(employeeId)}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={submit}
+          disabled={saving || !employeeId || !targetId || employeeId === targetId}
+          className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Separate'}
         </button>
         <button onClick={onCancel} className="px-3 py-2 rounded-lg border border-border text-sm">
           Cancel

@@ -230,9 +230,14 @@ def get_employee_relationships(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own relationships.",
         )
+    # ADR-361 — a dispatch separation shares this table and sits in the same two
+    # columns as a ban, so without this it would come back here and be shown to
+    # the employee as though they had banned the other person. It is dispatch's
+    # decision, not theirs, and they are not told about it.
     return db.query(EmployeeRelationship).filter(
         EmployeeRelationship.employee_id == employee_id,
         EmployeeRelationship.company_id == caller.company_id,
+        EmployeeRelationship.relationship_type != "sep",
     ).all()
 
 @router.delete("/employee/{employee_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
@@ -257,9 +262,14 @@ def clear_employee_relationships(employee_id: UUID, db: Session = Depends(get_db
     # Snapshot before deleting: ADR-132 DP-3/DP-5 audited the sibling
     # `delete_employee_relationships` for exactly this (GDPR Art. 17); this
     # bulk-clear path was missed and deleted the same personal data silently.
+    # ADR-361 — "clear this employee's preferences" must not silently lift a
+    # dispatch separation that happens to have their id in employee_id. It is
+    # not one of their relationships; it survives, and is lifted from the
+    # separations surface by someone who can see it.
     doomed = db.query(EmployeeRelationship).filter(
         EmployeeRelationship.employee_id == employee_id,
         EmployeeRelationship.company_id == caller.company_id,
+        EmployeeRelationship.relationship_type != "sep",
     ).all()
     before = {
         "count": len(doomed),
@@ -295,6 +305,15 @@ def delete_employee_relationships(
     ).first()
     if not relationship:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
+
+    # ADR-361 — a separation is not a relationship the employee owns, even
+    # though their id is in employee_id. Without this the ownership check below
+    # PASSES for the source employee and they can lift a separation dispatch
+    # placed on them. 404 rather than 403: they are not told one exists.
+    if relationship.relationship_type == "sep":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found"
+        )
 
     if caller.role != "admin" and caller.id != relationship.employee_id:
         raise HTTPException(
