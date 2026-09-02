@@ -29,6 +29,12 @@ BASELINE = ROOT / "scripts" / "ui_prose_baseline.json"
 # A lone em dash between quotes is an empty-cell placeholder, not prose.
 TABULAR = re.compile(r"""['"]\s*—\s*['"]""")
 
+# A quoted VALUE followed by a dash and its gloss — `"07:00" — drivers must be
+# on-site by 7 AM` — is the same separator use one line down: a key and its
+# description, not two clauses joined. These render in a monospace box under an
+# "Example" heading, so they read as a legend rather than a sentence.
+VALUE_GLOSS = re.compile(r"""\\?['"][^'"]{1,40}\\?['"]\s+—\s""")
+
 PATTERNS: dict[str, re.Pattern] = {
     "em-dash": re.compile(r"—"),
     "delve": re.compile(r"\bdelve[sd]?\b", re.I),
@@ -59,7 +65,7 @@ def scan() -> list[tuple[str, int, str, str]]:
             if _is_comment(stripped):
                 continue
             # A className is markup, not copy.
-            probe = TABULAR.sub("", line)
+            probe = VALUE_GLOSS.sub("", TABULAR.sub("", line))
             if "className" in probe:
                 probe = re.sub(r'className=(\{[^}]*\}|"[^"]*")', "", probe)
             for name, pat in PATTERNS.items():

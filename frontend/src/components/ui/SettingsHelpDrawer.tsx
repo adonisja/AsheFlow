@@ -66,20 +66,20 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     detail:
       'When dispatch assignments are published to Discord, each employee receives a notification and is expected to confirm. If no response is received by this cutoff time, the assignment is treated as a pending rejection and flagged for reassignment. This allows dispatch to catch problems before routes depart.',
     example: '"09:00" — employees must confirm or reject before 9 AM. Unresponded assignments are flagged.',
-    note: 'Leave blank to disable the cutoff — assignments will remain "pending" indefinitely.',
+    note: 'Leave blank to disable the cutoff. Assignments then stay "pending" indefinitely.',
   },
   late_window_minutes: {
     title: 'Late Window',
     summary: 'Grace minutes past shift start before a crew arrival is marked “late.”',
     detail:
-      'Attendance is measured against max(shift start, when the AP was established) — so a station-caused late start (a late AP) shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
+      'Attendance is measured against max(shift start, when the AP was established). A station-caused late start (a late AP) therefore shifts everyone\'s clock later automatically, and on-time crew are never penalised for it. Within this window past that reference, an arrival is "present"; beyond it, "late" (still not NCNS).',
     example: '"20" — arrivals up to 20 min past the reference are on-time; later is late.',
   },
   ncns_cutoff_minutes: {
     title: 'NCNS Cutoff',
     summary: 'Minutes past shift start before an unaccounted crew member is a no-call-no-show.',
     detail:
-      'Measured from the same reference as the late window — max(shift start, AP established) — so it AUTO-EXTENDS on a late station AP (the rare Amazon/station-fault allowance; a captain can roll-call at the AP even before the driver "arrived"). Dispatch/admin can still override an individual with a manual roll-call. IMPORTANT: the NCNS cutoff must be set BEFORE any check-in deadline is accepted, and Check-In #1 can never be earlier than it — you can\'t require a check-in before crew attendance is even decided.',
+      'Measured from the same reference as the late window, max(shift start, AP established), so it AUTO-EXTENDS on a late station AP (the rare Amazon/station-fault allowance; a captain can roll-call at the AP even before the driver "arrived"). Dispatch/admin can still override an individual with a manual roll-call. IMPORTANT: the NCNS cutoff must be set BEFORE any check-in deadline is accepted, and Check-In #1 can never be earlier than it. A check-in cannot be required before crew attendance is decided.',
     example: '"60" — unaccounted crew are NCNS 60 min after shift start (later if the AP was late).',
     note: 'Set this first. The Check-in Deadlines editor is disabled until it exists.',
   },
@@ -87,7 +87,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     title: 'Check-in Deadlines',
     summary: 'Ordered mid-shift check-ins, each with its own deadline.',
     detail:
-      'Add check-ins one at a time; each is the next in sequence and its deadline must be LATER than the previous. Deadlines are minutes past shift start (shown as a clock time), anchored the same way as the NCNS cutoff — so Check-In #1 auto-extends on a late station AP too. Check-In #1 also carries the completed Crew Roster + uniform/cart-cover compliance to Dispatch, so its deadline must be at or after the NCNS cutoff (crew must be decided first). Remove from the end so the earlier deadlines keep their order.',
+      'Add check-ins one at a time; each is the next in sequence and its deadline must be LATER than the previous. Deadlines are minutes past shift start (shown as a clock time), anchored the same way as the NCNS cutoff, so Check-In #1 auto-extends on a late station AP too. Check-In #1 also carries the completed Crew Roster + uniform/cart-cover compliance to Dispatch, so its deadline must be at or after the NCNS cutoff (crew must be decided first). Remove from the end so the earlier deadlines keep their order.',
     example: 'NCNS 60 → Check-In #1 at 75 min, #2 at 180 min, #3 at 300 min.',
     note: 'Requires the NCNS cutoff to be set and saved first.',
   },
@@ -201,7 +201,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     title: 'Effort Time Factor',
     summary: 'Weight applied to time-based components when computing route effort scores.',
     detail:
-      'Controls how much the time spent on a route (total hours, stop duration) contributes to the final effort score. A value of 1.0 means time is the sole driver; 0.0 means time is ignored entirely. Combine with Effort Physical Factor — the two do not need to sum to 1.',
+      'Controls how much the time spent on a route (total hours, stop duration) contributes to the final effort score. A value of 1.0 means time is the sole driver; 0.0 means time is ignored entirely. Combine with Effort Physical Factor. The two do not need to sum to 1.',
     example: '"0.5" — time and physical effort contribute equally.',
   },
   effort_physical_factor: {
@@ -243,7 +243,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     title: 'Captains Channel ID',
     summary: "The Discord channel where the day's captain roster is posted.",
     detail:
-      'At finalize, each truck and its captain is posted here. If this is unset, no captain roster is posted — nothing else breaks.',
+      'At finalize, each truck and its captain is posted here. If this is unset, no captain roster is posted. Nothing else breaks.',
   },
   discord_general_channel_id: {
     title: 'General Channel ID',
@@ -297,7 +297,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
   },
   discord_role_captain: {
     title: 'Captain Role ID',
-    summary: 'Discord role ID for captains — the truck route leads.',
+    summary: 'Discord role ID for captains, the truck route leads.',
     detail:
       'Granted and revoked automatically on promotion to or from captain. Distinct from the Trainer role: a captain leads a truck, a trainer supervises a trainee. If unset, captain promotions log a warning and grant no Discord role.',
   },
