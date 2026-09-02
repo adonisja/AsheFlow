@@ -93,6 +93,49 @@ def test_the_empty_case_is_silent_not_a_nothing_to_report_post():
     assert "logger" in else_src, "the empty case should still be logged"
 
 
+def test_an_empty_drivers_embed_is_not_posted():
+    """The drivers table had the same hole the trainer embed did (ADR-334 D2).
+
+    With no trucks the row loop never runs, but the header row and separator
+    are already in `rows`, so the embed posts "Dispatch Finalized" over an
+    empty table -- a green tick that reads as a successful dispatch of zero
+    trucks rather than a dispatch that produced nothing.
+
+    Pinned at the BUILDER, because that is the ADR-334 lesson: the caller
+    cannot tell emptiness from a representation detail. Testing `embed.fields`
+    here would be permanently false -- this builder renders into `description`
+    and never calls add_field.
+    """
+    src = _bot_source("cogs/dispatch.py")
+    tree = ast.parse(src)
+    builder = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_build_drivers_chat_embed"
+    )
+    # Only the builder's OWN returns: it defines a nested `_row` helper whose
+    # return is a plain string, and ast.walk would descend into it.
+    nested = {
+        id(n) for fn in ast.walk(builder)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn is not builder
+        for n in ast.walk(fn)
+    }
+    returns = [
+        n for n in ast.walk(builder)
+        if isinstance(n, ast.Return) and id(n) not in nested
+    ]
+    assert returns, "_build_drivers_chat_embed no longer returns"
+    assert all(isinstance(r.value, ast.Tuple) for r in returns), (
+        "the builder must return (embed, has_trucks) so the caller does not have "
+        "to infer emptiness from the embed itself"
+    )
+
+    fn = _cog_finalize()
+    assert "has_trucks" in fn, (
+        "finalize_assignments ignores the builder's emptiness flag, so an empty "
+        "dispatch still posts a header-only table to #drivers-chat"
+    )
+
+
 # ── D2: edited in place, not stacked ─────────────────────────────────────────
 
 def test_both_summaries_go_through_the_upsert_not_a_bare_send():
