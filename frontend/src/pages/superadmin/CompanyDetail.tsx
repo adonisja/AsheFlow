@@ -6,6 +6,7 @@ import {
   ArrowLeft, Building2, Settings2, Save, RotateCcw,
   ShieldCheck, ShieldAlert, Pencil, X, Users, AlertTriangle,
   CheckCircle2, XCircle, UserCheck, UserX, Clock, Bot, PackageCheck, PackageX,
+  KeyRound,
 } from 'lucide-react';
 import axiosClient from '../../api/axiosClient';
 import ErrorBanner from '../../components/ui/ErrorBanner';
@@ -64,6 +65,9 @@ interface CompanyDetail {
   is_active: boolean;
   created_at: string;
   config: CompanyConfig | null;
+  /** ADR-364 — the Cognito app client this tenant's bot signs in as. Null for
+   *  a company created before ADR-364, or one that has no Discord bot. */
+  machine_client_id?: string | null;
 }
 
 interface AdminSummary {
@@ -968,6 +972,138 @@ function discordConfigToEditDraft(cfg: DiscordConfig): DiscordDraft {
   return d;
 }
 
+/** Bot credentials for one tenant (ADR-364).
+ *
+ *  The create-company flow shows these once, which covers a NEW tenant and
+ *  nothing else. Every company created before ADR-364 has no client and no way
+ *  to get one — this is that way, and it is also the recovery path when the
+ *  one-time secret is lost.
+ *
+ *  Sits beside the Discord card because that is what the credentials are for:
+ *  a tenant with no Discord bot never needs them. */
+function MachineClientCard({ detail, onProvisioned }: {
+  detail: CompanyDetail;
+  onProvisioned: (clientId: string) => void;
+}) {
+  const [secret, setSecret] = useState<string | null>(null);
+  const [clientId, setClientId] = useState<string | null>(detail.machine_client_id ?? null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const provision = async () => {
+    setBusy(true); setError(null);
+    try {
+      const res = await axiosClient.post<{ machine_client_id: string; machine_client_secret: string }>(
+        `/admin/companies/${detail.id}/machine-client`,
+      );
+      setClientId(res.data.machine_client_id);
+      setSecret(res.data.machine_client_secret);
+      onProvisioned(res.data.machine_client_id);
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not provision the bot credentials.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reveal = async () => {
+    setBusy(true); setError(null);
+    try {
+      const res = await axiosClient.get<{ machine_client_id: string; machine_client_secret: string }>(
+        `/admin/companies/${detail.id}/machine-client`,
+      );
+      setSecret(res.data.machine_client_secret);
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not read the bot credentials.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-accent shrink-0">
+          <KeyRound className="w-5 h-5 text-muted-foreground" />
+        </div>
+        <div className="min-w-0">
+          <p className="font-semibold text-foreground">Bot Credentials</p>
+          <p className="text-xs text-muted-foreground">
+            How this tenant's Discord bot signs in to the API.
+          </p>
+        </div>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+
+      {!clientId ? (
+        <>
+          <p className="text-sm text-muted-foreground">
+            No credentials yet. Provisioning creates a machine client scoped to
+            this company alone.
+          </p>
+          <button onClick={provision} disabled={busy} className="btn-primary text-sm px-4 py-2 disabled:opacity-50">
+            {busy ? 'Provisioning…' : 'Provision credentials'}
+          </button>
+        </>
+      ) : (
+        <>
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+              COGNITO_M2M_CLIENT_ID
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 text-xs bg-accent rounded-lg px-3 py-2 break-all">{clientId}</code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(clientId)}
+                className="text-xs px-2.5 py-2 rounded-lg border border-border hover:bg-accent shrink-0"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+              COGNITO_M2M_CLIENT_SECRET
+            </p>
+            {secret ? (
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-accent rounded-lg px-3 py-2 break-all">{secret}</code>
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard?.writeText(secret)}
+                  className="text-xs px-2.5 py-2 rounded-lg border border-border hover:bg-accent shrink-0"
+                >
+                  Copy
+                </button>
+              </div>
+            ) : (
+              /* Not shown until asked for. It is a live credential, and every
+                 reveal is audited — so it should be a deliberate click, not
+                 something sitting on screen behind whoever walks past. */
+              <button onClick={reveal} disabled={busy} className="text-sm px-3 py-2 rounded-lg border border-border hover:bg-accent disabled:opacity-50">
+                {busy ? 'Reading…' : 'Reveal secret'}
+              </button>
+            )}
+          </div>
+
+          <p className="text-[11px] text-muted-foreground">
+            Paste both into this tenant's bot environment, with
+            COGNITO_OAUTH_DOMAIN. Re-provisioning issues a new secret and
+            revokes the old one immediately.
+          </p>
+
+          <button onClick={provision} disabled={busy} className="text-xs text-muted-foreground hover:text-danger">
+            Re-provision (rotates the secret)
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function DiscordConfigCard({ companyId }: { companyId: string }) {
   const [cfg, setCfg] = useState<DiscordConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1258,7 +1394,13 @@ export default function CompanyDetailPage() {
         />
       )}
 
-      {/* 5. Discord integration */}
+      {/* 5. Bot credentials — beside Discord, because that is what they serve. */}
+      <MachineClientCard
+        detail={detail}
+        onProvisioned={id => setDetail(prev => prev ? { ...prev, machine_client_id: id } : prev)}
+      />
+
+      {/* 6. Discord integration */}
       {companyId && <DiscordConfigCard companyId={companyId} />}
 
       {/* 6. Danger zone */}
