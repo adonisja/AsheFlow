@@ -436,7 +436,11 @@ def get_my_employee(
 def get_employee_by_discord(
     discord_id: str,
     caller: Employee = Depends(get_caller_employee),
-    current_user: dict = Depends(RoleChecker(list(PRIVILEGED_ROLES | FIELD_ROLES))),
+    # ADR-363 — the bot resolves a Discord id to an employee on every command.
+    current_user: dict = Depends(RoleChecker(
+        list(PRIVILEGED_ROLES | FIELD_ROLES),
+        machine_scopes=["asheflow.bot/employees.read"],
+    )),
     db: Session = Depends(get_db),
 ):
     """Fetch an employee by Discord ID. Used by the bot on member-join to assign roles."""

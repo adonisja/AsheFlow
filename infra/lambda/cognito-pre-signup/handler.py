@@ -1,7 +1,16 @@
 import boto3
 import os
 
-POOL_ID = os.environ["USER_POOL_ID"]
+# The invoking pool comes from the EVENT, not the environment (ADR-362).
+#
+# This read os.environ["USER_POOL_ID"], pinned to the staging pool. Once this
+# same function is attached to BOTH pools, that means a prod federated sign-in
+# has its email checked against STAGING's user list: anyone with a staging
+# account is admitted to prod, and a legitimate prod user is refused. The event
+# always carries the pool that invoked us, so there is no reason to guess.
+#
+# Kept as a fallback only for a direct/manual invoke with no event context.
+_FALLBACK_POOL_ID = os.environ.get("USER_POOL_ID", "")
 
 _client = None
 
@@ -10,6 +19,10 @@ def _cognito():
     if _client is None:
         _client = boto3.client("cognito-idp", region_name="us-east-2")
     return _client
+
+
+def _pool_id(event) -> str:
+    return event.get("userPoolId") or _FALLBACK_POOL_ID
 
 
 def handler(event, context):
@@ -27,7 +40,7 @@ def handler(event, context):
     if trigger.startswith("PreSignUp_ExternalProvider"):
         email = _extract_email(event)
 
-        if email and _native_user_exists(email):
+        if email and _native_user_exists(email, _pool_id(event)):
             # Account pre-exists — allow and auto-confirm/verify so linking works.
             event["response"]["autoConfirmUser"] = True
             event["response"]["autoVerifyEmail"] = True
@@ -48,10 +61,13 @@ def _extract_email(event):
     return attrs.get("email", "").lower().strip() or None
 
 
-def _native_user_exists(email):
+def _native_user_exists(email, pool_id):
+    if not pool_id:
+        # No pool to check against: fail closed, same as a failed lookup.
+        return False
     try:
         resp = _cognito().list_users(
-            UserPoolId=POOL_ID,
+            UserPoolId=pool_id,
             Filter=f'email = "{email}"',
             Limit=1,
         )

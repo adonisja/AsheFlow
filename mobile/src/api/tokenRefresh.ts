@@ -7,6 +7,7 @@
  * stored tokens are cleared and the user must log in again.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetchAuthSession } from 'aws-amplify/auth';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } from '@env';
 
 const REGION = (COGNITO_USER_POOL_ID ?? '').split('_')[0] || 'us-east-2';
@@ -81,6 +82,23 @@ export async function getValidIdToken(): Promise<string | null> {
 async function doRefresh(): Promise<string | null> {
   const refreshToken = await AsyncStorage.getItem('asheflow_refresh_token');
   if (!refreshToken) {
+    // ADR-362 — a password sign-in now goes through Amplify, which keeps the
+    // refresh token in its OWN storage and never hands it out. No stored token
+    // therefore does not mean "signed out"; it means Amplify owns this session.
+    // Ask it before destroying anything: clearing here would sign a walker out
+    // roughly an hour into their shift.
+    try {
+      const { tokens } = await fetchAuthSession({ forceRefresh: true });
+      const refreshed = tokens?.idToken?.toString();
+      if (refreshed) {
+        await AsyncStorage.setItem('asheflow_id_token', refreshed);
+        const access = tokens?.accessToken?.toString();
+        if (access) await AsyncStorage.setItem('asheflow_access_token', access);
+        return refreshed;
+      }
+    } catch {
+      // Amplify has no session either — fall through to the real sign-out.
+    }
     await clearTokens();
     return null;
   }
