@@ -31,6 +31,19 @@ interface Company {
   data_class: 'live' | 'seed' | 'demo';
 }
 
+/** Company creation, plus the machine client credentials (ADR-364).
+ *
+ *  `machine_client_secret` is present ONLY in this response. It is never
+ *  stored, so this is the one moment it can be copied without a separate
+ *  reveal. `machine_client_error` means the company was created but Cognito
+ *  provisioning failed — the tenant works, its bot does not, and provisioning
+ *  can be retried from the company detail page. */
+interface CompanyCreated extends Company {
+  machine_client_id?: string | null;
+  machine_client_secret?: string | null;
+  machine_client_error?: string | null;
+}
+
 interface BootstrapResult {
   employee_id: string;
   name: string;
@@ -58,6 +71,8 @@ function CreateCompanyForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [created, setCreated] = useState<CompanyCreated | null>(null);
+
   const handleNameChange = (v: string) => {
     setName(v);
     setSlug(v.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
@@ -68,14 +83,22 @@ function CreateCompanyForm({
     setError(null);
     setSaving(true);
     try {
-      const res = await axiosClient.post<Company>('/admin/companies/', {
+      const res = await axiosClient.post<CompanyCreated>('/admin/companies/', {
         name: name.trim(),
         slug: slug.trim(),
         amazon_dsp_code: dspCode.trim() || null,
         timezone,
       });
       onCreated(res.data);
-      onClose();
+      /* ADR-364 — the machine client secret is shown ONCE and never stored, so
+         the form stays open until it has been copied. Closing on success (what
+         this did before) would discard the only copy, and recovering it means
+         a separate reveal action. */
+      if (res.data.machine_client_secret) {
+        setCreated(res.data);
+      } else {
+        onClose();
+      }
     } catch (err: unknown) {
       setError(errorText(err, 'Failed to create company.'));
     } finally {
@@ -92,12 +115,78 @@ function CreateCompanyForm({
       className="card"
     >
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-sm">Create New Company</h3>
+        <h3 className="font-semibold text-sm">
+          {created ? 'Company Created' : 'Create New Company'}
+        </h3>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
           <X className="w-4 h-4" />
         </button>
       </div>
       {error && <ErrorBanner message={error} className="mb-3" />}
+
+      {/* ADR-364 — shown once. The secret is not stored anywhere, so this panel
+          replaces the form rather than sitting under it: a superadmin who
+          scrolls past and closes has lost the only copy. */}
+      {created ? (
+        <div className="space-y-4">
+          <p className="text-sm text-foreground">
+            <span className="font-medium">{created.name}</span> is ready. Its
+            Discord bot signs in with the credentials below.
+          </p>
+
+          {created.machine_client_error ? (
+            <div className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
+              <p className="text-xs text-foreground leading-relaxed">
+                The company was created, but its bot credentials could not be
+                provisioned: {created.machine_client_error} You can retry from
+                the company's detail page. Everything else works in the meantime.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5">
+                <p className="text-xs text-foreground leading-relaxed">
+                  <span className="font-semibold text-danger">Copy the secret now.</span>{' '}
+                  It is not stored. If you lose it you can reveal it again from
+                  the company's detail page, but it is not shown here twice.
+                </p>
+              </div>
+
+              {[
+                ['COGNITO_M2M_CLIENT_ID', created.machine_client_id],
+                ['COGNITO_M2M_CLIENT_SECRET', created.machine_client_secret],
+              ].map(([label, value]) => (
+                <div key={label as string}>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                    {label}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 text-xs bg-accent rounded-lg px-3 py-2 break-all">
+                      {value}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(String(value ?? ''))}
+                      className="text-xs px-2.5 py-2 rounded-lg border border-border hover:bg-accent shrink-0"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              <p className="text-[11px] text-muted-foreground">
+                Paste both into this tenant's bot environment, alongside
+                COGNITO_OAUTH_DOMAIN.
+              </p>
+            </>
+          )}
+
+          <button onClick={onClose} className="btn-primary text-sm px-4 py-2">
+            Done
+          </button>
+        </div>
+      ) : (
       <form onSubmit={handleSubmit}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
@@ -160,6 +249,7 @@ function CreateCompanyForm({
           </button>
         </div>
       </form>
+      )}
     </motion.div>
   );
 }
