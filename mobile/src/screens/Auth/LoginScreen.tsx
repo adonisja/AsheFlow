@@ -4,14 +4,14 @@ import {
   KeyboardAvoidingView, Platform,
   ActivityIndicator, ScrollView,
 } from 'react-native';
-import { useAuth } from '@contexts/AuthContext';
+import { useAuth, type AuthChallenge } from '@contexts/AuthContext';
 import { useColors } from '@contexts/ThemeContext';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 import { DiscordIcon, GoogleIcon } from '@components/ui/BrandIcons';
 
 export default function LoginScreen() {
   const c = useColors();
-  const { signIn, signInWithProvider } = useAuth();
+  const { signIn, respondToChallenge, signInWithProvider } = useAuth();
 
   const [username,       setUsername]       = useState('');
   const [password,       setPassword]       = useState('');
@@ -21,6 +21,13 @@ export default function LoginScreen() {
   const [error,          setError]          = useState<string | null>(null);
   const pwRef = useRef<TextInput>(null);
 
+  /* ADR-362 — a sign-in can stop on a challenge instead of returning tokens.
+     Before this, the context read AuthenticationResult unconditionally and threw
+     a TypeError, so even the temporary-password step (which ships today) failed
+     with "undefined is not an object" rather than asking for a new password. */
+  const [challenge, setChallenge] = useState<AuthChallenge | null>(null);
+  const [answer,    setAnswer]    = useState('');
+
   const handleLogin = async () => {
     if (!username.trim() || !password) {
       setError('Enter your username and password.');
@@ -29,12 +36,65 @@ export default function LoginScreen() {
     setLoading(true);
     setError(null);
     try {
-      await signIn(username.trim(), password);
+      const next = await signIn(username.trim(), password);
+      if (next) { setChallenge(next); setAnswer(''); }
     } catch (err: any) {
       setError(err.message ?? 'Sign-in failed. Check your credentials.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleChallenge = async () => {
+    if (!challenge || !answer.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await respondToChallenge(challenge, answer.trim());
+      // Cognito chains: choosing a factor returns the challenge for its code.
+      setChallenge(next);
+      setAnswer('');
+    } catch (err: any) {
+      setError(err.message ?? 'That code was not accepted. Try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* Copy per step. A walker reading "SOFTWARE_TOKEN_MFA" learns nothing. */
+  const CHALLENGE_COPY: Record<AuthChallenge['name'], { title: string; sub: string; label: string; secure: boolean }> = {
+    NEW_PASSWORD_REQUIRED: {
+      title: 'Set a new password',
+      sub:   'You signed in with a temporary password. Choose a permanent one.',
+      label: 'New password',
+      secure: true,
+    },
+    SOFTWARE_TOKEN_MFA: {
+      title: 'Enter your code',
+      sub:   'Open your authenticator app and enter the 6-digit code.',
+      label: 'Authentication code',
+      secure: false,
+    },
+    EMAIL_OTP: {
+      title: 'Check your email',
+      sub:   challenge?.destination
+        ? `We sent a code to ${challenge.destination}.`
+        : 'We sent you a sign-in code.',
+      label: 'Emailed code',
+      secure: false,
+    },
+    SELECT_MFA_TYPE: {
+      title: 'Choose a method',
+      sub:   'Pick how you want to confirm it is you.',
+      label: 'Method',
+      secure: false,
+    },
+    MFA_SETUP: {
+      title: 'Set up sign-in security',
+      sub:   'Your account needs a second factor. Set it up on the web app, then sign in here.',
+      label: '',
+      secure: false,
+    },
   };
 
   const handleFederated = async (provider: 'Discord' | 'Google') => {
@@ -71,6 +131,71 @@ export default function LoginScreen() {
           <Text style={s.cardTitle}>Sign in</Text>
           <Text style={s.cardSub}>Use the credentials provided by your manager</Text>
 
+          {/* ── Challenge step ──────────────────────────────────
+              Replaces the credential fields rather than appearing under them:
+              the password is already accepted at this point, and leaving it on
+              screen invites the user to retype it when the code is refused. */}
+          {challenge ? (
+            <>
+              <View style={s.fieldGroup}>
+                <Text style={s.label}>{CHALLENGE_COPY[challenge.name].label}</Text>
+                {challenge.name === 'SELECT_MFA_TYPE' ? (
+                  <View>
+                    {(challenge.options ?? []).map(opt => (
+                      <TouchableOpacity
+                        key={opt}
+                        style={[s.input, { justifyContent: 'center', borderColor: c.border }]}
+                        onPress={() => { setAnswer(opt); }}
+                      >
+                        <Text style={{ color: answer === opt ? c.brand : c.foreground }}>
+                          {opt === 'SOFTWARE_TOKEN_MFA' ? 'Authenticator app' : 'Emailed code'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  <TextInput
+                    style={[s.input, { color: c.foreground, borderColor: error ? c.danger + '80' : c.border }]}
+                    placeholderTextColor={c.mutedForeground}
+                    // A 6-digit code on a numeric pad, not a full keyboard: this
+                    // is typed in a van, one-handed.
+                    keyboardType={challenge.name === 'NEW_PASSWORD_REQUIRED' ? 'default' : 'number-pad'}
+                    textContentType={challenge.name === 'NEW_PASSWORD_REQUIRED' ? 'newPassword' : 'oneTimeCode'}
+                    autoComplete={challenge.name === 'NEW_PASSWORD_REQUIRED' ? 'password-new' : 'one-time-code'}
+                    secureTextEntry={CHALLENGE_COPY[challenge.name].secure}
+                    autoCapitalize="none"
+                    autoFocus
+                    value={answer}
+                    onChangeText={t => { setAnswer(t); setError(null); }}
+                    onSubmitEditing={handleChallenge}
+                    returnKeyType="go"
+                  />
+                )}
+              </View>
+
+              {error && (
+                <View style={[s.errorBox, { backgroundColor: c.danger + '0D', borderColor: c.danger + '30' }]}>
+                  <Text style={[s.errorText, { color: c.danger }]}>{error}</Text>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[s.btn, { backgroundColor: c.brand, opacity: loading || !answer.trim() ? 0.7 : 1 }]}
+                onPress={handleChallenge}
+                disabled={loading || !answer.trim()}
+              >
+                <Text style={s.btnText}>{loading ? 'Checking…' : 'Continue'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => { setChallenge(null); setAnswer(''); setError(null); setPassword(''); }}
+                style={{ marginTop: spacing.md, alignItems: 'center' }}
+              >
+                <Text style={[s.showHide, { color: c.mutedForeground }]}>Start over</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+          <>
           {/* Username */}
           <View style={s.fieldGroup}>
             <Text style={s.label}>Username</Text>
@@ -164,6 +289,8 @@ export default function LoginScreen() {
             }
             <Text style={[s.socialBtnText, { color: c.foreground }]}>Continue with Google</Text>
           </TouchableOpacity>
+          </>
+          )}
         </View>
 
         {/* ── Footer note ─────────────────────────────────────── */}

@@ -17,6 +17,18 @@ class Company(Base):
     name             = Column(String(255),        nullable=False)
     slug             = Column(String(100),        nullable=False, unique=True, index=True)
     amazon_dsp_code  = Column(String(20),         nullable=True)
+    # ADR-364 — the Cognito app client this tenant's bot authenticates as.
+    #
+    # The SECRET is deliberately absent. Cognito returns it from
+    # DescribeUserPoolClient on demand, so storing it would put a live
+    # credential in a table three services join against, for no capability the
+    # API does not already have.
+    #
+    # Nullable: every company predates this, and one without a Discord bot never
+    # needs a client. Unique (partial index, non-null only) because one client
+    # serves exactly one tenant — two companies sharing one would make the
+    # tenant lookup arbitrary.
+    machine_client_id = Column(String(128), nullable=True, unique=True)
     # ADR-289 D8 / ADR-290 D6: the DSP name as Amazon prints it on the BTR sheet
     # (e.g. "NYCD"). Distinct from `name`, which is the company's own legal or
     # trading name and need not match Amazon's label.

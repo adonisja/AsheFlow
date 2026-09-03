@@ -142,8 +142,18 @@ def verify_cognito_token(token: str) -> dict:
                 issuer=COGNITO_ISSUER,
                 options={"verify_aud": False},
             )
+            # ADR-364 — a machine token is identified by its TENANT SCOPE, not
+            # by a configured client id: there is one client per tenant now, so
+            # an allowlist would need editing on every onboarding.
+            #
+            # This is not a widening. A token from an unknown client carries no
+            # asheflow.tenant/<uuid> scope, so get_caller_employee refuses it;
+            # and one that does carry a tenant scope must also match the client
+            # id recorded against that company.
             token_client_id = payload.get("client_id")
-            if token_client_id != settings.aws_cognito_app_client_id:
+            scopes = payload.get("scope", "").split()
+            is_machine = any(s.startswith("asheflow.tenant/") for s in scopes)
+            if not is_machine and token_client_id != settings.aws_cognito_app_client_id:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Token was not issued for the AsheFlow Dispatch App Client.",
