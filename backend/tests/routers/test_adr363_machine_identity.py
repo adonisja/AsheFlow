@@ -180,3 +180,34 @@ class TestTheBotUsesTheMachineIdentity:
             "the challenge handling must survive on the fallback path — it is "
             "what makes a botched cutover legible"
         )
+
+
+class TestTheBotsReachIsExactlyItsEndpoints:
+    """A ninth endpoint opting in should be a deliberate act, not a drift.
+
+    The whole point of scopes here is that the bot reaches 8 endpoints instead
+    of everything `dispatch` allowed. Nothing stops a later change adding
+    machine_scopes= to a ninth without anyone noticing, so the count is pinned.
+    """
+
+    def test_the_scope_declarations_are_the_expected_set(self):
+        import re
+
+        routers = ROOT / "backend" / "app" / "routers"
+        found = {}
+        for f in sorted(routers.rglob("*.py")):
+            body = f.read_text(errors="ignore")
+            for m in re.finditer(r'machine_scopes=\[([^\]]+)\]', body):
+                for scope in re.findall(r'"([^"]+)"', m.group(1)):
+                    found.setdefault(scope, set()).add(f.name)
+
+        assert set(found) == {
+            "asheflow.bot/dispatch.read",
+            "asheflow.bot/dispatch.write",
+            "asheflow.bot/employees.read",
+            "asheflow.bot/training.read",
+        }, (
+            f"the bot's scope surface changed: {sorted(found)}. Adding a scope "
+            "widens what the machine identity can reach — update this list "
+            "deliberately, and the resource server with it."
+        )
