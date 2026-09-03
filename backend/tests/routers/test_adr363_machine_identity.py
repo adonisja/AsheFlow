@@ -92,59 +92,44 @@ class TestTenancyIsExplicit:
         c = MachineCaller(id="client", company_id=uuid.uuid4(), name="bot")
         assert not hasattr(c, "role")
 
-    def test_an_unbound_machine_client_is_refused(self, monkeypatch):
-        """Defaulting to 'the only company' is correct today and silently wrong
-        the day a second one exists — the worst failure shape available.
+    def test_a_token_with_no_tenant_scope_is_not_a_machine(self, monkeypatch):
+        """ADR-364 — the company comes from the TOKEN now, not an env var.
 
-        Exercises get_current_user with the binding unset rather than grepping
-        for the guard: a source assertion passes with the guard deleted, because
-        the setting name still appears in config.py.
+        A token carrying no asheflow.tenant/<uuid> scope is not treated as a
+        machine principal at all, so it falls through to the user path and is
+        refused there for having no `sub`.
         """
         from app.api import deps as D
 
-        monkeypatch.setattr(D.settings, "aws_cognito_bot_client_id", "bot-client", raising=False)
-        monkeypatch.setattr(D.settings, "aws_cognito_bot_company_id", None, raising=False)
         monkeypatch.setattr(
             D, "verify_cognito_token",
-            lambda _t: {"client_id": "bot-client", "sub": "bot-client",
-                        "scope": "asheflow.bot/dispatch.read"},
+            lambda _t: {"client_id": "some-client", "scope": "asheflow.bot/dispatch.read"},
         )
         with pytest.raises(HTTPException) as exc:
             D.get_current_user(token="stub")
         assert exc.value.status_code == 401
-        assert "company" in exc.value.detail.lower()
 
-    def test_a_bound_machine_client_carries_its_company(self, monkeypatch):
+    def test_the_tenant_scope_becomes_the_company(self, monkeypatch):
         from app.api import deps as D
 
-        monkeypatch.setattr(D.settings, "aws_cognito_bot_client_id", "bot-client", raising=False)
-        monkeypatch.setattr(D.settings, "aws_cognito_bot_company_id",
-                            "a0000000-0000-0000-0000-000000000001", raising=False)
         monkeypatch.setattr(
             D, "verify_cognito_token",
-            lambda _t: {"client_id": "bot-client", "sub": "bot-client",
-                        "scope": "asheflow.bot/dispatch.read"},
+            lambda _t: {"client_id": "c", "sub": "c",
+                        "scope": "asheflow.tenant/a0000000-0000-0000-0000-000000000001 "
+                                 "asheflow.bot/dispatch.read"},
         )
         user = D.get_current_user(token="stub")
         assert user["machine_company_id"] == "a0000000-0000-0000-0000-000000000001"
-        assert user["machine_scopes"] == {"asheflow.bot/dispatch.read"}
+        assert "asheflow.bot/dispatch.read" in user["machine_scopes"]
 
 
-class TestTheClientIdIsAllowlisted:
-    def test_only_configured_clients_are_accepted(self):
-        """Not 'any client in this pool': anyone able to create an app client
-        could otherwise mint tokens the API trusts."""
+class TestNonMachineTokensStillPinTheAppClient:
+    def test_a_human_token_must_come_from_the_configured_client(self):
+        """ADR-364 replaced the two-id allowlist, but a HUMAN token is still
+        pinned: only a token carrying a tenant scope skips that check."""
         src = _read(SECURITY)
-        assert "allowed = {settings.aws_cognito_app_client_id}" in src
-        assert "token_client_id not in allowed" in src
-
-    def test_the_bot_client_is_opt_in(self):
-        """Unset means NO client-credentials token is accepted — the safe
-        default rather than a permissive one."""
-        src = _read(SECURITY)
-        assert "if settings.aws_cognito_bot_client_id:" in src, (
-            "the bot client must only be added to the allowlist when configured"
-        )
+        assert 'is_machine = any(s.startswith("asheflow.tenant/") for s in scopes)' in src
+        assert "if not is_machine and token_client_id != settings.aws_cognito_app_client_id:" in src
 
 
 class TestTheBotUsesTheMachineIdentity:

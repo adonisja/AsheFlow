@@ -17,6 +17,11 @@ from app.core.config import settings
 from app.database import get_db
 from app.services.audit import write_audit, super_admin_identity
 from app.models.company import Company, CompanyConfig
+from app.services.tenant_machine_client import (
+    delete_machine_client,
+    provision_machine_client,
+    reveal_machine_client_secret,
+)
 from app.models.employee import Employee
 from app.models.invite_token import InviteToken
 from app.services.email import send_invite_email
@@ -70,6 +75,21 @@ class CompanyResponse(BaseModel):
     data_class: str = "live"
 
     model_config = {"from_attributes": True}
+
+
+class CompanyCreatedResponse(CompanyResponse):
+    """Company creation, plus the machine client secret shown exactly once.
+
+    ADR-364 — the secret is never stored. It is returned here so the superadmin
+    can paste it into that tenant's bot deployment, and read back later with the
+    reveal endpoint if it is lost. A separate schema from CompanyResponse so the
+    secret cannot leak into a list or detail read by accident.
+    """
+    machine_client_id: Optional[str] = None
+    machine_client_secret: Optional[str] = None
+    # Present when the company was created but Cognito provisioning failed. The
+    # tenant is usable; its bot is not, until provisioning is retried.
+    machine_client_error: Optional[str] = None
 
 
 class CompanyDetailResponse(CompanyResponse):
@@ -290,7 +310,7 @@ class DiscordConfigResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/", response_model=CompanyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=CompanyCreatedResponse, status_code=status.HTTP_201_CREATED)
 def create_company(
     payload: CompanyCreate,
     _: dict = Depends(get_super_admin),
@@ -332,7 +352,139 @@ def create_company(
     )
     db.commit()
     db.refresh(company)
-    return company
+
+    # ADR-364 — provision this tenant's machine client so onboarding never needs
+    # the AWS CLI.
+    #
+    # AFTER the commit, deliberately. Cognito is not transactional: rolling the
+    # company back on a provisioning failure would leave an orphaned app client
+    # holding a tenant scope for a company that no longer exists. A company
+    # without a bot client is a recoverable state; the reverse is not.
+    secret = None
+    provisioning_error = None
+    try:
+        client_id, secret = provision_machine_client(company.id, company.name)
+        company.machine_client_id = client_id
+        write_audit(
+            db=db,
+            company_id=str(company.id),
+            action_type="company.machine_client_provisioned",
+            target_table="companies",
+            target_id=str(company.id),
+            after={**super_admin_identity(_), "machine_client_id": client_id},
+        )
+        db.commit()
+        db.refresh(company)
+    except Exception as exc:
+        # The tenant exists and is usable; only its bot is not. Surfaced in the
+        # response rather than raised, so a superadmin is not left guessing
+        # whether the company was created.
+        logger.error("Machine client provisioning failed for %s: %s", company.id, exc)
+        provisioning_error = str(exc)
+
+    return CompanyCreatedResponse(
+        **CompanyResponse.model_validate(company, from_attributes=True).model_dump(),
+        machine_client_id=company.machine_client_id,
+        machine_client_secret=secret,
+        machine_client_error=provisioning_error,
+    )
+
+
+class MachineClientSecretResponse(BaseModel):
+    machine_client_id: str
+    machine_client_secret: str
+
+
+@router.get("/{company_id}/machine-client", response_model=MachineClientSecretResponse)
+def reveal_machine_client(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Read back this tenant's machine client secret (ADR-364).
+
+    The secret is shown once at creation and never stored, so this is the
+    recovery path — and the reason a lost secret does not need the AWS CLI.
+
+    Audited on every call: this returns a live credential, and "who read this,
+    when" is the only thing that makes that acceptable.
+    """
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    if not company.machine_client_id:
+        raise HTTPException(
+            status_code=404,
+            detail="This company has no machine client. Provision one first.",
+        )
+
+    try:
+        secret = reveal_machine_client_secret(company.machine_client_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.machine_client_secret_revealed",
+        target_table="companies",
+        target_id=str(company.id),
+        after={**super_admin_identity(_), "machine_client_id": company.machine_client_id},
+    )
+    db.commit()
+    return MachineClientSecretResponse(
+        machine_client_id=company.machine_client_id,
+        machine_client_secret=secret,
+    )
+
+
+@router.post("/{company_id}/machine-client", response_model=CompanyCreatedResponse,
+             status_code=status.HTTP_201_CREATED)
+def provision_machine_client_for_company(
+    company_id: UUID,
+    _: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+):
+    """Provision (or replace) this tenant's machine client (ADR-364).
+
+    Two uses: a company created before this existed, and one whose provisioning
+    failed at creation. Replacing an existing client REVOKES the old one, so the
+    old secret stops working the moment this returns — which is also the
+    rotation path.
+    """
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    previous = company.machine_client_id
+    try:
+        client_id, secret = provision_machine_client(company.id, company.name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    company.machine_client_id = client_id
+    write_audit(
+        db=db,
+        company_id=str(company.id),
+        action_type="company.machine_client_provisioned",
+        target_table="companies",
+        target_id=str(company.id),
+        before={"machine_client_id": previous} if previous else None,
+        after={**super_admin_identity(_), "machine_client_id": client_id},
+    )
+    db.commit()
+    db.refresh(company)
+
+    # Only after the new client is committed. Deleting first would leave the
+    # tenant with no working client if provisioning then failed.
+    if previous and previous != client_id:
+        delete_machine_client(previous)
+
+    return CompanyCreatedResponse(
+        **CompanyResponse.model_validate(company, from_attributes=True).model_dump(),
+        machine_client_id=client_id,
+        machine_client_secret=secret,
+    )
 
 
 @router.get("/", response_model=list[CompanyResponse])

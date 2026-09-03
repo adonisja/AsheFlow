@@ -10,6 +10,7 @@ from app.core.security import verify_cognito_token
 from app.database import get_db
 from app.services.constants import OVERSIGHT_ROLES
 from app.core.config import settings
+from app.services.tenant_machine_client import TENANT_RESOURCE_SERVER
 
 logger = logging.getLogger(__name__)
 
@@ -50,25 +51,34 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     #
     # Identified by client_id matching the configured bot client -- not by the
     # ABSENCE of user claims, which would let any future clientless token in.
-    bot_client_id = settings.aws_cognito_bot_client_id
-    if bot_client_id and payload.get("client_id") == bot_client_id:
-        if not settings.aws_cognito_bot_company_id:
-            # Refuse rather than guess. A machine caller with no company would
-            # otherwise run unscoped queries across every tenant (D4).
+    scopes = set(payload.get("scope", "").split())
+    tenant = [s for s in scopes if s.startswith(f"{TENANT_RESOURCE_SERVER}/")]
+    if tenant:
+        # ADR-364 supersedes ADR-363 D4. The company came from an env var, which
+        # bound one company per DEPLOYMENT -- and the bot is already multi-tenant
+        # (get_company_id_for_guild), so the second tenant's traffic would have
+        # been authorised against the first tenant's data.
+        #
+        # Tenancy now rides in the token, established at issuance and not
+        # assertable by the caller.
+        if len(tenant) != 1:
+            # Two tenant scopes means a client was provisioned for two companies.
+            # Picking one is a coin flip over whose data gets touched.
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Machine client is not bound to a company.",
+                detail="Machine token names more than one tenant.",
             )
+        company_id = tenant[0].split("/", 1)[1]
         return {
-            "id": bot_client_id,
+            "id": payload.get("client_id", ""),
             "email": None,
             "username": "asheflow.bot",
             "cognito_groups": [],
             # Present ONLY on a machine principal. Its presence is what the
             # authorisation path keys on, so a human token can never be mistaken
             # for one.
-            "machine_scopes": set(payload.get("scope", "").split()),
-            "machine_company_id": settings.aws_cognito_bot_company_id,
+            "machine_scopes": scopes,
+            "machine_company_id": company_id,
         }
 
     if not user_id:
@@ -176,9 +186,39 @@ def get_caller_employee(
     """
     machine_company_id = current_user.get("machine_company_id")
     if machine_company_id:
+        # The scope is trusted to be well-formed (Cognito issued it), but NOT to
+        # name a live company: a tenant deleted after its client was provisioned
+        # leaves a token that still parses. Confirming the row exists is what
+        # stops an orphaned client acting against nothing, or worse, against a
+        # company id later reused.
+        from app.models.company import Company
+
+        try:
+            company_uuid = UUID(machine_company_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Machine token carries a malformed tenant.",
+            )
+
+        company = db.query(Company).filter(Company.id == company_uuid).first()
+        if not company:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Machine token names a company that does not exist.",
+            )
+        # The client that presented the token must be THE client provisioned for
+        # this company. Without this, a client holding tenant A's scope by any
+        # other route would be accepted for tenant A.
+        if company.machine_client_id and company.machine_client_id != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Machine client is not the one registered for this company.",
+            )
+
         return MachineCaller(
             id=current_user["id"],
-            company_id=UUID(machine_company_id),
+            company_id=company_uuid,
             name=current_user.get("username", "machine"),
         )
 
