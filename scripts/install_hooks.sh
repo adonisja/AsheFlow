@@ -7,7 +7,9 @@
 #   bash scripts/install_hooks.sh
 #
 # Hooks installed:
-#   pre-push — syncs proprietary files to AsheFlow-private before every push.
+#   pre-push — checks ADR documentation coverage, then syncs proprietary files
+#              to AsheFlow-private. Coverage runs first so a push that is about
+#              to be rejected does not publish docs the public repo lacks.
 #              Aborts the push if the sync fails so the two repos stay in lockstep.
 
 set -euo pipefail
@@ -29,6 +31,26 @@ cat > "$HOOKS_DIR/pre-push" << 'HOOK'
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# git writes "<local ref> <local sha> <remote ref> <remote sha>" to our stdin.
+# It can only be read once, so capture it up front.
+STDIN_PAYLOAD="$(cat)"
+
+# ADR coverage (ADR-366). The three-artifact rule has been in CLAUDE.md the whole
+# time and was skipped twice in three days, the second time after its own lesson
+# had been written -- so it is enforced here rather than remembered.
+#
+# Runs BEFORE the sync: a push about to be rejected should not first publish
+# documentation to the private repo. Placed above the sync-script guard below,
+# which exits 0 and would otherwise skip this entirely.
+COVERAGE="$REPO_ROOT/scripts/check_adr_coverage.py"
+if [ -f "$COVERAGE" ] && [ "${ALLOW_UNDOCUMENTED:-}" != "1" ]; then
+  if ! python3 "$COVERAGE" <<< "$STDIN_PAYLOAD"; then
+    echo ""
+    echo "Push aborted: documentation is missing for a cited ADR."
+    exit 1
+  fi
+fi
 SYNC_SCRIPT="$REPO_ROOT/scripts/setup_private_repo.sh"
 
 if [ ! -f "$SYNC_SCRIPT" ]; then
