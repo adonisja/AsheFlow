@@ -142,8 +142,16 @@ def verify_cognito_token(token: str) -> dict:
                 issuer=COGNITO_ISSUER,
                 options={"verify_aud": False},
             )
+            # ADR-363 — two client ids are accepted, and only two. The app
+            # client for humans, and the bot's machine client if one is
+            # configured. An allowlist rather than "any client in this pool":
+            # anyone who can create an app client in the pool could otherwise
+            # mint tokens the API trusts.
             token_client_id = payload.get("client_id")
-            if token_client_id != settings.aws_cognito_app_client_id:
+            allowed = {settings.aws_cognito_app_client_id}
+            if settings.aws_cognito_bot_client_id:
+                allowed.add(settings.aws_cognito_bot_client_id)
+            if token_client_id not in allowed:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Token was not issued for the AsheFlow Dispatch App Client.",
