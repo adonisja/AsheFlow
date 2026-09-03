@@ -22,17 +22,22 @@ CLIENT = ROOT / "bot" / "services" / "api_client.py"
 
 
 def _refresh_source() -> str:
-    """The function's CODE, with its docstring stripped.
+    """The password path's CODE, with its docstring stripped.
 
-    The docstring explains the bug it fixes and so mentions
-    AuthenticationResult before the code checks for a challenge — which defeats
-    an ordering assertion made against the raw text.
+    ADR-363 split `_refresh_token` into a dispatcher plus two paths, so this
+    follows the logic to `_refresh_token_password`. The challenge handling still
+    matters after the split: the password path is retained for rollback, and it
+    is what makes a botched cutover legible instead of a KeyError.
+
+    The docstring is stripped because it explains the bug it fixes and so
+    mentions AuthenticationResult before the code checks for a challenge, which
+    defeats an ordering assertion made against the raw text.
     """
     tree = ast.parse(CLIENT.read_text(errors="ignore"))
     fn = next(
         n for n in ast.walk(tree)
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.name == "_refresh_token"
+        and n.name == "_refresh_token_password"
     )
     if (fn.body and isinstance(fn.body[0], ast.Expr)
             and isinstance(fn.body[0].value, ast.Constant)

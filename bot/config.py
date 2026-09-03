@@ -9,8 +9,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     api_base_url: str = "http://backend:8000/api/v1"
 
-    bot_username: str
-    bot_password: str
+    # ADR-363 — the bot is migrating to an OAuth2 client_credentials machine
+    # identity. These stay OPTIONAL during the cutover so a rollback needs an
+    # env change rather than a deploy, and are removed once M2M is proven.
+    bot_username: str | None = None
+    bot_password: str | None = None
+
+    # Machine identity. When both are set the bot uses client_credentials and
+    # never touches the username/password path.
+    cognito_m2m_client_id: str | None = None
+    cognito_m2m_client_secret: str | None = None
+    cognito_oauth_domain: str | None = None
 
     aws_cognito_user_pool_id: str
     aws_cognito_client_id: str

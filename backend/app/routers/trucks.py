@@ -121,6 +121,12 @@ def _assert_anchor_not_duplicate(
 router = APIRouter(prefix="/trucks", tags=["trucks"])
 
 allow_any_auth = RoleChecker(["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"])
+# ADR-363 — the bot lists trucks to build its dispatch embeds. A separate
+# gate rather than widening allow_any_auth, which guards other endpoints.
+allow_any_auth_bot = RoleChecker(
+    ["driver", "walker", "trainer", "trainee", "dispatch", "management", "admin"],
+    machine_scopes=["asheflow.bot/dispatch.read"],
+)
 allow_write    = RoleChecker(["management", "admin"])
 
 
@@ -154,7 +160,7 @@ def get_trucks(
     pg: Pagination = Depends(),
     include_inactive: bool = Query(default=False),
     caller: Employee = Depends(get_caller_employee),
-    _: dict = Depends(allow_any_auth),
+    _: dict = Depends(allow_any_auth_bot),
     db: Session = Depends(get_db),
 ):
     """Return trucks scoped to the caller's company. Active-only by default."""

@@ -1,4 +1,6 @@
 import logging
+from dataclasses import dataclass
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
@@ -39,6 +41,35 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     # Cognito stores the unique user ID in 'sub' and the email in 'email'
     user_id = payload.get("sub")
     email = payload.get("email")
+
+    # ADR-363 — a machine principal (OAuth2 client_credentials) carries no user.
+    # Measured against a real token: `sub` IS the client id, and there is no
+    # `email`, `username` or `cognito:groups`. Without this branch the machine
+    # token falls through to the role path, resolves no Employee, and 403s on
+    # every call.
+    #
+    # Identified by client_id matching the configured bot client -- not by the
+    # ABSENCE of user claims, which would let any future clientless token in.
+    bot_client_id = settings.aws_cognito_bot_client_id
+    if bot_client_id and payload.get("client_id") == bot_client_id:
+        if not settings.aws_cognito_bot_company_id:
+            # Refuse rather than guess. A machine caller with no company would
+            # otherwise run unscoped queries across every tenant (D4).
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Machine client is not bound to a company.",
+            )
+        return {
+            "id": bot_client_id,
+            "email": None,
+            "username": "asheflow.bot",
+            "cognito_groups": [],
+            # Present ONLY on a machine principal. Its presence is what the
+            # authorisation path keys on, so a human token can never be mistaken
+            # for one.
+            "machine_scopes": set(payload.get("scope", "").split()),
+            "machine_company_id": settings.aws_cognito_bot_company_id,
+        }
 
     if not user_id:
         raise HTTPException(
@@ -110,6 +141,24 @@ def _resolve_employee_from_cognito(current_user: dict, db: Session):
     return employee, sub
 
 
+@dataclass(frozen=True)
+class MachineCaller:
+    """Stand-in for ``Employee`` when the caller is a machine (ADR-363).
+
+    Deliberately NOT an Employee: there is no row, and creating one would put a
+    fake person in the roster, in headcount, and in every name-resolution
+    lookup. This carries only what tenant-scoped code actually reads.
+
+    Frozen because nothing should mutate a caller identity, and the absence of
+    ``role`` is intentional — a machine is authorised by scope, so any code
+    reaching for ``caller.role`` on this object is a bug worth an AttributeError
+    rather than a silent wrong answer.
+    """
+    id: str
+    company_id: UUID
+    name: str
+
+
 def get_caller_employee(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -119,7 +168,20 @@ def get_caller_employee(
     Matches on discord_id == current_user['username'] (Cognito username).
     Raises 403 if no employee record exists for the caller — prevents ghost
     users from submitting field-ops records on behalf of real employees.
+
+    A machine principal (ADR-363) has no Employee row by definition, and every
+    endpoint reads ``caller.company_id`` for tenant scoping. It gets a stand-in
+    carrying the company its app client is bound to, so Dimension 1 scoping
+    keeps working unchanged rather than each endpoint growing a special case.
     """
+    machine_company_id = current_user.get("machine_company_id")
+    if machine_company_id:
+        return MachineCaller(
+            id=current_user["id"],
+            company_id=UUID(machine_company_id),
+            name=current_user.get("username", "machine"),
+        )
+
     employee, sub = _resolve_employee_from_cognito(current_user, db)
 
     needs_commit = False
@@ -287,12 +349,37 @@ def get_platform_staff(current_user: dict = Depends(get_current_user)) -> dict:
 
 
 class RoleChecker:
-    """Dependency class to check if a user has the required roles."""
-    def __init__(self, allowed_roles: list[str]):
+    """Dependency class to check if a user has the required roles.
+
+    A machine principal (ADR-363) has no role, because it has no user. Endpoints
+    the bot calls declare `machine_scopes=` and the caller is authorised on
+    SCOPE instead. The two paths cannot be confused: a human token never carries
+    `machine_scopes`, and a machine token never resolves to an Employee.
+
+    An endpoint that does NOT declare machine_scopes refuses a machine caller,
+    so the bot's reach is exactly the set of endpoints that opted in -- rather
+    than everything its old `dispatch` role happened to allow.
+    """
+    def __init__(self, allowed_roles: list[str], machine_scopes: list[str] | None = None):
         self.allowed_roles = allowed_roles
+        self.machine_scopes = set(machine_scopes or ())
 
     def __call__(self, user: dict = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
         from app.models.employee import Employee
+
+        held = user.get("machine_scopes")
+        if held is not None:
+            if not self.machine_scopes:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This endpoint is not available to machine clients.",
+                )
+            if not (held & self.machine_scopes):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Token does not carry a scope for this operation.",
+                )
+            return user
 
         sub   = user.get("id", "")
         email = user.get("email", "")

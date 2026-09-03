@@ -11,6 +11,21 @@ class Settings(BaseSettings):
     aws_region: str
     aws_cognito_user_pool_id: str
     aws_cognito_app_client_id: str
+    # The machine client the Discord bot authenticates as (ADR-363). Optional so
+    # a deployment without the bot still boots; when unset, NO client-credentials
+    # token is accepted, which is the safe default rather than a permissive one.
+    aws_cognito_bot_client_id: str | None = None
+    # Which company the bot's machine client acts for (ADR-363 D4).
+    #
+    # A machine principal has no Employee row and therefore no company, and
+    # multi-tenancy depends on caller.company_id. Defaulting to "the only
+    # company" is correct today and silently wrong the day a second one exists,
+    # which is the worst failure shape available -- so the binding is explicit
+    # and the machine path refuses to run without it.
+    #
+    # One M2M client per company: the bot already runs one Discord guild per
+    # company, so this matches how it is deployed.
+    aws_cognito_bot_company_id: str | None = None
 
     app_env: str = "development"
 
