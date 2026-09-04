@@ -1318,6 +1318,30 @@ function CurrentAssignments() {
   const [truckActionError, setTruckActionError] = useState<Record<string, string>>({});
 
 
+  // Hub trucks come from the TRUCK, not from a status (ADR-274).
+  //
+  // This used to filter `status === 'planned'` with no workflow-phase term, and
+  // before publish EVERY assignment is 'planned' — so every card showed a
+  // "Publish Hub" button instead of "Publish Crew". Hub-ness is a property of
+  // the truck; the backend now sends it as one.
+  /* Memoised as of ADR-375 D1: confirmationGate now reads it, and a bare
+     `new Set(...)` gets a fresh identity every render — so listing it as a
+     dependency would defeat that memo, and omitting it leaves an
+     exhaustive-deps warning nobody can tell from a real one. Stable identity
+     lets the dependency be declared honestly. */
+  const hubTruckIds: Set<string> = useMemo(
+    () => new Set(
+      (dispatchData?.truck_assignments || [])
+        .filter((a: any) => a.is_hub)
+        .map((a: any) => a.truck_id)
+    ),
+    [dispatchData],
+  );
+
+  /* MUST stay above confirmationGate — that gate reads it (ADR-375 D1). A
+     useMemo body runs late enough that the old ordering happened to work, but
+     depending on that is a trap for the next edit. */
+
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
     // ADR-329 D2 — the stats were already per-truck and were then multiplied by
@@ -1336,8 +1360,15 @@ function CurrentAssignments() {
           total, confirmed, rate: total ? confirmed / total : 1,
         };
       })
-      // trucks with no crew don't gate, and neither do trucks past confirmation
-      .filter(t => t.total > 0 && truckStatuses[t.truckId] === 'active');
+      /* Trucks with no crew don't gate, and neither do trucks past confirmation.
+         Nor does the HUB (ADR-375 D1): it is published early on purpose
+         (ADR-320), so it is the only `active` truck for most of the morning,
+         and its pinned crew of two — frequently not on Discord at all — was
+         blocking Post Final Crews for the whole board at 0/2. Keyed on the
+         truck's is_hub, not on a status (ADR-274). */
+      .filter(t => t.total > 0
+                   && !hubTruckIds.has(t.truckId)
+                   && truckStatuses[t.truckId] === 'active');
 
     // `live` is retained for the surrounding copy, but no longer multiplies the
     // gate: it now means "is any truck still in its confirmation window".
@@ -1351,19 +1382,7 @@ function CurrentAssignments() {
       warn: below50.length === 0 && below80.length > 0,  // soft gate
       below50, below80,
     };
-  }, [dispatchData, confirmations, trucks, truckStatuses]);
-
-  // Hub trucks come from the TRUCK, not from a status (ADR-274).
-  //
-  // This used to filter `status === 'planned'` with no workflow-phase term, and
-  // before publish EVERY assignment is 'planned' — so every card showed a
-  // "Publish Hub" button instead of "Publish Crew". Hub-ness is a property of
-  // the truck; the backend now sends it as one.
-  const hubTruckIds: Set<string> = new Set(
-    (dispatchData?.truck_assignments || [])
-      .filter((a: any) => a.is_hub)
-      .map((a: any) => a.truck_id)
-  );
+  }, [dispatchData, confirmations, trucks, truckStatuses, hubTruckIds]);
 
   /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
      D1) minus any already assigned. Derived once and shared by the "+ Add Hub"
@@ -1517,7 +1536,10 @@ function CurrentAssignments() {
             disabled={isFinalizing || isLoading || phaseCounts.active === 0 || confirmationGate.block}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={confirmationGate.block
-              ? 'Blocked: under 50% confirmed on at least one truck'
+              /* ADR-375 D3 — name them. The banner does, but the banner is the
+                 thing the dispatcher is trying to act on. */
+              ? `Blocked: under 50% confirmed on ${confirmationGate.below50
+                  .map(t => `${t.name} (${t.confirmed}/${t.total})`).join(', ')}`
               : 'Post confirmed crew lists to each truck channel and #drivers-chat'}
           >
             {isFinalizing ? (
