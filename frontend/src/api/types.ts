@@ -732,6 +732,19 @@ export interface TruckPinCreatePayload {
   days: Weekday[];
 }
 
+/** PATCH /truck-pins/employee/{employee_id} — ADR-373 D3.
+ *  Only the truck: moving a pin to a different PERSON is a different pin. */
+export interface TruckPinRetruckPayload {
+  truck_id: string;
+}
+
+/** PATCH /crew-pins/{id} — every field optional; send only what changed. */
+export interface CrewPinUpdatePayload {
+  name?: string;
+  member_ids?: string[];
+  is_active?: boolean;
+}
+
 export interface AssignmentChangeRequest {
   id: string;
   requested_date: string;
