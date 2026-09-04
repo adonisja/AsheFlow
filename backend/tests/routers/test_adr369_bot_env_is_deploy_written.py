@@ -70,9 +70,16 @@ class TestAMissingParameterFallsBack:
                 "to start instead of falling back"
             )
 
-    def test_the_client_prefers_m2m_only_when_both_are_set(self):
+    def test_a_half_configured_environment_fails_loudly(self):
+        """Was test_the_client_prefers_m2m_only_when_both_are_set.
+
+        There is nothing left to fall back TO: ADR-377 removed the password
+        path. A half-configured environment must now name the problem rather
+        than attempt M2M with a missing secret, which would surface as a
+        TypeError inside aiohttp.BasicAuth.
+        """
         client = (ROOT / "bot" / "services" / "api_client.py").read_text(errors="ignore")
-        assert "if settings.cognito_m2m_client_id and settings.cognito_m2m_client_secret:" in client, (
-            "a half-configured environment must fall back, not attempt M2M with "
-            "a missing secret"
+        assert "if not (settings.cognito_m2m_client_id and settings.cognito_m2m_client_secret):" in client, (
+            "a half-configured environment must be refused with a named error"
         )
+        assert "COGNITO_M2M_CLIENT_ID and COGNITO_M2M_CLIENT_SECRET are required" in client
