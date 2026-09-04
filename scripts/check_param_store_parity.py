@@ -30,9 +30,10 @@ EXPECTED_DIFFERENCES = {
     # Supplied to the backend by docker-compose from POSTGRES_*; staging carries
     # an explicit override for an external DB host.
     "DATABASE_URL",
-    # Bot container credentials; staging runs a live Discord bot, prod does not.
-    "BOT_USERNAME",
-    "BOT_PASSWORD",
+    # BOT_USERNAME / BOT_PASSWORD were here until ADR-377 removed the bot's
+    # USER_PASSWORD_AUTH path. They are deleted from Parameter Store with the
+    # `asheflow.bot` account, so an exemption for them would now hide a real
+    # difference rather than explain an expected one.
 }
 
 
