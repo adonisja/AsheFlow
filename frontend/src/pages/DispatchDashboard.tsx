@@ -2006,10 +2006,21 @@ function CurrentAssignments() {
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                {Object.entries(dispatchData.assigned_crews).map(([truckId, crew]) => {
                  const isHub = hubTruckIds.has(truckId);
+                 /* ADR-368 D3 — this hub assignment was created by the dispatch
+                    run itself, because someone is pinned to the hub today. The
+                    dispatcher did not ask for it, so it must not look like the
+                    cards they did create: a warning-toned border and an explicit
+                    notice below the header. An assignment appearing silently is
+                    worse than none. */
+                 const autoCreated = (dispatchData.truck_assignments || [])
+                   .find((a: any) => a.truck_id === truckId)?.auto_created_reason;
                  return (
                  <div
                    key={truckId}
-                   className={`card-elevated border flex flex-col transition-colors min-h-[160px] ${isHub ? 'border-primary/40' : 'border-border'}`}
+                   className={`card-elevated border flex flex-col transition-colors min-h-[160px] ${
+                     autoCreated ? 'border-warning/50 bg-warning/5'
+                     : isHub ? 'border-primary/40' : 'border-border'
+                   }`}
                    onDragOver={(e) => e.preventDefault()}
                    onDrop={(e) => handleDropToTruck(e, truckId)}
                  >
@@ -2029,6 +2040,11 @@ function CurrentAssignments() {
                        <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
                          {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
                        </h3>
+                       {autoCreated && (
+                         <span className="text-[10px] uppercase tracking-wide bg-warning/20 text-warning rounded-md px-1.5 py-0.5 shrink-0">
+                           auto
+                         </span>
+                       )}
                      </div>
                      {/* Right-hand column, STACKED: crew count on top, HUB
                          badge beneath it, both right-aligned. The name is
@@ -2051,6 +2067,7 @@ function CurrentAssignments() {
                          <Users className="w-3 h-3" />
                          {(crew as any[]).length}
                        </div>
+
                        {isHub && (
                          <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-1.5 py-0.5 rounded">
                            Hub
@@ -2058,6 +2075,19 @@ function CurrentAssignments() {
                        )}
                      </div>
                    </div>
+
+                   {autoCreated && (
+                     /* Named cause, not just a badge. A dispatcher seeing an
+                        assignment they did not create needs to know WHY in one
+                        read, or they delete it and the pinned crew silently
+                        loses today's placement. */
+                     <div className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+                       <p className="text-xs text-foreground leading-relaxed">
+                         Created automatically because someone is pinned to this hub today.
+                         Remove the pin on Crew Rules if this should not recur.
+                       </p>
+                     </div>
+                   )}
 
                    {/* Hub actions get their OWN row, so every card's header is
                        the same shape: name + count. Sharing the header with the
