@@ -2638,3 +2638,24 @@ export interface Separation {
   employee_name: string | null;
   target_employee_name: string | null;
 }
+
+
+/** GET /employees/me/mfa-status — ADR-377 D2.
+ *
+ *  `enrolled` is `null` when Cognito could not be reached. That is deliberately
+ *  not `false`: false means "not enrolled" and past the deadline that blocks, so
+ *  an AWS hiccup must never read as a lockout. Render no banner on null.
+ *
+ *  Note it answers "should we nudge", NOT "is this account protected". Under
+ *  MfaConfiguration=ON Cognito challenges on the associated token regardless of
+ *  the preference flag this reads, so an account can be protected while this
+ *  says enrolled=false.
+ */
+export interface MfaStatus {
+  required: boolean;
+  enrolled: boolean | null;
+  tier: 'privileged' | 'field' | 'none';
+  grace_days_total: number;
+  days_remaining: number | null;
+  blocked: boolean;
+}

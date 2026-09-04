@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
+from app.services import mfa_status
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
@@ -430,6 +431,59 @@ def get_my_employee(
 ):
     """Return the Employee record for the currently authenticated user."""
     return EmployeeResponse.model_validate(caller)
+
+
+@router.get("/me/mfa-status")
+def get_my_mfa_status(
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+):
+    """This user's MFA obligation, and how long they have left (ADR-377 D2).
+
+    Also STARTS the grace clock. It is stamped here rather than at account
+    creation because anchoring the deadline to creation would put every existing
+    employee instantly past it -- the staging accounts date from 2026-05-07 --
+    which is a day-one mass lockout.
+
+    Stamped ONCE. A later call must not extend the window, so the write is
+    guarded on the column still being NULL rather than overwritten each time.
+    """
+    # ADR-374 — a MachineCaller has no role, no cognito_sub and no grace column.
+    # Reaching for any of them here is the exact AttributeError that 500'd the
+    # bot's morning fetch. A machine authenticates by scope and never enrols, so
+    # the question does not apply to it.
+    if getattr(caller, "role", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MFA status applies to user accounts, not machine clients.",
+        )
+
+    enrolled = mfa_status.is_enrolled(caller.cognito_sub, caller.discord_id)
+
+    # None means Cognito could not be reached. Treat as enrolled for gating
+    # purposes: an AWS hiccup must never block a shift. The banner simply does
+    # not appear that request.
+    if enrolled is None:
+        status_obj = mfa_status.evaluate(
+            role=caller.role, enrolled=True, grace_started_at=caller.mfa_grace_started_at,
+        )
+        out = status_obj.as_dict()
+        out["enrolled"] = None      # honest: unknown, not confirmed
+        return out
+
+    if not enrolled and caller.mfa_grace_started_at is None:
+        # First sign-in after enforcement shipped: the window opens now.
+        caller.mfa_grace_started_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(caller)
+
+    grace_days = mfa_status.DEFAULT_MFA_GRACE_DAYS
+    return mfa_status.evaluate(
+        role=caller.role,
+        enrolled=enrolled,
+        grace_started_at=caller.mfa_grace_started_at,
+        grace_days=grace_days,
+    ).as_dict()
 
 
 @router.get("/by-discord/{discord_id}", response_model=EmployeePublicResponse)
