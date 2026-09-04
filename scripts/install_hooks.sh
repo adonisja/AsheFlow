@@ -11,6 +11,16 @@
 #              to AsheFlow-private. Coverage runs first so a push that is about
 #              to be rejected does not publish docs the public repo lacks.
 #              Aborts the push if the sync fails so the two repos stay in lockstep.
+#
+# NOT covered by any hook, on purpose: a design-only session. An ADR written with
+# no code change has nothing to push, so pre-push never fires and the doc stays
+# on one machine (this is how ADR-377 went unsynced). For that case:
+#
+#   bash scripts/check_docs_synced.sh          # am I ahead of the private repo?
+#   bash scripts/setup_private_repo.sh --docs-only
+#
+# A hook cannot catch it -- there is no git event to hang off when nothing is
+# committed.
 
 set -euo pipefail
 
