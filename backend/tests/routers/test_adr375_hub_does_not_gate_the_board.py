@@ -207,9 +207,12 @@ class TestTheServerAlsoExcludesTheHub:
         from app.routers import dispatch as D
 
         src = inspect.getsource(D.finalize_dispatch)
-        uses = [ln.strip() for ln in src.splitlines() if "gating" in ln]
+        # Code lines only -- a comment mentioning `gating` is not a use, and
+        # counting one as a use made this fail on ADR-376's explanatory comment.
+        uses = [ln.strip() for ln in src.splitlines()
+                if "gating" in ln and not ln.strip().startswith("#")]
         assert len(uses) == 3, (
-            f"`gating` should appear exactly 3 times (assign, narrow, loop); "
+            f"`gating` should be used exactly 3 times (assign, narrow, loop); "
             f"found {len(uses)}: {uses}. If it spread further, the hub may have "
             f"stopped being finalized rather than merely stopped gating."
         )
