@@ -2188,8 +2188,14 @@ function CurrentAssignments() {
                            at a time by hand, so it must be removable one at a
                            time; a mistake should not cost the whole day via
                            Clear Dispatch. Regular trucks have no equivalent:
-                           they arrive as a balanced SET from Run Dispatch. */}
-                       {isHub && (
+                           they arrive as a balanced SET from Run Dispatch.
+
+                           Gone once the final crew is posted (ADR-376 D3): the
+                           server 409s on a completed assignment, and the badge
+                           beside this already says the state. A disabled-but-
+                           visible button would invite the question the badge
+                           just answered. */}
+                       {isHub && st !== 'completed' && (
                          <button
                            onClick={() => handleRemoveHub(
                              truckId,
