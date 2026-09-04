@@ -861,6 +861,10 @@ function CurrentAssignments() {
           // messages standing in Discord. Say so: the crew reads Discord, so a
           // silent partial retraction is the version that misleads people.
           const failures = res.data?.discord_failures ?? [];
+          // ADR-367 — `=== false`, never `!discord_cleared`. The field is now
+          // three-state: null means there was nothing to retract, and null is
+          // falsy, so the "simplification" to `!` silently restores the bug
+          // where clearing an unpublished day warns about orphaned crew posts.
           if (res.data && res.data.discord_cleared === false) {
             setDiscordClearWarning(
               'The day was cleared, but Discord could not be reached. Crew posts may still be visible there.',

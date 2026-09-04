@@ -249,7 +249,16 @@ export interface FinalizeResponse {
 export interface ClearDispatchResponse {
   date: string;
   assignments_cleared: number;
-  discord_cleared: boolean;
+  /** ADR-367 — three-state, not a boolean:
+   *
+   *    null   nothing to retract; the bot was never called
+   *    true   called, retraction succeeded
+   *    false  called, and it failed
+   *
+   *  Compare with `=== false`. `!discord_cleared` is true for null as well, so
+   *  a falsy check warns about orphaned crew posts on every clear of a day that
+   *  was never published to Discord. */
+  discord_cleared: boolean | null;
   /** Named, not counted — "crew embed Eagle: missing Manage Messages". */
   discord_failures: string[];
 }
