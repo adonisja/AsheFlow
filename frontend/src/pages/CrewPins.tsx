@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse, HelpCircle, UserMinus } from 'lucide-react';
+import { Pin, Plus, Trash2, X, AlertTriangle, RotateCcw, Truck as TruckIcon, CalendarDays, Warehouse, HelpCircle, UserMinus, Pencil, ArrowRightLeft } from 'lucide-react';
 
 import axiosClient from '../api/axiosClient';
 import { errorText } from '../utils/errorText';
 import ErrorBanner from '../components/ui/ErrorBanner';
 import SelectMenu, { type SelectOption } from '../components/ui/SelectMenu';
 import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
-import type { CrewPin, Employee, Separation, Truck, TruckPin, Weekday } from '../api/types';
+import type { CrewPin, CrewPinUpdatePayload, Employee, Separation, Truck, TruckPin,
+  TruckPinRetruckPayload, Weekday } from '../api/types';
 
 /** Crew pins (ADR-357).
  *
@@ -181,12 +182,53 @@ export default function CrewPins() {
     }
   };
 
+  /* Edit, not delete-and-recreate (ADR-373 D1). Recreating a pin to rename it
+     loses its id, and the id is what the audit trail and every "since when"
+     question hangs off. PATCH keeps the pin the same pin. */
+  const editPin = async (pin: CrewPin, patch: CrewPinUpdatePayload) => {
+    try {
+      await axiosClient.patch(`/crew-pins/${pin.id}`, patch);
+      await load();
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not save the crew pin.'));
+      throw err;   // the card stays in edit mode so the typing is not lost
+    }
+  };
+
   const removeTruckPin = async (pin: TruckPin) => {
     try {
       await axiosClient.delete(`/truck-pins/${pin.id}`);
       await load();
     } catch (err: unknown) {
       setError(errorText(err, 'Could not delete the truck pin.'));
+    }
+  };
+
+  /* Keyed by employee, not by pin (ADR-373 D3). "Move Jerome to Truck 4" means
+     every day he is pinned; doing it row by row can half-succeed and leave him
+     pinned to two trucks on different days. */
+  const retruck = async (employeeId: string, truckId: string) => {
+    try {
+      const body: TruckPinRetruckPayload = { truck_id: truckId };
+      await axiosClient.patch(`/truck-pins/employee/${employeeId}`, body);
+      await load();
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not move the truck pin.'));
+      throw err;
+    }
+  };
+
+  /* Adding a day needs no new endpoint (ADR-373 D2): POST already creates one
+     row per day and already 409s on a day the person holds. */
+  const addTruckPinDays = async (employeeId: string, truckId: string, days: Weekday[]) => {
+    try {
+      await axiosClient.post('/truck-pins', {
+        employee_id: employeeId, truck_id: truckId, days,
+      });
+      await load();
+    } catch (err: unknown) {
+      setError(errorText(err, 'Could not add the day.'));
+      throw err;
     }
   };
 
@@ -251,8 +293,11 @@ export default function CrewPins() {
             <PinCard
               key={pin.id}
               pin={pin}
+              employees={employees}
+              crewPinnedIds={crewPinnedIds}
               onToggle={setActive}
               onDelete={remove}
+              onEdit={editPin}
             />
           ))}
         </div>
@@ -269,6 +314,8 @@ export default function CrewPins() {
         employees={employees}
         crewPinnedIds={crewPinnedIds}
         onDelete={removeTruckPin}
+        onRetruck={retruck}
+        onAddDays={addTruckPinDays}
         onSaved={load}
         onError={setError}
       />
@@ -291,18 +338,82 @@ export default function CrewPins() {
 }
 
 function PinCard({
-  pin, onToggle, onDelete,
+  pin, employees, crewPinnedIds, onToggle, onDelete, onEdit,
 }: {
   pin: CrewPin;
+  employees: Employee[];
+  crewPinnedIds: Set<string>;
   onToggle: (p: CrewPin, active: boolean) => void;
   onDelete: (p: CrewPin) => void;
+  onEdit: (p: CrewPin, patch: CrewPinUpdatePayload) => Promise<void>;
 }) {
+  /* Edit state is local to the card, so opening one editor does not disturb the
+     others and cancelling restores the server's values rather than a shared
+     draft. */
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(pin.name);
+  const [draftMembers, setDraftMembers] = useState<string[]>(
+    () => pin.members.map(m => m.employee_id),
+  );
+  const [saving, setSaving] = useState(false);
+
+  const open = () => {
+    setDraftName(pin.name);
+    setDraftMembers(pin.members.map(m => m.employee_id));
+    setEditing(true);
+  };
+
+  /* The anchor is not a member and cannot become one; everyone pinned to
+     ANOTHER crew is unavailable, but this crew's own members must stay
+     selectable or editing would empty the list it is meant to edit. */
+  const mine = useMemo(() => new Set(pin.members.map(m => m.employee_id)), [pin.members]);
+  const candidates = useMemo(
+    () => crewCandidates(employees, e =>
+      e.id === pin.driver_id ||
+      e.role === 'driver' ||
+      (crewPinnedIds.has(e.id) && !mine.has(e.id))),
+    [employees, pin.driver_id, crewPinnedIds, mine],
+  );
+
+  const trimmed = draftName.trim();
+  const membersChanged =
+    draftMembers.length !== mine.size || draftMembers.some(id => !mine.has(id));
+  const dirty = (trimmed !== pin.name && trimmed.length > 0) || membersChanged;
+
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    try {
+      // Send only what changed. A no-op field still rewrites rows server-side.
+      const patch: CrewPinUpdatePayload = {};
+      if (trimmed !== pin.name && trimmed.length > 0) patch.name = trimmed;
+      if (membersChanged) patch.member_ids = draftMembers;
+      await onEdit(pin, patch);
+      setEditing(false);
+    } catch {
+      // handler surfaced it; stay open so the edit is not lost
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className={`${CARD} ${pin.is_active ? '' : 'opacity-70 bg-accent/20'}`}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="font-semibold tracking-tight">{pin.name}</h3>
+            {editing ? (
+              <input
+                value={draftName}
+                onChange={e => setDraftName(e.target.value)}
+                maxLength={80}
+                aria-label="Crew name"
+                autoFocus
+                className="border border-input rounded-lg px-2 py-1 text-sm font-semibold bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+              />
+            ) : (
+              <h3 className="font-semibold tracking-tight">{pin.name}</h3>
+            )}
             {!pin.is_active && (
               <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground bg-accent rounded-md px-1.5 py-0.5">
                 Inactive
@@ -322,6 +433,14 @@ function PinCard({
             Deactivate. They read as equal-weight controls otherwise, and only
             one of them is destructive. */}
         <div className="flex items-center gap-1">
+          {!editing && (
+            <button
+              onClick={open}
+              className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" /> Edit
+            </button>
+          )}
           <button
             onClick={() => onToggle(pin, !pin.is_active)}
             className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -351,6 +470,63 @@ function PinCard({
       {/* Sorted by role, not by insertion. The screenshot showed
           trainer/walker/walker/captain/walker — the captain is the route lead
           and was buried in the middle of the list. */}
+      {editing ? (
+        /* Checkboxes, not a multi-select: a dispatcher editing a crew is
+           looking for one name in a short list, and a native multi-select
+           hides the current selection behind a scroll and loses it on a
+           stray click. */
+        <div className="mt-3 space-y-3">
+          <div className="rounded-lg border border-border bg-accent/20 p-2 max-h-56 overflow-y-auto">
+            {candidates.length === 0 ? (
+              <p className="text-sm text-muted-foreground p-1">
+                No one else is available. Everyone is on another crew pin.
+              </p>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-1">
+                {candidates.map(e => {
+                  const on = draftMembers.includes(e.id);
+                  return (
+                    <label
+                      key={e.id}
+                      className="flex items-center gap-2 text-sm rounded-md px-2 py-1.5 hover:bg-accent cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => setDraftMembers(prev =>
+                          on ? prev.filter(id => id !== e.id) : [...prev, e.id])}
+                        className="accent-primary"
+                      />
+                      <span className="font-medium truncate">{e.name}</span>
+                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-auto shrink-0">
+                        {e.role.replace('_', ' ')}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void save()}
+              disabled={!dirty || saving || trimmed.length === 0}
+              className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 hover:opacity-90 transition-opacity"
+            >
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              className="px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:bg-accent transition-colors"
+            >
+              Cancel
+            </button>
+            {trimmed.length === 0 && (
+              <span className="text-xs text-danger">A crew needs a name.</span>
+            )}
+          </div>
+        </div>
+      ) : (
       <div className="mt-3 flex flex-wrap gap-1.5">
         {pin.members.length === 0 ? (
           <span className="text-sm text-muted-foreground">No members yet.</span>
@@ -371,6 +547,7 @@ function PinCard({
             ))
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -532,7 +709,8 @@ const WEEKDAYS: Weekday[] = [
 ];
 
 function TruckPinSection({
-  truckPins, trucks, employees, crewPinnedIds, onDelete, onSaved, onError, onHelp,
+  truckPins, trucks, employees, crewPinnedIds, onDelete, onRetruck, onAddDays,
+  onSaved, onError, onHelp,
 }: {
   onHelp: (k: string) => void;
   truckPins: TruckPin[];
@@ -540,6 +718,8 @@ function TruckPinSection({
   employees: Employee[];
   crewPinnedIds: Set<string>;
   onDelete: (p: TruckPin) => void;
+  onRetruck: (employeeId: string, truckId: string) => Promise<void>;
+  onAddDays: (employeeId: string, truckId: string, days: Weekday[]) => Promise<void>;
   onSaved: () => Promise<void> | void;
   onError: (m: string) => void;
 }) {
@@ -605,7 +785,65 @@ function TruckPinSection({
       ) : (
         <div className="grid gap-3">
           {grouped.map(g => (
-            <div key={`${g.name}-${g.truck}`} className={CARD}>
+            <TruckPinCard
+              key={`${g.name}-${g.truck}`}
+              group={g}
+              trucks={trucks}
+              onDelete={onDelete}
+              onRetruck={onRetruck}
+              onAddDays={onAddDays}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** One person on one truck, with the days they hold it.
+ *
+ *  Both edits live here rather than in a modal (ADR-373 D4): the thing being
+ *  edited is three chips and a truck name, and a dialog to change one of them
+ *  costs more attention than the edit does. */
+function TruckPinCard({
+  group: g, trucks, onDelete, onRetruck, onAddDays,
+}: {
+  group: { pins: TruckPin[]; name: string; role: string; truck: string; isHub: boolean };
+  trucks: Truck[];
+  onDelete: (p: TruckPin) => void;
+  onRetruck: (employeeId: string, truckId: string) => Promise<void>;
+  onAddDays: (employeeId: string, truckId: string, days: Weekday[]) => Promise<void>;
+}) {
+  const [moving, setMoving] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const employeeId = g.pins[0].employee_id;
+  const truckId = g.pins[0].truck_id;
+  const held = useMemo(() => new Set(g.pins.map(p => p.day_of_week)), [g.pins]);
+
+  /* A day the person already holds on ANOTHER truck would 409 on POST. The
+     server is still the authority; this only avoids offering a click that is
+     guaranteed to fail. */
+  const free = WEEKDAYS.filter(d => !held.has(d));
+
+  const addDay = async (day: Weekday) => {
+    if (busy) return;
+    setBusy(true);
+    try { await onAddDays(employeeId, truckId, [day]); }
+    catch { /* surfaced by the handler */ }
+    finally { setBusy(false); }
+  };
+
+  const move = async (id: string) => {
+    if (busy || id === truckId) { setMoving(false); return; }
+    setBusy(true);
+    try { await onRetruck(employeeId, id); setMoving(false); }
+    catch { /* surfaced by the handler */ }
+    finally { setBusy(false); }
+  };
+
+  return (
+            <div className={CARD}>
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                   <h3 className="font-semibold tracking-tight">
@@ -630,6 +868,41 @@ function TruckPinSection({
                     )}
                   </p>
                 </div>
+
+                {/* Changing the truck is one action for the whole person, not
+                    per day (ADR-373 D3) — a per-row truck picker invites
+                    leaving someone on two trucks in one week. */}
+                {moving ? (
+                  <div className="flex items-center gap-2">
+                    <select
+                      autoFocus
+                      defaultValue={truckId}
+                      disabled={busy}
+                      aria-label={`Move ${g.name} to another truck`}
+                      onChange={e => void move(e.target.value)}
+                      className="border border-input rounded-lg px-2 py-1.5 text-sm bg-background focus:ring-1 focus:ring-primary focus:border-primary outline-none"
+                    >
+                      {trucks.map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}{t.is_hub ? ' (hub)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setMoving(false)}
+                      className="text-sm text-muted-foreground hover:text-foreground px-2 py-1.5 rounded-lg hover:bg-accent transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setMoving(true)}
+                    className="inline-flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  >
+                    <ArrowRightLeft className="w-3.5 h-3.5" /> Move
+                  </button>
+                )}
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {g.pins
@@ -653,12 +926,25 @@ function TruckPinSection({
                       </button>
                     </span>
                   ))}
+
+                {/* Adding a day is the same shape as removing one — a chip, in
+                    the same row (ADR-373 D2). The dashed border says "not held
+                    yet" without needing a label to explain it. */}
+                {free.map(d => (
+                  <button
+                    key={d}
+                    onClick={() => void addDay(d)}
+                    disabled={busy}
+                    aria-label={`Also pin ${g.name} to ${g.truck} on ${d}`}
+                    title={`Also pin ${g.name} to ${g.truck} on ${d}`}
+                    className="inline-flex items-center gap-1 text-xs rounded-lg border border-dashed border-border text-muted-foreground px-2 py-1 hover:border-primary hover:text-primary hover:bg-primary/5 disabled:opacity-50 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{d.slice(0, 3)}</span>
+                  </button>
+                ))}
               </div>
             </div>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
 
