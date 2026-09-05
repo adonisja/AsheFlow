@@ -93,7 +93,13 @@ class CompanyCreatedResponse(CompanyResponse):
 
 
 class CompanyDetailResponse(CompanyResponse):
+    # ADR-364 — the superadmin detail page needs to know whether a client
+    # exists, so it can offer "reveal" rather than "provision". Without it the
+    # page always offers to provision, and doing so ROTATES a working secret
+    # and breaks that tenant's bot. The id is not a credential; the secret is,
+    # and that stays behind its own audited endpoint.
     """Extended response that includes the company's config row."""
+    machine_client_id: Optional[str] = None
     config: Optional["CompanyConfigResponse"]
 
 

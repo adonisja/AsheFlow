@@ -861,6 +861,10 @@ function CurrentAssignments() {
           // messages standing in Discord. Say so: the crew reads Discord, so a
           // silent partial retraction is the version that misleads people.
           const failures = res.data?.discord_failures ?? [];
+          // ADR-367 — `=== false`, never `!discord_cleared`. The field is now
+          // three-state: null means there was nothing to retract, and null is
+          // falsy, so the "simplification" to `!` silently restores the bug
+          // where clearing an unpublished day warns about orphaned crew posts.
           if (res.data && res.data.discord_cleared === false) {
             setDiscordClearWarning(
               'The day was cleared, but Discord could not be reached. Crew posts may still be visible there.',
@@ -1314,6 +1318,30 @@ function CurrentAssignments() {
   const [truckActionError, setTruckActionError] = useState<Record<string, string>>({});
 
 
+  // Hub trucks come from the TRUCK, not from a status (ADR-274).
+  //
+  // This used to filter `status === 'planned'` with no workflow-phase term, and
+  // before publish EVERY assignment is 'planned' — so every card showed a
+  // "Publish Hub" button instead of "Publish Crew". Hub-ness is a property of
+  // the truck; the backend now sends it as one.
+  /* Memoised as of ADR-375 D1: confirmationGate now reads it, and a bare
+     `new Set(...)` gets a fresh identity every render — so listing it as a
+     dependency would defeat that memo, and omitting it leaves an
+     exhaustive-deps warning nobody can tell from a real one. Stable identity
+     lets the dependency be declared honestly. */
+  const hubTruckIds: Set<string> = useMemo(
+    () => new Set(
+      (dispatchData?.truck_assignments || [])
+        .filter((a: any) => a.is_hub)
+        .map((a: any) => a.truck_id)
+    ),
+    [dispatchData],
+  );
+
+  /* MUST stay above confirmationGate — that gate reads it (ADR-375 D1). A
+     useMemo body runs late enough that the old ordering happened to work, but
+     depending on that is a trap for the next edit. */
+
   const confirmationGate = useMemo(() => {
     const crews: Record<string, any[]> = dispatchData?.assigned_crews ?? {};
     // ADR-329 D2 — the stats were already per-truck and were then multiplied by
@@ -1332,8 +1360,15 @@ function CurrentAssignments() {
           total, confirmed, rate: total ? confirmed / total : 1,
         };
       })
-      // trucks with no crew don't gate, and neither do trucks past confirmation
-      .filter(t => t.total > 0 && truckStatuses[t.truckId] === 'active');
+      /* Trucks with no crew don't gate, and neither do trucks past confirmation.
+         Nor does the HUB (ADR-375 D1): it is published early on purpose
+         (ADR-320), so it is the only `active` truck for most of the morning,
+         and its pinned crew of two — frequently not on Discord at all — was
+         blocking Post Final Crews for the whole board at 0/2. Keyed on the
+         truck's is_hub, not on a status (ADR-274). */
+      .filter(t => t.total > 0
+                   && !hubTruckIds.has(t.truckId)
+                   && truckStatuses[t.truckId] === 'active');
 
     // `live` is retained for the surrounding copy, but no longer multiplies the
     // gate: it now means "is any truck still in its confirmation window".
@@ -1347,19 +1382,7 @@ function CurrentAssignments() {
       warn: below50.length === 0 && below80.length > 0,  // soft gate
       below50, below80,
     };
-  }, [dispatchData, confirmations, trucks, truckStatuses]);
-
-  // Hub trucks come from the TRUCK, not from a status (ADR-274).
-  //
-  // This used to filter `status === 'planned'` with no workflow-phase term, and
-  // before publish EVERY assignment is 'planned' — so every card showed a
-  // "Publish Hub" button instead of "Publish Crew". Hub-ness is a property of
-  // the truck; the backend now sends it as one.
-  const hubTruckIds: Set<string> = new Set(
-    (dispatchData?.truck_assignments || [])
-      .filter((a: any) => a.is_hub)
-      .map((a: any) => a.truck_id)
-  );
+  }, [dispatchData, confirmations, trucks, truckStatuses, hubTruckIds]);
 
   /* Hubs that can still take an assignment for this date: hub trucks (ADR-274
      D1) minus any already assigned. Derived once and shared by the "+ Add Hub"
@@ -1513,7 +1536,10 @@ function CurrentAssignments() {
             disabled={isFinalizing || isLoading || phaseCounts.active === 0 || confirmationGate.block}
             className="bg-info text-white hover:bg-info/90 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             title={confirmationGate.block
-              ? 'Blocked: under 50% confirmed on at least one truck'
+              /* ADR-375 D3 — name them. The banner does, but the banner is the
+                 thing the dispatcher is trying to act on. */
+              ? `Blocked: under 50% confirmed on ${confirmationGate.below50
+                  .map(t => `${t.name} (${t.confirmed}/${t.total})`).join(', ')}`
               : 'Post confirmed crew lists to each truck channel and #drivers-chat'}
           >
             {isFinalizing ? (
@@ -2002,10 +2028,21 @@ function CurrentAssignments() {
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                {Object.entries(dispatchData.assigned_crews).map(([truckId, crew]) => {
                  const isHub = hubTruckIds.has(truckId);
+                 /* ADR-368 D3 — this hub assignment was created by the dispatch
+                    run itself, because someone is pinned to the hub today. The
+                    dispatcher did not ask for it, so it must not look like the
+                    cards they did create: a warning-toned border and an explicit
+                    notice below the header. An assignment appearing silently is
+                    worse than none. */
+                 const autoCreated = (dispatchData.truck_assignments || [])
+                   .find((a: any) => a.truck_id === truckId)?.auto_created_reason;
                  return (
                  <div
                    key={truckId}
-                   className={`card-elevated border flex flex-col transition-colors min-h-[160px] ${isHub ? 'border-primary/40' : 'border-border'}`}
+                   className={`card-elevated border flex flex-col transition-colors min-h-[160px] ${
+                     autoCreated ? 'border-warning/50 bg-warning/5'
+                     : isHub ? 'border-primary/40' : 'border-border'
+                   }`}
                    onDragOver={(e) => e.preventDefault()}
                    onDrop={(e) => handleDropToTruck(e, truckId)}
                  >
@@ -2025,6 +2062,11 @@ function CurrentAssignments() {
                        <h3 className="font-semibold text-foreground text-sm uppercase tracking-wide truncate">
                          {trucks[truckId]?.name || `Truck ${truckId.substring(0,4)}`}
                        </h3>
+                       {autoCreated && (
+                         <span className="text-[10px] uppercase tracking-wide bg-warning/20 text-warning rounded-md px-1.5 py-0.5 shrink-0">
+                           auto
+                         </span>
+                       )}
                      </div>
                      {/* Right-hand column, STACKED: crew count on top, HUB
                          badge beneath it, both right-aligned. The name is
@@ -2047,6 +2089,7 @@ function CurrentAssignments() {
                          <Users className="w-3 h-3" />
                          {(crew as any[]).length}
                        </div>
+
                        {isHub && (
                          <span className="shrink-0 text-[9px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-1.5 py-0.5 rounded">
                            Hub
@@ -2054,6 +2097,19 @@ function CurrentAssignments() {
                        )}
                      </div>
                    </div>
+
+                   {autoCreated && (
+                     /* Named cause, not just a badge. A dispatcher seeing an
+                        assignment they did not create needs to know WHY in one
+                        read, or they delete it and the pinned crew silently
+                        loses today's placement. */
+                     <div className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+                       <p className="text-xs text-foreground leading-relaxed">
+                         Created automatically because someone is pinned to this hub today.
+                         Remove the pin on Crew Rules if this should not recur.
+                       </p>
+                     </div>
+                   )}
 
                    {/* Hub actions get their OWN row, so every card's header is
                        the same shape: name + count. Sharing the header with the
@@ -2132,8 +2188,14 @@ function CurrentAssignments() {
                            at a time by hand, so it must be removable one at a
                            time; a mistake should not cost the whole day via
                            Clear Dispatch. Regular trucks have no equivalent:
-                           they arrive as a balanced SET from Run Dispatch. */}
-                       {isHub && (
+                           they arrive as a balanced SET from Run Dispatch.
+
+                           Gone once the final crew is posted (ADR-376 D3): the
+                           server 409s on a completed assignment, and the badge
+                           beside this already says the state. A disabled-but-
+                           visible button would invite the question the badge
+                           just answered. */}
+                       {isHub && st !== 'completed' && (
                          <button
                            onClick={() => handleRemoveHub(
                              truckId,

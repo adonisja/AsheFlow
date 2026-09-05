@@ -26,8 +26,14 @@ class Employee(Base):
         is_active: Whether the employee is currently active and eligible for dispatch.
         account_status: Lifecycle state — pending_verification (invited, not yet logged in),
             active (logged in at least once), or deactivated (manually disabled).
-        invited_at: Timestamp when the invite was issued. Used by the Celery cleanup job
-            to expire unverified accounts after INVITE_EXPIRY_DAYS days.
+        invited_at: Timestamp when the invite was issued — an event, not a birthday.
+            Used by the Celery cleanup job to expire unverified accounts after
+            INVITE_EXPIRY_DAYS days. Reissued on re-invite, and absent entirely for
+            an employee created without an invite.
+        created_at: When this row was first written. Written once, never reset, and
+            unrelated to invited_at (ADR-377 D2). NULL on rows predating the column.
+        mfa_grace_started_at: First sign-in after MFA enforcement shipped. The
+            MFA enrolment deadline is measured from here, not from created_at.
 
     Uniqueness:
         discord_id and email are unique per company, not globally. This allows
@@ -61,6 +67,22 @@ class Employee(Base):
     phone_number         = Column(String(20),         nullable=True)
     account_status       = Column(String(30),         nullable=False, default="pending_verification", index=True)
     invited_at           = Column(DateTime(timezone=True), nullable=True)
+    # ADR-377 D2 — the row's own birthday, for anything that needs to measure
+    # age. A DIFFERENT FACT from `invited_at`, not a rename of it: an invite is
+    # an event that may never happen and is reissued on re-invite
+    # (employees.py:554), while this is written once when the row appears.
+    # Nullable, and NOT backfilled: rows predating this column keep NULL rather
+    # than borrowing a date from a different fact.
+    created_at           = Column(
+        DateTime(timezone=True), nullable=True,
+        default=lambda: datetime.now(timezone.utc), index=True,
+    )
+    # ADR-377 D2 — stamped on the FIRST sign-in after MFA enforcement ships,
+    # not at account creation. Anchoring the grace period to creation would put
+    # every existing employee instantly past the deadline (the staging accounts
+    # date from 2026-05-07), which is a day-one mass lockout. Stamped once and
+    # never moved: a later sign-in must not silently extend the window.
+    mfa_grace_started_at = Column(DateTime(timezone=True), nullable=True)
     # ADR-221: stamped on deactivation. The tombstone survives so the 6-month
     # name-redaction clock has a departure time to measure against.
     deactivated_at       = Column(DateTime(timezone=True), nullable=True)

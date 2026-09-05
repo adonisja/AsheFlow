@@ -61,11 +61,26 @@ def seat_truck_pins(
         for emp in employees:
             pool_by_id[str(emp.id)] = (role_key, emp)
 
+    # ADR-371 — resolve the caller's key type once, from the dict itself.
+    #
+    # This compared `str(pin.truck_id)` against assigned_crews, which run_dispatch
+    # keys by UUID OBJECTS. `str(uuid) in {uuid: []}` is False, so the guard below
+    # fired for EVERY pin and truck pins have never seated anyone since ADR-358.
+    #
+    # The comment on that guard described a legitimate skip ("truck not running
+    # today"), which is what made a failing comparison look like designed
+    # behaviour -- and why ADR-368 diagnosed it as a hub problem.
+    #
+    # Built from the live keys rather than assuming a type, so this keeps working
+    # if run_dispatch ever re-keys to strings.
+    by_str = {str(k): k for k in assigned_crews}
+
     for pin in pins:
-        truck_key = str(pin.truck_id)
-        if truck_key not in assigned_crews:
-            # Truck not running today. Not a misconfiguration — a pin binds a
-            # person to a truck, it does not reserve the truck.
+        truck_key = by_str.get(str(pin.truck_id))
+        if truck_key is None:
+            # Genuinely not running today -- now a real lookup rather than a
+            # type mismatch. A pin binds a person to a truck; it does not
+            # reserve the truck.
             continue
 
         entry = pool_by_id.get(str(pin.employee_id))

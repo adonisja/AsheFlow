@@ -133,12 +133,18 @@ class TestNonMachineTokensStillPinTheAppClient:
 
 
 class TestTheBotUsesTheMachineIdentity:
-    def test_m2m_is_preferred_over_the_password_path(self):
+    def test_the_machine_identity_is_the_only_path(self):
+        """Was test_m2m_is_preferred_over_the_password_path.
+
+        There is no longer a preference to express: ADR-377 removed the password
+        fallback, so `_refresh_token` dispatches to exactly one place.
+        """
         src = _read(BOT_CLIENT)
         i = src.index("async def _refresh_token(self)")
-        window = src[i: i + 700]
-        assert "cognito_m2m_client_id" in window and "_refresh_token_m2m" in window, (
-            "the bot must prefer the machine identity when it is configured"
+        body = src[i: src.index("async def _refresh_token_m2m")]
+        assert "_refresh_token_m2m" in body
+        assert "else:" not in body, (
+            "a second auth path is back in the dispatcher (ADR-377 removed it)"
         )
 
     def test_expires_in_is_read_not_assumed(self):
@@ -151,20 +157,56 @@ class TestTheBotUsesTheMachineIdentity:
     def test_a_token_endpoint_error_is_named(self):
         """The token endpoint reports failures as an OAuth error code with a
         200-shaped body, not an exception."""
+        # Scoped to the FUNCTION, not a fixed character window. The window was
+        # 2600 chars and ADR-377's credential guard pushed the error handling
+        # past it -- the test failed while the behaviour was intact, which is a
+        # false alarm on a real check.
+        import ast
+
         src = _read(BOT_CLIENT)
-        i = src.index("async def _refresh_token_m2m")
-        window = src[i: i + 2600]
+        fn = next(
+            n for n in ast.walk(ast.parse(src))
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "_refresh_token_m2m"
+        )
+        # Slice the RAW source by line numbers rather than ast.unparse: unparse
+        # normalises quote style, so body.get("error") comes back as
+        # body.get('error') and a quote-sensitive assertion fails on code that
+        # is perfectly correct.
+        window = "\n".join(src.splitlines()[fn.lineno - 1: fn.end_lineno])
         assert 'body.get("error"' in window, "an OAuth error code is not surfaced"
         assert "logger.error" in window
 
-    def test_the_password_path_survives_for_rollback(self):
-        """Kept deliberately: a rollback should be an env change, not a deploy."""
+    def test_the_password_path_is_gone(self):
+        """INVERTED by ADR-377. This test previously asserted the opposite.
+
+        ADR-363 kept the USER_PASSWORD_AUTH fallback so a rollback was an env
+        change rather than a deploy, and pinned it here. That reasoning held
+        until MFA enforcement: a bot has no phone and cannot answer a challenge,
+        so under MfaConfiguration=ON the `asheflow.bot` user account is refused
+        at sign-in. The fallback would look like a safety net while being
+        incapable of working.
+
+        Rolling back the machine identity is now a git revert.
+        """
         src = _read(BOT_CLIENT)
-        assert "_refresh_token_password" in src
-        assert "SOFTWARE_TOKEN_MFA" in src, (
-            "the challenge handling must survive on the fallback path — it is "
-            "what makes a botched cutover legible"
+        assert "_refresh_token_password" not in src, (
+            "the password fallback is back — under MFA enforcement it cannot "
+            "authenticate, so it is a rollback that provably fails (ADR-377)"
         )
+        assert "bot_username" not in src and "bot_password" not in src, (
+            "the credentials outlived the code path that used them"
+        )
+
+    def test_missing_m2m_credentials_fail_loudly(self):
+        """With no fallback, unset credentials must name the problem.
+
+        The old dispatcher treated missing M2M credentials as "use the other
+        path". With that path gone they would otherwise surface as a TypeError
+        inside aiohttp.BasicAuth rather than as the configuration error they are.
+        """
+        src = _read(BOT_CLIENT)
+        assert "COGNITO_M2M_CLIENT_ID and COGNITO_M2M_CLIENT_SECRET are required" in src
 
 
 class TestTheBotsReachIsExactlyItsEndpoints:

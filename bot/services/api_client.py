@@ -1,7 +1,7 @@
 """Shared async HTTP client for all bot → AsheFlow API calls.
 
 Handles:
-- Cognito authentication (USER_PASSWORD_AUTH flow) to obtain a JWT
+- Cognito authentication (OAuth2 client_credentials, ADR-363) to obtain a JWT
 - Automatic token refresh when the token expires
 - All API calls the dispatch cog needs
 """
@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
-import boto3
 from botocore.exceptions import ClientError
 
 from config import settings
@@ -42,9 +41,9 @@ class AsheFlowClient:
         try:
             await self._refresh_token()
         except ClientError as e:
-            # Auth failure on startup (e.g. throttle cooldown, wrong password).
-            # Log and continue — the bot's internal webhook server still starts.
-            # Token will be retried lazily on the first API call.
+            # Auth failure on startup (e.g. throttle cooldown, bad client
+            # secret). Log and continue — the bot's internal webhook server
+            # still starts. Token is retried lazily on the first API call.
             logger.warning("Startup Cognito auth failed (will retry on first API call): %s", e)
 
     async def close(self) -> None:
@@ -59,14 +58,16 @@ class AsheFlowClient:
     async def _refresh_token(self) -> None:
         """Obtain an API token and cache it until shortly before it expires.
 
-        Two paths. The machine identity (ADR-363) is preferred and is the one
-        that survives MFA enforcement; the password path is the pre-migration
-        fallback, kept so a rollback is an env change rather than a deploy.
+        One path. ADR-363 kept a USER_PASSWORD_AUTH fallback so a rollback was
+        an env change rather than a deploy; ADR-377 removed it, because MFA
+        enforcement makes it a rollback that provably cannot work. A bot has no
+        phone and cannot answer a challenge, so under MfaConfiguration=ON the
+        `asheflow.bot` user account is refused at sign-in. Keeping the branch
+        would leave a safety net that looks like one and is not.
+
+        Rolling back the machine identity is now a git revert.
         """
-        if settings.cognito_m2m_client_id and settings.cognito_m2m_client_secret:
-            await self._refresh_token_m2m()
-        else:
-            await self._refresh_token_password()
+        await self._refresh_token_m2m()
 
     async def _refresh_token_m2m(self) -> None:
         """OAuth2 client_credentials against the user pool token endpoint.
@@ -81,6 +82,19 @@ class AsheFlowClient:
         configured for one hour, but reading the response means a console change
         to that setting does not silently strand the bot on a stale token.
         """
+        # ADR-377 — checked explicitly now that there is no password fallback.
+        # The old dispatcher treated missing M2M credentials as "use the other
+        # path"; with that path gone, unset credentials would otherwise surface
+        # as a TypeError inside aiohttp.BasicAuth rather than as the
+        # configuration error it is.
+        if not (settings.cognito_m2m_client_id and settings.cognito_m2m_client_secret):
+            raise RuntimeError(
+                "COGNITO_M2M_CLIENT_ID and COGNITO_M2M_CLIENT_SECRET are required. "
+                "The BOT_USERNAME/BOT_PASSWORD fallback was removed in ADR-377: a "
+                "user account cannot answer an MFA challenge, so it could not have "
+                "worked once enforcement lands."
+            )
+
         domain = (settings.cognito_oauth_domain or "").rstrip("/")
         if not domain:
             raise RuntimeError(
@@ -133,85 +147,6 @@ class AsheFlowClient:
                 seconds=expires_in - margin
             )
             logger.info("Bot M2M token acquired (expires in %ss).", expires_in)
-
-    async def _refresh_token_password(self) -> None:
-        """Authenticate as a Cognito USER and cache the IdToken.
-
-        Superseded by the machine identity (ADR-363) and kept only for rollback.
-        A user account cannot answer an MFA challenge, which is exactly why this
-        path blocks enforcement — see the challenge handling below, which makes
-        that legible instead of a KeyError.
-        """
-        if not (settings.bot_username and settings.bot_password):
-            raise RuntimeError(
-                "No bot credentials configured: set COGNITO_M2M_CLIENT_ID and "
-                "COGNITO_M2M_CLIENT_SECRET (preferred), or BOT_USERNAME and "
-                "BOT_PASSWORD."
-            )
-        try:
-            client = boto3.client("cognito-idp", region_name=settings.aws_region)
-            resp = client.initiate_auth(
-                AuthFlow="USER_PASSWORD_AUTH",
-                AuthParameters={
-                    "USERNAME": settings.bot_username,
-                    "PASSWORD": settings.bot_password,
-                },
-                ClientId=settings.aws_cognito_client_id,
-            )
-        except ClientError as e:
-            logger.error("Failed to authenticate bot with Cognito: %s", e)
-            raise
-
-        challenge = resp.get("ChallengeName")
-        if challenge:
-            remedy = {
-                "NEW_PASSWORD_REQUIRED": (
-                    "the account is in FORCE_CHANGE_PASSWORD. Reset it with "
-                    "admin-set-user-password --permanent."
-                ),
-                "SOFTWARE_TOKEN_MFA": (
-                    "the account has TOTP enrolled. A bot cannot produce a code; "
-                    "migrate to the machine identity (ADR-363)."
-                ),
-                "EMAIL_OTP": (
-                    "the account has email MFA enabled. A bot has no inbox; "
-                    "migrate to the machine identity (ADR-363)."
-                ),
-                "SELECT_MFA_TYPE": (
-                    "the account has more than one MFA factor enrolled. Migrate "
-                    "to the machine identity (ADR-363)."
-                ),
-                "MFA_SETUP": (
-                    "the pool requires MFA and the account has no factor. A bot "
-                    "cannot enrol one; migrate to the machine identity (ADR-363)."
-                ),
-            }.get(challenge, "this challenge has no automated path.")
-
-            logger.error(
-                "Bot Cognito sign-in was challenged with %s and cannot continue: %s "
-                "Username=%s. Until this is cleared, every bot API call will fail.",
-                challenge, remedy, settings.bot_username,
-            )
-            raise RuntimeError(
-                f"Bot authentication requires {challenge}, which a service "
-                f"account cannot satisfy. {remedy}"
-            )
-
-        result = resp.get("AuthenticationResult") or {}
-        token = result.get("IdToken")
-        if not token:
-            logger.error(
-                "Bot Cognito sign-in returned neither tokens nor a challenge; "
-                "keys=%s", sorted(resp.keys()),
-            )
-            raise RuntimeError(
-                "Bot authentication returned an unexpected response from Cognito."
-            )
-
-        self._token = token
-        # IdToken expires in 1 hour; refresh 5 minutes early
-        self._token_expiry = datetime.now(timezone.utc) + timedelta(minutes=55)
-        logger.info("Bot Cognito token refreshed.")
 
     async def _ensure_token(self) -> str:
         if datetime.now(timezone.utc) >= self._token_expiry:

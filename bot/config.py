@@ -12,8 +12,6 @@ class Settings(BaseSettings):
     # ADR-363 — the bot is migrating to an OAuth2 client_credentials machine
     # identity. These stay OPTIONAL during the cutover so a rollback needs an
     # env change rather than a deploy, and are removed once M2M is proven.
-    bot_username: str | None = None
-    bot_password: str | None = None
 
     # Machine identity. When both are set the bot uses client_credentials and
     # never touches the username/password path.

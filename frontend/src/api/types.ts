@@ -191,6 +191,10 @@ export interface DispatchResult {
     /** From the TRUCK, not derived from status (ADR-274). The old client-side
      *  derivation (`status === 'planned'`) matched every truck before publish. */
     is_hub?: boolean;
+    /** Why dispatch created this assignment on its own (ADR-368). "truck_pin"
+     *  means a hub had someone pinned to it for this weekday. Null for every
+     *  assignment a dispatcher created by hand, which is nearly all of them. */
+    auto_created_reason?: string | null;
     /** Physical bay this truck collects from (ADR-274 D17). Null until dispatch
      *  sets one or publish inherits the truck's last known bay. The Discord bot
      *  reads this same payload, so the DM and this board cannot disagree. */
@@ -249,7 +253,16 @@ export interface FinalizeResponse {
 export interface ClearDispatchResponse {
   date: string;
   assignments_cleared: number;
-  discord_cleared: boolean;
+  /** ADR-367 — three-state, not a boolean:
+   *
+   *    null   nothing to retract; the bot was never called
+   *    true   called, retraction succeeded
+   *    false  called, and it failed
+   *
+   *  Compare with `=== false`. `!discord_cleared` is true for null as well, so
+   *  a falsy check warns about orphaned crew posts on every clear of a day that
+   *  was never published to Discord. */
+  discord_cleared: boolean | null;
   /** Named, not counted — "crew embed Eagle: missing Manage Messages". */
   discord_failures: string[];
 }
@@ -717,6 +730,19 @@ export interface TruckPinCreatePayload {
   employee_id: string;
   truck_id: string;
   days: Weekday[];
+}
+
+/** PATCH /truck-pins/employee/{employee_id} — ADR-373 D3.
+ *  Only the truck: moving a pin to a different PERSON is a different pin. */
+export interface TruckPinRetruckPayload {
+  truck_id: string;
+}
+
+/** PATCH /crew-pins/{id} — every field optional; send only what changed. */
+export interface CrewPinUpdatePayload {
+  name?: string;
+  member_ids?: string[];
+  is_active?: boolean;
 }
 
 export interface AssignmentChangeRequest {
@@ -2611,4 +2637,25 @@ export interface Separation {
   target_employee_id: string;
   employee_name: string | null;
   target_employee_name: string | null;
+}
+
+
+/** GET /employees/me/mfa-status — ADR-377 D2.
+ *
+ *  `enrolled` is `null` when Cognito could not be reached. That is deliberately
+ *  not `false`: false means "not enrolled" and past the deadline that blocks, so
+ *  an AWS hiccup must never read as a lockout. Render no banner on null.
+ *
+ *  Note it answers "should we nudge", NOT "is this account protected". Under
+ *  MfaConfiguration=ON Cognito challenges on the associated token regardless of
+ *  the preference flag this reads, so an account can be protected while this
+ *  says enrolled=false.
+ */
+export interface MfaStatus {
+  required: boolean;
+  enrolled: boolean | null;
+  tier: 'privileged' | 'field' | 'none';
+  grace_days_total: number;
+  days_remaining: number | null;
+  blocked: boolean;
 }

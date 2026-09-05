@@ -15,11 +15,13 @@ import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, Pagination, get_caller_employee
+from app.api.deps import (RoleChecker, Pagination, get_caller_employee,
+                          get_caller_employee_optional, get_current_user)
 from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
+from app.services import device_fleet, mfa_status
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
@@ -430,6 +432,106 @@ def get_my_employee(
 ):
     """Return the Employee record for the currently authenticated user."""
     return EmployeeResponse.model_validate(caller)
+
+
+@router.get("/me/mfa-status")
+def get_my_mfa_status(
+    db: Session = Depends(get_db),
+    # OPTIONAL, not get_caller_employee: a platform account (super_admin,
+    # platform_support) has no Employee row BY DESIGN -- it is not staff and
+    # must not appear in the roster or headcount. Requiring one 403s exactly the
+    # accounts the privileged tier exists to protect. Measured on prod: deleting
+    # `adon`'s stray roster row made this endpoint refuse the platform owner.
+    caller: Employee | None = Depends(get_caller_employee_optional),
+    current_user: dict = Depends(get_current_user),
+):
+    """This user's MFA obligation, and how long they have left (ADR-377 D2).
+
+    Also STARTS the grace clock. It is stamped here rather than at account
+    creation because anchoring the deadline to creation would put every existing
+    employee instantly past it -- the staging accounts date from 2026-05-07 --
+    which is a day-one mass lockout.
+
+    Stamped ONCE. A later call must not extend the window, so the write is
+    guarded on the column still being NULL rather than overwritten each time.
+    """
+    groups = set(current_user.get("cognito_groups", []))
+
+    # A platform account with no Employee row. Its tier comes entirely from the
+    # Cognito group, and it has no row on which to stamp a grace clock -- which
+    # is correct, because the privileged tier has no grace period to track.
+    if caller is None:
+        if not (groups & mfa_status.MFA_PRIVILEGED_ROLES):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No employee record found for your account. Contact your manager.",
+            )
+        enrolled = mfa_status.is_enrolled(
+            current_user.get("id"), current_user.get("username"),
+        )
+        return mfa_status.evaluate(
+            role="", enrolled=True if enrolled is None else enrolled,
+            grace_started_at=None, groups=groups,
+        ).as_dict()
+
+    # ADR-374 — a MachineCaller has no role, no cognito_sub and no grace column.
+    # Reaching for any of them here is the exact AttributeError that 500'd the
+    # bot's morning fetch. A machine authenticates by scope and never enrols, so
+    # the question does not apply to it.
+    if getattr(caller, "role", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="MFA status applies to user accounts, not machine clients.",
+        )
+
+    enrolled = mfa_status.is_enrolled(caller.cognito_sub, caller.discord_id)
+
+    # None means Cognito could not be reached. Treat as enrolled for gating
+    # purposes: an AWS hiccup must never block a shift. The banner simply does
+    # not appear that request.
+    if enrolled is None:
+        status_obj = mfa_status.evaluate(
+            role=caller.role, enrolled=True, grace_started_at=caller.mfa_grace_started_at,
+            groups=groups,
+        )
+        out = status_obj.as_dict()
+        out["enrolled"] = None      # honest: unknown, not confirmed
+        return out
+
+    if not enrolled and caller.mfa_grace_started_at is None:
+        # First sign-in after enforcement shipped: the window opens now.
+        caller.mfa_grace_started_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(caller)
+
+    # ADR-377 D3 — trim the remembered-device fleet on the way past.
+    #
+    # Here rather than in a Cognito trigger because no trigger fires on
+    # ConfirmDevice: PreAuthentication runs BEFORE the device is confirmed, so
+    # it cannot see the device that just pushed the user over the cap. This
+    # endpoint is called by both clients right after sign-in, which is the first
+    # moment the new device exists.
+    #
+    # Never raises (see enforce_cap): an AWS hiccup must degrade to one extra
+    # remembered device, not to a failed sign-in.
+    device_fleet.enforce_cap(
+        username=caller.discord_id or str(caller.cognito_sub),
+        pool_id=settings.aws_cognito_user_pool_id,
+        region=settings.aws_region,
+    )
+
+    grace_days = mfa_status.DEFAULT_MFA_GRACE_DAYS
+    return mfa_status.evaluate(
+        role=caller.role,
+        enrolled=enrolled,
+        grace_started_at=caller.mfa_grace_started_at,
+        grace_days=grace_days,
+        # Groups, not just the role: `super_admin` and `platform_support` are
+        # rejected by Employee.VALID_ROLES, so they arrive ONLY as Cognito
+        # groups. Prod's `adon` is super_admin in Cognito and `trainee` on its
+        # Employee row -- role alone put it on the field tier.
+        groups=groups,
+    ).as_dict()
 
 
 @router.get("/by-discord/{discord_id}", response_model=EmployeePublicResponse)

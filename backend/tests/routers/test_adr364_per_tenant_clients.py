@@ -184,3 +184,41 @@ class TestTheSecretIsNotStored:
         window = src[i: i + 2000]
         assert "machine_client_secret_revealed" in window
         assert "write_audit" in window
+
+
+class TestTheUICanTellProvisionedFromNot:
+    """The create-company flow shows credentials once, which covers a NEW tenant
+    and nothing else. Every company predating ADR-364 needs a way to get one,
+    and a lost secret needs a way back — both live on the company detail page.
+    """
+
+    def test_the_detail_response_exposes_whether_a_client_exists(self):
+        """Without this the page always offers to PROVISION, and doing so
+        rotates a working secret and breaks that tenant's bot."""
+        src = _read(COMPANIES)
+        i = src.index("class CompanyDetailResponse")
+        window = src[i: i + 700]
+        assert "machine_client_id" in window, (
+            "the detail page cannot distinguish provisioned from not, so it "
+            "would offer to re-provision a working client"
+        )
+
+    def test_the_secret_is_not_in_the_detail_response(self):
+        """The id is not a credential; the secret is, and it stays behind its
+        own audited endpoint."""
+        src = _read(COMPANIES)
+        i = src.index("class CompanyDetailResponse")
+        window = src[i: i + 700]
+        assert "machine_client_secret" not in window, (
+            "a live credential must not ride along on an ordinary page load"
+        )
+
+    def test_the_detail_page_calls_both_endpoints(self):
+        page = (
+            ROOT / "frontend" / "src" / "pages" / "superadmin" / "CompanyDetail.tsx"
+        ).read_text(errors="ignore")
+        assert "machine-client" in page, "the page never calls the endpoints"
+        assert "Reveal secret" in page, "no recovery path for a lost secret"
+        assert "Provision credentials" in page, (
+            "a company created before ADR-364 has no way to get a client"
+        )

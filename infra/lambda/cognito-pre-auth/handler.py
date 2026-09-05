@@ -79,8 +79,31 @@ def handler(event, context):
             return event  # field role: a factor is encouraged, not gated
 
         user = _cognito().admin_get_user(UserPoolId=pool_id, Username=username)
-        # A user with any factor enrolled has a non-empty UserMFASettingList.
-        # Absent entirely for someone who has never enrolled.
+
+        # UserMFASettingList, and ONLY that -- but the reason is subtler than it
+        # looks, and worth writing down because the obvious reading is wrong.
+        #
+        # ADR-377 D1 measured that this field is a false negative UNDER
+        # MfaConfiguration: ON -- a user who clears their preference reads None
+        # here while Cognito still challenges them, because the associated token
+        # is what ON enforces. That suggests this check could lock out a
+        # protected account.
+        #
+        # It cannot, because of which pool mode the trigger matters in.
+        # Measured on a scratch pool, same user, preference cleared:
+        #
+        #     sign-in under OPTIONAL -> TOKENS (no challenge)
+        #     sign-in under ON       -> SOFTWARE_TOKEN_MFA
+        #
+        # Under OPTIONAL the preference DOES gate, so None means genuinely
+        # unprotected and refusing is correct -- this trigger is the only thing
+        # standing there. Under ON every sign-in is challenged anyway, so the
+        # trigger is redundant and a false refusal is the only harm it can do.
+        #
+        # Checked for a replacement signal that survives a cleared preference:
+        # MFAOptions and PreferredMfaSetting both go None too. There is no such
+        # field. So this is the best available signal, and it is correct where
+        # it is load-bearing.
         if user.get("UserMFASettingList"):
             return event
 

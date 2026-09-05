@@ -24,6 +24,20 @@ class TruckPinCreate(BaseModel):
     days: List[Weekday] = Field(..., min_length=1, max_length=7)
 
 
+class TruckPinRetruck(BaseModel):
+    """Move every one of an employee's truck pins to a different truck (ADR-373).
+
+    Only `truck_id`. Not the employee -- changing who a pin is for is not an edit
+    of that pin, it is a different pin, and silently reassigning one detaches it
+    from its audit trail. Not the days either: those are added and removed
+    individually, which is what the day chips already do.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    truck_id: UUID
+
+
 class TruckPinResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
