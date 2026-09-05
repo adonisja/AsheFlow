@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
 from app.models.employee import Employee
-from app.services import mfa_status
+from app.services import device_fleet, mfa_status
 from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
@@ -476,6 +476,22 @@ def get_my_mfa_status(
         caller.mfa_grace_started_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(caller)
+
+    # ADR-377 D3 — trim the remembered-device fleet on the way past.
+    #
+    # Here rather than in a Cognito trigger because no trigger fires on
+    # ConfirmDevice: PreAuthentication runs BEFORE the device is confirmed, so
+    # it cannot see the device that just pushed the user over the cap. This
+    # endpoint is called by both clients right after sign-in, which is the first
+    # moment the new device exists.
+    #
+    # Never raises (see enforce_cap): an AWS hiccup must degrade to one extra
+    # remembered device, not to a failed sign-in.
+    device_fleet.enforce_cap(
+        username=caller.discord_id or str(caller.cognito_sub),
+        pool_id=settings.aws_cognito_user_pool_id,
+        region=settings.aws_region,
+    )
 
     grace_days = mfa_status.DEFAULT_MFA_GRACE_DAYS
     return mfa_status.evaluate(
