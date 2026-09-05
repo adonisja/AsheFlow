@@ -135,3 +135,63 @@ class TestAMachineIsNotAUser:
             get_my_mfa_status(db=None, caller=machine)
         assert exc.value.status_code == 403
         assert "machine" in exc.value.detail.lower()
+
+
+class TestCognitoGroupsOutrankTheEmployeeRole:
+    """`super_admin` and `platform_support` are NOT in Employee.VALID_ROLES.
+
+    A DB constraint rejects them, so they can only ever arrive as Cognito
+    groups. Classifying by `Employee.role` alone makes two of the five
+    privileged roles unreachable.
+
+    Found on PROD: `adon` is `super_admin` in Cognito and `trainee` on its
+    Employee row. Role-only classification put the platform's highest-privilege
+    account on the FIELD tier with a 14-day grace period -- the exact inversion
+    the tiering exists to prevent.
+    """
+
+    def test_super_admin_is_not_a_valid_employee_role(self):
+        """The premise. If this ever changes, the precedence below can be
+        revisited -- but until then the group is the only signal."""
+        from app.models.employee import VALID_ROLES
+
+        assert "super_admin" not in VALID_ROLES
+        assert "platform_support" not in VALID_ROLES
+
+    def test_the_group_promotes_a_field_role_to_privileged(self):
+        assert tier_for("trainee", {"super_admin"}) == "privileged"
+        assert tier_for("walker", {"platform_support"}) == "privileged"
+
+    def test_the_prod_adon_case_end_to_end(self):
+        """super_admin group + trainee row must get NO grace period."""
+        s = evaluate(role="trainee", enrolled=False, grace_started_at=None,
+                     groups={"super_admin"}, now=NOW)
+        assert s.tier == "privileged"
+        assert s.grace_days_total == 0
+        assert s.blocked is True, (
+            "a super_admin must enrol before first use, not get 14 days"
+        )
+
+    def test_a_missing_group_never_demotes(self):
+        """Escalation only. A dispatch employee whose groups did not come
+        through keeps the tier their role implies."""
+        assert tier_for("dispatch", set()) == "privileged"
+        assert tier_for("dispatch", None) == "privileged"
+
+    def test_an_unrelated_group_changes_nothing(self):
+        assert tier_for("walker", {"some_other_group"}) == "field"
+
+    def test_the_endpoint_passes_groups_not_just_the_role(self):
+        import inspect
+
+        from app.routers.employees import get_my_mfa_status
+
+        src = inspect.getsource(get_my_mfa_status)
+        assert 'groups=set(current_user.get("cognito_groups", []))' in src, (
+            "the endpoint must pass Cognito groups, or super_admin lands on "
+            "the field tier"
+        )
+        assert src.count("groups=set(") == 2, (
+            "both the normal and the Cognito-unreachable path must classify "
+            "the same way"
+        )

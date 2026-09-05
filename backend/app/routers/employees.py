@@ -15,7 +15,7 @@ import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, Pagination, get_caller_employee
+from app.api.deps import RoleChecker, Pagination, get_caller_employee, get_current_user
 from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
@@ -437,6 +437,7 @@ def get_my_employee(
 def get_my_mfa_status(
     db: Session = Depends(get_db),
     caller: Employee = Depends(get_caller_employee),
+    current_user: dict = Depends(get_current_user),
 ):
     """This user's MFA obligation, and how long they have left (ADR-377 D2).
 
@@ -466,6 +467,7 @@ def get_my_mfa_status(
     if enrolled is None:
         status_obj = mfa_status.evaluate(
             role=caller.role, enrolled=True, grace_started_at=caller.mfa_grace_started_at,
+            groups=set(current_user.get("cognito_groups", [])),
         )
         out = status_obj.as_dict()
         out["enrolled"] = None      # honest: unknown, not confirmed
@@ -499,6 +501,11 @@ def get_my_mfa_status(
         enrolled=enrolled,
         grace_started_at=caller.mfa_grace_started_at,
         grace_days=grace_days,
+        # Groups, not just the role: `super_admin` and `platform_support` are
+        # rejected by Employee.VALID_ROLES, so they arrive ONLY as Cognito
+        # groups. Prod's `adon` is super_admin in Cognito and `trainee` on its
+        # Employee row -- role alone put it on the field tier.
+        groups=set(current_user.get("cognito_groups", [])),
     ).as_dict()
 
 
