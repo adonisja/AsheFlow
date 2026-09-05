@@ -60,7 +60,26 @@ class MfaStatus:
         }
 
 
-def tier_for(role: str) -> str:
+def tier_for(role: str, groups: Optional[set[str]] = None) -> str:
+    """Which tier this caller is in.
+
+    `groups` are the Cognito groups, and they take PRECEDENCE over the Employee
+    role. That is not a nicety -- `super_admin` and `platform_support` are NOT
+    in Employee.VALID_ROLES and a DB constraint rejects them, so they can only
+    ever arrive as groups. Reading `Employee.role` alone makes two of the five
+    privileged roles unreachable.
+
+    Measured on prod: `adon` is `super_admin` in Cognito and `trainee` on its
+    Employee row. Role-only classification put the platform's highest-privilege
+    account on the FIELD tier with a 14-day grace period -- the exact inversion
+    this tiering exists to prevent.
+
+    Escalation only. A group can promote a caller to privileged; it never
+    demotes one, so a dispatch employee whose groups are missing keeps their
+    tier from the role.
+    """
+    if groups and (groups & MFA_PRIVILEGED_ROLES):
+        return "privileged"
     if role in MFA_PRIVILEGED_ROLES:
         return "privileged"
     if role in MFA_FIELD_ROLES:
@@ -75,6 +94,7 @@ def evaluate(
     grace_started_at: Optional[datetime],
     grace_days: int = DEFAULT_MFA_GRACE_DAYS,
     now: Optional[datetime] = None,
+    groups: Optional[set[str]] = None,
 ) -> MfaStatus:
     """Pure function -- no DB, no Cognito -- so the deadline rule is testable.
 
@@ -84,7 +104,7 @@ def evaluate(
     everything right.
     """
     now = now or datetime.now(timezone.utc)
-    t = tier_for(role)
+    t = tier_for(role, groups)
 
     if t == "none":
         return MfaStatus(False, enrolled, t, 0, None, False)
