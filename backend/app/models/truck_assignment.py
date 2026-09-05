@@ -46,6 +46,18 @@ class TruckAssignment(Base):
     # Nullable: a truck-day with no bay set yet is normal, and the value is
     # prefilled from the truck's previous assignment for dispatch to confirm.
     dock_zone           = Column(String(50), nullable=True)
+    # ADR-368 D3: why dispatch created this assignment on its own, when it did.
+    # "truck_pin" means a hub had someone pinned to it for this weekday, so the
+    # run created the assignment rather than skipping the pin.
+    #
+    # On the ASSIGNMENT rather than derived at read time: answering "was this
+    # auto-created?" from "does a matching pin exist?" flips to false the moment
+    # the pin is edited or deleted, rewriting history. ADR-274 named that trap.
+    #
+    # Nullable, and null for every hand-created assignment -- the board renders a
+    # distinct treatment only when it is set, because an assignment nobody asked
+    # for is worse than none if it appears silently.
+    auto_created_reason = Column(String(40), nullable=True)
 
     # ADR-290: the warehouse zone where THIS TRUCK'S TOTES are staged ("BTR31").
     #

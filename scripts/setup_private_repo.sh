@@ -49,9 +49,24 @@ PRIVATE_REPO="git@github.com:adonisja/AsheFlow-private.git"
 PUBLIC_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 INIT_MODE=false
+DOCS_ONLY=false
 
 if [ "${1:-}" = "--init" ]; then
   INIT_MODE=true
+fi
+
+# --docs-only: mirror docs/, memory/ and CLAUDE.md, and skip the proprietary
+# code copy and the orphan guard.
+#
+# For a DESIGN-ONLY session: an ADR or journal written with no code change has
+# nothing to commit, so `git push` is a no-op and the pre-push hook never fires.
+# ADR-377 sat unsynced for exactly that reason -- written, correct, and invisible
+# to everyone but the machine it was written on.
+#
+# Only skips work that cannot have changed when no code changed. It is NOT a
+# faster full sync: run the full one after touching any proprietary file.
+if [ "${1:-}" = "--docs-only" ]; then
+  DOCS_ONLY=true
 fi
 
 # Determine which private branch to push to based on current public branch.
@@ -115,113 +130,119 @@ mkdir -p docs/decisions
 mkdir -p docs/journals
 mkdir -p docs/templates
 
-# ── Proprietary files ───────────────────────────────────────────────────────
-# Read from PROPRIETARY.txt — the single source of truth. Previously these were
-# two hardcoded arrays that had to agree with .gitignore by hand, and they
-# drifted in both directions: assign_captains.py was in NEITHER list (so nothing
-# had it), while run_sort/persist_zones/sort_analysis were in SERVICES but not
-# .gitignore (so they synced to private AND stayed public). One list removes the
-# whole failure class.
-MANIFEST="$PUBLIC_ROOT/PROPRIETARY.txt"
-if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: $MANIFEST not found — cannot determine what is proprietary."
-  exit 1
-fi
-
-ROUTERS=()
-SERVICES=()
-while IFS= read -r _p; do
-  case "$_p" in ''|\#*) continue ;; esac
-  case "$_p" in
-    backend/app/routers/*.py)  ROUTERS+=("$(basename "$_p")") ;;
-    backend/app/services/*.py) SERVICES+=("$(basename "$_p")") ;;
-  esac
-done < "$MANIFEST"
-
-echo "  manifest: ${#ROUTERS[@]} routers, ${#SERVICES[@]} services"
-
-echo ""
-echo "Copying routers..."
-for f in "${ROUTERS[@]}"; do
-  src="$PUBLIC_ROOT/backend/app/routers/$f"
-  if [ -f "$src" ]; then
-    cp "$src" "backend/app/routers/$f"
-    echo "  ✓ routers/$f"
-  else
-    echo "  ✗ MISSING: routers/$f (skipped)"
-  fi
-done
-
-echo ""
-echo "Copying services..."
-for f in "${SERVICES[@]}"; do
-  src="$PUBLIC_ROOT/backend/app/services/$f"
-  if [ -f "$src" ]; then
-    cp "$src" "backend/app/services/$f"
-    echo "  ✓ services/$f"
-  else
-    echo "  ✗ MISSING: services/$f (skipped)"
-  fi
-done
-
-# ── Orphan guard: a service in NEITHER the manifest nor the public index ─────
-# The manifest removed the two-list drift class, but one gap survives it: a NEW
-# service file that nobody has classified yet. It is untracked publicly (so the
-# public repo does not have it) and absent from the manifest (so this sync does
-# not copy it) — exactly how assign_captains.py became invisible to everything
-# at once. Fail the push rather than let it disappear.
-echo ""
-echo "Checking for unclassified services..."
-_orphans=0
-for src in "$PUBLIC_ROOT"/backend/app/services/*.py; do
-  f="$(basename "$src")"
-  printf '%s\n' "${SERVICES[@]}" | grep -qx "$f" && continue
-  git -C "$PUBLIC_ROOT" ls-files --error-unmatch "backend/app/services/$f" >/dev/null 2>&1 && continue
-  echo "  ✗ $f is neither tracked publicly nor listed in PROPRIETARY.txt."
-  echo "    Decide which it is: add it to PROPRIETARY.txt (then run"
-  echo "    scripts/sync_proprietary_lists.sh), or git add it."
-  _orphans=1
-done
-if [ "$_orphans" -eq 1 ]; then
+if $DOCS_ONLY; then
   echo ""
-  echo "ERROR: unclassified proprietary file(s) would be lost. Push aborted."
-  exit 1
-fi
-echo "  ✓ every service is classified"
-
-# ── Proprietary tests ────────────────────────────────────────────────────────
-# These import proprietary routers/services, so they're gitignored from the public
-# repo and can't run in public CI. Sync them here so the CI test job (which pulls
-# this repo) can run the FULL suite instead of silently skipping proprietary paths.
-# Relative paths under backend/tests/ so services tests sync too, not just routers.
-TESTS=(
-  routers/test_arrival_confirm.py
-  routers/test_back_at_truck.py
-  routers/test_confirmation_gate.py
-  routers/test_dispatch_move_pairing.py
-  routers/test_clear_dispatch.py
-  routers/test_finalize_gate.py
-  routers/test_my_performance.py
-  routers/test_pair_split.py
-  routers/test_cover_remaining.py
-  routers/test_route_detail.py
-  routers/test_route_reassign_unassign.py
-  routers/test_peer_ratings.py
-  routers/test_reassign_trainee.py
-  services/test_stop_cutoff.py
-)
-echo ""
-echo "Copying proprietary tests..."
-for f in "${TESTS[@]}"; do
-  src="$PUBLIC_ROOT/backend/tests/$f"
-  if [ -f "$src" ]; then
-    mkdir -p "backend/tests/$(dirname "$f")"
-    cp "$src" "backend/tests/$f"
-    echo "  ✓ tests/$f"
-  else
-    echo "  ✗ MISSING: tests/$f (skipped)"
+  echo "--docs-only: skipping proprietary code, tests and the orphan guard."
+else
+  # ── Proprietary files ───────────────────────────────────────────────────────
+  # Read from PROPRIETARY.txt — the single source of truth. Previously these were
+  # two hardcoded arrays that had to agree with .gitignore by hand, and they
+  # drifted in both directions: assign_captains.py was in NEITHER list (so nothing
+  # had it), while run_sort/persist_zones/sort_analysis were in SERVICES but not
+  # .gitignore (so they synced to private AND stayed public). One list removes the
+  # whole failure class.
+  MANIFEST="$PUBLIC_ROOT/PROPRIETARY.txt"
+  if [ ! -f "$MANIFEST" ]; then
+    echo "ERROR: $MANIFEST not found — cannot determine what is proprietary."
+    exit 1
   fi
-done
+
+  ROUTERS=()
+  SERVICES=()
+  while IFS= read -r _p; do
+    case "$_p" in ''|\#*) continue ;; esac
+    case "$_p" in
+      backend/app/routers/*.py)  ROUTERS+=("$(basename "$_p")") ;;
+      backend/app/services/*.py) SERVICES+=("$(basename "$_p")") ;;
+    esac
+  done < "$MANIFEST"
+
+  echo "  manifest: ${#ROUTERS[@]} routers, ${#SERVICES[@]} services"
+
+  echo ""
+  echo "Copying routers..."
+  for f in "${ROUTERS[@]}"; do
+    src="$PUBLIC_ROOT/backend/app/routers/$f"
+    if [ -f "$src" ]; then
+      cp "$src" "backend/app/routers/$f"
+      echo "  ✓ routers/$f"
+    else
+      echo "  ✗ MISSING: routers/$f (skipped)"
+    fi
+  done
+
+  echo ""
+  echo "Copying services..."
+  for f in "${SERVICES[@]}"; do
+    src="$PUBLIC_ROOT/backend/app/services/$f"
+    if [ -f "$src" ]; then
+      cp "$src" "backend/app/services/$f"
+      echo "  ✓ services/$f"
+    else
+      echo "  ✗ MISSING: services/$f (skipped)"
+    fi
+  done
+
+  # ── Orphan guard: a service in NEITHER the manifest nor the public index ─────
+  # The manifest removed the two-list drift class, but one gap survives it: a NEW
+  # service file that nobody has classified yet. It is untracked publicly (so the
+  # public repo does not have it) and absent from the manifest (so this sync does
+  # not copy it) — exactly how assign_captains.py became invisible to everything
+  # at once. Fail the push rather than let it disappear.
+  echo ""
+  echo "Checking for unclassified services..."
+  _orphans=0
+  for src in "$PUBLIC_ROOT"/backend/app/services/*.py; do
+    f="$(basename "$src")"
+    printf '%s\n' "${SERVICES[@]}" | grep -qx "$f" && continue
+    git -C "$PUBLIC_ROOT" ls-files --error-unmatch "backend/app/services/$f" >/dev/null 2>&1 && continue
+    echo "  ✗ $f is neither tracked publicly nor listed in PROPRIETARY.txt."
+    echo "    Decide which it is: add it to PROPRIETARY.txt (then run"
+    echo "    scripts/sync_proprietary_lists.sh), or git add it."
+    _orphans=1
+  done
+  if [ "$_orphans" -eq 1 ]; then
+    echo ""
+    echo "ERROR: unclassified proprietary file(s) would be lost. Push aborted."
+    exit 1
+  fi
+  echo "  ✓ every service is classified"
+
+  # ── Proprietary tests ────────────────────────────────────────────────────────
+  # These import proprietary routers/services, so they're gitignored from the public
+  # repo and can't run in public CI. Sync them here so the CI test job (which pulls
+  # this repo) can run the FULL suite instead of silently skipping proprietary paths.
+  # Relative paths under backend/tests/ so services tests sync too, not just routers.
+  TESTS=(
+    routers/test_arrival_confirm.py
+    routers/test_back_at_truck.py
+    routers/test_confirmation_gate.py
+    routers/test_dispatch_move_pairing.py
+    routers/test_clear_dispatch.py
+    routers/test_finalize_gate.py
+    routers/test_my_performance.py
+    routers/test_pair_split.py
+    routers/test_cover_remaining.py
+    routers/test_route_detail.py
+    routers/test_route_reassign_unassign.py
+    routers/test_peer_ratings.py
+    routers/test_reassign_trainee.py
+    services/test_stop_cutoff.py
+  )
+  echo ""
+  echo "Copying proprietary tests..."
+  for f in "${TESTS[@]}"; do
+    src="$PUBLIC_ROOT/backend/tests/$f"
+    if [ -f "$src" ]; then
+      mkdir -p "backend/tests/$(dirname "$f")"
+      cp "$src" "backend/tests/$f"
+      echo "  ✓ tests/$f"
+    else
+      echo "  ✗ MISSING: tests/$f (skipped)"
+    fi
+  done
+
+fi
 
 # ── Docs (PII-scrubbed ADRs, journals, guides) ───────────────────────────────
 # MIRROR, not append. `cp -r` into a persistent clone never removes a file that
@@ -372,7 +393,13 @@ if git diff --cached --quiet; then
   echo ""
   echo "No changes to sync — private repo already up to date."
 else
-  git commit -m "sync from AsheFlow $CURRENT_BRANCH"
+  # Label the mode: a --docs-only commit did NOT refresh proprietary code, so a
+  # reader of the private history can tell which commits are full mirrors.
+  if $DOCS_ONLY; then
+    git commit -m "docs sync from AsheFlow $CURRENT_BRANCH (docs only)"
+  else
+    git commit -m "sync from AsheFlow $CURRENT_BRANCH"
+  fi
   git push origin HEAD:"$PRIVATE_BRANCH"
   echo ""
   echo "Pushed to AsheFlow-private/$PRIVATE_BRANCH."
@@ -384,6 +411,15 @@ if $INIT_MODE; then
   git push origin staging
   echo "Created AsheFlow-private/staging branch."
 fi
+
+# ── Sync marker ──────────────────────────────────────────────────────────────
+# The clone lives in a temp dir that is deleted below, so nothing local knows
+# when the last sync happened. Without this, check_docs_synced.sh would have to
+# ask GitHub on every invocation -- slow, and useless offline.
+#
+# Under .git/ on purpose: it is machine-local state, not project content, and it
+# must never be committed to either repo or mirrored into the private clone.
+date -u +%s > "$PUBLIC_ROOT/.git/last_private_sync" 2>/dev/null || true
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 cd /

@@ -74,6 +74,24 @@ _graduation_quizzes_sqlite = Table(
     Column("updated_at",          DateTime,    nullable=True),
 )
 
+# audit_logs uses JSONB for its two snapshot columns, same problem as above.
+# Every write endpoint calls write_audit, so without this table any router test
+# that exercises a real write path dies on "no such table: audit_logs" rather
+# than on the behaviour it is testing (ADR-373).
+_audit_logs_sqlite = Table(
+    "audit_logs",
+    MetaData(),
+    Column("id",              String(36), primary_key=True),
+    Column("company_id",      String(36), nullable=True),
+    Column("actor_id",        String(36), nullable=True),
+    Column("action_type",     String(80), nullable=False),
+    Column("target_table",    String(80), nullable=False),
+    Column("target_id",       String(36), nullable=False),
+    Column("before_snapshot", SQLiteJSON, nullable=True),
+    Column("after_snapshot",  SQLiteJSON, nullable=True),
+    Column("created_at",      DateTime,   nullable=True),
+)
+
 # Collect only the Table objects for models we actually need in tests.
 # Any model imported above registers its Table in Base.metadata.
 # We build a targeted MetaData containing only those tables.
@@ -103,6 +121,7 @@ DISPATCH_TABLES = [
     CrewPinMember.__table__,             # ADR-357
     TruckPin.__table__,                  # ADR-358
     _graduation_quizzes_sqlite,
+    _audit_logs_sqlite,
 ]
 
 

@@ -10,7 +10,7 @@ from app.models.crew_pin import CrewPin, CrewPinMember
 from app.models.employee import Employee
 from app.models.truck import Truck
 from app.models.truck_pin import TruckPin
-from app.schemas.truck_pin import TruckPinCreate, TruckPinResponse
+from app.schemas.truck_pin import TruckPinCreate, TruckPinResponse, TruckPinRetruck
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/truck-pins", tags=["truck-pins"])
@@ -183,6 +183,92 @@ def create_truck_pins(
     for p in created:
         db.refresh(p)
     return [_to_response(p, emp, truck) for p in created]
+
+
+@router.patch("/employee/{employee_id}", response_model=list[TruckPinResponse])
+def retruck_employee_pins(
+    employee_id: UUID,
+    body: TruckPinRetruck,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(allow_dispatch),
+):
+    """Move all of this employee's truck pins to a different truck (ADR-373 D3).
+
+    Keyed by EMPLOYEE, not pin id. "Move Jerome to Truck 4" means every day he is
+    pinned; doing it row by row can half-succeed and leave him pinned to two
+    different trucks on different days -- which the model permits and nobody
+    intended.
+    """
+    emp = (
+        db.query(Employee)
+        .filter(Employee.id == employee_id, Employee.company_id == caller.company_id)
+        .first()
+    )
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    truck = (
+        db.query(Truck)
+        .filter(Truck.id == body.truck_id, Truck.company_id == caller.company_id)
+        .first()
+    )
+    if not truck:
+        raise HTTPException(status_code=404, detail="Truck not found.")
+
+    # ADR-358 D2 — re-checked here, not only on create. A person can hold a crew
+    # pin or a truck pin, never both, and an invariant guarded at one door is as
+    # strong as its weaker door.
+    clash = holds_crew_pin(db, caller.company_id, employee_id)
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{emp.name} is in the crew pin '{clash.name}'. A person can hold "
+                f"a crew pin or a truck pin, not both."
+            ),
+        )
+
+    pins = (
+        db.query(TruckPin)
+        .filter(
+            TruckPin.company_id == caller.company_id,
+            TruckPin.employee_id == employee_id,
+        )
+        .all()
+    )
+    if not pins:
+        raise HTTPException(
+            status_code=404, detail=f"{emp.name} has no truck pins to move."
+        )
+
+    previous = {p.truck_id for p in pins}
+    if previous == {body.truck_id}:
+        # Already there. Not an error, but not worth an audit row either.
+        return [_to_response(p, emp, truck) for p in pins]
+
+    for pin in pins:
+        pin.truck_id = body.truck_id
+    db.flush()
+
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="truck_pin.retrucked",
+        target_table="truck_pins",
+        target_id=str(employee_id),
+        detail={
+            "employee_id": str(employee_id),
+            "days": sorted(p.day_of_week for p in pins),
+            "from_truck_ids": sorted(str(t) for t in previous),
+            "to_truck_id": str(body.truck_id),
+        },
+    )
+    db.commit()
+    for pin in pins:
+        db.refresh(pin)
+    return [_to_response(p, emp, truck) for p in pins]
 
 
 @router.delete("/{pin_id}", status_code=status.HTTP_204_NO_CONTENT)
