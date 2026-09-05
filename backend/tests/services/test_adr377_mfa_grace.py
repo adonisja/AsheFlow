@@ -132,7 +132,11 @@ class TestAMachineIsNotAUser:
 
         machine = MachineCaller(id="bot", company_id=uuid.uuid4(), name="asheflow.bot")
         with pytest.raises(HTTPException) as exc:
-            get_my_mfa_status(db=None, caller=machine)
+            get_my_mfa_status(
+                db=None, caller=machine,
+                # A machine token carries scopes, never cognito_groups.
+                current_user={"machine_scopes": {"asheflow.bot/dispatch.read"}},
+            )
         assert exc.value.status_code == 403
         assert "machine" in exc.value.detail.lower()
 
@@ -187,11 +191,72 @@ class TestCognitoGroupsOutrankTheEmployeeRole:
         from app.routers.employees import get_my_mfa_status
 
         src = inspect.getsource(get_my_mfa_status)
-        assert 'groups=set(current_user.get("cognito_groups", []))' in src, (
-            "the endpoint must pass Cognito groups, or super_admin lands on "
+        assert 'current_user.get("cognito_groups", [])' in src, (
+            "the endpoint must read Cognito groups, or super_admin lands on "
             "the field tier"
         )
-        assert src.count("groups=set(") == 2, (
-            "both the normal and the Cognito-unreachable path must classify "
-            "the same way"
+        # Every evaluate() call must classify the same way. Counting `groups=`
+        # rather than a literal, because the value is now a local -- an earlier
+        # version of this test asserted on the inlined expression and broke on a
+        # refactor that changed nothing about the behaviour.
+        # EVERY evaluate() call must be classified the same way. Counting
+        # `groups=groups` rather than an inlined expression: an earlier version
+        # asserted on the literal and broke on a refactor that hoisted it to a
+        # local, changing nothing about behaviour.
+        assert src.count("evaluate(") == src.count("groups=groups"), (
+            f"{src.count('evaluate(')} evaluate() call(s) but only "
+            f"{src.count('groups=groups')} pass groups= -- one path classifies "
+            f"by role alone, which puts super_admin on the field tier"
         )
+
+
+class TestAPlatformAccountHasNoEmployeeRow:
+    """super_admin and platform_support are NOT staff.
+
+    They have no Employee row by design -- putting one in the roster adds a
+    fake person to headcount and to every name lookup. But the endpoint used
+    `get_caller_employee`, which 403s without a row, so it refused exactly the
+    accounts the privileged tier exists to protect.
+
+    Found on prod: deleting `adon`'s stray roster row made /me/mfa-status
+    refuse the platform owner.
+    """
+
+    def _call(self, groups, enrolled=True):
+        from unittest.mock import patch
+
+        from app.routers.employees import get_my_mfa_status
+
+        with patch("app.services.mfa_status.is_enrolled", return_value=enrolled):
+            return get_my_mfa_status(
+                db=None, caller=None,
+                current_user={"cognito_groups": groups, "id": "s", "username": "u"},
+            )
+
+    def test_a_super_admin_with_no_row_is_served(self):
+        out = self._call(["super_admin"])
+        assert out["tier"] == "privileged"
+        assert out["blocked"] is False, "an enrolled super_admin must not be blocked"
+
+    def test_platform_support_with_no_row_is_served(self):
+        assert self._call(["platform_support"])["tier"] == "privileged"
+
+    def test_an_unenrolled_super_admin_with_no_row_is_blocked(self):
+        """No grace period for the privileged tier, row or no row."""
+        out = self._call(["super_admin"], enrolled=False)
+        assert out["blocked"] is True and out["grace_days_total"] == 0
+
+    def test_a_non_privileged_caller_with_no_row_still_403s(self):
+        """The 403 protects against a ghost account submitting as real staff.
+        Only platform groups may skip the roster."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            self._call(["walker"])
+        assert exc.value.status_code == 403
+
+    def test_unreachable_cognito_does_not_block_a_platform_account(self):
+        """is_enrolled returns None when AWS cannot be read. That must not read
+        as 'not enrolled' and lock the platform owner out."""
+        out = self._call(["super_admin"], enrolled=None)
+        assert out["blocked"] is False

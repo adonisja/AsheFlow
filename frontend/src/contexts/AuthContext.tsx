@@ -3,6 +3,7 @@ import { getCurrentUser, fetchAuthSession } from 'aws-amplify/auth';
 import { Hub } from 'aws-amplify/utils';
 import { getUserGroups } from '../utils/auth';
 import axiosClient from '../api/axiosClient';
+import type { MfaStatus } from '../api/types';
 
 interface AuthUser {
   username: string;
@@ -31,6 +32,8 @@ interface AuthContextType {
   refreshConfigured: () => Promise<void>;
   /** null while loading or when the call failed — see hasFeature. */
   capabilities: Capabilities | null;
+  /** ADR-377 — null means "not known", not "no MFA required". */
+  mfaStatus: MfaStatus | null;
   /** True when the feature is available. Returns TRUE while capabilities are
    *  unknown: a transient failure must not blank out a working nav, and every
    *  gated route is enforced server-side anyway (RequireMode → 404). Failing
@@ -50,6 +53,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [isConfigured, setIsConfigured] = useState(true);
   const [federatedError, setFederatedError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  /* ADR-377 — null means "not known", NOT "no MFA required". The fetch is
+     allowed to fail without blocking sign-in, so consumers must render nothing
+     on null rather than treating it as an all-clear. */
+  const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
 
   const refreshConfigured = async () => {
     try {
@@ -128,6 +135,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       // Every role, not just admins (ADR-289).
       await loadCapabilities();
 
+        /* ADR-377 D2/D3 — the call that starts the MFA grace clock and trims
+           the remembered-device fleet.
+
+           Both are server SIDE-EFFECTS of this GET, not just a read: the clock
+           is stamped on the first call after enforcement ships, and eviction
+           runs here because no Cognito trigger fires on ConfirmDevice. Until
+           this was wired, both features were reachable and never reached.
+
+           Not awaited, and errors swallowed: a status banner is worth nothing
+           if failing to fetch it stops a walker starting their shift at 05:00. */
+        void axiosClient
+          .get('/employees/me/mfa-status')
+          .then(res => setMfaStatus(res.data))
+          .catch(() => setMfaStatus(null));
+
     } catch {
       // If this throws, the user is simply not logged in.
       setUser(null);
@@ -178,6 +200,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     isConfigured,
     refreshConfigured,
     capabilities,
+    mfaStatus,
     hasFeature,
     federatedError,
     clearFederatedError,

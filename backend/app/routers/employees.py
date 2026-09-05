@@ -15,7 +15,8 @@ import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import RoleChecker, Pagination, get_caller_employee, get_current_user
+from app.api.deps import (RoleChecker, Pagination, get_caller_employee,
+                          get_caller_employee_optional, get_current_user)
 from app.core.config import settings
 from app.core.security import _get_redis
 from app.database import get_db
@@ -436,7 +437,12 @@ def get_my_employee(
 @router.get("/me/mfa-status")
 def get_my_mfa_status(
     db: Session = Depends(get_db),
-    caller: Employee = Depends(get_caller_employee),
+    # OPTIONAL, not get_caller_employee: a platform account (super_admin,
+    # platform_support) has no Employee row BY DESIGN -- it is not staff and
+    # must not appear in the roster or headcount. Requiring one 403s exactly the
+    # accounts the privileged tier exists to protect. Measured on prod: deleting
+    # `adon`'s stray roster row made this endpoint refuse the platform owner.
+    caller: Employee | None = Depends(get_caller_employee_optional),
     current_user: dict = Depends(get_current_user),
 ):
     """This user's MFA obligation, and how long they have left (ADR-377 D2).
@@ -449,6 +455,25 @@ def get_my_mfa_status(
     Stamped ONCE. A later call must not extend the window, so the write is
     guarded on the column still being NULL rather than overwritten each time.
     """
+    groups = set(current_user.get("cognito_groups", []))
+
+    # A platform account with no Employee row. Its tier comes entirely from the
+    # Cognito group, and it has no row on which to stamp a grace clock -- which
+    # is correct, because the privileged tier has no grace period to track.
+    if caller is None:
+        if not (groups & mfa_status.MFA_PRIVILEGED_ROLES):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No employee record found for your account. Contact your manager.",
+            )
+        enrolled = mfa_status.is_enrolled(
+            current_user.get("id"), current_user.get("username"),
+        )
+        return mfa_status.evaluate(
+            role="", enrolled=True if enrolled is None else enrolled,
+            grace_started_at=None, groups=groups,
+        ).as_dict()
+
     # ADR-374 — a MachineCaller has no role, no cognito_sub and no grace column.
     # Reaching for any of them here is the exact AttributeError that 500'd the
     # bot's morning fetch. A machine authenticates by scope and never enrols, so
@@ -467,7 +492,7 @@ def get_my_mfa_status(
     if enrolled is None:
         status_obj = mfa_status.evaluate(
             role=caller.role, enrolled=True, grace_started_at=caller.mfa_grace_started_at,
-            groups=set(current_user.get("cognito_groups", [])),
+            groups=groups,
         )
         out = status_obj.as_dict()
         out["enrolled"] = None      # honest: unknown, not confirmed
@@ -505,7 +530,7 @@ def get_my_mfa_status(
         # rejected by Employee.VALID_ROLES, so they arrive ONLY as Cognito
         # groups. Prod's `adon` is super_admin in Cognito and `trainee` on its
         # Employee row -- role alone put it on the field tier.
-        groups=set(current_user.get("cognito_groups", [])),
+        groups=groups,
     ).as_dict()
 
 
