@@ -98,9 +98,26 @@ def _derive_username(name: str, db: Session) -> str:
     last  = re.sub(r"[^a-z0-9]", "", parts[-1]) if len(parts) > 1 else ""
     base  = f"{first}.{last}" if last else first
 
+    # ADR-380 D5 — bounded. 100 employees sharing one normalised name in a
+    # single Cognito pool is not a roster; it is a bug or an attack, and either
+    # deserves a refusal rather than a spin.
+    #
+    # The cap is deliberately far above any real collision count: `username` is
+    # globally unique (matching Cognito's flat namespace), so this counts
+    # `jane.smith` across ALL tenants, not one.
     candidate = base
     suffix    = 2
+    MAX_SUFFIX = 100
     while db.query(Employee).filter(Employee.username == candidate).first():
+        if suffix > MAX_SUFFIX:
+            logger.error(
+                "username derivation exhausted %d suffixes for base %r",
+                MAX_SUFFIX, base,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not allocate a unique username. Please try again.",
+            )
         candidate = f"{base}{suffix}"
         suffix += 1
     return candidate
