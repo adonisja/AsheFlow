@@ -260,3 +260,82 @@ class TestAPlatformAccountHasNoEmployeeRow:
         as 'not enrolled' and lock the platform owner out."""
         out = self._call(["super_admin"], enrolled=None)
         assert out["blocked"] is False
+
+
+class TestBothClientsCallItAndAgreeOnTheShape:
+    """The endpoint has SIDE EFFECTS, so a client that never calls it silently
+    disables the feature: the grace clock is never stamped and device eviction
+    never runs. That is how this shipped and sat inert until 2026-09-05.
+
+    Mobile matters more than web for the clock -- a walker may never open the
+    web app, so their 14-day window would otherwise start the day someone
+    finally signs them in on a desktop.
+    """
+
+    import re
+    from pathlib import Path
+
+    ROOT = Path(__file__).resolve().parents[3]
+    WEB = ROOT / "frontend" / "src" / "contexts" / "AuthContext.tsx"
+    MOBILE = ROOT / "mobile" / "src" / "contexts" / "AuthContext.tsx"
+    TYPES = ROOT / "frontend" / "src" / "api" / "types.ts"
+
+    def test_the_web_client_calls_it_after_sign_in(self):
+        assert "/employees/me/mfa-status" in self.WEB.read_text(), (
+            "the web client stopped calling it -- the grace clock and device "
+            "eviction are side effects of that GET"
+        )
+
+    def test_the_mobile_client_calls_it_after_sign_in(self):
+        assert "/employees/me/mfa-status" in self.MOBILE.read_text(), (
+            "mobile stopped calling it -- a walker who never opens the web app "
+            "would never start their grace window"
+        )
+
+    def test_neither_client_blocks_sign_in_on_it(self):
+        """A status banner is worth nothing if failing to fetch it stops a
+        walker starting their shift at 05:00."""
+        for path in (self.WEB, self.MOBILE):
+            src = path.read_text()
+            # The LAST occurrence, not the first. Mobile documents the endpoint
+            # in a docstring above the call, so `.index()` found the comment and
+            # searched around prose instead of code -- the same trap as
+            # ADR-378's watch-list test.
+            i = src.rindex("/employees/me/mfa-status")
+            window = src[max(0, i - 700): i + 400]
+            # Strip comments first. A mutant that replaced the handler with
+            # `finally { /* no catch */ }` survived because the WORD catch was
+            # still there -- in a comment saying it had been removed.
+            code = self.re.sub(r"/\*.*?\*/", "", window, flags=self.re.S)
+            code = self.re.sub(r"//.*", "", code)
+            assert (".catch(" in code) or ("} catch" in code), (
+                f"{path.name} does not swallow a failed MFA status fetch -- a "
+                f"walker must not be blocked from their shift by a status call"
+            )
+
+    def test_the_two_client_type_declarations_agree(self):
+        """Mobile has no shared types file, so it declares its own copy. Two
+        copies drift; this fails when they do."""
+        def fields(text, marker):
+            body = text.split(marker)[1].split("};")[0]
+            return set(self.re.findall(r"^\s*(\w+)\??:", body, self.re.M))
+
+        web = fields(self.TYPES.read_text(), "export interface MfaStatus {")
+        mob = fields(self.MOBILE.read_text(), "export type MfaStatus = {")
+        assert web == mob, f"client MfaStatus types drifted: web-only={web - mob}, mobile-only={mob - web}"
+
+    def test_the_client_types_match_the_endpoint_response(self):
+        from unittest.mock import patch
+
+        from app.routers.employees import get_my_mfa_status
+
+        def fields(text, marker):
+            body = text.split(marker)[1].split("};")[0]
+            return set(self.re.findall(r"^\s*(\w+)\??:", body, self.re.M))
+
+        with patch("app.services.mfa_status.is_enrolled", return_value=True):
+            out = get_my_mfa_status(
+                db=None, caller=None,
+                current_user={"cognito_groups": ["super_admin"], "id": "s", "username": "u"},
+            )
+        assert set(out.keys()) == fields(self.TYPES.read_text(), "export interface MfaStatus {")

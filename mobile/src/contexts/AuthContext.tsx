@@ -53,6 +53,24 @@ export type Capabilities = {
   features: string[];
 };
 
+/** GET /employees/me/mfa-status — ADR-377 D2.
+ *
+ *  Mirrors the web client's MfaStatus in frontend/src/api/types.ts. Declared
+ *  locally because mobile has no shared types file; keep the two in step.
+ *
+ *  `enrolled` is null when Cognito could not be reached. That is deliberately
+ *  not false: false means "not enrolled" and past the deadline that BLOCKS, so
+ *  an AWS hiccup must never read as a lockout. Render no banner on null.
+ */
+export type MfaStatus = {
+  required: boolean;
+  enrolled: boolean | null;
+  tier: 'privileged' | 'field' | 'none';
+  grace_days_total: number;
+  days_remaining: number | null;
+  blocked: boolean;
+};
+
 /** A Cognito challenge that sign-in stopped on (ADR-362).
  *
  *  Cognito returns EITHER `AuthenticationResult` OR a `ChallengeName` plus a
@@ -91,6 +109,8 @@ type AuthContextType = {
   signOut: () => Promise<void>;
   hasRole: (...roles: string[]) => boolean;
   capabilities: Capabilities | null;
+  /** null means "not known", not "no MFA required" (ADR-377). */
+  mfaStatus: MfaStatus | null;
   /** Fails OPEN when capabilities are unknown: a walker on a flaky van
    *  connection must not lose their tabs, and the server enforces every gated
    *  route anyway (RequireMode -> 404). A dead tab is recoverable; a blank app
@@ -104,6 +124,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser]         = useState<AuthUser | null>(null);
   const [isLoading, setLoading] = useState(true);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  /* null means "not known", NOT "no MFA required" (ADR-377). */
+  const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
 
   useEffect(() => { restoreSession(); }, []);
 
@@ -304,6 +326,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, [user]);
 
+  /* ADR-377 D2/D3 — starts the MFA grace clock and trims the remembered-device
+     fleet. Both are server SIDE-EFFECTS of this GET, not just a read: the clock
+     is stamped on the first call after enforcement ships, and eviction runs
+     here because no Cognito trigger fires on ConfirmDevice.
+
+     Mobile matters more than web for the clock. A walker may never open the web
+     app, so without this their 14-day window would never START -- and then
+     begin the day someone finally signs them in on a desktop.
+
+     Same shape as the capabilities load above: keyed on `user`, cancellable,
+     and a failure leaves null. `null` means "not known", NOT "no MFA required";
+     a banner is worth nothing if failing to fetch it blocks a shift at 05:00. */
+  useEffect(() => {
+    if (!user) { setMfaStatus(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiClient.get<MfaStatus>('/employees/me/mfa-status');
+        if (!cancelled) setMfaStatus(res.data);
+      } catch {
+        if (!cancelled) setMfaStatus(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
   const hasFeature = useCallback(
     (key: string) => (capabilities ? capabilities.features.includes(key) : true),
     [capabilities],
@@ -318,7 +366,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={{
       user, isLoading, isAuthenticated: !!user,
       signIn, respondToChallenge, signInWithProvider, signOut, hasRole,
-      capabilities, hasFeature,
+      capabilities, hasFeature, mfaStatus,
     }}>
       {children}
     </AuthContext.Provider>
@@ -329,6 +377,9 @@ const AUTH_FALLBACK: AuthContextType = {
   user: null,
   isLoading: true,
   isAuthenticated: false,
+  // null = "not known". Outside a provider nothing is known, which is the
+  // honest value here (ADR-377).
+  mfaStatus: null,
   signIn: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   respondToChallenge: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signInWithProvider: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
