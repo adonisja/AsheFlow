@@ -11,7 +11,8 @@ import {
 import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
-import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, type LucideIcon } from 'lucide-react';
+import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, HelpCircle, type LucideIcon } from 'lucide-react';
+import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 import { getLocalYMD } from '../utils/date';
 
 const selectStyles = {
@@ -38,7 +39,7 @@ const selectStyles = {
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   }),
-  singleValue: () => ({ display: 'none' }),
+  singleValue: (base: any) => ({ ...base, color: 'hsl(224 30% 12%)' }),
   placeholder: (base: any) => ({ ...base }),
 };
 
@@ -434,6 +435,7 @@ const Preferences = () => {
 
   const [myId, setMyId] = useState<string>('');
   const [employees, setEmployees] = useState<any[]>([]);
+  const [helpKey, setHelpKey] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
   const [targetFavId, setTargetFavId] = useState('');
   const [targetBanId, setTargetBanId] = useState('');
@@ -542,6 +544,22 @@ const Preferences = () => {
 
   const EXEMPT_ROLES = ['management', 'admin', 'dispatch', 'trainee'];
 
+  /** Mirror of FAV_LIMITS in backend/app/routers/employee_relationships.py
+   *  (ADR-353). HAND-MAINTAINED — there is no codegen, so a change to the server
+   *  table must be repeated here or the UI will promise slots the API refuses.
+   *
+   *  A missing pair means ZERO, matching the server's `.get(..., 0)` on both
+   *  levels. The gaps are deliberate: driver-driver and captain-captain are one
+   *  per truck, and walker-trainer rarely affect each other's day. */
+  const FAV_LIMITS: Record<string, Record<string, number>> = {
+    driver:  { driver: 0, captain: 2, trainer: 1, walker: 2 },
+    captain: { driver: 2, captain: 0, trainer: 1, walker: 2 },
+    trainer: { driver: 1, captain: 1, walker: 1 },
+    walker:  { driver: 2, captain: 2, walker: 1 },
+  };
+  /** Bans are global, not per-role — 2 total, matching the server. */
+  const BAN_LIMIT = 2;
+
   const getGroupedOptions = (excludeId?: string) => {
     const currentRole = employees.find(e => e.id === excludeId)?.role;
     let valid = excludeId ? employees.filter(e => e.id !== excludeId) : employees;
@@ -554,6 +572,28 @@ const Preferences = () => {
         value: e.id, label: `${e.first_name || e.name} (${e.role})`
       }))
     }));
+  };
+
+  /** Group headings that show the cap for THIS viewer's role against each target
+   *  role, e.g. "Drivers — 1 of 2 used". Previously the only signal that a limit
+   *  existed was a 409 after pressing Add. */
+  const getFavOptions = (excludeId?: string) => {
+    const myRole = employees.find(e => e.id === excludeId)?.role;
+    return getGroupedOptions(excludeId).map(g => {
+      const targetRole = g.label.slice(0, -1).toLowerCase();
+      const cap  = FAV_LIMITS[myRole ?? '']?.[targetRole] ?? 0;
+      const used = favs.filter(f =>
+        employees.find(e => e.id === f.target_employee_id)?.role === targetRole).length;
+      return {
+        ...g,
+        label: cap === 0
+          ? `${g.label} — not available for a ${myRole}`
+          : `${g.label} — ${used} of ${cap} used`,
+        // A full or zero-cap group stays visible but unselectable, so the rule is
+        // legible rather than the people simply vanishing.
+        options: g.options.map(o => ({ ...o, isDisabled: used >= cap })),
+      };
+    });
   };
 
   const favs = relationships.filter(r => r.relationship_type === 'fav');
@@ -641,11 +681,12 @@ const Preferences = () => {
 
           {/* Favorites — driver/walker/trainer only (not trainee) */}
           {canFavBan && (
-            <Section icon={Heart} title="Favorites" iconColor="text-success">
+            <Section icon={Heart} title="Favorites" iconColor="text-success"
+                     helpKey="favorites" onHelp={setHelpKey}>
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
                   {(() => {
-                    const favOpts = getGroupedOptions(myId);
+                    const favOpts = getFavOptions(myId);
                     const favValue = favOpts.flatMap(g => g.options).find(o => o.value === targetFavId) || null;
                     return (
                       <Select
@@ -668,7 +709,8 @@ const Preferences = () => {
 
           {/* Blocked — driver/walker/trainer only (not trainee) */}
           {canFavBan && (
-            <Section icon={ShieldOff} title="Blocked" iconColor="text-danger">
+            <Section icon={ShieldOff} title="Blocked" iconColor="text-danger"
+                     helpKey="blocked" onHelp={setHelpKey}>
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
                   {(() => {
@@ -679,7 +721,10 @@ const Preferences = () => {
                         options={banOpts}
                         value={banValue}
                         onChange={(s) => setTargetBanId(s?.value || '')}
-                        placeholder="Search and select to block..."
+                        placeholder={bans.length >= BAN_LIMIT
+                          ? `Block limit reached (${BAN_LIMIT} of ${BAN_LIMIT})`
+                          : 'Search and select to block...'}
+                        isDisabled={bans.length >= BAN_LIMIT}
                         isClearable
                         isSearchable
                         styles={selectStyles}
@@ -702,11 +747,13 @@ const Preferences = () => {
 
         </div>
       )}
+
+      <SettingsHelpDrawer fieldKey={helpKey} onClose={() => setHelpKey(null)} />
     </div>
   );
 };
 
-function Section({ icon: Icon, title, iconColor, children }: { icon: LucideIcon; title: string; iconColor: string; children: React.ReactNode }) {
+function Section({ icon: Icon, title, iconColor, children, helpKey, onHelp }: { icon: LucideIcon; title: string; iconColor: string; children: React.ReactNode; helpKey?: string; onHelp?: (k: string) => void }) {
   return (
     <div className="card">
       <div className="flex items-center gap-3 mb-5">
@@ -714,6 +761,16 @@ function Section({ icon: Icon, title, iconColor, children }: { icon: LucideIcon;
           <Icon className={`w-4 h-4 ${iconColor}`} />
         </div>
         <h2 className="section-title">{title}</h2>
+        {helpKey && onHelp && (
+          <button
+            type="button"
+            onClick={() => onHelp(helpKey)}
+            aria-label={`What are ${title.toLowerCase()}?`}
+            className="text-muted-foreground/60 hover:text-primary transition-colors"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
+        )}
       </div>
       {children}
     </div>

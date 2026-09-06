@@ -24,6 +24,74 @@ interface HelpEntry {
 }
 
 const HELP_CONTENT: Record<string, HelpEntry> = {
+  favorites: {
+    title: 'Favorites',
+    summary:
+      'People you would rather be dispatched with. A preference, not a guarantee.',
+    detail: (
+      <>
+        <p>
+          Favorites raise the score of a pairing when dispatch runs. They compete
+          with everything else the algorithm weighs, so a favorite is a strong
+          nudge rather than a rule.
+        </p>
+        <p className="font-semibold text-foreground">Limits depend on both roles</p>
+        <p>
+          How many favorites you may hold is set per target role — a walker may
+          favor two drivers but only one other walker. Your own limits are listed
+          above each group in the picker.
+        </p>
+      </>
+    ),
+    example:
+      'A walker may favor 2 drivers, 2 captains and 1 walker. Adding a third driver is refused until one is removed.',
+    note: (
+      <>
+        <p>
+          Some pairings have no slots at all — a driver cannot favor another
+          driver, because only one drives each truck.
+        </p>
+        <p className="mt-1.5">
+          Existing favorites above a limit are kept; the limit only gates new ones.
+        </p>
+      </>
+    ),
+  },
+  blocked: {
+    title: 'Blocked',
+    summary:
+      'People you should not be dispatched with. A hard constraint, unlike a favorite.',
+    detail: (
+      <>
+        <p>
+          A block is honoured absolutely — dispatch will not place you on the same
+          truck, regardless of how well the pairing otherwise scores.
+        </p>
+        <p className="font-semibold text-foreground">Two blocks, total</p>
+        <p>
+          Unlike favorites, the limit is not per role. Every field employee may
+          hold{' '}
+          <span className="text-danger font-semibold">two blocks in total</span>,
+          across all roles.
+        </p>
+      </>
+    ),
+    example:
+      'Block a walker and a captain and you are at your limit. A third block is refused until one is removed.',
+    noteTone: 'danger',
+    note: (
+      <>
+        <p>
+          A block between two people automatically deactivates any crew pin that
+          contains them both.
+        </p>
+        <p className="mt-1.5">
+          The roster is kept so the pin can be reactivated once the block is
+          removed.
+        </p>
+      </>
+    ),
+  },
   crew_pin: {
     title: 'Crew Pins',
     summary: 'A pinned crew works the same truck every day that the driver is dispatched.',
