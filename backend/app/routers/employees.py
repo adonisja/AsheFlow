@@ -26,6 +26,7 @@ from app.models.invite_token import InviteToken
 from app.models.notification import Notification
 from app.schemas.employee import _validate_discord_id, EmployeeCreate, EmployeeUpdate, EmployeeResponse, EmployeePublicResponse, BulkImportRow, BulkImportResult, InjuryStatusPatch, RoleTransitionRequest
 from app.services.audit import write_audit
+from app.services import mfa_containment
 from app.services.company_onboarding import is_onboarding, onboarding_note
 from app.services.email import send_invite_email
 from app.services.integration_alerts import (
@@ -794,6 +795,82 @@ def update_employee(
         detail={k: str(v) if v is not None else None for k, v in updates.items()},
     )
     return db_employee
+
+
+@router.post("/{employee_id}/mfa/reset", status_code=status.HTTP_200_OK)
+def reset_employee_mfa(
+    employee_id: UUID,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+):
+    """Clear an employee's remembered devices and end every session (ADR-386).
+
+    SecurityPanel has promised this since it shipped -- "Lost your phone? An admin
+    can reset your second factor" -- with no endpoint behind it.
+
+    It does NOT remove the Cognito factor itself. Cognito holds exactly one
+    software token per user and a new secret replaces the old (ADR-377 D3), so
+    re-enrolling overwrites it. What strands a user is not the stale factor; it is
+    the remembered devices skipping the challenge and the live sessions outliving
+    the change. Those are what this clears.
+
+    This is a privilege-escalation surface: it operates on ANOTHER user's account
+    protection, so it is gated to management/admin and every call is audited with
+    both the actor and the target.
+    """
+    target = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    username = cognito_username_for(target)
+    if not username:
+        # No resolvable Cognito Username: invited but never registered. There is
+        # no account to contain, and a 409 says that rather than reporting a
+        # containment that did nothing.
+        raise HTTPException(
+            status_code=409,
+            detail="This employee has not completed registration yet.",
+        )
+
+    result = mfa_containment.contain(
+        username=username,
+        pool_id=settings.aws_cognito_user_pool_id,
+        region=settings.aws_region,
+    )
+
+    write_audit(
+        db=db,
+        company_id=caller.company_id,
+        actor_id=caller.id,
+        action_type="employee.mfa_reset",
+        target_table="employees",
+        target_id=str(target.id),
+        detail={
+            "devices_forgotten": result.devices_forgotten,
+            "signed_out": result.signed_out,
+            # Error TYPES only -- never the message, which can carry identifiers.
+            "errors": result.errors,
+        },
+    )
+    db.commit()
+
+    if not result.fully_contained:
+        # 502, not 500: the failure is downstream at Cognito, and the caller
+        # needs to know the reset did NOT fully take rather than assume it did.
+        raise HTTPException(
+            status_code=502,
+            detail="The reset did not fully complete. Please try again.",
+        )
+
+    return {
+        "employee_id": str(target.id),
+        "devices_forgotten": result.devices_forgotten,
+        "signed_out": result.signed_out,
+    }
 
 
 @router.put("/{employee_id}/deactivate", response_model=EmployeeResponse)
