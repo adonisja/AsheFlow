@@ -577,23 +577,42 @@ const Preferences = () => {
   /** Group headings that show the cap for THIS viewer's role against each target
    *  role, e.g. "Drivers — 1 of 2 used". Previously the only signal that a limit
    *  existed was a 409 after pressing Add. */
+  /** Remaining favourite slots per target role, for the summary line under the
+   *  picker. The group headings inside the menu only exist once it is OPEN —
+   *  the resting state of the page is a closed control, which is where the caps
+   *  need to be readable. */
+  const favSlotSummary = (excludeId?: string) => {
+    const myRole = employees.find(e => e.id === excludeId)?.role;
+    const caps = FAV_LIMITS[myRole ?? ''] ?? {};
+    return Object.entries(caps)
+      .filter(([, cap]) => cap > 0)
+      .map(([role, cap]) => {
+        const used = favs.filter(f =>
+          employees.find(e => e.id === f.target_employee_id)?.role === role).length;
+        return { role, used, cap, full: used >= cap };
+      });
+  };
+
   const getFavOptions = (excludeId?: string) => {
     const myRole = employees.find(e => e.id === excludeId)?.role;
-    return getGroupedOptions(excludeId).map(g => {
-      const targetRole = g.label.slice(0, -1).toLowerCase();
-      const cap  = FAV_LIMITS[myRole ?? '']?.[targetRole] ?? 0;
-      const used = favs.filter(f =>
-        employees.find(e => e.id === f.target_employee_id)?.role === targetRole).length;
-      return {
-        ...g,
-        label: cap === 0
-          ? `${g.label} — not available for a ${myRole}`
-          : `${g.label} — ${used} of ${cap} used`,
-        // A full or zero-cap group stays visible but unselectable, so the rule is
-        // legible rather than the people simply vanishing.
-        options: g.options.map(o => ({ ...o, isDisabled: used >= cap })),
-      };
-    });
+    return getGroupedOptions(excludeId)
+      .map(g => {
+        const targetRole = g.label.slice(0, -1).toLowerCase();
+        const cap  = FAV_LIMITS[myRole ?? '']?.[targetRole] ?? 0;
+        const used = favs.filter(f =>
+          employees.find(e => e.id === f.target_employee_id)?.role === targetRole).length;
+        return { ...g, targetRole, cap, used };
+      })
+      // A cap of 0 is PERMANENT for this role pair — a walker will never be able
+      // to favourite a trainer — so there is no rule to teach by showing it. Drop
+      // the group rather than making the user scroll past people they can never
+      // pick. A group that is merely FULL is different: those options stay,
+      // disabled, because removing one favourite makes them selectable again.
+      .filter(g => g.cap > 0)
+      .map(g => ({
+        label: `${g.label} — ${g.used} of ${g.cap} used`,
+        options: g.options.map(o => ({ ...o, isDisabled: g.used >= g.cap })),
+      }));
   };
 
   const favs = relationships.filter(r => r.relationship_type === 'fav');
@@ -703,6 +722,15 @@ const Preferences = () => {
                 </div>
                 <button onClick={handleAddFav} className="btn-primary text-xs">Add</button>
               </div>
+              {favSlotSummary(myId).length > 0 && (
+                <p className="text-xs text-muted-foreground mb-4 flex flex-wrap gap-x-3 gap-y-1">
+                  {favSlotSummary(myId).map(s => (
+                    <span key={s.role} className={s.full ? 'text-warning font-medium' : ''}>
+                      {s.used}/{s.cap} {s.role}{s.cap === 1 ? '' : 's'}
+                    </span>
+                  ))}
+                </p>
+              )}
               <ItemList items={favs} getLabel={(f) => getEmpName(f.target_employee_id)} onDelete={handleDeleteRelationship} emptyText="No favorites yet." />
             </Section>
           )}
@@ -734,6 +762,9 @@ const Preferences = () => {
                 </div>
                 <button onClick={handleAddBan} className="btn-primary text-xs">Add</button>
               </div>
+              <p className={`text-xs mb-4 ${bans.length >= BAN_LIMIT ? 'text-warning font-medium' : 'text-muted-foreground'}`}>
+                {bans.length} of {BAN_LIMIT} blocks used
+              </p>
               <ItemList items={bans} getLabel={(b) => getEmpName(b.target_employee_id)} onDelete={handleDeleteRelationship} emptyText="No blocks yet." />
             </Section>
           )}
