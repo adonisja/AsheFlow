@@ -5,6 +5,7 @@ import Navbar from './Navbar';
 import FeedbackModal from '../FeedbackModal';
 import CommandPalette from '../CommandPalette';
 import NotificationBanner from '../NotificationBanner';
+import MfaNudgeBanner from '../MfaNudgeBanner';
 
 /**
  * Page width by route. TWO widths only (see `.layout-wide` / `.layout-form` in
@@ -72,7 +73,12 @@ const Layout = () => {
           was tried first and overshot — the page then ended in obvious dead
           space. 56px clears the widget without looking empty. */}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 pt-6 pb-14">
-        <div className={`${widthClass} mb-4`}>
+        <div className={`${widthClass} mb-4 space-y-3`}>
+          {/* ADR-381 D1 — above the notification banner deliberately. This
+              one is about losing access; those are about today's work, and a
+              countdown that scrolls below three dispatch notices is not a
+              warning. */}
+          <MfaNudgeBanner />
           <NotificationBanner />
         </div>
         <AnimatePresence mode="wait">
