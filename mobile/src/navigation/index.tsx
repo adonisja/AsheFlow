@@ -53,13 +53,19 @@ import MyRouteTabScreen from '@screens/Trainee/MyRouteScreen';
 import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
 import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
 import MyWorkforceRouteScreen from '@screens/Walker/MyWorkforceRouteScreen';
+import MfaRequiredScreen        from '@screens/MfaRequiredScreen';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
 export const useTabSwitch = () => useContext(TabSwitchContext);
 
 // ── Navigator param lists ─────────────────────────────────────────────────────
-export type RootStackParamList = { Auth: undefined; Main: undefined };
+export type RootStackParamList = {
+  Auth: undefined;
+  Main: undefined;
+  /** ADR-381 D2 — shown INSTEAD OF Main when the grace period has closed. */
+  MfaRequired: undefined;
+};
 
 export type HomeStackParamList = {
   HomeMain: undefined;
@@ -306,7 +312,17 @@ function MainShell() {
 
 // ── Root navigator ────────────────────────────────────────────────────────────
 export default function RootNavigator() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, mfaStatus } = useAuth();
+
+  /* ADR-381 D2 — a blocked user gets a screen INSTEAD OF the app, not a modal
+     over it. Same idiom as the isAuthenticated swap below: the tab shell is
+     unreachable, which is what blocked means. A modal would leave the tabs
+     navigable behind it.
+
+     Guarded on `blocked` alone. `enrolled === null` means Cognito could not be
+     read, and mfaStatus is null before the first fetch returns -- neither is a
+     reason to lock someone out of their shift. */
+  const mfaBlocked = Boolean(mfaStatus?.blocked);
   const c = useColors();
 
   if (isLoading) {
@@ -320,10 +336,12 @@ export default function RootNavigator() {
   return (
     <NavigationContainer>
       <RootStack.Navigator screenOptions={{ headerShown: false }}>
-        {isAuthenticated ? (
-          <RootStack.Screen name="Main" component={MainShell} />
-        ) : (
+        {!isAuthenticated ? (
           <RootStack.Screen name="Auth" component={LoginScreen} />
+        ) : mfaBlocked ? (
+          <RootStack.Screen name="MfaRequired" component={MfaRequiredScreen} />
+        ) : (
+          <RootStack.Screen name="Main" component={MainShell} />
         )}
       </RootStack.Navigator>
     </NavigationContainer>
