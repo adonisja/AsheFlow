@@ -206,6 +206,81 @@ def send_invite(
     return {"detail": f"Invite sent to {employee.email}."}
 
 
+@router.delete("/invite/{employee_id}", status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
+def revoke_invite(
+    request: Request,
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Revoke a pending invite without destroying the employee record (ADR-380 D3).
+
+    A manager who invited the wrong person, or the right person at the wrong
+    address, previously had exactly one option: delete the whole employee row,
+    taking its audit history with it. Re-inviting replaces the token
+    (send_invite deletes prior ones first), but that requires knowing the
+    address is wrong AND having a correct one to hand.
+
+    This kills the live token and leaves the row in `pending_verification` with
+    no invite, so the manager can correct the email and re-invite deliberately.
+
+    NOT a deactivation: the employee record, its audit trail and its identity
+    stay. The only thing removed is the credential.
+    """
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    # Registered means a Cognito account exists and the token is already spent
+    # (complete_registration sets `used`). Deleting a spent token would report
+    # success while revoking nothing -- and the caller almost certainly wanted
+    # to stop someone signing in, which is deactivation, not this.
+    if employee.username:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This employee has already registered. Revoking an invite does "
+                "not remove account access — deactivate them instead."
+            ),
+        )
+
+    record = db.query(InviteToken).filter(
+        InviteToken.employee_id == employee.id,
+        # Dimension 1 -- employee_id is unique so this cannot select another
+        # tenant's row, but the token is a credential and a scoped delete should
+        # not depend on a uniqueness constraint elsewhere staying true.
+        InviteToken.company_id == caller.company_id,
+    ).first()
+    if not record:
+        # Not an error worth failing on: the desired end state (no live invite)
+        # already holds. Reported so the caller knows nothing was there rather
+        # than believing they revoked something.
+        return {"detail": "No pending invite to revoke.", "revoked": False}
+
+    db.delete(record)
+    db.flush()
+
+    # The token itself is deliberately absent, matching send_invite: an audit
+    # row is readable by other admins, and a token is a working credential.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="employee.invite_revoked",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={"had_pending_invite": True, "account_status": employee.account_status},
+    )
+    db.commit()
+
+    return {"detail": f"Invite for {employee.name} revoked.", "revoked": True}
+
+
 @router.post("/resend-credentials", status_code=status.HTTP_200_OK)
 @limiter.limit("5/minute")
 def resend_credentials(
