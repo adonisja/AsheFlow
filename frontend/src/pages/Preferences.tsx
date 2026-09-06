@@ -11,7 +11,8 @@ import {
 import ErrorBanner from '../components/ui/ErrorBanner';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { useConfirm } from '../hooks/useConfirm';
-import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, type LucideIcon } from 'lucide-react';
+import { Heart, ShieldOff, X, ArrowLeftRight, BarChart2, AlertTriangle, Users, HelpCircle, type LucideIcon } from 'lucide-react';
+import SettingsHelpDrawer from '../components/ui/SettingsHelpDrawer';
 import { getLocalYMD } from '../utils/date';
 
 const selectStyles = {
@@ -38,7 +39,7 @@ const selectStyles = {
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   }),
-  singleValue: () => ({ display: 'none' }),
+  singleValue: (base: any) => ({ ...base, color: 'hsl(224 30% 12%)' }),
   placeholder: (base: any) => ({ ...base }),
 };
 
@@ -434,6 +435,7 @@ const Preferences = () => {
 
   const [myId, setMyId] = useState<string>('');
   const [employees, setEmployees] = useState<any[]>([]);
+  const [helpKey, setHelpKey] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<EmployeeRelationship[]>([]);
   const [targetFavId, setTargetFavId] = useState('');
   const [targetBanId, setTargetBanId] = useState('');
@@ -542,6 +544,22 @@ const Preferences = () => {
 
   const EXEMPT_ROLES = ['management', 'admin', 'dispatch', 'trainee'];
 
+  /** Mirror of FAV_LIMITS in backend/app/routers/employee_relationships.py
+   *  (ADR-353). HAND-MAINTAINED — there is no codegen, so a change to the server
+   *  table must be repeated here or the UI will promise slots the API refuses.
+   *
+   *  A missing pair means ZERO, matching the server's `.get(..., 0)` on both
+   *  levels. The gaps are deliberate: driver-driver and captain-captain are one
+   *  per truck, and walker-trainer rarely affect each other's day. */
+  const FAV_LIMITS: Record<string, Record<string, number>> = {
+    driver:  { driver: 0, captain: 2, trainer: 1, walker: 2 },
+    captain: { driver: 2, captain: 0, trainer: 1, walker: 2 },
+    trainer: { driver: 1, captain: 1, walker: 1 },
+    walker:  { driver: 2, captain: 2, walker: 1 },
+  };
+  /** Bans are global, not per-role — 2 total, matching the server. */
+  const BAN_LIMIT = 2;
+
   const getGroupedOptions = (excludeId?: string) => {
     const currentRole = employees.find(e => e.id === excludeId)?.role;
     let valid = excludeId ? employees.filter(e => e.id !== excludeId) : employees;
@@ -554,6 +572,126 @@ const Preferences = () => {
         value: e.id, label: `${e.first_name || e.name} (${e.role})`
       }))
     }));
+  };
+
+  /** Group headings that show the cap for THIS viewer's role against each target
+   *  role, e.g. "Drivers — 1 of 2 used". Previously the only signal that a limit
+   *  existed was a 409 after pressing Add. */
+  /** Remaining favourite slots per target role, for the summary line under the
+   *  picker. The group headings inside the menu only exist once it is OPEN —
+   *  the resting state of the page is a closed control, which is where the caps
+   *  need to be readable. */
+  const favSlotSummary = (excludeId?: string) => {
+    const myRole = employees.find(e => e.id === excludeId)?.role;
+    const caps = FAV_LIMITS[myRole ?? ''] ?? {};
+    return Object.entries(caps)
+      .filter(([, cap]) => cap > 0)
+      .map(([role, cap]) => {
+        const used = favs.filter(f =>
+          employees.find(e => e.id === f.target_employee_id)?.role === role).length;
+        return { role, used, cap, full: used >= cap };
+      });
+  };
+
+  /** Role-specific help lines, DERIVED from FAV_LIMITS rather than written out.
+   *  A generic entry has to describe every role at once, which is the paragraph
+   *  a reader has to work out does not apply to them. Deriving means the help
+   *  cannot drift from the caps the picker enforces, or from the server. */
+  const favHelpOverride = (excludeId?: string) => {
+    const myRole = employees.find(e => e.id === excludeId)?.role;
+    if (!myRole || !FAV_LIMITS[myRole]) return undefined;
+
+    const plural = (role: string, n: number) => `${role}${n === 1 ? '' : 's'}`;
+    const allRoles = Object.keys(FAV_LIMITS);
+    const capFor = (target: string) => FAV_LIMITS[myRole]?.[target] ?? 0;
+    const allowed = allRoles.filter(r => capFor(r) > 0).map(r => [r, capFor(r)] as const);
+    const barred  = allRoles.filter(r => capFor(r) === 0);
+
+    return {
+      favorites: {
+        detail: (
+          <>
+            <p>
+              Favorites raise the score of a pairing when dispatch runs. A
+              favorite is a strong nudge rather than a rule.
+            </p>
+            <p className="font-semibold text-foreground">Your limits</p>
+            <p>As a {myRole}, you may favor:</p>
+            <ul className="mt-1.5 space-y-1">
+              {allowed.map(([role, cap]) => (
+                <li key={role}>
+                  {cap} {plural(role, cap)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              These are also listed above each group in the picker, with how many
+              you have used.
+            </p>
+          </>
+        ),
+        note: (
+          <>
+            {barred.length > 0 && (
+              <p>
+                A {myRole} cannot favor{' '}
+                {barred.map((role, i) => (
+                  <span key={role}>
+                    {i > 0 ? ' or ' : ''}
+                    {role === myRole ? `another ${role}` : `a ${role}`}
+                  </span>
+                ))}
+                , so that group is not offered.
+              </p>
+            )}
+            <p className={barred.length > 0 ? 'mt-1.5' : ''}>
+              Existing favorites above a limit are kept; the limit only gates new
+              ones.
+            </p>
+          </>
+        ),
+      },
+      blocked: {
+        detail: (
+          <>
+            <p>
+              A block is honoured absolutely. Dispatch will not place you on the
+              same truck, regardless of how well the pairing otherwise scores.
+            </p>
+            <p className="font-semibold text-foreground">Two blocks, total</p>
+            <p>
+              Unlike favorites, this limit is not per role. You may hold{' '}
+              <span className="text-danger font-semibold">
+                two blocks in total
+              </span>
+              , across everyone. You have used {bans.length} of {BAN_LIMIT}.
+            </p>
+          </>
+        ),
+      },
+    };
+  };
+
+  const getFavOptions = (excludeId?: string) => {
+    const myRole = employees.find(e => e.id === excludeId)?.role;
+    return getGroupedOptions(excludeId)
+      .map(g => {
+        const targetRole = g.label.slice(0, -1).toLowerCase();
+        const cap  = FAV_LIMITS[myRole ?? '']?.[targetRole] ?? 0;
+        const used = favs.filter(f =>
+          employees.find(e => e.id === f.target_employee_id)?.role === targetRole).length;
+        return { ...g, targetRole, cap, used };
+      })
+      // A cap of 0 is PERMANENT for this role pair — a walker will never be able
+      // to favourite a trainer — so there is no rule to teach by showing it. Drop
+      // the group rather than making the user scroll past people they can never
+      // pick. A group that is merely FULL is different: those options stay,
+      // disabled, because removing one favourite makes them selectable again.
+      .filter(g => g.cap > 0)
+      .map(g => ({
+        label: `${g.label} · ${g.used} of ${g.cap} used`,
+        options: g.options.map(o => ({ ...o, isDisabled: g.used >= g.cap })),
+      }));
   };
 
   const favs = relationships.filter(r => r.relationship_type === 'fav');
@@ -641,11 +779,12 @@ const Preferences = () => {
 
           {/* Favorites — driver/walker/trainer only (not trainee) */}
           {canFavBan && (
-            <Section icon={Heart} title="Favorites" iconColor="text-success">
+            <Section icon={Heart} title="Favorites" iconColor="text-success"
+                     helpKey="favorites" onHelp={setHelpKey}>
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
                   {(() => {
-                    const favOpts = getGroupedOptions(myId);
+                    const favOpts = getFavOptions(myId);
                     const favValue = favOpts.flatMap(g => g.options).find(o => o.value === targetFavId) || null;
                     return (
                       <Select
@@ -662,13 +801,23 @@ const Preferences = () => {
                 </div>
                 <button onClick={handleAddFav} className="btn-primary text-xs">Add</button>
               </div>
+              {favSlotSummary(myId).length > 0 && (
+                <p className="text-xs text-muted-foreground mb-4 flex flex-wrap gap-x-3 gap-y-1">
+                  {favSlotSummary(myId).map(s => (
+                    <span key={s.role} className={s.full ? 'text-warning font-medium' : ''}>
+                      {s.used}/{s.cap} {s.role}{s.cap === 1 ? '' : 's'}
+                    </span>
+                  ))}
+                </p>
+              )}
               <ItemList items={favs} getLabel={(f) => getEmpName(f.target_employee_id)} onDelete={handleDeleteRelationship} emptyText="No favorites yet." />
             </Section>
           )}
 
           {/* Blocked — driver/walker/trainer only (not trainee) */}
           {canFavBan && (
-            <Section icon={ShieldOff} title="Blocked" iconColor="text-danger">
+            <Section icon={ShieldOff} title="Blocked" iconColor="text-danger"
+                     helpKey="blocked" onHelp={setHelpKey}>
               <div className="flex gap-3 mb-4">
                 <div className="flex-1">
                   {(() => {
@@ -679,7 +828,10 @@ const Preferences = () => {
                         options={banOpts}
                         value={banValue}
                         onChange={(s) => setTargetBanId(s?.value || '')}
-                        placeholder="Search and select to block..."
+                        placeholder={bans.length >= BAN_LIMIT
+                          ? `Block limit reached (${BAN_LIMIT} of ${BAN_LIMIT})`
+                          : 'Search and select to block...'}
+                        isDisabled={bans.length >= BAN_LIMIT}
                         isClearable
                         isSearchable
                         styles={selectStyles}
@@ -689,6 +841,9 @@ const Preferences = () => {
                 </div>
                 <button onClick={handleAddBan} className="btn-primary text-xs">Add</button>
               </div>
+              <p className={`text-xs mb-4 ${bans.length >= BAN_LIMIT ? 'text-warning font-medium' : 'text-muted-foreground'}`}>
+                {bans.length} of {BAN_LIMIT} blocks used
+              </p>
               <ItemList items={bans} getLabel={(b) => getEmpName(b.target_employee_id)} onDelete={handleDeleteRelationship} emptyText="No blocks yet." />
             </Section>
           )}
@@ -702,11 +857,17 @@ const Preferences = () => {
 
         </div>
       )}
+
+      <SettingsHelpDrawer
+        fieldKey={helpKey}
+        onClose={() => setHelpKey(null)}
+        overrides={favHelpOverride(myId)}
+      />
     </div>
   );
 };
 
-function Section({ icon: Icon, title, iconColor, children }: { icon: LucideIcon; title: string; iconColor: string; children: React.ReactNode }) {
+function Section({ icon: Icon, title, iconColor, children, helpKey, onHelp }: { icon: LucideIcon; title: string; iconColor: string; children: React.ReactNode; helpKey?: string; onHelp?: (k: string) => void }) {
   return (
     <div className="card">
       <div className="flex items-center gap-3 mb-5">
@@ -714,6 +875,16 @@ function Section({ icon: Icon, title, iconColor, children }: { icon: LucideIcon;
           <Icon className={`w-4 h-4 ${iconColor}`} />
         </div>
         <h2 className="section-title">{title}</h2>
+        {helpKey && onHelp && (
+          <button
+            type="button"
+            onClick={() => onHelp(helpKey)}
+            aria-label={`What are ${title.toLowerCase()}?`}
+            className="text-muted-foreground/60 hover:text-primary transition-colors"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
+        )}
       </div>
       {children}
     </div>

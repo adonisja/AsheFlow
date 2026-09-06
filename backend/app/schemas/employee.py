@@ -27,6 +27,16 @@ def _validate_discord_id(v: Optional[str]) -> Optional[str]:
 
 
 class EmployeeCreate(BaseModel):
+    """A manager creating an employee record (ADR-380 D4).
+
+    `extra="forbid"` because this is a REQUEST body. Without it Pydantic drops
+    unknown keys silently, so `is_active=True` -- a field a manager must never
+    set, and which this endpoint hardcodes to False -- was accepted and ignored
+    rather than refused, and a typo like `roles=` produced a confusing 422 about
+    the MISSING field instead of naming the one that was wrong.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., max_length=100)
     email: EmailStr
     discord_id: Optional[str] = None
@@ -40,6 +50,14 @@ class EmployeeCreate(BaseModel):
 
 
 class EmployeeUpdate(BaseModel):
+    """A partial update (ADR-380 D4).
+
+    The largest blast radius of the four: every field here is optional, so a
+    misspelled key produced NO validation error at all -- the request succeeded,
+    changed nothing, and the caller believed it had.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     name:         Optional[str]      = Field(None, max_length=100)
     email:        Optional[EmailStr] = None
     discord_id:   Optional[str]      = None
@@ -72,12 +90,26 @@ class EmployeeResponse(BaseModel):
 
 
 class InjuryStatusPatch(BaseModel):
-    """Body for PATCH /employees/{id}/injury-status."""
+    """Body for PATCH /employees/{id}/injury-status.
+
+    `extra="forbid"` (ADR-380 D4). The one field is optional, so before this an
+    entirely misspelled body was a valid no-op request.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     injury_status: Optional[Literal["injured", "disabled"]] = None
 
 
 class BulkImportRow(BaseModel):
-    """One row from a bulk import payload — same fields as EmployeeCreate."""
+    """One row from a bulk import payload — same fields as EmployeeCreate.
+
+    `extra="forbid"` (ADR-380 D4). A bulk CSV import is exactly where a
+    mis-mapped column goes unnoticed: 200 rows import "successfully" with a
+    whole column silently discarded, and nobody looks again until the data is
+    wrong in production.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., max_length=100)
     email: EmailStr
     discord_id: Optional[str] = None

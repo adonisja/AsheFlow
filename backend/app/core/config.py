@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     # Days after invite before an unverified (pending_verification) employee
     # record is automatically deleted by the Celery cleanup job.
     invite_expiry_days: int = 7
+    # ADR-379 D2 — a REGISTERED employee who never signs in is a different
+    # question from a stale invite, and deserves a different answer. Deleting
+    # them at invite_expiry_days is the bug D1 fixed; keeping them forever
+    # leaves a live Cognito account whose password was emailed to someone.
+    registered_unused_expiry_days: int = 30
 
     # Retention period (days) for operational shift records:
     # CrewCompliance, DriverCheckIn, RTSReport, StationHandoff.

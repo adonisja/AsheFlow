@@ -339,3 +339,54 @@ class TestBothClientsCallItAndAgreeOnTheShape:
                 current_user={"cognito_groups": ["super_admin"], "id": "s", "username": "u"},
             )
         assert set(out.keys()) == fields(self.TYPES.read_text(), "export interface MfaStatus {")
+
+
+class TestTheEnrolmentLookupUsesACognitoUsername:
+    """The banner was invisible in production for every field employee.
+
+    `is_enrolled(cognito_sub, username)` was called as
+    `is_enrolled(caller.cognito_sub, caller.discord_id)` -- a Discord snowflake
+    in the USERNAME slot, and None for anyone who never linked Discord. It then
+    fell back to cognito_sub, which is not a valid Username in this pool:
+
+        admin_get_user --username <sub>        -> UserNotFoundException
+        admin_get_user --username walker.test  -> the user
+
+    So the lookup returned None for everyone, and the banner renders nothing on
+    None BY DESIGN -- null means "could not read", never "not enrolled". The
+    countdown was silent for the exact population it exists to warn.
+
+    Found by signing in as walker.test on staging and seeing no banner. Every
+    test passed the whole time, because they all supply the identifier directly
+    rather than exercising the call site.
+    """
+
+    def test_the_call_site_passes_a_resolved_cognito_username(self):
+        import inspect
+
+        from app.routers.employees import get_my_mfa_status
+
+        src = inspect.getsource(get_my_mfa_status)
+        assert "caller.discord_id" not in src, (
+            "discord_id is not a Cognito username -- it is a Discord snowflake, "
+            "and None for anyone who never linked Discord"
+        )
+        assert "cognito_username_for(caller)" in src, (
+            "the call site must use the resolver, not a hand-picked field"
+        )
+
+    def test_the_resolver_prefers_username_over_email(self):
+        """Employee.username IS the Cognito username after registration."""
+        from app.routers.employees import cognito_username_for
+
+        class E:
+            username = "walker.test"
+            email = "walker@example.com"
+
+        assert cognito_username_for(E()) == "walker.test"
+
+    def test_a_none_lookup_still_renders_nothing_rather_than_nagging(self):
+        """The null behaviour is CORRECT and must not be "fixed" in response to
+        this bug: an unreadable Cognito must never nag an enrolled user."""
+        s = evaluate(role="walker", enrolled=True, grace_started_at=None, now=NOW)
+        assert s.blocked is False

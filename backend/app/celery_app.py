@@ -107,6 +107,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup.expire_pending_invites",
         "schedule": crontab(hour=3, minute=0),
     },
+    # 03:15 AM Eastern — ADR-379 D2. Fifteen minutes after the invite sweep, not
+    # concurrently: the two partition the same table on complementary filters,
+    # and running them together makes a log read like one job deleted both sets.
+    "expire-registered-unused-daily": {
+        "task": "app.tasks.cleanup.expire_registered_unused",
+        "schedule": crontab(hour=3, minute=15),
+    },
     # 00:01 AM Eastern — flag training records not submitted before midnight
     "check-training-submissions-nightly": {
         "task": "app.tasks.training_deadlines.check_training_submissions",

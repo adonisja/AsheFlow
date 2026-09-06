@@ -19,6 +19,7 @@ from app.models.invite_token import InviteToken
 from app.services.email import send_invite_email, send_credentials_email
 from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
+    IDENTITY_REVOCATION_FAILED, IDENTITY_PROVISIONING_MESSAGE,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,9 +99,26 @@ def _derive_username(name: str, db: Session) -> str:
     last  = re.sub(r"[^a-z0-9]", "", parts[-1]) if len(parts) > 1 else ""
     base  = f"{first}.{last}" if last else first
 
+    # ADR-380 D5 — bounded. 100 employees sharing one normalised name in a
+    # single Cognito pool is not a roster; it is a bug or an attack, and either
+    # deserves a refusal rather than a spin.
+    #
+    # The cap is deliberately far above any real collision count: `username` is
+    # globally unique (matching Cognito's flat namespace), so this counts
+    # `jane.smith` across ALL tenants, not one.
     candidate = base
     suffix    = 2
+    MAX_SUFFIX = 100
     while db.query(Employee).filter(Employee.username == candidate).first():
+        if suffix > MAX_SUFFIX:
+            logger.error(
+                "username derivation exhausted %d suffixes for base %r",
+                MAX_SUFFIX, base,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not allocate a unique username. Please try again.",
+            )
         candidate = f"{base}{suffix}"
         suffix += 1
     return candidate
@@ -186,6 +204,81 @@ def send_invite(
     db.commit()
 
     return {"detail": f"Invite sent to {employee.email}."}
+
+
+@router.delete("/invite/{employee_id}", status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
+def revoke_invite(
+    request: Request,
+    employee_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(RoleChecker(["management", "admin"])),
+    db: Session = Depends(get_db),
+):
+    """Revoke a pending invite without destroying the employee record (ADR-380 D3).
+
+    A manager who invited the wrong person, or the right person at the wrong
+    address, previously had exactly one option: delete the whole employee row,
+    taking its audit history with it. Re-inviting replaces the token
+    (send_invite deletes prior ones first), but that requires knowing the
+    address is wrong AND having a correct one to hand.
+
+    This kills the live token and leaves the row in `pending_verification` with
+    no invite, so the manager can correct the email and re-invite deliberately.
+
+    NOT a deactivation: the employee record, its audit trail and its identity
+    stay. The only thing removed is the credential.
+    """
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == caller.company_id,
+    ).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    # Registered means a Cognito account exists and the token is already spent
+    # (complete_registration sets `used`). Deleting a spent token would report
+    # success while revoking nothing -- and the caller almost certainly wanted
+    # to stop someone signing in, which is deactivation, not this.
+    if employee.username:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This employee has already registered. Revoking an invite does "
+                "not remove account access — deactivate them instead."
+            ),
+        )
+
+    record = db.query(InviteToken).filter(
+        InviteToken.employee_id == employee.id,
+        # Dimension 1 -- employee_id is unique so this cannot select another
+        # tenant's row, but the token is a credential and a scoped delete should
+        # not depend on a uniqueness constraint elsewhere staying true.
+        InviteToken.company_id == caller.company_id,
+    ).first()
+    if not record:
+        # Not an error worth failing on: the desired end state (no live invite)
+        # already holds. Reported so the caller knows nothing was there rather
+        # than believing they revoked something.
+        return {"detail": "No pending invite to revoke.", "revoked": False}
+
+    db.delete(record)
+    db.flush()
+
+    # The token itself is deliberately absent, matching send_invite: an audit
+    # row is readable by other admins, and a token is a working credential.
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="employee.invite_revoked",
+        target_table="employees",
+        target_id=str(employee.id),
+        after={"had_pending_invite": True, "account_status": employee.account_status},
+    )
+    db.commit()
+
+    return {"detail": f"Invite for {employee.name} revoked.", "revoked": True}
 
 
 @router.post("/resend-credentials", status_code=status.HTTP_200_OK)
@@ -402,17 +495,69 @@ def complete_registration(
     else:
         raise HTTPException(status_code=502, detail="Could not allocate a unique username. Please try again.")
 
-    # Add to role group (best-effort)
+    # Add to role group. NOT best-effort (ADR-380 D1).
+    #
+    # This used to log and continue, so a failure produced an account that signs
+    # in successfully and behaves wrong: RoleChecker prefers the DB role, so the
+    # API still works, but every surface reading `cognito:groups` does not --
+    # including the web client's entire navigation, which routes on
+    # groups.includes(...). A dispatch hire lands on the worker view with no
+    # dispatch tab while the API would have served them.
+    #
+    # A half-provisioned account that looks fine is worse than a registration the
+    # employee is told to retry: the first is discovered on their first shift,
+    # the second immediately. Retrying is safe -- the Cognito user already
+    # exists, and admin_add_user_to_group is idempotent.
     group = ROLE_TO_COGNITO_GROUP.get(employee.role)
     if group:
-        try:
-            cognito.admin_add_user_to_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=username,
-                GroupName=group,
+        last_error = None
+        for attempt in range(3):
+            try:
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=username,
+                    GroupName=group,
+                )
+                last_error = None
+                break
+            except ClientError as e:
+                last_error = e
+                logger.warning(
+                    "AdminAddUserToGroup attempt %d/3 failed for %s: %s",
+                    attempt + 1, username, e.response["Error"]["Code"],
+                )
+        if last_error is not None:
+            logger.error(
+                "AdminAddUserToGroup exhausted retries for %s: %s",
+                username, last_error.response["Error"]["Code"],
             )
-        except ClientError as e:
-            logger.error("AdminAddUserToGroup failed for %s: %s", username, e)
+            # ADR-336 D1 — a Cognito group is PLATFORM infrastructure; a company
+            # admin cannot create one. Somebody must learn this is broken rather
+            # than each new hire discovering it on their first shift.
+            raise_platform_alert(
+                db,
+                alert_type=IDENTITY_REVOCATION_FAILED,
+                company_id=employee.company_id,
+                message=IDENTITY_PROVISIONING_MESSAGE,
+            )
+            db.commit()
+            # Raising here is BEFORE the DB stamp and before `record.used`, so
+            # the invite link stays valid and the employee can retry. Verified
+            # by reading the order, not assumed.
+            #
+            # KNOWN COST: a retry re-enters with the Cognito user already
+            # present, so the UsernameExistsException loop suffixes to
+            # `jane.smith2` and leaves `jane.smith` orphaned in the pool. That is
+            # the lesser evil -- an orphaned unused account beats a live account
+            # with no permissions -- and the registration.py:366 comment already
+            # documents that orphans exist. Reconciling them is its own work.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Your account was created but could not be given its role "
+                    "permissions. Contact your manager before signing in."
+                ),
+            )
 
     # Stamp the employee record — account_status stays pending_verification until
     # they actually sign in (get_caller_employee flips it to active on first login)

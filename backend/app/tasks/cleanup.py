@@ -22,12 +22,33 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.cleanup.expire_pending_invites")
 def expire_pending_invites() -> dict:
-    """Delete employee records (and their Cognito users) that have been in
-    ``pending_verification`` status for longer than ``INVITE_EXPIRY_DAYS`` days.
+    """Delete UNREGISTERED invites (and their Cognito users) that have gone stale.
 
     Safe to run multiple times — only targets rows where:
     - account_status = 'pending_verification'
     - invited_at < now - INVITE_EXPIRY_DAYS
+    - username IS NULL  (never completed registration)
+
+    ADR-379 D1 — that last term is the whole point, and it was missing.
+
+    `account_status` carries TWO meanings and this job only knew one.
+    `complete_registration` deliberately leaves the status alone (its own comment:
+    "account_status stays pending_verification until they actually sign in"), and
+    only `get_caller_employee` promotes it, on an authenticated API call rather
+    than on Cognito sign-in.
+
+    So an employee invited on day 1 who registered on day 6 and first signs in on
+    day 8 was DELETED on day 7 -- DB row and Cognito user both -- having done
+    everything asked of them.
+
+    `username` is the registration marker because it is set only by
+    complete_registration, and `resend-credentials` already keys off it to tell
+    "registered, not signed in" from "never registered" (registration.py:214).
+    One definition of registered, not two.
+
+    NOT `cognito_sub`: complete_registration tolerates it being None when the
+    attribute is absent from the AdminCreateUser response, so it can be null on a
+    genuinely registered employee. `username` cannot.
 
     Returns a summary dict with counts for observability.
     """
@@ -43,6 +64,10 @@ def expire_pending_invites() -> dict:
             .filter(
                 Employee.account_status == "pending_verification",
                 Employee.invited_at < cutoff,
+                # ADR-379 D1 — never registered. Without this the job deletes
+                # employees who completed registration and simply have not
+                # signed in yet.
+                Employee.username.is_(None),
             )
             .all()
         )
@@ -94,6 +119,96 @@ def expire_pending_invites() -> dict:
     except Exception as e:
         db.rollback()
         logger.error("expire_pending_invites task failed: %s", e)
+        raise
+    finally:
+        db.close()
+
+    return {
+        "deleted_db": deleted_db,
+        "deleted_cognito": deleted_cognito,
+        "cognito_failures": cognito_failures,
+    }
+
+
+@celery_app.task(name="app.tasks.cleanup.expire_registered_unused")
+def expire_registered_unused() -> dict:
+    """Delete accounts that completed registration but never signed in (ADR-379 D2).
+
+    A DIFFERENT question from a stale invite, which is why it is a different
+    task on a different clock. `expire_pending_invites` asks "did this invite go
+    unanswered"; this asks "was this account ever used". Folding them together is
+    what produced the bug D1 fixed -- one filter serving two meanings.
+
+    Never expiring these is not an option either: a registered account is a live
+    Cognito user whose temporary password was emailed to someone. Leaving it
+    forever leaves that credential live forever.
+
+    Selects the exact complement of D1's filter: `username IS NOT NULL`.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=settings.registered_unused_expiry_days
+    )
+    db = SessionLocal()
+    deleted_db = 0
+    deleted_cognito = 0
+    cognito_failures: list = []
+
+    try:
+        stale = (
+            db.query(Employee)
+            .filter(
+                # Still never signed in -- get_caller_employee promotes to
+                # `active` on the first authenticated call.
+                Employee.account_status == "pending_verification",
+                Employee.invited_at < cutoff,
+                # Registered. The complement of expire_pending_invites, so the
+                # two tasks partition the space rather than overlapping.
+                Employee.username.isnot(None),
+            )
+            .all()
+        )
+
+        if not stale:
+            logger.info("expire_registered_unused: nothing to expire.")
+            return {"deleted_db": 0, "deleted_cognito": 0, "cognito_failures": []}
+
+        cognito = boto3.client("cognito-idp", region_name=settings.aws_region)
+
+        # Same order as expire_pending_invites: DB first so access is lost
+        # atomically, Cognito best-effort afterwards.
+        for employee in stale:
+            db.delete(employee)
+            deleted_db += 1
+        db.commit()
+
+        for employee in stale:
+            cognito_username = employee.username or employee.email
+            if not cognito_username:
+                continue
+            try:
+                cognito.admin_delete_user(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=cognito_username,
+                )
+                deleted_cognito += 1
+            except ClientError as e:
+                if e.response["Error"]["Code"] == "UserNotFoundException":
+                    deleted_cognito += 1
+                else:
+                    # No email or username in the message beyond the Cognito
+                    # identifier already required to name the failure (D7).
+                    logger.error(
+                        "Failed to delete Cognito user %s: %s", cognito_username, e
+                    )
+                    cognito_failures.append(cognito_username)
+
+        logger.info(
+            "expire_registered_unused: deleted %d DB records, %d Cognito users. Failures: %s",
+            deleted_db, deleted_cognito, cognito_failures,
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error("expire_registered_unused task failed: %s", e)
         raise
     finally:
         db.close()
