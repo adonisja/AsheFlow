@@ -593,6 +593,85 @@ const Preferences = () => {
       });
   };
 
+  /** Role-specific help lines, DERIVED from FAV_LIMITS rather than written out.
+   *  A generic entry has to describe every role at once, which is the paragraph
+   *  a reader has to work out does not apply to them. Deriving means the help
+   *  cannot drift from the caps the picker enforces, or from the server. */
+  const favHelpOverride = (excludeId?: string) => {
+    const myRole = employees.find(e => e.id === excludeId)?.role;
+    if (!myRole || !FAV_LIMITS[myRole]) return undefined;
+
+    const plural = (role: string, n: number) => `${role}${n === 1 ? '' : 's'}`;
+    const allRoles = Object.keys(FAV_LIMITS);
+    const capFor = (target: string) => FAV_LIMITS[myRole]?.[target] ?? 0;
+    const allowed = allRoles.filter(r => capFor(r) > 0).map(r => [r, capFor(r)] as const);
+    const barred  = allRoles.filter(r => capFor(r) === 0);
+
+    return {
+      favorites: {
+        detail: (
+          <>
+            <p>
+              Favorites raise the score of a pairing when dispatch runs. A
+              favorite is a strong nudge rather than a rule.
+            </p>
+            <p className="font-semibold text-foreground">Your limits</p>
+            <p>As a {myRole}, you may favor:</p>
+            <ul className="mt-1.5 space-y-1">
+              {allowed.map(([role, cap]) => (
+                <li key={role}>
+                  {cap} {plural(role, cap)}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              These are also listed above each group in the picker, with how many
+              you have used.
+            </p>
+          </>
+        ),
+        note: (
+          <>
+            {barred.length > 0 && (
+              <p>
+                A {myRole} cannot favor{' '}
+                {barred.map((role, i) => (
+                  <span key={role}>
+                    {i > 0 ? ' or ' : ''}
+                    {role === myRole ? `another ${role}` : `a ${role}`}
+                  </span>
+                ))}
+                , so that group is not offered.
+              </p>
+            )}
+            <p className={barred.length > 0 ? 'mt-1.5' : ''}>
+              Existing favorites above a limit are kept; the limit only gates new
+              ones.
+            </p>
+          </>
+        ),
+      },
+      blocked: {
+        detail: (
+          <>
+            <p>
+              A block is honoured absolutely. Dispatch will not place you on the
+              same truck, regardless of how well the pairing otherwise scores.
+            </p>
+            <p className="font-semibold text-foreground">Two blocks, total</p>
+            <p>
+              Unlike favorites, this limit is not per role. You may hold{' '}
+              <span className="text-danger font-semibold">
+                two blocks in total
+              </span>
+              , across everyone. You have used {bans.length} of {BAN_LIMIT}.
+            </p>
+          </>
+        ),
+      },
+    };
+  };
+
   const getFavOptions = (excludeId?: string) => {
     const myRole = employees.find(e => e.id === excludeId)?.role;
     return getGroupedOptions(excludeId)
@@ -610,7 +689,7 @@ const Preferences = () => {
       // disabled, because removing one favourite makes them selectable again.
       .filter(g => g.cap > 0)
       .map(g => ({
-        label: `${g.label} — ${g.used} of ${g.cap} used`,
+        label: `${g.label} · ${g.used} of ${g.cap} used`,
         options: g.options.map(o => ({ ...o, isDisabled: g.used >= g.cap })),
       }));
   };
@@ -779,7 +858,11 @@ const Preferences = () => {
         </div>
       )}
 
-      <SettingsHelpDrawer fieldKey={helpKey} onClose={() => setHelpKey(null)} />
+      <SettingsHelpDrawer
+        fieldKey={helpKey}
+        onClose={() => setHelpKey(null)}
+        overrides={favHelpOverride(myId)}
+      />
     </div>
   );
 };
