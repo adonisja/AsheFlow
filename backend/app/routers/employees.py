@@ -508,7 +508,24 @@ def get_my_mfa_status(
             detail="MFA status applies to user accounts, not machine clients.",
         )
 
-    enrolled = mfa_status.is_enrolled(caller.cognito_sub, caller.discord_id)
+    # ADR-380 F7, missed here. This passed the caller's DISCORD id as the USERNAME
+    # argument -- a Discord snowflake, not a Cognito username, and None for every
+    # employee who has not linked Discord. It then fell back to cognito_sub,
+    # which is not a valid Username in this pool either:
+    #
+    #     admin_get_user --username <sub>          -> UserNotFoundException
+    #     admin_get_user --username walker.test    -> the user
+    #
+    # So is_enrolled returned None for EVERY field employee, and the banner
+    # renders nothing on None by design (null means "could not read", never "not
+    # enrolled"). The countdown was invisible for the entire population it
+    # exists to warn -- the same silence ADR-381 D1 was written to end.
+    #
+    # cognito_username_for is the resolver the F7 sweep introduced; this call
+    # site predates it and was not converted.
+    enrolled = mfa_status.is_enrolled(
+        caller.cognito_sub, cognito_username_for(caller),
+    )
 
     # None means Cognito could not be reached. Treat as enrolled for gating
     # purposes: an AWS hiccup must never block a shift. The banner simply does
@@ -539,7 +556,12 @@ def get_my_mfa_status(
     # Never raises (see enforce_cap): an AWS hiccup must degrade to one extra
     # remembered device, not to a failed sign-in.
     device_fleet.enforce_cap(
-        username=caller.discord_id or str(caller.cognito_sub),
+        # Same bug as the enrolment lookup above, same fix. This passed a
+        # Discord id as the Cognito Username, so AdminListDevices raised
+        # UserNotFoundException -- and enforce_cap fails SOFT by design, so it
+        # returned 0 and logged a warning nobody reads. Device eviction has
+        # therefore never trimmed anything in production.
+        username=cognito_username_for(caller) or str(caller.cognito_sub),
         pool_id=settings.aws_cognito_user_pool_id,
         region=settings.aws_region,
     )
