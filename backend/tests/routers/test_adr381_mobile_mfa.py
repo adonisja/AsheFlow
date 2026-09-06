@@ -187,3 +187,96 @@ class TestTheContext:
         i = src.index("const refreshMfaStatus")
         window = src[i:i + 500]
         assert "setMfaStatus(null)" not in window
+
+
+PROMPT = ROOT / "mobile" / "src" / "components" / "MfaGracePrompt.tsx"
+
+
+def prompts(status, skipped=False):
+    """MfaGracePrompt's guard chain, executed."""
+    if status is None or status["enrolled"] is None:
+        return False
+    if not status["required"] or status["enrolled"] or status["blocked"]:
+        return False
+    return not skipped
+
+
+class TestTheGracePromptIsSkippable:
+    """ADR-381 D2 specified "a Profile row with the day count, PLUS a
+    one-per-launch prompt". The first shipped; the second did not, so the
+    countdown was visible only to someone who navigated to Settings -- which a
+    walker opening the app to check today's route never does.
+    """
+
+    def test_it_prompts_during_the_grace_period(self):
+        assert prompts(_s(days=14)) is True
+
+    def test_the_component_actually_implements_that_chain(self):
+        """`prompts()` above is a MODEL of the guard chain -- mutating the
+        component does not change it, so the executable tests alone let two
+        mutants through (removing the skip guard, and dropping the blocked
+        term). These assert the real source carries each guard.
+        """
+        code = "\n".join(
+            l for l in PROMPT.read_text().splitlines()
+            if not l.lstrip().startswith(("*", "/*", "//"))
+        )
+        assert "if (skipped) return null;" in code, (
+            "the prompt is no longer skippable -- it would nag on every launch "
+            "for the whole grace period"
+        )
+        assert "mfaStatus.blocked) return null;" in code, (
+            "the prompt fires when BLOCKED, offering a 'Not now' escape from a "
+            "wall that must not have one"
+        )
+        assert "mfaStatus.enrolled === null" in code, (
+            "null means Cognito was unreadable, not 'not enrolled'"
+        )
+
+    def test_it_shows_the_day_count(self):
+        """"Required soon" is what people ignore. The number is the point."""
+        src = PROMPT.read_text()
+        assert "days_remaining" in src
+        assert "Required in ${days} days" in src
+
+    def test_skipping_hides_it_for_the_rest_of_the_launch(self):
+        assert prompts(_s(days=14), skipped=True) is False
+
+    def test_skipping_does_NOT_escape_the_block(self):
+        """The question this was built to answer. Once the countdown ends the
+        prompt is irrelevant -- RootNavigator has already swapped the shell for
+        MfaRequiredScreen, which has no dismiss at all."""
+        assert prompts(_s(days=0, blocked=True), skipped=True) is False
+        assert prompts(_s(days=0, blocked=True)) is False
+        assert surface(True, _s(days=0, blocked=True)) == "blocking"
+
+    def test_it_never_fires_for_an_enrolled_user(self):
+        assert prompts(_s(enrolled=True, days=None)) is False
+
+    def test_it_never_fires_on_an_unreadable_status(self):
+        assert prompts(_s(enrolled=None)) is False
+
+    def test_it_is_a_modal_over_the_shell_not_a_replacement(self):
+        """Escapable BECAUSE they may still work. The blocked case is a
+        navigator swap for the opposite reason."""
+        assert "<Modal" in PROMPT.read_text()
+
+    def test_it_mounts_once_per_launch(self):
+        """MainShell mounts once per session, so "Not now" lasts exactly that
+        long. Re-asking on every screen change is how a warning becomes noise
+        people dismiss without reading."""
+        nav = NAV.read_text()
+        assert "<MfaGracePrompt />" in nav
+        i_shell = nav.index("function MainShell")
+        i_prompt = nav.index("<MfaGracePrompt />")
+        i_root = nav.index("function RootNavigator")
+        assert i_shell < i_prompt < i_root, (
+            "the prompt must mount inside MainShell -- mounting it deeper would "
+            "re-ask on every screen change"
+        )
+
+    def test_skip_state_is_not_persisted(self):
+        """A new launch is a new chance to ask. Persisting the skip would let a
+        deadline stop mentioning itself entirely."""
+        src = PROMPT.read_text()
+        assert "AsyncStorage" not in src

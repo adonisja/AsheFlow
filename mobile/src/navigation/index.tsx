@@ -54,6 +54,7 @@ import TruckBuildingsScreen from '@screens/Walker/TruckBuildingsScreen';
 import ToteAddressScreen from '@screens/Captain/ToteAddressScreen';
 import MyWorkforceRouteScreen from '@screens/Walker/MyWorkforceRouteScreen';
 import MfaRequiredScreen        from '@screens/MfaRequiredScreen';
+import MfaGracePrompt           from '@components/MfaGracePrompt';
 
 // ── Tab-switch context (lets child screens navigate to a different tab) ───────
 const TabSwitchContext = createContext<(key: string) => void>(() => {});
@@ -300,6 +301,11 @@ function MainShell() {
 
   return (
     <TabSwitchContext.Provider value={switchTab}>
+      {/* ADR-381 D2 — the skippable half of the grace period. Renders over
+          the shell rather than replacing it, because while counting down they
+          may still work. Mounted here so it appears ONCE PER LAUNCH: MainShell
+          mounts once per session, so "Not now" lasts exactly that long. */}
+      <MfaGracePrompt />
       <View style={{ flex: 1 }}>
         <View style={{ flex: 1 }}>
           <ActiveScreen />
