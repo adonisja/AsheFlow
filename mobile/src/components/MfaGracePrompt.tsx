@@ -69,7 +69,7 @@ export default function MfaGracePrompt() {
 }
 
 const styles = (c: ThemeColors) => StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000080' },
+  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   sheet: {
     backgroundColor: c.background, borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg, maxHeight: '85%',
