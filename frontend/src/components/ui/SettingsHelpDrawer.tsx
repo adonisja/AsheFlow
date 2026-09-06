@@ -31,26 +31,20 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     detail: (
       <>
         <p>
-          Favorites raise the score of a pairing when dispatch runs. They compete
-          with everything else the algorithm weighs, so a favorite is a strong
-          nudge rather than a rule.
+          Favorites raise the score of a pairing when dispatch runs. A favorite is
+          a strong nudge rather than a rule.
         </p>
         <p className="font-semibold text-foreground">Limits depend on both roles</p>
         <p>
-          How many favorites you may hold is set per target role — a walker may
-          favor two drivers but only one other walker. Your own limits are listed
-          above each group in the picker.
+          How many favorites you may hold is set by your role and the role of the
+          person you are adding. Your own limits are listed above each group in
+          the picker.
         </p>
       </>
     ),
-    example:
-      'A walker may favor 2 drivers, 2 captains and 1 walker. Adding a third driver is refused until one is removed.',
     note: (
       <>
-        <p>
-          Some pairings have no slots at all — a driver cannot favor another
-          driver, because only one drives each truck.
-        </p>
+        <p>Some pairings have no slots at all.</p>
         <p className="mt-1.5">
           Existing favorites above a limit are kept; the limit only gates new ones.
         </p>
@@ -64,7 +58,7 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
     detail: (
       <>
         <p>
-          A block is honoured absolutely — dispatch will not place you on the same
+          A block is honoured absolutely. Dispatch will not place you on the same
           truck, regardless of how well the pairing otherwise scores.
         </p>
         <p className="font-semibold text-foreground">Two blocks, total</p>
@@ -454,10 +448,22 @@ const HELP_CONTENT: Record<string, HelpEntry> = {
 interface SettingsHelpDrawerProps {
   fieldKey: string | null;
   onClose: () => void;
+  /** Per-viewer content, keyed by the same fieldKey. A generic help entry has to
+   *  describe every role's rules at once, which is exactly the paragraph a reader
+   *  has to work out does not apply to them. Where a caller knows the viewer's
+   *  role it can supply the concrete lines instead, and the shared entry keeps
+   *  the framing. Omitted by callers with nothing viewer-specific to say. */
+  overrides?: Record<string, { detail?: React.ReactNode; note?: React.ReactNode }>;
 }
 
-export default function SettingsHelpDrawer({ fieldKey, onClose }: SettingsHelpDrawerProps) {
-  const entry = fieldKey ? HELP_CONTENT[fieldKey] : null;
+export default function SettingsHelpDrawer({ fieldKey, onClose, overrides }: SettingsHelpDrawerProps) {
+  const base = fieldKey ? HELP_CONTENT[fieldKey] : null;
+  const override = fieldKey ? overrides?.[fieldKey] : undefined;
+  const entry = base && {
+    ...base,
+    ...(override?.detail !== undefined ? { detail: override.detail } : {}),
+    ...(override?.note !== undefined ? { note: override.note } : {}),
+  };
 
   return (
     <AnimatePresence>
