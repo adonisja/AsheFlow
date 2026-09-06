@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,22 @@ logger = logging.getLogger(__name__)
 # Phone, personal laptop, and the shared station terminal is an ordinary
 # combination. 2 forces a re-challenge every time someone alternates.
 MAX_REMEMBERED_DEVICES = 3
+
+# How long a remembered device may skip the MFA challenge before it is forgotten
+# and the next sign-in re-challenges (ADR-385).
+#
+# These bound how LONG one device stays trusted; MAX_REMEMBERED_DEVICES bounds
+# how MANY are trusted at once. Neither subsumes the other: without the age
+# bound, a single daily-driver device is remembered forever; without the count
+# cap, a user accumulates unbounded trusted devices.
+#
+# 24h for privileged matches NIST SP 800-63B's AAL2 reauthentication ceiling.
+# 7d for field is deliberately below Duo's 30-day default -- the trend is
+# downward against MFA-targeting attacks -- while staying far from the
+# per-session challenge a field user cannot tolerate: their app backgrounds and
+# drops sessions constantly on unreliable mobile networks.
+PRIVILEGED_DEVICE_TTL = timedelta(hours=24)
+FIELD_DEVICE_TTL = timedelta(days=7)
 
 # Cognito's own ceiling for one AdminListDevices page. A user at the cap has
 # ~3 devices, so one page is always enough -- but ask for the max so a user who
@@ -100,6 +116,67 @@ def select_for_eviction(devices: list[Device], cap: int = MAX_REMEMBERED_DEVICES
         return []
     remembered.sort(key=lambda d: d.sort_key)
     return remembered[: len(remembered) - cap]
+
+
+def select_stale(devices: list[Device], ttl: timedelta,
+                 now: Optional[datetime] = None) -> list[Device]:
+    """Which remembered devices have not been used within `ttl`.
+
+    Distinct from select_for_eviction, which sorts by COUNT to a cap. This is
+    the AGE rule (ADR-385) and the two are not interchangeable.
+
+    Only remembered devices are returned: a device already marked
+    `not_remembered` is inert -- it is challenged on every sign-in already, and
+    forgetting it would be a wasted API call.
+
+    A device with no DeviceLastAuthenticatedDate is treated as INFINITELY OLD,
+    matching Device.sort_key. It has never completed an auth, so it has no claim
+    to be trusted; the alternative -- treating a missing timestamp as "now" --
+    would make an unproven device permanently un-forgettable.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - ttl
+    return [d for d in devices if d.remembered and d.sort_key < cutoff]
+
+
+def forget_stale(username: str, pool_id: str, region: str, ttl: timedelta,
+                 now: Optional[datetime] = None) -> int:
+    """Forget this user's remembered devices unused within `ttl`. Returns count.
+
+    Never raises, for the same reason enforce_cap does not: this runs unattended
+    on a schedule, and one user's AWS hiccup must not abort the sweep for
+    everyone after them.
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    try:
+        client = boto3.client("cognito-idp", region_name=region)
+        resp = client.admin_list_devices(
+            UserPoolId=pool_id, Username=username, Limit=_PAGE,
+        )
+    except (ClientError, BotoCoreError) as exc:
+        logger.warning("device_fleet: could not list devices: %s", type(exc).__name__)
+        return 0
+
+    doomed = select_stale(parse_devices(resp.get("Devices", [])), ttl, now)
+    forgotten = 0
+    for d in doomed:
+        try:
+            client.admin_forget_device(
+                UserPoolId=pool_id, Username=username, DeviceKey=d.key,
+            )
+            forgotten += 1
+        except (ClientError, BotoCoreError) as exc:
+            logger.warning(
+                "device_fleet: could not forget a stale device: %s", type(exc).__name__,
+            )
+
+    if forgotten:
+        # No device_name, no last_ip_used, no username -- device_name carries OS
+        # and browser, and the IP is personal data (ADR-115 D7).
+        logger.info("device_fleet: forgot %d stale device(s)", forgotten)
+    return forgotten
 
 
 def enforce_cap(username: str, pool_id: str, region: str,

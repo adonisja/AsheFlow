@@ -71,6 +71,21 @@ celery_app.conf.beat_schedule = {
     # a large zone is finished by the next run rather than one long job.
     # ADR-317 D1 — surface a role whose Cognito group is missing or empty before
     # a captain finds out by losing every tab. Reports, never enforces.
+    # ADR-385 — bounds how LONG a remembered device may skip the MFA challenge;
+    # MAX_REMEMBERED_DEVICES bounds how MANY. Privileged 24h, field 7 days.
+    #
+    # 01:00 Eastern: no DSP is operating, and midnight already holds
+    # check-training-submissions (00:01) and escalate-adp-mismatch (00:05).
+    # minute=37 because :00/:10/../:50 are taken by two */10 tasks and the fixed
+    # slots in use are :00 :01 :05 :15 :30 :45.
+    #
+    # Eastern is ASSUMED, not derived — see the task docstring. The task warns on
+    # any company not on Eastern time rather than silently forgetting their
+    # devices at the wrong local hour.
+    "sweep-stale-remembered-devices": {
+        "task": "app.tasks.device_sweep.sweep_stale_devices",
+        "schedule": crontab(hour=1, minute=37),
+    },
     "check-role-directory-drift": {
         "task": "app.tasks.role_directory.check_role_directory_drift",
         "schedule": crontab(hour=5, minute=0),
