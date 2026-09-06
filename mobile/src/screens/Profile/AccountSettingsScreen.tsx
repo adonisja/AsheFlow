@@ -23,6 +23,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@contexts/AuthContext';
 import { useColors, useTheme } from '@contexts/ThemeContext';
 import apiClient from '@api/client';
+import MfaEnrolment from '@components/MfaEnrolment';
 import { COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID } from '@env';
 import { spacing, radius, fontSize, fontWeight, type ThemeColors } from '@theme/index';
 
@@ -39,7 +40,7 @@ type PasswordStep = 'idle' | 'open';
 export default function AccountSettingsScreen() {
   const c = useColors();
   const { isDark, isSystemTheme, setTheme } = useTheme();
-  const { user, signOut } = useAuth();
+  const { user, signOut, mfaStatus, refreshMfaStatus } = useAuth();
   const s = styles(c);
 
   // Email edit
@@ -577,6 +578,22 @@ export default function AccountSettingsScreen() {
           </View>
         </View>
 
+        {/* ── Two-factor (ADR-381 D2) ──
+            The counting-down surface. The BLOCKED case never reaches here --
+            RootNavigator swaps this whole shell out for MfaRequiredScreen -- so
+            this is only ever the warning, and it is a section rather than a
+            banner because a banner on a phone is one swipe from gone. */}
+        {mfaStatus && mfaStatus.required && mfaStatus.enrolled === false && (
+          <View style={s.section}>
+            <Text style={s.sectionLabel}>Two-factor authentication</Text>
+            <Text style={s.editHint}>
+              {mfaStatus.days_remaining === 1
+                ? 'Required from tomorrow.'
+                : `Required in ${mfaStatus.days_remaining} days.`}
+            </Text>
+            <MfaEnrolment onEnrolled={refreshMfaStatus} />
+          </View>
+        )}
         {/* ── Sign out ── */}
         <TouchableOpacity
           style={[s.signOutBtn, { borderColor: c.danger + '40', backgroundColor: c.danger + '08' }]}

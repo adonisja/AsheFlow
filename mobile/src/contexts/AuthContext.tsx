@@ -111,6 +111,8 @@ type AuthContextType = {
   capabilities: Capabilities | null;
   /** null means "not known", not "no MFA required" (ADR-377). */
   mfaStatus: MfaStatus | null;
+  /** Re-fetch after enrolling, so the blocking screen can release. */
+  refreshMfaStatus: () => Promise<void>;
   /** Fails OPEN when capabilities are unknown: a walker on a flaky van
    *  connection must not lose their tabs, and the server enforces every gated
    *  route anyway (RequireMode -> 404). A dead tab is recoverable; a blank app
@@ -352,6 +354,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, [user]);
 
+  /* ADR-381 D2 — the blocking screen calls this after enrolling, so the app
+     lets them through without a sign-out/sign-in round trip. Failure leaves the
+     previous value rather than nulling it: on the blocked path, null would
+     unblock someone whose enrolment we could not confirm. */
+  const refreshMfaStatus = useCallback(async () => {
+    try {
+      const res = await apiClient.get<MfaStatus>('/employees/me/mfa-status');
+      setMfaStatus(res.data);
+    } catch {
+      /* keep the last known status */
+    }
+  }, []);
+
   const hasFeature = useCallback(
     (key: string) => (capabilities ? capabilities.features.includes(key) : true),
     [capabilities],
@@ -366,7 +381,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={{
       user, isLoading, isAuthenticated: !!user,
       signIn, respondToChallenge, signInWithProvider, signOut, hasRole,
-      capabilities, hasFeature, mfaStatus,
+      capabilities, hasFeature, mfaStatus, refreshMfaStatus,
     }}>
       {children}
     </AuthContext.Provider>
@@ -380,6 +395,7 @@ const AUTH_FALLBACK: AuthContextType = {
   // null = "not known". Outside a provider nothing is known, which is the
   // honest value here (ADR-377).
   mfaStatus: null,
+  refreshMfaStatus: async () => {},
   signIn: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   respondToChallenge: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
   signInWithProvider: async () => { throw new Error('useAuth must be used inside AuthProvider'); },
