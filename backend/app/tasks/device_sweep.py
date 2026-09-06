@@ -40,6 +40,7 @@ from app.core.config import settings
 from app.models.company import Company
 from app.models.employee import Employee
 from app.services import device_fleet, mfa_status
+from app.services.integration_alerts import raise_platform_alert
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def sweep_stale_devices() -> dict:
     run that forgot nothing is distinguishable from one that never ran.
     """
     db = SessionLocal()
-    checked = forgotten = skipped = 0
+    checked = forgotten = skipped = unprotected = 0
     try:
         # The timezone assumption, surfaced. Cheap, and it is the difference
         # between a future incident and a log line that already explains itself.
@@ -140,6 +141,30 @@ def sweep_stale_devices() -> dict:
                 skipped += 1
                 continue
 
+            # ADR-386 layer 2 — the BACKSTOP, not the mechanism. Unenrolment
+            # cannot be refused (ADR-377 D1: the client calls Cognito directly
+            # with a scope that cannot be stripped), so a privileged account
+            # sitting with no factor is either an unenrolment we did not catch
+            # or an enrolment that never happened. Both want a human.
+            #
+            # ADR-387 responds to the SetUserMFAPreference event in seconds; this
+            # catches whatever that path missed, within a day.
+            if tier == "privileged" and not mfa_status.is_enrolled(
+                emp.cognito_sub, username,
+            ):
+                unprotected += 1
+                raise_platform_alert(
+                    db,
+                    alert_type="mfa.privileged_unprotected",
+                    company_id=emp.company_id,
+                    message=(
+                        "A privileged account has no MFA factor. If this was an "
+                        "unenrolment it may indicate a compromised session "
+                        "(ADR-386)."
+                    ),
+                    severity="critical",
+                )
+
             ttl = (device_fleet.PRIVILEGED_DEVICE_TTL if tier == "privileged"
                    else device_fleet.FIELD_DEVICE_TTL)
 
@@ -151,11 +176,16 @@ def sweep_stale_devices() -> dict:
                 ttl=ttl,
             )
 
+        if unprotected:
+            db.commit()  # persist the alerts raised above
+
         logger.info(
             "device sweep: checked %d employee(s), forgot %d stale device(s), "
-            "skipped %d", checked, forgotten, skipped,
+            "skipped %d, %d privileged unprotected",
+            checked, forgotten, skipped, unprotected,
         )
         return {"checked": checked, "forgotten": forgotten, "skipped": skipped,
+                "privileged_unprotected": unprotected,
                 "ran_at": datetime.now(ZoneInfo(SWEEP_TIMEZONE)).isoformat()}
     finally:
         db.close()
