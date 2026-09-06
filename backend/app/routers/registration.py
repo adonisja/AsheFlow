@@ -19,6 +19,7 @@ from app.models.invite_token import InviteToken
 from app.services.email import send_invite_email, send_credentials_email
 from app.services.integration_alerts import (
     raise_platform_alert, EMAIL_DELIVERY_FAILED, EMAIL_DOWN_MESSAGE,
+    IDENTITY_REVOCATION_FAILED, IDENTITY_PROVISIONING_MESSAGE,
 )
 
 logger = logging.getLogger(__name__)
@@ -419,17 +420,69 @@ def complete_registration(
     else:
         raise HTTPException(status_code=502, detail="Could not allocate a unique username. Please try again.")
 
-    # Add to role group (best-effort)
+    # Add to role group. NOT best-effort (ADR-380 D1).
+    #
+    # This used to log and continue, so a failure produced an account that signs
+    # in successfully and behaves wrong: RoleChecker prefers the DB role, so the
+    # API still works, but every surface reading `cognito:groups` does not --
+    # including the web client's entire navigation, which routes on
+    # groups.includes(...). A dispatch hire lands on the worker view with no
+    # dispatch tab while the API would have served them.
+    #
+    # A half-provisioned account that looks fine is worse than a registration the
+    # employee is told to retry: the first is discovered on their first shift,
+    # the second immediately. Retrying is safe -- the Cognito user already
+    # exists, and admin_add_user_to_group is idempotent.
     group = ROLE_TO_COGNITO_GROUP.get(employee.role)
     if group:
-        try:
-            cognito.admin_add_user_to_group(
-                UserPoolId=settings.aws_cognito_user_pool_id,
-                Username=username,
-                GroupName=group,
+        last_error = None
+        for attempt in range(3):
+            try:
+                cognito.admin_add_user_to_group(
+                    UserPoolId=settings.aws_cognito_user_pool_id,
+                    Username=username,
+                    GroupName=group,
+                )
+                last_error = None
+                break
+            except ClientError as e:
+                last_error = e
+                logger.warning(
+                    "AdminAddUserToGroup attempt %d/3 failed for %s: %s",
+                    attempt + 1, username, e.response["Error"]["Code"],
+                )
+        if last_error is not None:
+            logger.error(
+                "AdminAddUserToGroup exhausted retries for %s: %s",
+                username, last_error.response["Error"]["Code"],
             )
-        except ClientError as e:
-            logger.error("AdminAddUserToGroup failed for %s: %s", username, e)
+            # ADR-336 D1 — a Cognito group is PLATFORM infrastructure; a company
+            # admin cannot create one. Somebody must learn this is broken rather
+            # than each new hire discovering it on their first shift.
+            raise_platform_alert(
+                db,
+                alert_type=IDENTITY_REVOCATION_FAILED,
+                company_id=employee.company_id,
+                message=IDENTITY_PROVISIONING_MESSAGE,
+            )
+            db.commit()
+            # Raising here is BEFORE the DB stamp and before `record.used`, so
+            # the invite link stays valid and the employee can retry. Verified
+            # by reading the order, not assumed.
+            #
+            # KNOWN COST: a retry re-enters with the Cognito user already
+            # present, so the UsernameExistsException loop suffixes to
+            # `jane.smith2` and leaves `jane.smith` orphaned in the pool. That is
+            # the lesser evil -- an orphaned unused account beats a live account
+            # with no permissions -- and the registration.py:366 comment already
+            # documents that orphans exist. Reconciling them is its own work.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Your account was created but could not be given its role "
+                    "permissions. Contact your manager before signing in."
+                ),
+            )
 
     # Stamp the employee record — account_status stays pending_verification until
     # they actually sign in (get_caller_employee flips it to active on first login)
