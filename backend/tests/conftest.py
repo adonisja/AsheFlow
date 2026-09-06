@@ -47,6 +47,7 @@ from app.models.shift_session import ShiftSession
 from app.models.captain_truck_familiarity import CaptainTruckFamiliarity
 from app.models.crew_pin import CrewPin, CrewPinMember
 from app.models.truck_pin import TruckPin
+from app.models.invite_token import InviteToken
 from app.models.graduation_quiz import GraduationQuiz
 
 # graduation_quizzes uses JSONB (PostgreSQL-specific) in the ORM model so we
@@ -120,6 +121,8 @@ DISPATCH_TABLES = [
     CrewPin.__table__,                   # ADR-357
     CrewPinMember.__table__,             # ADR-357
     TruckPin.__table__,                  # ADR-358
+    InviteToken.__table__,               # ADR-380 D3 — revoke reads it
+
     _graduation_quizzes_sqlite,
     _audit_logs_sqlite,
 ]

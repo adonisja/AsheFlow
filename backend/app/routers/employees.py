@@ -99,6 +99,30 @@ def _cognito_client():
     return boto3.client("cognito-idp", region_name=settings.aws_region)
 
 
+def cognito_username_for(employee) -> str | None:
+    """The Username this employee's Cognito account actually has (ADR-380 F7).
+
+    NOT a guess, and not the email. Which identifier is correct depends on how
+    far through onboarding they are:
+
+      pre-registration   AdminCreateUser used the EMAIL as the Username
+      post-registration  complete_registration derived firstname.lastname and
+                         stamped it on Employee.username
+
+    So `username or email` -- in that order -- is the only correct resolution,
+    and it is what cleanup.py and the deactivate/delete paths already use.
+
+    Three sites deviated, and each was a silent no-op on a REGISTERED employee:
+    Cognito raises UserNotFoundException and every one of them swallowed it into
+    a log line.
+
+    cognito_sub is deliberately NOT a fallback: it is a valid Username for admin
+    APIs, but reaching for it hides the real problem, which is that neither
+    identifier was stamped.
+    """
+    return getattr(employee, "username", None) or getattr(employee, "email", None)
+
+
 def _cognito_revoke_access(cognito_username: str | None) -> bool:
     """Disable the Cognito user and revoke all their tokens.
 
@@ -484,7 +508,24 @@ def get_my_mfa_status(
             detail="MFA status applies to user accounts, not machine clients.",
         )
 
-    enrolled = mfa_status.is_enrolled(caller.cognito_sub, caller.discord_id)
+    # ADR-380 F7, missed here. This passed the caller's DISCORD id as the USERNAME
+    # argument -- a Discord snowflake, not a Cognito username, and None for every
+    # employee who has not linked Discord. It then fell back to cognito_sub,
+    # which is not a valid Username in this pool either:
+    #
+    #     admin_get_user --username <sub>          -> UserNotFoundException
+    #     admin_get_user --username walker.test    -> the user
+    #
+    # So is_enrolled returned None for EVERY field employee, and the banner
+    # renders nothing on None by design (null means "could not read", never "not
+    # enrolled"). The countdown was invisible for the entire population it
+    # exists to warn -- the same silence ADR-381 D1 was written to end.
+    #
+    # cognito_username_for is the resolver the F7 sweep introduced; this call
+    # site predates it and was not converted.
+    enrolled = mfa_status.is_enrolled(
+        caller.cognito_sub, cognito_username_for(caller),
+    )
 
     # None means Cognito could not be reached. Treat as enrolled for gating
     # purposes: an AWS hiccup must never block a shift. The banner simply does
@@ -515,7 +556,12 @@ def get_my_mfa_status(
     # Never raises (see enforce_cap): an AWS hiccup must degrade to one extra
     # remembered device, not to a failed sign-in.
     device_fleet.enforce_cap(
-        username=caller.discord_id or str(caller.cognito_sub),
+        # Same bug as the enrolment lookup above, same fix. This passed a
+        # Discord id as the Cognito Username, so AdminListDevices raised
+        # UserNotFoundException -- and enforce_cap fails SOFT by design, so it
+        # returned 0 and logged a warning nobody reads. Device eviction has
+        # therefore never trimmed anything in production.
+        username=cognito_username_for(caller) or str(caller.cognito_sub),
         pool_id=settings.aws_cognito_user_pool_id,
         region=settings.aws_region,
     )
@@ -628,7 +674,46 @@ def update_employee(
     # Wrong-email recovery — only valid while the account is still pending.
     # Delete the old Cognito user and recreate with the corrected email so a
     # fresh invite is sent. Active accounts must use the Cognito console.
-    if new_email and new_email != old_email and db_employee.account_status == "pending_verification":
+    if (new_email and new_email != old_email
+            and db_employee.account_status == "pending_verification"
+            and db_employee.username):
+        # ADR-380 F7 — REGISTERED. Their Cognito Username is the derived
+        # firstname.lastname and does not change with their email, so this is an
+        # attribute update on the account they already have.
+        #
+        # The old code deleted by `Username=old_email`, which raised
+        # UserNotFoundException into a warning, then created a SECOND Cognito
+        # user named after the new email. The real account stayed live under the
+        # old address and nothing pointed at the new one.
+        #
+        # No re-invite: they already registered and hold credentials. Use
+        # resend-credentials if they need new ones.
+        try:
+            cognito.admin_update_user_attributes(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                Username=db_employee.username,
+                UserAttributes=[
+                    {"Name": "email", "Value": new_email},
+                    # Re-verified: an admin corrected it, and leaving it
+                    # unverified breaks forgot-password, which recovers on
+                    # verified_email only.
+                    {"Name": "email_verified", "Value": "true"},
+                ],
+            )
+        except ClientError as e:
+            logger.error(
+                "Cognito email update failed for employee %s: %s",
+                db_employee.id, e.response["Error"]["Code"],
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Email updated in DB but Cognito update failed. Contact support.",
+            )
+
+    elif new_email and new_email != old_email and db_employee.account_status == "pending_verification":
+        # NOT registered: no Employee.username, so the Cognito Username IS the
+        # email. The account is a shell, and recreating it is what sends a fresh
+        # invite to the corrected address.
         try:
             if old_email:
                 cognito.admin_delete_user(
@@ -673,7 +758,11 @@ def update_employee(
 
     # Sync Cognito group when role changes on an active account
     elif new_role and new_role != old_role and db_employee.email and db_employee.account_status != "pending_verification":
-        cognito_username = db_employee.email
+        # ADR-380 F7 — was `db_employee.email`, which is only the Cognito
+        # Username BEFORE registration. On a registered employee this raised
+        # UserNotFoundException into the log below and the group never synced,
+        # so their token claims kept the old role indefinitely.
+        cognito_username = cognito_username_for(db_employee)
         old_group = ROLE_TO_COGNITO_GROUP.get(old_role)
         new_group = ROLE_TO_COGNITO_GROUP.get(new_role)
         try:
@@ -800,7 +889,7 @@ def reactivate_employee(
 
     # Re-enable the Cognito user and restore their role group so permissions
     # take effect on next token refresh.
-    cognito_username = db_employee.username or db_employee.email
+    cognito_username = cognito_username_for(db_employee)
     if cognito_username:
         cognito = _cognito_client()
         try:
@@ -850,7 +939,7 @@ def delete_employee(
 
     # Prefer username — Cognito accounts are created under the derived username.
     # Fall back to email only for legacy accounts predating the username column.
-    cognito_username = db_employee.username or db_employee.email
+    cognito_username = cognito_username_for(db_employee)
 
     # Revoke session first, then delete the Cognito user
     _cognito_revoke_access(cognito_username)
@@ -1028,7 +1117,10 @@ def _apply_role_transition(
             )
         else:
             cognito = _cognito_client()
-            cognito_username = db_employee.email or db_employee.cognito_sub
+            # ADR-380 F7 — was `email or cognito_sub`, which skipped
+            # Employee.username entirely, so a registered employee's group
+            # never synced on a role transition.
+            cognito_username = cognito_username_for(db_employee)
             # ADD BEFORE REMOVE. Nothing in this codebase creates Cognito groups —
             # they are assumed to already exist in the User Pool — so a role whose
             # group has not been created yet raises ResourceNotFoundException here.

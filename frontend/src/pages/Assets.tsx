@@ -630,6 +630,49 @@ function PeopleTab() {
     }
   };
 
+  /* ADR-381 D3 — the correction that does not destroy the record.
+   *
+   * Before this, a manager who invited the wrong person, or the right person at
+   * the wrong address, could only DELETE the employee — taking its audit history
+   * with it. Re-inviting replaces the token, but that needs a correct address to
+   * hand; a manager who only knows "that was a mistake" had nothing.
+   *
+   * `revoked: false` is NOT an error. The endpoint returns it when there was no
+   * live token, because the desired end state already holds — reporting it as a
+   * failure would send the manager looking for a problem that is not there.
+   */
+  const handleRevokeInvite = async (emp: Employee) => {
+    if (!window.confirm(
+      `Revoke the invite for ${emp.name}?\n\n` +
+      'Their invite link stops working. The employee record stays, so you can ' +
+      'correct their email and invite them again.'
+    )) return;
+
+    setResendingId(emp.id);
+    setResendMsg(null);
+    try {
+      const res = await axiosClient.delete<{ detail: string; revoked: boolean }>(
+        `/registration/invite/${emp.id}`,
+      );
+      setResendMsg({
+        id: emp.id,
+        ok: true,
+        text: res.data.revoked
+          ? `Invite for ${emp.name} revoked.`
+          : 'There was no pending invite to revoke.',
+      });
+      // The row's lifecycle badge is derived from invited_at, which the revoke
+      // deliberately leaves alone — the record is still "invited, link dead"
+      // until someone re-invites. Reload so any server-side change is reflected
+      // rather than inferred.
+      load();
+    } catch (err: unknown) {
+      setResendMsg({ id: emp.id, ok: false, text: errorText(err, 'Failed to revoke invite.') });
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const handleResendCredentials = async (emp: Employee) => {
     setResendingId(emp.id);
     setResendMsg(null);
@@ -955,6 +998,21 @@ function PeopleTab() {
                                 ? <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                                 : <Mail className="w-3 h-3" />}
                               {lc === 'not_invited' ? 'Send Invite' : 'Resend Invite'}
+                            </button>
+                          )}
+                          {/* ADR-381 D3 — `invited` ONLY. `not_invited` has no token to
+                              revoke, and the backend refuses a `registered` employee with a
+                              409 naming deactivation instead, because their token is already
+                              spent and revoking it stops nobody signing in. */}
+                          {lc === 'invited' && (
+                            <button
+                              onClick={() => handleRevokeInvite(emp)}
+                              disabled={resendingId === emp.id}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-danger hover:bg-danger/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                              title="Kill the invite link. The employee record stays."
+                            >
+                              <ShieldOff className="w-3 h-3" />
+                              Revoke
                             </button>
                           )}
                           {lc === 'registered' && emp.email && (

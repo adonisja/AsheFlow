@@ -57,6 +57,16 @@ IDENTITY_REVOCATION_MESSAGE = (
     "manually."
 )
 
+# ADR-380 D1 — same alert TYPE (one per integration, per the rule above), but a
+# different message, because the blast radius is the opposite of revocation:
+# there the risk is someone who should not get in, here it is someone who should
+# and cannot be given the right permissions.
+IDENTITY_PROVISIONING_MESSAGE = (
+    "Cognito group assignment failed during employee registration. A new hire "
+    "may be signed in with no role permissions — verify their group in the "
+    "Cognito console and add it manually."
+)
+
 # Names the blast radius, not the endpoint that happened to fail. "The bot is
 # down" understates it — every Discord surface stops working at once, and an
 # admin sizing the outage from one endpoint's name would under-react.

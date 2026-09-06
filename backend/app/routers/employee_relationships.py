@@ -330,7 +330,7 @@ def delete_employee_relationships(
         company_id=str(caller.company_id),
         before={
             "employee_id": str(relationship.employee_id),
-            "related_employee_id": str(relationship.related_employee_id),
+            "target_employee_id": str(relationship.target_employee_id),
             "relationship_type": relationship.relationship_type,
         },
         after=None,
