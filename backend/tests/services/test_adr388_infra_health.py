@@ -171,6 +171,9 @@ class TestThePermissionProbe:
         admin_set_user_mfa_preference="UserNotFoundException",
         admin_user_global_sign_out="UserNotFoundException",
         admin_list_devices="UserNotFoundException",
+        admin_get_user="UserNotFoundException",
+        # AdminForgetDevice reports a missing DEVICE, not a missing user.
+        admin_forget_device="ResourceNotFoundException",
     )
 
     def test_all_permitted_is_clean(self):
@@ -234,5 +237,38 @@ class TestThePermissionProbe:
         c = MagicMock()  # no side effects: every call "succeeds"
         with patch("boto3.client", return_value=c):
             problems = h._check_containment_permissions("r", "p")
-        assert len(problems) == 3
+        # One per probed action -- the count follows the probe list, which the
+        # ADR-395 drift check keeps aligned with contain()'s real calls.
+        assert len(problems) == 5
         assert all("unexpectedly exists" in p for p in problems), problems
+
+
+class TestTheDeviceProbeUsesAWellFormedKey:
+    """ADR-395. Cognito validates the device-key SHAPE before any permission or
+    user lookup, so a nonsense key returns InvalidParameterException and never
+    reaches the check -- a permanent false alarm that looks like a real problem.
+
+    Measured against live Cognito: a REGION_uuid key returns
+    ResourceNotFoundException, which means the call was permitted.
+    """
+
+    def test_the_probe_key_is_region_underscore_uuid(self):
+        import inspect
+        src = inspect.getsource(h._check_containment_permissions)
+        assert 'f"{region}_00000000' in src, (
+            "the device key must be REGION_uuid. {pool_id}_uuid produces "
+            "InvalidParameterException, which never reaches the permission check."
+        )
+
+    def test_resource_not_found_counts_as_permitted(self):
+        """AdminForgetDevice reports a missing DEVICE, not a missing user, so it
+        needs its own success code or every run reports a false failure."""
+        c = MagicMock()
+        for m in ("admin_set_user_mfa_preference", "admin_user_global_sign_out",
+                  "admin_list_devices", "admin_get_user"):
+            getattr(c, m).side_effect = ClientError(
+                {"Error": {"Code": "UserNotFoundException"}}, "Op")
+        c.admin_forget_device.side_effect = ClientError(
+            {"Error": {"Code": "ResourceNotFoundException"}}, "Op")
+        with patch("boto3.client", return_value=c):
+            assert h._check_containment_permissions("us-east-2", "p") == []
