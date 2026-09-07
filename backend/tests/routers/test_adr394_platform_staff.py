@@ -127,15 +127,102 @@ class TestNoCredentialIsReturned:
         assert 'DesiredDeliveryMediums=["EMAIL"]' in src
 
 
-class TestAHalfCreatedAccountIsNotReportedAsSuccess:
-    def test_a_failed_group_assignment_raises(self):
-        """An account with no group holds no privilege. Reporting success would
-        leave something that LOOKS like a rescuer and is not -- which is the
-        ADR-389 failure this endpoint exists to prevent."""
+class TestCreateDoesNotGrantTheGroup:
+    """ADR-397. Granting at create makes the account unable to sign in AT ALL:
+    PreAuthentication reads the groups, sees an empty UserMFASettingList, and
+    refuses BEFORE any password challenge -- so it never reaches enrolment.
+    Confirmed in production on `nicoy.hunt`."""
+
+    def test_create_never_calls_add_user_to_group(self):
         src = inspect.getsource(P.create_platform_staff)
-        idx = src.index("admin_add_user_to_group")
-        after = src[idx:]
-        assert "HTTPException" in after, "a failed group assignment must not return 200"
+        assert "admin_add_user_to_group" not in src, (
+            "granting the group at create produces an account that can never "
+            "sign in to enrol (ADR-397)"
+        )
+
+    def test_the_intended_group_is_recorded_instead(self):
+        src = inspect.getsource(P.create_platform_staff)
+        assert "custom:pending_group" in src
+
+    def test_the_created_account_is_marked_pending(self):
+        from unittest.mock import MagicMock, patch
+        from botocore.exceptions import ClientError
+        body = P.PlatformStaffCreate(
+            email="p@example.com", name="Pending Person", group="super_admin")
+        c = MagicMock()
+        c.admin_get_user.side_effect = ClientError(
+            {"Error": {"Code": "UserNotFoundException"}}, "AdminGetUser")
+        with patch("boto3.client", return_value=c), patch.object(P, "write_audit"):
+            out = P.create_platform_staff(body=body, _super={}, db=MagicMock())
+        assert out.pending is True, "the UI must be able to show unfinished work"
+
+
+class TestActivateRequiresAFactor:
+    def _user(self, *, pending="super_admin", mfa=None, status="CONFIRMED"):
+        attrs = [{"Name": "email", "Value": "p@example.com"},
+                 {"Name": "name", "Value": "Pending Person"}]
+        if pending:
+            attrs.append({"Name": "custom:pending_group", "Value": pending})
+        u = {"UserAttributes": attrs, "UserStatus": status}
+        if mfa:
+            u["UserMFASettingList"] = mfa
+        return u
+
+    def test_an_account_with_no_factor_is_refused(self):
+        """THE guard. Without it this endpoint reintroduces the exact lockout it
+        exists to prevent."""
+        import pytest
+        from fastapi import HTTPException
+        from unittest.mock import MagicMock, patch
+        c = MagicMock()
+        c.admin_get_user.return_value = self._user(mfa=None)
+        with patch("boto3.client", return_value=c):
+            with pytest.raises(HTTPException) as exc:
+                P.activate_platform_staff(username="p", _super={}, db=MagicMock())
+        assert exc.value.status_code == 409
+        c.admin_add_user_to_group.assert_not_called()
+
+    def test_an_enrolled_account_is_granted(self):
+        from unittest.mock import MagicMock, patch
+        c = MagicMock()
+        c.admin_get_user.return_value = self._user(mfa=["SOFTWARE_TOKEN_MFA"])
+        with patch("boto3.client", return_value=c), patch.object(P, "write_audit"):
+            out = P.activate_platform_staff(username="p", _super={}, db=MagicMock())
+        c.admin_add_user_to_group.assert_called_once()
+        assert out.pending is False
+
+    def test_the_marker_is_cleared_only_after_the_grant(self):
+        """A failure between the two must leave the account visibly pending
+        rather than silently orphaned."""
+        order = []
+        from unittest.mock import MagicMock, patch
+        c = MagicMock()
+        c.admin_get_user.return_value = self._user(mfa=["SOFTWARE_TOKEN_MFA"])
+        c.admin_add_user_to_group.side_effect = lambda **k: order.append("grant")
+        c.admin_delete_user_attributes.side_effect = lambda **k: order.append("clear")
+        with patch("boto3.client", return_value=c), patch.object(P, "write_audit"):
+            P.activate_platform_staff(username="p", _super={}, db=MagicMock())
+        assert order == ["grant", "clear"], order
+
+    def test_a_tampered_group_is_refused(self):
+        """The attribute is user-visible metadata; it must not become a grant."""
+        import pytest
+        from fastapi import HTTPException
+        from unittest.mock import MagicMock, patch
+        c = MagicMock()
+        c.admin_get_user.return_value = self._user(
+            pending="admin", mfa=["SOFTWARE_TOKEN_MFA"])
+        with patch("boto3.client", return_value=c):
+            with pytest.raises(HTTPException) as exc:
+                P.activate_platform_staff(username="p", _super={}, db=MagicMock())
+        assert exc.value.status_code == 422
+        c.admin_add_user_to_group.assert_not_called()
+
+    def test_activate_is_gated_on_super_admin(self):
+        sig = inspect.signature(P.activate_platform_staff)
+        deps = [p.default.dependency.__name__ for p in sig.parameters.values()
+                if hasattr(p.default, "dependency")]
+        assert "get_super_admin" in deps, deps
 
 
 class TestTheRequestIsBounded:
