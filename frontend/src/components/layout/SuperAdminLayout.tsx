@@ -3,6 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
+import MfaNudgeBanner from '../MfaNudgeBanner';
 
 const NAV = [
   { to: '/superadmin/companies', label: 'Companies',  icon: Building2  },
@@ -78,6 +79,17 @@ export default function SuperAdminLayout() {
 
       {/* Page content */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* ADR-396 — this shell deliberately omits the tenant-scoped pieces of
+            the main Layout (NotificationBanner, CommandPalette, FeedbackModal),
+            all of which resolve the caller through an Employee row a super admin
+            does not have. The MFA banner is NOT one of those: it reads only
+            `mfaStatus` from AuthContext and applies to every human with an
+            account.
+
+            It matters most here. ADR-377 puts super_admin on the PRIVILEGED tier
+            with no grace period, so this is the one role that must enrol before
+            first use -- and it was the one role never told to. */}
+        <MfaNudgeBanner />
         <Outlet />
       </main>
     </div>
