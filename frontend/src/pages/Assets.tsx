@@ -586,6 +586,8 @@ function PeopleTab() {
   const [page, setPage]               = useState(0);
   const [resendingId, setResendingId]     = useState<string | null>(null);
   const [resendMsg, setResendMsg]         = useState<{ id: string; ok: boolean; text: string } | null>(null);
+  const [resettingMfaId, setResettingMfaId] = useState<string | null>(null);
+  const [resetMfaMsg, setResetMfaMsg]       = useState<{ id: string; ok: boolean; text: string } | null>(null);
   const [promotingId, setPromotingId]     = useState<string | null>(null);
   const [promoteMsg, setPromoteMsg]       = useState<{ id: string; ok: boolean; text: string } | null>(null);
 
@@ -697,6 +699,41 @@ function PeopleTab() {
     if (!ok) return;
     const res = await axiosClient.put(`/employees/${emp.id}/${action}`);
     setEmployees(prev => prev.map(e => e.id === emp.id ? res.data : e));
+  };
+
+  /** ADR-386 layer 4a. SecurityPanel has told users "an admin can reset your
+   *  second factor" since it shipped; the endpoint landed in 79a27147 and had
+   *  no caller until this. It does NOT remove the Cognito factor -- a new secret
+   *  replaces the old on re-enrolment (ADR-377 D3) -- it clears the remembered
+   *  devices skipping the challenge and ends the sessions outliving the change. */
+  const handleResetMfa = async (emp: any) => {
+    const ok = await confirm({
+      title: 'Reset two-factor authentication',
+      message: `Reset ${emp.name}'s second factor? They will be signed out on every device and must set it up again at their next sign-in.`,
+      confirmLabel: 'Reset',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setResettingMfaId(emp.id);
+    setResetMfaMsg(null);
+    try {
+      const res = await axiosClient.post(`/employees/${emp.id}/mfa/reset`);
+      setResetMfaMsg({
+        id: emp.id, ok: true,
+        text: `Signed out. ${res.data.devices_forgotten} device(s) cleared.`,
+      });
+    } catch (err: any) {
+      // 502 means containment did not FULLY complete. The admin must know it did
+      // not take rather than assume it did.
+      setResetMfaMsg({
+        id: emp.id, ok: false,
+        text: err?.response?.status === 502
+          ? 'Did not fully complete. Please try again.'
+          : errorText(err, 'Could not reset two-factor authentication.'),
+      });
+    } finally {
+      setResettingMfaId(null);
+    }
   };
 
   // ADR-256: walker/trainer/captain move between one another. The table mirrors
@@ -987,6 +1024,14 @@ function PeopleTab() {
                               {resendMsg.ok ? 'Invite sent' : 'Failed'}
                             </span>
                           )}
+                          {resetMfaMsg?.id === emp.id && (
+                            <span
+                              className={`text-xs font-medium max-w-[160px] truncate ${resetMfaMsg.ok ? 'text-success' : 'text-danger'}`}
+                              title={resetMfaMsg.text}
+                            >
+                              {resetMfaMsg.ok ? '2FA reset' : 'Reset failed'}
+                            </span>
+                          )}
                           {(lc === 'not_invited' || lc === 'invited') && emp.email && (
                             <button
                               onClick={() => handleResendInvite(emp)}
@@ -1085,6 +1130,19 @@ function PeopleTab() {
                                   }`}
                                 >
                                   {lc === 'active' ? 'Deactivate' : 'Reactivate'}
+                                </button>
+                              )}
+                              {/* ADR-386 layer 4a. ACTIVE employees only: containing a
+                                  deactivated account is pointless, and the endpoint 409s on
+                                  one that never completed registration. */}
+                              {lc === 'active' && (
+                                <button
+                                  onClick={() => handleResetMfa(emp)}
+                                  disabled={resettingMfaId === emp.id}
+                                  className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                                  title="Reset two-factor authentication"
+                                >
+                                  <ShieldOff className="w-3.5 h-3.5" />
                                 </button>
                               )}
                               {isAdmin && (
