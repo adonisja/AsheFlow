@@ -144,6 +144,30 @@ class TestClearFactorSeparatesTheTwoCallers:
         assert kwargs["SoftwareTokenMfaSettings"]["Enabled"] is False
         assert r.factor_cleared is True
 
+    def test_it_clears_EVERY_factor_type_not_just_totp(self):
+        """ADR-391. Clearing only the software token left walker.test on
+        EMAIL_OTP -- still challenged, after a reset that reported success.
+
+        Cognito treats each factor as an independent preference, so a reset that
+        names one is not a reset."""
+        c = _client(devices=[])
+        with patch("boto3.client", return_value=c):
+            mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        kwargs = c.admin_set_user_mfa_preference.call_args.kwargs
+        for key in ("SoftwareTokenMfaSettings", "EmailMfaSettings", "SMSMfaSettings"):
+            assert key in kwargs, f"{key} not cleared -- the user stays challenged"
+            assert kwargs[key]["Enabled"] is False
+            assert kwargs[key]["PreferredMfa"] is False
+
+    def test_it_does_not_touch_webauthn(self):
+        """A passkey is bound to hardware the user still holds, so it is not
+        what strands them. Clearing it would destroy a working credential."""
+        c = _client(devices=[])
+        with patch("boto3.client", return_value=c):
+            mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        assert "WebAuthnMfaSettings" not in \
+            c.admin_set_user_mfa_preference.call_args.kwargs
+
     def test_the_factor_is_cleared_before_sign_out(self):
         """A session issued after the preference change would otherwise survive
         with the old state."""

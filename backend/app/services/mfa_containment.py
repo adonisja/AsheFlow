@@ -91,12 +91,22 @@ def contain(username: str, pool_id: str, region: str,
 
     if clear_factor:
         try:
-            # Cognito holds ONE software token per user. Disabling the preference
-            # is what makes the next sign-in skip the TOTP challenge, so the user
-            # can reach /account and enrol again.
+            # EVERY factor type, not just the software token. Cognito treats
+            # each as an independent preference, so clearing one leaves the
+            # others enabled and the user still challenged -- while this
+            # function reports success. That is exactly what happened to
+            # walker.test, which kept EMAIL_OTP after a "successful" reset
+            # (ADR-391).
+            #
+            # WebAuthn is deliberately omitted: a passkey is bound to hardware
+            # the user still holds, so it is not what strands them, and clearing
+            # it would destroy a working credential.
+            off = {"Enabled": False, "PreferredMfa": False}
             client.admin_set_user_mfa_preference(
                 UserPoolId=pool_id, Username=username,
-                SoftwareTokenMfaSettings={"Enabled": False, "PreferredMfa": False},
+                SoftwareTokenMfaSettings=off,
+                EmailMfaSettings=off,
+                SMSMfaSettings=off,
             )
             factor_cleared = True
         except (ClientError, BotoCoreError) as exc:
