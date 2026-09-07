@@ -20,6 +20,7 @@ import {
 } from 'aws-amplify/auth';
 import QRCode from 'qrcode';
 import { ShieldCheck, Smartphone, Mail, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function SecurityPanel() {
   const [enabled, setEnabled] = useState({ totp: false, email: false });
@@ -35,6 +36,12 @@ export default function SecurityPanel() {
   const [setupSecret, setSetupSecret] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [code, setCode] = useState('');
+
+  /* ADR-393. Enrolment happens here via Amplify, but the grace banner reads
+     `mfaStatus` from AuthContext, which is fetched ONLY by checkAuth() on mount
+     and sign-in. Without re-running it the banner keeps telling a
+     just-enrolled user to set up MFA until they reload the page. */
+  const { checkAuth } = useAuth();
 
   const refresh = useCallback(async () => {
     try {
@@ -78,6 +85,8 @@ export default function SecurityPanel() {
       await updateMFAPreference({ totp: 'PREFERRED' });
       setSetupUri(null); setCode('');
       await refresh();
+      // Re-fetch mfa-status so the grace banner clears immediately.
+      await checkAuth();
     } catch {
       setError('That code was not accepted. Check the time on your device and try again.');
     } finally {
@@ -90,6 +99,9 @@ export default function SecurityPanel() {
     try {
       await updateMFAPreference({ email: on ? 'ENABLED' : 'DISABLED' });
       await refresh();
+      // Turning email MFA on can be a user's FIRST factor, so the banner must
+      // re-evaluate here too, not only after TOTP.
+      await checkAuth();
     } catch {
       setError('Could not update your email code setting.');
     } finally {
@@ -98,6 +110,18 @@ export default function SecurityPanel() {
   };
 
   const anyFactor = enabled.totp || enabled.email;
+
+  /* ADR-386 layer 1. Neither client has a TOTP-disable path, so the only way to
+     reach zero factors from this UI is turning email off while it is the only
+     one. For a privileged user the PreAuthentication trigger then refuses their
+     next sign-in outright, locking them out with no self-service path, because
+     enrolment lives behind that sign-in.
+
+     A UI affordance, NOT enforcement. Amplify calls Cognito directly with
+     `aws.cognito.signin.user.admin`, a scope that cannot be stripped (ADR-377
+     D1), so developer tools still reach it. That is why ADR-386 pairs this with
+     detection and containment instead of trusting a hidden button. */
+  const isLastFactor = enabled.email && !enabled.totp;
 
   if (loading) {
     return <div className="card"><p className="text-sm text-muted-foreground">Loading…</p></div>;
@@ -227,7 +251,10 @@ export default function SecurityPanel() {
             </div>
             <button
               onClick={() => toggleEmail(!enabled.email)}
-              disabled={busy}
+              disabled={busy || isLastFactor}
+              title={isLastFactor
+                ? 'Set up an authenticator app first. An account cannot be left without a second factor.'
+                : undefined}
               className={`text-xs px-3 py-1.5 rounded-lg border disabled:opacity-50 shrink-0 ${
                 enabled.email
                   ? 'border-border hover:bg-accent text-foreground'

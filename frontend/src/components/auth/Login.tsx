@@ -3,6 +3,7 @@ import { signIn, signInWithRedirect, confirmSignIn } from 'aws-amplify/auth';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { Eye, EyeOff } from 'lucide-react';
+import QRCode from 'qrcode';
 import logoFull from '../../assets/logo-full.svg';
 import logoFullLight from '../../assets/logo-full-light.svg';
 
@@ -21,9 +22,18 @@ export default function Login() {
     | 'CONFIRM_SIGN_IN_WITH_TOTP_CODE'
     | 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE'
     | 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION'
+    | 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP'
     | null
   >(null);
   const [mfaOptions, setMfaOptions] = useState<string[]>([]);
+  /* ADR-386/387. Enrolment normally lives at /account, behind a completed
+     sign-in. This challenge is the case where the user CANNOT complete one --
+     a privileged account whose factor was removed, or any account under a pool
+     that requires MFA. Without handling it here they are told to "contact your
+     admin" with no way forward, and mobile's advice is to use this very screen. */
+  const [totpSetupUri, setTotpSetupUri] = useState<string | null>(null);
+  const [totpSecret, setTotpSecret] = useState('');
+  const [totpQr, setTotpQr] = useState('');
   const [showPassword,           setShowPassword]           = useState(false);
   const [showNewPassword,        setShowNewPassword]        = useState(false);
 
@@ -68,6 +78,30 @@ export default function Login() {
           setChallengeStep(step);
           setSuccessMsg('We emailed you a sign-in code.');
           return;
+        case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP': {
+          /* Amplify hands us the shared secret on the nextStep. Build the
+             otpauth:// URI ourselves rather than calling setUpTOTP(): that helper
+             is for a SIGNED-IN user and there is no session here yet. */
+          const secret =
+            (response.nextStep as { totpSetupDetails?: { sharedSecret?: string } })
+              ?.totpSetupDetails?.sharedSecret ?? '';
+          const uri = secret
+            ? `otpauth://totp/AsheFlow:${encodeURIComponent(username)}`
+              + `?secret=${secret}&issuer=AsheFlow`
+            : '';
+          setChallengeStep(step);
+          setTotpSecret(secret);
+          setTotpSetupUri(uri);
+          if (uri) {
+            QRCode.toDataURL(uri, { margin: 1, width: 180 })
+              .then(setTotpQr)
+              /* A missing QR is recoverable: the secret is shown as text and can
+                 be typed in. Failing the whole sign-in over it would not be. */
+              .catch(() => setTotpQr(''));
+          }
+          setSuccessMsg('Scan this with your authenticator app, then enter the code it shows.');
+          return;
+        }
         case 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION':
           setChallengeStep(step);
           setMfaOptions(response.nextStep?.allowedMFATypes ?? []);
@@ -107,6 +141,11 @@ export default function Login() {
     CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED: {
       heading: 'Update Password', sub: 'A new password is required to continue',
       label: 'New Password', submit: 'Set new password',
+    },
+    CONTINUE_SIGN_IN_WITH_TOTP_SETUP: {
+      heading: 'Set up two-factor authentication',
+      sub: 'Your account needs an authenticator app before you can sign in',
+      label: 'Code from your app', submit: 'Verify and finish',
     },
     CONFIRM_SIGN_IN_WITH_TOTP_CODE: {
       heading: 'Enter your code', sub: 'From your authenticator app',
@@ -191,6 +230,32 @@ export default function Login() {
               </div>
             ) : challengeStep ? (
               <div>
+                {/* The enrolment half of the setup challenge. Shown above the
+                    code field because the user must scan BEFORE they can have a
+                    code to type. */}
+                {challengeStep === 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP' && totpSetupUri && (
+                  <div className="mb-4 rounded-xl border border-border p-4 text-center">
+                    {totpQr ? (
+                      <img
+                        src={totpQr}
+                        alt="QR code for your authenticator app"
+                        className="mx-auto rounded-lg"
+                        width={180}
+                        height={180}
+                      />
+                    ) : null}
+                    {/* Always shown, not a fallback. A phone cannot scan a QR on
+                        its own screen, so the typed secret is the ONLY path for
+                        anyone signing in from the device holding the
+                        authenticator. */}
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Or enter this key manually:
+                    </p>
+                    <code className="block text-xs font-mono break-all mt-1 text-foreground">
+                      {totpSecret}
+                    </code>
+                  </div>
+                )}
                 <label className="block text-sm font-medium text-foreground mb-1.5">{copy!.label}</label>
                 <div className="relative">
                   {/* Deliberately no placeholder: a password input masks its value with

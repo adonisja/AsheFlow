@@ -15,7 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_super_admin, get_platform_staff
+from app.core.config import settings
 from app.models.platform_alert import PlatformAlert
+from app.services import mfa_containment
 from app.services.audit import write_audit, super_admin_identity
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,79 @@ def list_platform_alerts(
         q = q.filter(PlatformAlert.is_resolved.is_(False))
     rows = q.order_by(PlatformAlert.last_seen_at.desc()).limit(limit).all()
     return [PlatformAlertOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+class MfaResetRequest(BaseModel):
+    """Who to reset. A Cognito Username, not an employee id.
+
+    Deliberately NOT an Employee UUID: the accounts this endpoint exists to
+    rescue may have no Employee row at all (a super admin never does), and
+    requiring one would rebuild the exact circular dependency this endpoint
+    breaks.
+    """
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/mfa/reset", status_code=status.HTTP_200_OK)
+def platform_reset_mfa(
+    body: MfaResetRequest,
+    _super: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Clear any account's MFA factor, sessions and devices (ADR-389).
+
+    WHY THIS EXISTS ALONGSIDE /employees/{id}/mfa/reset
+    That endpoint is gated `RoleChecker(["management", "admin"])`, which resolves
+    the caller through an Employee row. A super admin has none by design
+    (`get_super_admin` never touches the table), so the platform owner -- the one
+    person who should always be able to rescue an account -- could not call it.
+
+    Worse, the same gap runs the other way: a super admin who loses their
+    authenticator cannot be reset BY anyone through the product, because the
+    other endpoint takes an employee_id they do not have. That is the circular
+    lockout ADR-389 documents.
+
+    This endpoint breaks the circle in one direction. The other -- a super admin
+    rescuing THEMSELVES -- is deliberately not solved in code, because any
+    in-product self-rescue for the highest-privilege account is a backdoor by
+    construction. See the break-glass runbook.
+    """
+    result = mfa_containment.contain(
+        username=body.username,
+        pool_id=settings.aws_cognito_user_pool_id,
+        region=settings.aws_region,
+        clear_factor=True,
+    )
+
+    write_audit(
+        db=db,
+        company_id=None,
+        actor_id=None,  # super admin has no Employee row; identity goes in detail
+        action_type="platform.mfa_reset",
+        target_table="cognito_users",
+        target_id=body.username,
+        detail={
+            "actor": super_admin_identity(_super),
+            "devices_forgotten": result.devices_forgotten,
+            "signed_out": result.signed_out,
+            "factor_cleared": result.factor_cleared,
+            "errors": result.errors,
+        },
+    )
+    db.commit()
+
+    if not result.fully_contained:
+        raise HTTPException(
+            status_code=502,
+            detail="The reset did not fully complete. Please try again.",
+        )
+    return {
+        "username": body.username,
+        "devices_forgotten": result.devices_forgotten,
+        "signed_out": result.signed_out,
+        "factor_cleared": result.factor_cleared,
+    }
 
 
 @router.post("/alerts/{alert_id}/resolve", status_code=status.HTTP_200_OK)

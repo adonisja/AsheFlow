@@ -91,8 +91,8 @@ export default function LoginScreen() {
     },
     MFA_SETUP: {
       title: 'Set up sign-in security',
-      sub:   'Your account needs a second factor. Set it up on the web app, then sign in here.',
-      label: '',
+      sub:   'Add this key to your authenticator app, then enter the code it shows.',
+      label: 'Code from your app',
       secure: false,
     },
   };
@@ -139,6 +139,29 @@ export default function LoginScreen() {
             <>
               <View style={s.fieldGroup}>
                 <Text style={s.label}>{CHALLENGE_COPY[challenge.name].label}</Text>
+                {challenge.name === 'MFA_SETUP' && challenge.totpSecret ? (
+                  <View style={[s.input, {
+                    borderColor: c.border, minHeight: 0, paddingVertical: 12,
+                    marginBottom: 12, justifyContent: 'center',
+                  }]}>
+                    <Text style={{ color: c.mutedForeground, fontSize: 12 }}>
+                      Setup key
+                    </Text>
+                    {/* No QR code, deliberately: this device IS the one holding
+                        the authenticator, so it cannot scan its own screen. The
+                        typed key is the primary path here, not a fallback.
+                        selectable so it can be long-pressed and copied. */}
+                    <Text
+                      selectable
+                      style={{
+                        color: c.foreground, fontSize: 14, marginTop: 4,
+                        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+                      }}
+                    >
+                      {challenge.totpSecret}
+                    </Text>
+                  </View>
+                ) : null}
                 {challenge.name === 'SELECT_MFA_TYPE' ? (
                   <View>
                     {(challenge.options ?? []).map(opt => (
