@@ -92,6 +92,11 @@ export type AuthChallenge = {
   username: string;
   /** Which factors the account has, when Cognito asks the user to choose. */
   options?: string[];
+  /** The TOTP shared secret, present only on MFA_SETUP. Without it the screen
+   *  can name the challenge but not resolve it, which is what it did before
+   *  (ADR-386): it told the user to "set it up on the web app", and the web app
+   *  could not handle this challenge either. A closed loop. */
+  totpSecret?: string;
   /** Where an emailed code went, e.g. "e***@e***.com". Cognito redacts it. */
   destination?: string;
 };
@@ -197,7 +202,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             options: step?.allowedMFATypes ?? [],
           };
         case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP':
-          return { name: 'MFA_SETUP', session: '', username };
+          return {
+            name: 'MFA_SETUP', session: '', username,
+            totpSecret: step?.totpSetupDetails?.sharedSecret,
+          };
         default:
           return null;
       }
