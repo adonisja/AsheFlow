@@ -15,10 +15,16 @@ from botocore.exceptions import ClientError
 from app.services import mfa_containment
 
 
-def _client(devices=None, signout_error=None, forget_error=None):
+def _client(devices=None, signout_error=None, forget_error=None,
+            remaining_factors=None):
     c = MagicMock()
     c.admin_list_devices.return_value = {
         "Devices": [{"DeviceKey": k} for k in (devices or [])]
+    }
+    # ADR-392: contain(clear_factor=True) reads the account back to confirm the
+    # clear actually took. Default: nothing left, i.e. it worked.
+    c.admin_get_user.return_value = {
+        "UserMFASettingList": list(remaining_factors or [])
     }
     if signout_error:
         c.admin_user_global_sign_out.side_effect = signout_error
@@ -190,3 +196,57 @@ class TestClearFactorSeparatesTheTwoCallers:
         assert r.factor_cleared is False
         assert r.fully_contained is False
         assert any("clear_factor" in e for e in r.errors)
+
+
+class TestTheClearIsVerifiedNotAssumed:
+    """ADR-392. Two defects shipped reporting success on an account that was
+    still challenged: clearing nothing (ADR-386) and clearing one factor of four
+    (ADR-391). Both are invisible unless the account is read BACK.
+
+    `factor_cleared=True` must mean "this account has no blocking factor", not
+    "Cognito accepted our request".
+    """
+
+    def test_a_clean_account_reports_cleared(self):
+        c = _client(devices=[], remaining_factors=[])
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        assert r.factor_cleared is True
+        assert r.fully_contained is True
+
+    def test_a_surviving_factor_is_NOT_reported_as_cleared(self):
+        """THE ADR-391 regression: TOTP cleared, EMAIL_OTP left enrolled, and the
+        endpoint said success while the user was still challenged."""
+        c = _client(devices=[], remaining_factors=["EMAIL_OTP"])
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        assert r.factor_cleared is False
+        assert r.fully_contained is False
+        assert any("still enrolled" in e and "EMAIL_OTP" in e for e in r.errors), r.errors
+
+    def test_the_surviving_factor_is_NAMED(self):
+        """An admin needs to know WHICH factor survived; "reset failed" does not
+        tell them whether to look at email, SMS or a stale token."""
+        c = _client(devices=[], remaining_factors=["SMS_MFA", "EMAIL_OTP"])
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        joined = " ".join(r.errors)
+        assert "EMAIL_OTP" in joined and "SMS_MFA" in joined, r.errors
+
+    def test_a_surviving_webauthn_does_not_fail_the_reset(self):
+        """WebAuthn is deliberately not cleared (ADR-391) -- a passkey is
+        hardware the user still holds. Counting it here would make every reset
+        of a passkey user report failure."""
+        c = _client(devices=[], remaining_factors=["WEBAUTHN"])
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        assert r.factor_cleared is True
+        assert r.fully_contained is True
+
+    def test_containment_does_not_read_back(self):
+        """clear_factor=False never touches the preference, so there is nothing
+        to verify -- and the responder's IAM role has no AdminGetUser."""
+        c = _client(devices=["d1"])
+        with patch("boto3.client", return_value=c):
+            mfa_containment.contain("u", "pool", "us-east-2")
+        c.admin_get_user.assert_not_called()

@@ -108,7 +108,30 @@ def contain(username: str, pool_id: str, region: str,
                 EmailMfaSettings=off,
                 SMSMfaSettings=off,
             )
-            factor_cleared = True
+            # READ BACK. The API accepting the request is not the outcome we
+            # promised: "the user can sign in again" is a property of the
+            # ACCOUNT, not of the call. Two defects shipped reporting success on
+            # an account that was still challenged -- clearing nothing (ADR-386)
+            # and clearing one factor of four (ADR-391) -- and both would have
+            # been caught here.
+            #
+            # Probed 2026-09-07: UserMFASettingList is immediately consistent
+            # after a preference write, so this needs no retry or sleep and
+            # cannot produce a false failure from replication lag.
+            remaining = client.admin_get_user(
+                UserPoolId=pool_id, Username=username,
+            ).get("UserMFASettingList") or []
+            # WebAuthn is intentionally not cleared (a passkey is hardware the
+            # user still holds), so it must not count as a failure here.
+            blocking = [f for f in remaining if f != "WEBAUTHN"]
+            if blocking:
+                errors.append(f"clear_factor: still enrolled {','.join(sorted(blocking))}")
+                logger.error(
+                    "mfa containment: factors survived the clear: %s",
+                    ",".join(sorted(blocking)),
+                )
+            else:
+                factor_cleared = True
         except (ClientError, BotoCoreError) as exc:
             errors.append(f"clear_factor: {type(exc).__name__}")
             logger.error("mfa containment: could not clear factor: %s",
