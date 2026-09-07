@@ -25,6 +25,8 @@ looks at the EFFECT, not the status field:
   lambda exists      the target of that rule
   topic exists       where the alert goes
   topic has a subscriber  a topic with none publishes into the void
+  we can CALL the containment APIs  a permission can be revoked, and the
+                     application would not find out until a human clicks Reset
 
 That last one matters more than it looks. The SNS topic was created and confirmed,
 but an unconfirmed or deleted subscription leaves publishing "successful" and
@@ -154,6 +156,68 @@ def _check_topic(region: str) -> list[str]:
     return problems
 
 
+def _check_containment_permissions(region: str, pool_id: str) -> list[str]:
+    """Can this role actually PERFORM containment? (ADR-390)
+
+    Every other check here verifies infrastructure EXISTS. This one verifies we
+    are still ALLOWED to use it, which is a different failure and one that
+    already happened: `admin_set_user_mfa_preference` shipped in application code
+    without the matching IAM grant, and the gap surfaced only when a human clicked
+    Reset and got a 502 (ADR-389).
+
+    Nothing in CI can catch that. Every mock returns success for a call the
+    production role cannot make.
+
+    NON-MUTATING BY CONSTRUCTION. Each call targets a username that cannot exist,
+    because IAM is evaluated BEFORE the user lookup:
+
+        AccessDeniedException  -> the permission is gone            (a problem)
+        UserNotFoundException  -> permitted, user absent as expected (fine)
+
+    Verified against live Cognito before this was written. A probe that mutated a
+    real account to test a permission would be a worse cure than the disease.
+    """
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    # A name no real account can hold: Cognito usernames in this pool are
+    # firstname.lastname or an email, and neither contains this sentinel.
+    PROBE_USER = "asheflow-permission-probe-does-not-exist"
+
+    problems: list[str] = []
+    client = boto3.client("cognito-idp", region_name=region)
+
+    probes = [
+        ("AdminSetUserMFAPreference", lambda: client.admin_set_user_mfa_preference(
+            UserPoolId=pool_id, Username=PROBE_USER,
+            SoftwareTokenMfaSettings={"Enabled": False, "PreferredMfa": False})),
+        ("AdminUserGlobalSignOut", lambda: client.admin_user_global_sign_out(
+            UserPoolId=pool_id, Username=PROBE_USER)),
+        ("AdminListDevices", lambda: client.admin_list_devices(
+            UserPoolId=pool_id, Username=PROBE_USER, Limit=1)),
+    ]
+
+    for action, call in probes:
+        try:
+            call()
+            # Reaching here would mean the sentinel user EXISTS, which is a
+            # different problem worth surfacing rather than ignoring.
+            problems.append(f"{action}: probe user unexpectedly exists")
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code == "UserNotFoundException":
+                continue  # permitted, and nothing was changed
+            if code in ("AccessDeniedException", "NotAuthorizedException"):
+                problems.append(
+                    f"{action}: {code} — containment cannot run (ADR-389)")
+            else:
+                problems.append(f"{action}: {code}")
+        except BotoCoreError as exc:
+            problems.append(f"{action}: {type(exc).__name__}")
+
+    return problems
+
+
 @celery_app.task(name="app.tasks.security_infra_health.check_security_infra")
 def check_security_infra() -> dict:
     """Verify the ADR-387 containment chain, and alert super admins if it is broken.
@@ -166,6 +230,8 @@ def check_security_infra() -> dict:
     problems += _check_trail(region)
     problems += _check_rule_and_lambda(region)
     problems += _check_topic(region)
+    problems += _check_containment_permissions(
+        region, settings.aws_cognito_user_pool_id)
 
     if not problems:
         logger.info("security infra health: all checks passed")
