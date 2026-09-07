@@ -11,6 +11,8 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+import re
+
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -147,6 +149,55 @@ def platform_reset_mfa(
 PLATFORM_GROUPS = ("super_admin", "platform_support")
 
 
+def _derive_platform_username(client, name: str) -> str:
+    """firstname.lastname, matching every other account in the pool (ADR-396).
+
+    The first version used the EMAIL as the username. It works, and it made this
+    the only account type whose username is not a name: `adon`, `walker.test` and
+    `manager.test` all follow the convention, and a staff list showing
+    `nicoyhunt@gmail.com` twice -- once as username, once as email -- reads as a
+    rendering bug rather than as data.
+
+    Uniqueness is checked against COGNITO, not the Employee table.
+    registration.py's `_derive_username` queries `Employee.username`, and platform
+    staff have no Employee row by design (ADR-274), so that check would happily
+    hand out a name Cognito already holds and the create would then 409.
+
+    Bounded for the same reason as ADR-380 D5: a spin here is a bug or an attack,
+    and either deserves a refusal.
+    """
+    parts = name.strip().lower().split()
+    first = re.sub(r"[^a-z0-9]", "", parts[0]) if parts else ""
+    last = re.sub(r"[^a-z0-9]", "", parts[-1]) if len(parts) > 1 else ""
+    base = f"{first}.{last}" if last else first
+    if not base:
+        # A name of only punctuation would otherwise derive an empty username,
+        # which Cognito rejects with an opaque InvalidParameterException.
+        raise HTTPException(
+            status_code=422,
+            detail="Name must contain at least one letter or digit.",
+        )
+
+    candidate, suffix, MAX_SUFFIX = base, 2, 100
+    while True:
+        try:
+            client.admin_get_user(
+                UserPoolId=settings.aws_cognito_user_pool_id, Username=candidate,
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
+                return candidate  # free
+            raise
+        if suffix > MAX_SUFFIX:
+            logger.error("platform username derivation exhausted for base %r", base)
+            raise HTTPException(
+                status_code=502,
+                detail="Could not allocate a unique username. Please try again.",
+            )
+        candidate = f"{base}{suffix}"
+        suffix += 1
+
+
 class PlatformStaffCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: EmailStr
@@ -157,6 +208,11 @@ class PlatformStaffCreate(BaseModel):
 class PlatformStaffOut(BaseModel):
     username: str
     email: str
+    # The person's actual name. Captured on create and, until ADR-396, never read
+    # back -- so the list showed username and email, which for an account created
+    # here are THE SAME STRING (username = email). A list of identical pairs is
+    # not a roster.
+    name: str
     group: str
     status: str
 
@@ -186,6 +242,7 @@ def list_platform_staff(
             out.append(PlatformStaffOut(
                 username=u["Username"],
                 email=attrs.get("email", ""),
+                name=attrs.get("name", ""),
                 group=group,
                 status=u.get("UserStatus", ""),
             ))
@@ -224,9 +281,7 @@ def create_platform_staff(
         )
 
     client = boto3.client("cognito-idp", region_name=settings.aws_region)
-    # Cognito usernames here are the email, matching how registration.py and
-    # employees.py create pre-registration accounts (ADR-380 F7).
-    username = body.email
+    username = _derive_platform_username(client, body.name)
 
     try:
         client.admin_create_user(
@@ -279,7 +334,7 @@ def create_platform_staff(
     db.commit()
 
     return PlatformStaffOut(
-        username=username, email=body.email, group=body.group,
+        username=username, email=body.email, name=body.name, group=body.group,
         status="FORCE_CHANGE_PASSWORD",
     )
 
