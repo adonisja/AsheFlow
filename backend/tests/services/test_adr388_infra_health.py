@@ -143,3 +143,94 @@ class TestItRaisesOneAlertForSuperAdmins:
         with patch("boto3.client", return_value=c):
             problems = h._check_trail("us-east-2")
         assert any("AccessDenied" in p for p in problems)
+
+
+class TestThePermissionProbe:
+    """ADR-390. Every other check verifies infrastructure EXISTS; this one
+    verifies we are still ALLOWED to use it.
+
+    That gap was real: admin_set_user_mfa_preference shipped in application code
+    without the matching IAM grant (ADR-389), and nothing found out until a human
+    clicked Reset and got a 502. CI cannot catch it -- every mock returns success
+    for a call the production role cannot make.
+    """
+
+    def _client(self, **codes):
+        """A client whose three probed calls raise the given error codes.
+        UserNotFoundException is the PERMITTED case: IAM is evaluated before the
+        user lookup, so a bogus username proves permission without mutating."""
+        c = MagicMock()
+        for meth, code in codes.items():
+            getattr(c, meth).side_effect = ClientError(
+                {"Error": {"Code": code, "Message": "x"}}, "Op")
+        return c
+
+    ALL_OK = dict(
+        admin_set_user_mfa_preference="UserNotFoundException",
+        admin_user_global_sign_out="UserNotFoundException",
+        admin_list_devices="UserNotFoundException",
+    )
+
+    def test_all_permitted_is_clean(self):
+        with patch("boto3.client", return_value=self._client(**self.ALL_OK)):
+            assert h._check_containment_permissions("r", "p") == []
+
+    def test_the_adr389_regression_is_caught(self):
+        """THE case: admin_set_user_mfa_preference not granted.
+
+        Asserts the ADR-389 wording, not merely that SOME problem came back. A
+        denial and an incidental API error are different operational situations,
+        and the generic `else` branch would satisfy a looser assertion -- which
+        it did: dropping the AccessDenied branch entirely once passed this test.
+        """
+        codes = dict(self.ALL_OK, admin_set_user_mfa_preference="AccessDeniedException")
+        with patch("boto3.client", return_value=self._client(**codes)):
+            problems = h._check_containment_permissions("r", "p")
+        assert any("AdminSetUserMFAPreference" in p
+                   and "containment cannot run" in p
+                   for p in problems), problems
+
+    def test_a_denial_is_distinguished_from_an_incidental_error(self):
+        """A revoked permission needs a human NOW; a transient InternalError does
+        not. Reporting both identically loses that."""
+        denied = dict(self.ALL_OK, admin_list_devices="AccessDeniedException")
+        other = dict(self.ALL_OK, admin_list_devices="InternalErrorException")
+        with patch("boto3.client", return_value=self._client(**denied)):
+            d = h._check_containment_permissions("r", "p")
+        with patch("boto3.client", return_value=self._client(**other)):
+            o = h._check_containment_permissions("r", "p")
+        assert any("containment cannot run" in p for p in d), d
+        assert not any("containment cannot run" in p for p in o), o
+
+    def test_a_revoked_sign_out_is_caught(self):
+        """Sign-out is the half that ends a live attacker session."""
+        codes = dict(self.ALL_OK, admin_user_global_sign_out="AccessDeniedException")
+        with patch("boto3.client", return_value=self._client(**codes)):
+            assert any("AdminUserGlobalSignOut" in p
+                       for p in h._check_containment_permissions("r", "p"))
+
+    def test_a_revoked_device_list_is_caught(self):
+        codes = dict(self.ALL_OK, admin_list_devices="NotAuthorizedException")
+        with patch("boto3.client", return_value=self._client(**codes)):
+            assert any("AdminListDevices" in p
+                       for p in h._check_containment_permissions("r", "p"))
+
+    def test_the_probe_never_mutates_a_real_account(self):
+        """The username must be one no real account can hold. If this probe ever
+        targeted a real user it would sign them out once an hour."""
+        c = self._client(**self.ALL_OK)
+        with patch("boto3.client", return_value=c):
+            h._check_containment_permissions("r", "p")
+        for call in c.admin_set_user_mfa_preference.call_args_list:
+            assert "does-not-exist" in call.kwargs["Username"]
+        for call in c.admin_user_global_sign_out.call_args_list:
+            assert "does-not-exist" in call.kwargs["Username"]
+
+    def test_a_probe_user_that_exists_is_itself_a_problem(self):
+        """If the sentinel resolves, the probe is mutating something and must
+        say so rather than reporting healthy."""
+        c = MagicMock()  # no side effects: every call "succeeds"
+        with patch("boto3.client", return_value=c):
+            problems = h._check_containment_permissions("r", "p")
+        assert len(problems) == 3
+        assert all("unexpectedly exists" in p for p in problems), problems
