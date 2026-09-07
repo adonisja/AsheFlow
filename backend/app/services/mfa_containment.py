@@ -37,6 +37,7 @@ class ContainmentResult:
     """
     devices_forgotten: int
     signed_out: bool
+    factor_cleared: bool
     errors: list[str]
 
     @property
@@ -44,22 +45,40 @@ class ContainmentResult:
         return self.signed_out and not self.errors
 
 
-def contain(username: str, pool_id: str, region: str) -> ContainmentResult:
+def contain(username: str, pool_id: str, region: str,
+            clear_factor: bool = False) -> ContainmentResult:
     """Forget every remembered device and end every session for `username`.
+
+    `clear_factor=True` ALSO removes the MFA preference. The two callers want
+    different things and conflating them caused a real lockout:
+
+      containment (ADR-387)  clear_factor=False -- the factor is the victim's
+                             protection. An attacker removed it; re-adding a
+                             challenge they cannot answer is the point.
+      admin reset (ADR-389)  clear_factor=True  -- the user LOST their
+                             authenticator. Leaving the factor in place leaves
+                             them locked out, which is what the endpoint exists
+                             to fix.
+
+    ADR-386 originally argued the factor could stay because re-enrolment
+    overwrites it (ADR-377 D3). True, and irrelevant: enrolment lives at
+    /account, behind the sign-in the factor is blocking.
 
     Never raises. This runs on two unattended paths -- an admin endpoint that
     must not 500, and a Lambda responding to a security event -- and a partial
     containment reported honestly beats an exception that contains nothing.
 
-    Order matters: sign out FIRST. Forgetting devices takes one API call per
-    device and a compromised session stays live for the duration; ending the
-    session first shrinks that window to a single call.
+    Order matters: clear the factor (when asked), then sign out, THEN forget
+    devices. Forgetting devices takes one API call per device and a compromised
+    session stays live for the duration; ending the session first shrinks that
+    window to a single call.
     """
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
 
     errors: list[str] = []
     signed_out = False
+    factor_cleared = False
     forgotten = 0
 
     try:
@@ -68,7 +87,22 @@ def contain(username: str, pool_id: str, region: str) -> ContainmentResult:
         # No client, no containment. Say so rather than returning a zero that
         # reads like "nothing needed doing".
         logger.error("mfa containment: no cognito client: %s", type(exc).__name__)
-        return ContainmentResult(0, False, [f"client: {type(exc).__name__}"])
+        return ContainmentResult(0, False, False, [f"client: {type(exc).__name__}"])
+
+    if clear_factor:
+        try:
+            # Cognito holds ONE software token per user. Disabling the preference
+            # is what makes the next sign-in skip the TOTP challenge, so the user
+            # can reach /account and enrol again.
+            client.admin_set_user_mfa_preference(
+                UserPoolId=pool_id, Username=username,
+                SoftwareTokenMfaSettings={"Enabled": False, "PreferredMfa": False},
+            )
+            factor_cleared = True
+        except (ClientError, BotoCoreError) as exc:
+            errors.append(f"clear_factor: {type(exc).__name__}")
+            logger.error("mfa containment: could not clear factor: %s",
+                         type(exc).__name__)
 
     try:
         client.admin_user_global_sign_out(UserPoolId=pool_id, Username=username)
@@ -109,4 +143,4 @@ def contain(username: str, pool_id: str, region: str) -> ContainmentResult:
         "mfa containment: signed_out=%s devices_forgotten=%d errors=%d",
         signed_out, forgotten, len(errors),
     )
-    return ContainmentResult(forgotten, signed_out, errors)
+    return ContainmentResult(forgotten, signed_out, factor_cleared, errors)

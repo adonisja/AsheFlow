@@ -113,3 +113,56 @@ class TestNoPiiInTheResult:
         joined = " ".join(r.errors)
         assert "sensitive.user" not in joined
         assert "ClientError" in joined
+
+
+class TestClearFactorSeparatesTheTwoCallers:
+    """ADR-389. The two callers want OPPOSITE things and conflating them caused
+    a real lockout on `test.user`.
+
+      containment (ADR-387)  the factor is the victim's PROTECTION. An attacker
+                             removed it; the account should end up challenged,
+                             not unlocked.
+      admin reset (ADR-389)  the user LOST their authenticator. Leaving the
+                             factor in place leaves them exactly as locked out.
+    """
+
+    def test_containment_does_not_clear_the_factor_by_default(self):
+        """The security-critical default. If this flips, the EventBridge
+        responder starts UNLOCKING accounts an attacker just tampered with."""
+        c = _client(devices=["d1"])
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2")
+        c.admin_set_user_mfa_preference.assert_not_called()
+        assert r.factor_cleared is False
+
+    def test_the_admin_reset_path_clears_it(self):
+        c = _client(devices=["d1"])
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        c.admin_set_user_mfa_preference.assert_called_once()
+        kwargs = c.admin_set_user_mfa_preference.call_args.kwargs
+        assert kwargs["SoftwareTokenMfaSettings"]["Enabled"] is False
+        assert r.factor_cleared is True
+
+    def test_the_factor_is_cleared_before_sign_out(self):
+        """A session issued after the preference change would otherwise survive
+        with the old state."""
+        order = []
+        c = MagicMock()
+        c.admin_set_user_mfa_preference.side_effect = lambda **k: order.append("clear")
+        c.admin_user_global_sign_out.side_effect = lambda **k: order.append("signout")
+        c.admin_list_devices.side_effect = lambda **k: (
+            order.append("list") or {"Devices": []})
+        with patch("boto3.client", return_value=c):
+            mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        assert order[:2] == ["clear", "signout"], order
+
+    def test_a_failed_clear_is_reported_not_swallowed(self):
+        """An admin must not read a silent success as "they can sign in now"."""
+        c = _client(devices=[])
+        c.admin_set_user_mfa_preference.side_effect = _err()
+        with patch("boto3.client", return_value=c):
+            r = mfa_containment.contain("u", "pool", "us-east-2", clear_factor=True)
+        assert r.factor_cleared is False
+        assert r.fully_contained is False
+        assert any("clear_factor" in e for e in r.errors)
