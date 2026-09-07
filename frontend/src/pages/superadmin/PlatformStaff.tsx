@@ -24,6 +24,9 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 interface StaffRow {
   username: string;
   email: string;
+  /** The person's actual name. Empty for accounts created outside this UI --
+   *  `adon` predates it and has neither name nor email attribute. */
+  name: string;
   group: string;
   status: string;
 }
@@ -43,6 +46,18 @@ export default function PlatformStaff() {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [group, setGroup] = useState('super_admin');
+
+  /* Mirrors _derive_platform_username on the server. A preview only -- the
+     server derives the real one and may append a collision suffix, which the
+     hint says. Kept simple deliberately: duplicating the suffix logic here would
+     be a second source of truth for something the server decides. */
+  const previewUsername = (() => {
+    const parts = name.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const clean = (p: string) => p.replace(/[^a-z0-9]/g, '');
+    const first = parts.length ? clean(parts[0]) : '';
+    const last = parts.length > 1 ? clean(parts[parts.length - 1]) : '';
+    return last ? `${first}.${last}` : first;
+  })();
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<StaffRow | null>(null);
 
@@ -178,15 +193,20 @@ export default function PlatformStaff() {
                         rather than by reading every row. */}
                     <span className="w-8 h-8 rounded-full bg-accent flex items-center justify-center
                                      text-xs font-semibold uppercase shrink-0">
-                      {(r.email || r.username).charAt(0)}
+                      {(r.name || r.username).charAt(0)}
                     </span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{r.username}</p>
-                      {/* Only when it differs. `adon` has no email attribute, so
-                          both lines rendered the username -- which reads as a
-                          bug rather than as a missing field. */}
-                      {r.email && r.email !== r.username && (
-                        <p className="text-xs text-muted-foreground truncate">{r.email}</p>
+                      {/* Lead with the person, fall back to the login. */}
+                      <p className="text-sm font-medium truncate">
+                        {r.name || r.username}
+                      </p>
+                      {/* The sign-in identifier, shown only when it adds
+                          something. For an account created here username IS the
+                          email, so printing both would repeat the same string --
+                          and `adon` has neither attribute, so it would repeat the
+                          username. Either way it reads as a bug. */}
+                      {r.name && (
+                        <p className="text-xs text-muted-foreground truncate">{r.username}</p>
                       )}
                     </div>
                   </div>
@@ -228,6 +248,15 @@ export default function PlatformStaff() {
               <label className="block text-sm font-medium mb-1.5">Name</label>
               <input type="text" required maxLength={255} value={name}
                      className="input-field" onChange={e => setName(e.target.value)} />
+              {/* The username is DERIVED from the name (ADR-396), so show what it
+                  will be. Otherwise the operator learns their colleague's
+                  sign-in identifier only after the account exists. */}
+              {name.trim() && (
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Signs in as <code className="font-mono">{previewUsername}</code>
+                  {' '}(a number is added if that is taken)
+                </p>
+              )}
             </div>
           </div>
           <div>

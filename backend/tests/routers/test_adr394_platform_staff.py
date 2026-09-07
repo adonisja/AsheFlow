@@ -65,6 +65,7 @@ class TestOnlyPlatformGroupsCanBeGranted:
         import pytest
         from fastapi import HTTPException
         from unittest.mock import MagicMock, patch
+        from botocore.exceptions import ClientError
 
         body = P.PlatformStaffCreate(
             email="x@example.com", name="X", group="admin",
@@ -79,11 +80,16 @@ class TestOnlyPlatformGroupsCanBeGranted:
     def test_a_platform_group_is_accepted(self):
         """The other half: the guard must not reject what it should allow."""
         from unittest.mock import MagicMock, patch
+        from botocore.exceptions import ClientError
 
         body = P.PlatformStaffCreate(
             email="ok@example.com", name="OK", group="platform_support",
         )
         client = MagicMock()
+        # ADR-396: the username is derived from the NAME, and derivation probes
+        # Cognito for collisions. UserNotFoundException means the name is free.
+        client.admin_get_user.side_effect = ClientError(
+            {"Error": {"Code": "UserNotFoundException"}}, "AdminGetUser")
         with patch("boto3.client", return_value=client), \
              patch.object(P, "write_audit"):
             out = P.create_platform_staff(body=body, _super={}, db=MagicMock())
@@ -140,3 +146,55 @@ class TestTheRequestIsBounded:
         f = P.PlatformStaffCreate.model_fields["name"]
         meta = str(f.metadata)
         assert "255" in meta, "an unbounded free-text field lands in Cognito"
+
+
+class TestTheUsernameIsDerivedFromTheName:
+    """ADR-396. The first version used the email as the username, making this the
+    only account type whose username is not a name -- and a staff list showing
+    the same string as username and email reads as a rendering bug."""
+
+    def _free(self):
+        from unittest.mock import MagicMock
+        from botocore.exceptions import ClientError
+        c = MagicMock()
+        c.admin_get_user.side_effect = ClientError(
+            {"Error": {"Code": "UserNotFoundException"}}, "AdminGetUser")
+        return c
+
+    def test_firstname_dot_lastname(self):
+        assert P._derive_platform_username(self._free(), "Nicoy Hunt") == "nicoy.hunt"
+
+    def test_punctuation_is_stripped(self):
+        assert P._derive_platform_username(self._free(), "Jean-Luc Picard") == "jeanluc.picard"
+
+    def test_a_single_word_name_has_no_dot(self):
+        assert P._derive_platform_username(self._free(), "Adon") == "adon"
+
+    def test_a_taken_name_gets_a_suffix(self):
+        """Uniqueness is probed against COGNITO, not the Employee table:
+        platform staff have no Employee row, so registration.py's check would
+        hand out a name Cognito already holds and the create would then 409."""
+        from unittest.mock import MagicMock
+        from botocore.exceptions import ClientError
+        c = MagicMock()
+        # First candidate exists; second does not.
+        c.admin_get_user.side_effect = [
+            {"Username": "nicoy.hunt"},
+            ClientError({"Error": {"Code": "UserNotFoundException"}}, "AdminGetUser"),
+        ]
+        assert P._derive_platform_username(c, "Nicoy Hunt") == "nicoy.hunt2"
+
+    def test_a_name_with_no_usable_characters_is_refused(self):
+        """Would otherwise derive an empty username and fail inside Cognito with
+        an opaque InvalidParameterException."""
+        import pytest
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc:
+            P._derive_platform_username(self._free(), "!!! ???")
+        assert exc.value.status_code == 422
+
+    def test_the_derivation_is_bounded(self):
+        """ADR-380 D5 -- a spin here is a bug or an attack, and either deserves
+        a refusal rather than an unbounded loop."""
+        import inspect
+        assert "MAX_SUFFIX" in inspect.getsource(P._derive_platform_username)
