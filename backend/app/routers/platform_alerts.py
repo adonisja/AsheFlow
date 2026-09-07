@@ -11,7 +11,9 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_super_admin, get_platform_staff
@@ -137,6 +139,149 @@ def platform_reset_mfa(
         "signed_out": result.signed_out,
         "factor_cleared": result.factor_cleared,
     }
+
+
+# Only these two. This endpoint creates PLATFORM staff; granting a tenant role
+# here would produce a Cognito user with no company and no Employee row, which is
+# the ghost-account shape that 403s on every request (ADR-394).
+PLATFORM_GROUPS = ("super_admin", "platform_support")
+
+
+class PlatformStaffCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr
+    name: str = Field(min_length=1, max_length=255)
+    group: str = Field(description="super_admin or platform_support")
+
+
+class PlatformStaffOut(BaseModel):
+    username: str
+    email: str
+    group: str
+    status: str
+
+
+@router.get("/staff", status_code=status.HTTP_200_OK)
+def list_platform_staff(
+    _staff: dict = Depends(get_platform_staff),
+) -> list[PlatformStaffOut]:
+    """Who holds platform access (ADR-394).
+
+    A READ, so `get_platform_staff` — a support engineer diagnosing an issue
+    should be able to see who else has access without being able to grant it.
+    """
+    client = boto3.client("cognito-idp", region_name=settings.aws_region)
+    out: list[PlatformStaffOut] = []
+    for group in PLATFORM_GROUPS:
+        try:
+            resp = client.list_users_in_group(
+                UserPoolId=settings.aws_cognito_user_pool_id,
+                GroupName=group, Limit=60,
+            )
+        except (ClientError, BotoCoreError) as exc:
+            logger.error("could not list %s: %s", group, type(exc).__name__)
+            continue
+        for u in resp.get("Users", []):
+            attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
+            out.append(PlatformStaffOut(
+                username=u["Username"],
+                email=attrs.get("email", ""),
+                group=group,
+                status=u.get("UserStatus", ""),
+            ))
+    return out
+
+
+@router.post("/staff", status_code=status.HTTP_201_CREATED)
+def create_platform_staff(
+    body: PlatformStaffCreate,
+    _super: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+) -> PlatformStaffOut:
+    """Create a platform staff account (ADR-394).
+
+    WHY get_super_admin AND NOT get_platform_staff
+    ADR-343 D1 split those deliberately: `get_platform_staff` accepts
+    `platform_support` and is for endpoints that only READ, so someone onboarded
+    to investigate an issue cannot change a customer's world. Creating a super
+    admin is the most privileged write there is — a `platform_support` caller
+    able to reach it could promote themselves.
+
+    NO EMPLOYEE ROW IS CREATED, deliberately. `get_super_admin` never touches
+    that table (ADR-274 D13/D14) because the platform owner has no tenant, and a
+    row here would leak them into company-scoped queries. This is the one place
+    a Cognito user without an Employee row is correct rather than a ghost.
+
+    Cognito emails the temporary password; no credential is returned. The account
+    CANNOT sign in until it enrols MFA — the PreAuthentication trigger refuses a
+    privileged group member with no factor — so the username is returned for the
+    operator to watch through that first sign-in.
+    """
+    if body.group not in PLATFORM_GROUPS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"group must be one of: {', '.join(PLATFORM_GROUPS)}",
+        )
+
+    client = boto3.client("cognito-idp", region_name=settings.aws_region)
+    # Cognito usernames here are the email, matching how registration.py and
+    # employees.py create pre-registration accounts (ADR-380 F7).
+    username = body.email
+
+    try:
+        client.admin_create_user(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=username,
+            UserAttributes=[
+                {"Name": "email", "Value": body.email},
+                {"Name": "email_verified", "Value": "true"},
+                {"Name": "name", "Value": body.name},
+            ],
+            DesiredDeliveryMediums=["EMAIL"],
+        )
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "UsernameExistsException":
+            raise HTTPException(
+                status_code=409, detail="An account with that email already exists.",
+            )
+        logger.error("platform staff create failed: %s", code)
+        raise HTTPException(status_code=502, detail="Could not create the account.")
+    except BotoCoreError as exc:
+        logger.error("platform staff create failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not create the account.")
+
+    try:
+        client.admin_add_user_to_group(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=username, GroupName=body.group,
+        )
+    except (ClientError, BotoCoreError) as exc:
+        # The account exists but holds no privilege. Say so rather than reporting
+        # success: a half-created platform account is worse than none, because it
+        # looks like a rescuer and is not (ADR-389).
+        logger.error("group assignment failed for %s: %s", body.group, type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="The account was created but the group could not be assigned. "
+                   "Remove it and try again.",
+        )
+
+    write_audit(
+        db=db,
+        company_id=None,
+        actor_id=None,  # super admin has no Employee row; identity goes in detail
+        action_type="platform.staff_created",
+        target_table="cognito_users",
+        target_id=username,
+        detail={"actor": super_admin_identity(_super), "group": body.group},
+    )
+    db.commit()
+
+    return PlatformStaffOut(
+        username=username, email=body.email, group=body.group,
+        status="FORCE_CHANGE_PASSWORD",
+    )
 
 
 @router.post("/alerts/{alert_id}/resolve", status_code=status.HTTP_200_OK)
