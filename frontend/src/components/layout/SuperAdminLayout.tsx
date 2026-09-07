@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { Shield, Building2, LogOut, UserCircle2, ShieldAlert } from 'lucide-react';
+import { Shield, Building2, LogOut, UserCircle2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { signOut } from 'aws-amplify/auth';
 import ThemeToggle from '../ui/ThemeToggle';
 
@@ -9,6 +9,10 @@ const NAV = [
   // ADR-340 — the heartbeat (ADR-337) detects a revoked credential within ten
   // minutes and wrote it to a board nobody could reach. This is the reader.
   { to: '/superadmin/alerts',    label: 'Alerts',     icon: ShieldAlert },
+  // ADR-394 — creating a second super admin and resetting a locked-out account
+  // both existed only as AWS CLI commands in a runbook: unaudited, untested and
+  // unavailable to anyone without AWS credentials.
+  { to: '/superadmin/staff',     label: 'Staff',      icon: ShieldCheck },
   { to: '/superadmin/account',   label: 'My Account', icon: UserCircle2 },
 ];
 
