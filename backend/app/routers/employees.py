@@ -809,11 +809,18 @@ def reset_employee_mfa(
     SecurityPanel has promised this since it shipped -- "Lost your phone? An admin
     can reset your second factor" -- with no endpoint behind it.
 
-    It does NOT remove the Cognito factor itself. Cognito holds exactly one
-    software token per user and a new secret replaces the old (ADR-377 D3), so
-    re-enrolling overwrites it. What strands a user is not the stale factor; it is
-    the remembered devices skipping the challenge and the live sessions outliving
-    the change. Those are what this clears.
+    Three actions: clear the MFA preference, end every session, forget every
+    remembered device.
+
+    ADR-386 originally argued the factor could stay, because re-enrolment
+    overwrites the single software token Cognito holds (ADR-377 D3). That was
+    wrong in the case this endpoint exists for. A user who has LOST their
+    authenticator cannot reach enrolment: it lives at /account, behind the
+    sign-in the factor is blocking. Corrected in ADR-389 after a real lockout.
+
+    Note a privileged user is still refused by the PreAuthentication trigger for
+    having NO factor, so for them this is necessary and not sufficient -- see the
+    break-glass runbook.
 
     This is a privilege-escalation surface: it operates on ANOTHER user's account
     protection, so it is gated to management/admin and every call is audited with
@@ -840,6 +847,11 @@ def reset_employee_mfa(
         username=username,
         pool_id=settings.aws_cognito_user_pool_id,
         region=settings.aws_region,
+        # THE fix for the lockout this endpoint was supposed to solve (ADR-389).
+        # Clearing devices and sessions does nothing for someone who LOST their
+        # authenticator: the factor is what they cannot satisfy, and enrolment
+        # lives at /account behind the sign-in it blocks.
+        clear_factor=True,
     )
 
     write_audit(
@@ -852,6 +864,7 @@ def reset_employee_mfa(
         detail={
             "devices_forgotten": result.devices_forgotten,
             "signed_out": result.signed_out,
+            "factor_cleared": result.factor_cleared,
             # Error TYPES only -- never the message, which can carry identifiers.
             "errors": result.errors,
         },
@@ -870,6 +883,7 @@ def reset_employee_mfa(
         "employee_id": str(target.id),
         "devices_forgotten": result.devices_forgotten,
         "signed_out": result.signed_out,
+        "factor_cleared": result.factor_cleared,
     }
 
 
