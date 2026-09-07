@@ -28,6 +28,9 @@ interface StaffRow {
    *  `adon` predates it and has neither name nor email attribute. */
   name: string;
   group: string;
+  /** The group is recorded but NOT granted: the account must enrol a factor
+   *  before it can be activated (ADR-397). It holds no privilege meanwhile. */
+  pending?: boolean;
   status: string;
 }
 
@@ -61,6 +64,7 @@ export default function PlatformStaff() {
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<StaffRow | null>(null);
 
+  const [activatingId, setActivatingId] = useState<string | null>(null);
   const [resetUser, setResetUser] = useState('');
   const [resetting, setResetting] = useState(false);
   const [resetMsg, setResetMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -101,6 +105,23 @@ export default function PlatformStaff() {
     }
   };
 
+  /** ADR-397 — grant the recorded group, once the account has a factor. */
+  const handleActivate = async (username: string) => {
+    setActivatingId(username);
+    setError(null);
+    try {
+      await axiosClient.post(`/platform/staff/${username}/activate`);
+      await load();
+    } catch (err: any) {
+      // A 409 means they have not enrolled yet, which is the expected answer
+      // rather than a fault: surface the server's own wording.
+      setError(err?.response?.data?.detail
+        ?? errorText(err, 'Could not activate the account.'));
+    } finally {
+      setActivatingId(null);
+    }
+  };
+
   const handleReset = async () => {
     const target = resetUser.trim();
     if (!target) return;
@@ -134,7 +155,10 @@ export default function PlatformStaff() {
     }
   };
 
-  const superAdmins = rows.filter(r => r.group === 'super_admin');
+  // Pending accounts are excluded deliberately: the group is recorded, not
+  // granted, so such an account cannot rescue anyone and must not silence the
+  // "only one super admin" warning (ADR-389).
+  const superAdmins = rows.filter(r => r.group === 'super_admin' && !r.pending);
 
   return (
     <div className="space-y-6">
@@ -213,7 +237,24 @@ export default function PlatformStaff() {
                   <div className="flex items-center gap-2 shrink-0">
                     {/* FORCE_CHANGE_PASSWORD means they have never signed in, so
                         they are not yet a working rescuer (ADR-394). */}
-                    {r.status === 'FORCE_CHANGE_PASSWORD' && (
+                    {r.pending ? (
+                      <>
+                        <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
+                          Awaiting 2FA setup
+                        </span>
+                        {/* The grant is refused server-side until a factor
+                            exists, so this can be offered unconditionally: the
+                            409 explains why rather than the button lying. */}
+                        <button
+                          onClick={() => void handleActivate(r.username)}
+                          disabled={activatingId === r.username}
+                          className="text-xs font-medium px-2.5 py-1 rounded-lg border border-primary
+                                     text-primary hover:bg-primary/5 transition-colors disabled:opacity-50"
+                        >
+                          {activatingId === r.username ? 'Activating…' : 'Activate'}
+                        </button>
+                      </>
+                    ) : r.status === 'FORCE_CHANGE_PASSWORD' && (
                       <span className="text-[10px] uppercase tracking-wide bg-warning/15 text-warning rounded-md px-2 py-0.5">
                         Not signed in yet
                       </span>

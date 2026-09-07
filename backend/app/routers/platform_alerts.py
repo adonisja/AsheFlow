@@ -214,6 +214,10 @@ class PlatformStaffOut(BaseModel):
     # not a roster.
     name: str
     group: str
+    # True while the group is recorded but NOT granted: the account must enrol a
+    # factor before /activate will grant it (ADR-397). Such an account holds no
+    # privilege and cannot rescue anyone, which is why the UI labels it.
+    pending: bool = False
     status: str
 
 
@@ -246,6 +250,38 @@ def list_platform_staff(
                 group=group,
                 status=u.get("UserStatus", ""),
             ))
+
+    # Pending accounts hold NO group, so the loop above cannot see them. Without
+    # this they would be created and then invisible -- discovered months later as
+    # an orphan (ADR-397). Listed last, flagged, so the page shows the work that
+    # is not finished.
+    seen = {r.username for r in out}
+    try:
+        resp = client.list_users(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Filter='cognito:user_status = "FORCE_CHANGE_PASSWORD"',
+            Limit=60,
+        )
+        for u in resp.get("Users", []):
+            if u["Username"] in seen:
+                continue
+            attrs = {a["Name"]: a["Value"] for a in u.get("Attributes", [])}
+            pending_group = attrs.get("custom:pending_group")
+            if not pending_group:
+                continue
+            out.append(PlatformStaffOut(
+                username=u["Username"],
+                email=attrs.get("email", ""),
+                name=attrs.get("name", ""),
+                group=pending_group,
+                pending=True,
+                status=u.get("UserStatus", ""),
+            ))
+    except (ClientError, BotoCoreError) as exc:
+        # A failure here hides pending accounts but must not hide the real staff
+        # list, which is the more important of the two.
+        logger.error("could not list pending staff: %s", type(exc).__name__)
+
     return out
 
 
@@ -291,6 +327,12 @@ def create_platform_staff(
                 {"Name": "email", "Value": body.email},
                 {"Name": "email_verified", "Value": "true"},
                 {"Name": "name", "Value": body.name},
+                # The group is NOT granted here (ADR-397). PreAuthentication
+                # refuses a privileged account with no factor BEFORE issuing any
+                # challenge, so granting it now creates an account that can never
+                # sign in to enrol. Recorded, then granted by /activate once a
+                # factor exists.
+                {"Name": "custom:pending_group", "Value": body.group},
             ],
             DesiredDeliveryMediums=["EMAIL"],
         )
@@ -306,22 +348,6 @@ def create_platform_staff(
         logger.error("platform staff create failed: %s", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Could not create the account.")
 
-    try:
-        client.admin_add_user_to_group(
-            UserPoolId=settings.aws_cognito_user_pool_id,
-            Username=username, GroupName=body.group,
-        )
-    except (ClientError, BotoCoreError) as exc:
-        # The account exists but holds no privilege. Say so rather than reporting
-        # success: a half-created platform account is worse than none, because it
-        # looks like a rescuer and is not (ADR-389).
-        logger.error("group assignment failed for %s: %s", body.group, type(exc).__name__)
-        raise HTTPException(
-            status_code=502,
-            detail="The account was created but the group could not be assigned. "
-                   "Remove it and try again.",
-        )
-
     write_audit(
         db=db,
         company_id=None,
@@ -329,14 +355,92 @@ def create_platform_staff(
         action_type="platform.staff_created",
         target_table="cognito_users",
         target_id=username,
-        detail={"actor": super_admin_identity(_super), "group": body.group},
+        detail={"actor": super_admin_identity(_super),
+                "pending_group": body.group, "activated": False},
     )
     db.commit()
 
     return PlatformStaffOut(
-        username=username, email=body.email, name=body.name, group=body.group,
+        username=username, email=body.email, name=body.name,
+        group=body.group, pending=True,
         status="FORCE_CHANGE_PASSWORD",
     )
+
+
+@router.post("/staff/{username}/activate", status_code=status.HTTP_200_OK)
+def activate_platform_staff(
+    username: str,
+    _super: dict = Depends(get_super_admin),
+    db: Session = Depends(get_db),
+) -> PlatformStaffOut:
+    """Grant the recorded group, once the account has an MFA factor (ADR-397).
+
+    THE 409 IS THE POINT. Creating an account already in a privileged group makes
+    it unable to sign in at all: PreAuthentication reads the groups, sees an empty
+    UserMFASettingList, and refuses BEFORE any password challenge -- so it never
+    reaches enrolment. Deferring the grant to here means it is impossible for this
+    surface to put a privileged group on an unprotected account.
+    """
+    client = boto3.client("cognito-idp", region_name=settings.aws_region)
+
+    try:
+        user = client.admin_get_user(
+            UserPoolId=settings.aws_cognito_user_pool_id, Username=username,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
+            raise HTTPException(status_code=404, detail="No such account.")
+        logger.error("activate lookup failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not read the account.")
+
+    attrs = {a["Name"]: a["Value"] for a in user.get("UserAttributes", [])}
+    pending = attrs.get("custom:pending_group")
+    if not pending:
+        raise HTTPException(
+            status_code=409,
+            detail="This account has no group awaiting activation.",
+        )
+    if pending not in PLATFORM_GROUPS:
+        # A tampered attribute must not become a grant.
+        raise HTTPException(status_code=422, detail="Recorded group is not valid.")
+
+    if not user.get("UserMFASettingList"):
+        raise HTTPException(
+            status_code=409,
+            detail="This account has not set up two-factor authentication yet. "
+                   "It must enrol before it can be activated.",
+        )
+
+    try:
+        client.admin_add_user_to_group(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=username, GroupName=pending,
+        )
+        # Clear the marker only AFTER the grant succeeds, so a failure here leaves
+        # the account visibly pending rather than silently orphaned.
+        client.admin_delete_user_attributes(
+            UserPoolId=settings.aws_cognito_user_pool_id,
+            Username=username, UserAttributeNames=["custom:pending_group"],
+        )
+    except (ClientError, BotoCoreError) as exc:
+        logger.error("activate failed for %s: %s", pending, type(exc).__name__)
+        raise HTTPException(
+            status_code=502, detail="Could not grant the group. Please try again.",
+        )
+
+    write_audit(
+        db=db, company_id=None, actor_id=None,
+        action_type="platform.staff_activated",
+        target_table="cognito_users", target_id=username,
+        detail={"actor": super_admin_identity(_super), "group": pending},
+    )
+    db.commit()
+
+    return PlatformStaffOut(
+        username=username, email=attrs.get("email", ""), name=attrs.get("name", ""),
+        group=pending, pending=False, status=user.get("UserStatus", ""),
+    )
+
 
 
 @router.post("/alerts/{alert_id}/resolve", status_code=status.HTTP_200_OK)
