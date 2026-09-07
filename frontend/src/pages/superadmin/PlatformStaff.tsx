@@ -158,7 +158,14 @@ export default function PlatformStaff() {
 
       {loading ? <SkeletonCard /> : (
         <div className="card">
-          <h3 className="section-title mb-4">Current staff</h3>
+          <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
+            <h3 className="section-title">Current staff</h3>
+            <p className="text-xs text-muted-foreground">
+              {superAdmins.length} super admin{superAdmins.length === 1 ? '' : 's'}
+              {' · '}
+              {rows.length - superAdmins.length} support
+            </p>
+          </div>
           {rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">No platform staff found.</p>
           ) : (
@@ -166,9 +173,22 @@ export default function PlatformStaff() {
               {rows.map(r => (
                 <li key={`${r.group}:${r.username}`}
                     className="flex items-center justify-between gap-4 py-3 flex-wrap">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{r.email || r.username}</p>
-                    <p className="text-xs text-muted-foreground">{r.username}</p>
+                  <div className="min-w-0 flex items-center gap-3">
+                    {/* Initial, so a list of accounts is scannable by shape
+                        rather than by reading every row. */}
+                    <span className="w-8 h-8 rounded-full bg-accent flex items-center justify-center
+                                     text-xs font-semibold uppercase shrink-0">
+                      {(r.email || r.username).charAt(0)}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{r.username}</p>
+                      {/* Only when it differs. `adon` has no email attribute, so
+                          both lines rendered the username -- which reads as a
+                          bug rather than as a missing field. */}
+                      {r.email && r.email !== r.username && (
+                        <p className="text-xs text-muted-foreground truncate">{r.email}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {/* FORCE_CHANGE_PASSWORD means they have never signed in, so
@@ -256,13 +276,27 @@ export default function PlatformStaff() {
           must also be removed from its group temporarily before it can sign in
           again. See the lockout runbook.
         </p>
-        <div className="flex gap-3 flex-wrap">
-          <input type="text" value={resetUser} placeholder="Cognito username"
-                 className="input-field flex-1 min-w-[220px]" autoComplete="off"
-                 onChange={e => setResetUser(e.target.value)} />
+        <div className="flex gap-3 flex-wrap items-start">
+          <div className="flex-1 min-w-[220px]">
+            <input type="text" value={resetUser} placeholder="e.g. walker.test"
+                   className="input-field w-full" autoComplete="off"
+                   onChange={e => setResetUser(e.target.value)} />
+            {/* The username, not the email. The two differ for anyone who
+                registered (firstname.lastname vs their email), and getting it
+                wrong returns a confusing "not found" (ADR-380 F7). */}
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Their Cognito username, which may differ from their email.
+            </p>
+          </div>
+          {/* Neutral until a name is entered. A red button greyed to 50% reads
+              as "broken and dangerous" rather than "fill in the field". */}
           <button onClick={() => void handleReset()}
                   disabled={resetting || !resetUser.trim()}
-                  className="btn-primary text-sm bg-danger hover:bg-danger/90 disabled:opacity-50">
+                  className={`text-sm px-4 py-2 min-h-[44px] rounded-lg font-medium transition-colors ${
+                    resetUser.trim() && !resetting
+                      ? 'bg-danger text-white hover:bg-danger/90'
+                      : 'bg-muted text-muted-foreground cursor-not-allowed'
+                  }`}>
             {resetting ? 'Resetting…' : 'Reset'}
           </button>
         </div>
