@@ -71,6 +71,17 @@ celery_app.conf.beat_schedule = {
     # a large zone is finished by the next run rather than one long job.
     # ADR-317 D1 — surface a role whose Cognito group is missing or empty before
     # a captain finds out by losing every tab. Reports, never enforces.
+    # ADR-388 — watches the ADR-387 containment chain: trail -> EventBridge ->
+    # Lambda -> SNS -> a human. Break any link and unenrolments stop being
+    # contained SILENTLY, which is not hypothetical: the previous trail reported
+    # IsLogging:true for twelve months while writing to a deleted bucket.
+    #
+    # Hourly, not daily: a broken containment control should surface within an
+    # hour. :07 is free of every fixed slot and both */10 tasks.
+    "check-security-infra-hourly": {
+        "task": "app.tasks.security_infra_health.check_security_infra",
+        "schedule": crontab(minute=7),
+    },
     # ADR-385 — bounds how LONG a remembered device may skip the MFA challenge;
     # MAX_REMEMBERED_DEVICES bounds how MANY. Privileged 24h, field 7 days.
     #
