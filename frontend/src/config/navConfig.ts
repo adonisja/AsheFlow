@@ -65,7 +65,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/dispatch',              label: 'Assignments',       icon: ClipboardCheck, roles: ['admin', 'dispatch'] },
   { path: '/anchor-points',         label: 'Anchor Points',     icon: MapPin,         roles: ['admin', 'dispatch', 'driver', 'captain'] },
   { path: '/assets',                label: 'Assets',            icon: Users,          roles: ['admin', 'management'] },
-  { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin', 'management'] },
+  // ADR-398 D1: admin only. Management is frequently the SUBJECT of these
+  // records, and a reviewer who appears in the log they review is the wrong
+  // reviewer. The backend gate in audit.py moved in step.
+  { path: '/audit',                 label: 'Audit Log',         icon: ScrollText,     roles: ['admin'] },
   { path: '/building-profiles',     label: 'Buildings',         icon: Building2,      roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   // ADR-277 D3: truck-scoped, alongside the company-wide list above. Field
   // roles + sign-off roles — the same union that gates the endpoint.
@@ -74,7 +77,10 @@ export const NAV_ITEMS: NavItem[] = [
   // records — "logistics role, does not walk blocks or assess difficulty".
   // Spreading it also silently drifted the nav gate away from the route
   // gate, which is what test_nav_and_route_gates_agree caught.
-  { path: '/my-truck-buildings',    label: 'My truck buildings', icon: Building2,     roles: ['admin', 'dispatch', 'management', 'captain', 'walker', 'trainer', 'trainee'] },
+  // ADR-398 D2 dropped `management` for the same reason `driver` was never
+  // here: management does not walk blocks. The company-wide /building-profiles
+  // list above is their surface.
+  { path: '/my-truck-buildings',    label: 'My truck buildings', icon: Building2,     roles: ['admin', 'dispatch', 'captain', 'walker', 'trainer', 'trainee'] },
   { path: '/vehicle-compliance',    label: 'Compliance',        icon: ShieldAlert,    roles: ['admin', 'management'] },
   { path: '/crew-status',           label: 'Crew Status',       icon: Users,          roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'] },
   // /dispatch-home has NO tab: it is dispatch's Dashboard landing

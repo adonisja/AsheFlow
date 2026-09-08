@@ -408,10 +408,11 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* ADR-398 D1: admin only — nav, this gate and audit.py agree. */}
             <Route
               path="/audit"
               element={
-                <ProtectedRoute allowedRoles={['management', 'admin']}>
+                <ProtectedRoute allowedRoles={['admin']}>
                   <AuditLog />
                 </ProtectedRoute>
               }
@@ -455,8 +456,9 @@ function App() {
                 exist and should land somewhere useful instead of a 404. */}
             <Route path="/package-lookup" element={<Navigate to="/field-packages" replace />} />
             {/* ADR-246 — field-added package oversight + manual assignment.
-                Dispatch-readable BY DESIGN: GET /audit is management+admin, so
-                pointing dispatch at the audit log would not actually work. */}
+                Dispatch-readable BY DESIGN: GET /audit is admin-only since
+                ADR-398 D1, so pointing dispatch at the audit log would not
+                actually work. */}
             <Route
               path="/field-packages"
               element={
@@ -513,7 +515,7 @@ function App() {
             <Route
               path="/my-truck-buildings"
               element={
-                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
+                <ProtectedRoute allowedRoles={['walker', 'trainee', 'trainer', 'dispatch', 'admin', 'captain']}>
                   <TruckBuildingsPage />
                 </ProtectedRoute>
               }
