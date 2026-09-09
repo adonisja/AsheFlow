@@ -80,8 +80,10 @@ class CommitWorkforceSortIn(BaseModel):
 
     truck_assignment_id: UUID
     route_date: date
-    # D7: the captain may knowingly exceed the capacity lock. Off by default so
-    # an overflow is always a deliberate act, never a silent side effect.
+    # DEPRECATED (ADR-400 A3). Overflow no longer needs permission — capacity
+    # measures rather than enforces, and `overflowed_routes` in the response
+    # reports it. Still ACCEPTED rather than removed so an older client sending
+    # it gets its sort rather than a 422 on an unexpected key (extra="forbid").
     allow_overflow: bool = False
 
     # ADR-302 D2a. Re-planning a route someone was told is theirs is an
@@ -863,17 +865,27 @@ def commit_workforce_sort(
 
     # D7: a route over its lock is allowed but must be recorded. Computed from
     # what the sort produced rather than trusted from the client.
+    #
+    # ADR-400 A3 — capacity MEASURES, it does not ENFORCE. This block used to
+    # 409 unless the client re-sent with allow_overflow=true. That gate was
+    # never in D7, which asked only that overflow be *visible* (citing ADR-273:
+    # routes closing for unrecorded reasons are invisible in production).
+    #
+    # It is removed because a cart's stated capacity is an estimate of a
+    # physical object people routinely beat — a walker stacks above the cover,
+    # hangs a light bag off the handle, carries an envelope. Those are normal
+    # days. A confirmation nobody can meaningfully refuse gets clicked through
+    # every time, and that habit erodes the confirmations that do matter.
+    #
+    # The NUMBERS still matter, and matter more without the gate: slot_cost,
+    # capacity_limit and overflow_half_slots are the only record of what a
+    # walker actually carried versus what a cart nominally holds. An enforced
+    # cap produces no such data — every route sits under the limit by
+    # construction, and the variance worth learning from is exactly what the
+    # cap suppressed.
     overflowed = 0
     for r in result.routes:
         over = max(0, (r.slot_cost or 0) - (r.capacity_limit or 0))
-        if over and not payload.allow_overflow:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "This sort produces at least one route above its capacity limit. "
-                    "Re-send with allow_overflow=true to accept it."
-                ),
-            )
         if over:
             overflowed += 1
 
