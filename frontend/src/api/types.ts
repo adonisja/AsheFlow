@@ -2698,6 +2698,13 @@ export interface WorkforceRouteOut {
   assigned_to_name: string | null;
   /** ADR-291 D11. NULL = not recorded yet; 0 = genuinely carried nothing. */
   flex_package_count: number | null;
+  /** ADR-406 D1. "assigned" = take it now; "reserved" = it is this walker's,
+   *  but they are carrying something else. Null when nobody holds it.
+   *
+   *  Derived server-side from whether the holder has a route out — NOT stored,
+   *  and NOT route order. A walker carrying route 7 with route 4 assigned has 4
+   *  reserved, despite 4 sorting lower. */
+  assignment_kind: 'assigned' | 'reserved' | null;
   /** ADR-402 D2. Null until the walker leaves / returns. Duration is derived
    *  from the pair client-side, never stored. */
   departed_at: string | null;
@@ -2888,4 +2895,44 @@ export interface LoadRosterOut {
   ovs: WorkforceOVOut[];
   ov_total: number;
   ov_unconfirmed_count: number;
+}
+
+/** A route held for this walker while they carry another (ADR-406 D2).
+ *  Shown as reserved and never as startable: the depart endpoint refuses a
+ *  route that is not `assigned`, so offering the action would only produce a
+ *  409. */
+export interface ReservedRouteOut {
+  route_id: string;
+  route_number: number;
+  tote_count: number;
+  /** Block descriptions, never addresses — `block_key` is not PII (ADR-219). */
+  block_keys: string[];
+}
+
+/** One tote on the walker's route. */
+export interface MyRouteToteOut {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  block_description: string | null;
+}
+
+/** The walker's own route (ADR-297). ONE shape whether or not a route exists —
+ *  `no_route_assigned` says which, so the client never guesses from an empty
+ *  field. */
+export interface MyRouteOut {
+  no_route_assigned: boolean;
+  /** ADR-406 D2. Waiting for this walker while they carry the one above. */
+  reserved_routes: ReservedRouteOut[];
+  route_id: string | null;
+  route_number: number | null;
+  status: string | null;
+  truck_name: string | null;
+  totes: MyRouteToteOut[];
+  block_keys: string[];
+  /** ADR-297 D5: THE parcel count. `package_count` counts addresses and is
+   *  deliberately absent from this payload. */
+  flex_package_count: number | null;
+  departed_at: string | null;
+  returned_at: string | null;
 }

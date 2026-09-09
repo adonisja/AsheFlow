@@ -61,15 +61,42 @@ def test_departure_is_stamped_when_it_happens_never_back_filled():
 
 
 def test_departed_plus_unreturned_is_the_in_progress_signal():
-    """The pair IS the lifecycle — asserted where it is consumed (D2b)."""
-    src = _src(W.assign_walker)
-    assert "Route.departed_at.isnot(None)" in src
-    assert "Route.returned_at.is_(None)" in src
+    """The pair IS the lifecycle.
+
+    ADR-406 D0 moved WHERE this is consumed. `assign_walker` used the pair to
+    refuse a walker who was out; it now caps their waiting routes instead, and
+    the pair is read by the reserved/assigned derivation (D1) — a route displays
+    as reserved exactly when its walker has another route departed-and-unreturned.
+
+    So the signal is used more, not less. Asserted at its new consumer.
+    """
+    src = _src(W._assignment_kind)
+    assert "departed_at" in src and "returned_at" in src, (
+        "the derivation no longer reads the departed/unreturned pair, so a "
+        "reserved route cannot be distinguished from one to walk now"
+    )
 
 
 # ── D2b: a walker who is out cannot be given another route ───────────────────
 
-def test_assign_refuses_a_walker_who_is_still_out():
+def test_assign_allows_a_reservation_but_caps_it():
+    """ADR-406 D0 supersedes D2b's refusal with D2b's own parenthetical.
+
+    D2b said "refuse (or warn, if a captain must be able to override for a
+    genuine hand-off)". A reserved route is that genuine case: assigning a
+    walker their NEXT route while they carry their current one strands nobody,
+    because nothing they hold has changed. What must not happen is a backlog, so
+    the cap replaces the refusal.
+    """
+    src = _src(W.assign_walker)
+    assert 'Route.status == "assigned"' in src, (
+        "the cap no longer counts only WAITING routes — counting in_progress "
+        "ones would refuse the reservation this ADR exists to allow"
+    )
+    assert "already has route" in src
+
+
+def _superseded_test_assign_refuses_a_walker_who_is_still_out():
     """THE gap this ADR closes.
 
     `assign_walker` guarded the ROUTE ("this route is already out") but never
@@ -81,10 +108,17 @@ def test_assign_refuses_a_walker_who_is_still_out():
     assert "HTTP_409_CONFLICT" in src
 
 
-def test_the_busy_409_names_the_route_they_are_on():
-    """"This walker is busy" is useless without "...on route 4"."""
+def test_the_cap_409_names_the_route_already_waiting():
+    """A refusal without the specifics is useless.
+
+    ADR-406 D1a replaced "this walker is out on route 4" with "this walker
+    already has route 7 waiting" — a different rule, same obligation to say
+    WHICH route.
+    """
     src = _src(W.assign_walker)
-    assert "busy.route_number" in src
+    assert "str(r.route_number) for r in held" in src, (
+        "the cap 409 no longer names the held route"
+    )
 
 
 def test_busy_check_is_scoped_to_the_same_day():
