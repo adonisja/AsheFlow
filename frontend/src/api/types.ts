@@ -2815,3 +2815,74 @@ export interface AddOVIn {
   source: 'milk_run' | 'captain';
   zone_label?: string | null;
 }
+
+/** One address a captain recorded against a tote or an OV. */
+export interface ToteAddressOut {
+  id: string;
+  bag_id: string;
+  raw_address: string | null;
+  normalised_address: string | null;
+  block_key: string | null;
+  /** The block key as a sentence, derived server-side (ADR-296 D5). Null when
+   *  the address is gone or no longer parses; show the raw key then. */
+  block_description: string | null;
+  entry_sequence: number;
+  entered_by_name: string | null;
+  /** False when the address could not be parsed into a block. The entry is
+   *  still stored and still sorts — visible and fixable beats vanished. */
+  geocoded: boolean;
+  bag_color: string | null;
+  bag_color_name: string | null;
+}
+
+/** A tote the BTR sheet says is aboard that nobody has addressed yet.
+ *  Enriched with colour and Amazon route because a flat id list is unusable at
+ *  25 totes — colour is how a tote is found in a physical stack. */
+export interface UnaddressedBagOut {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  amazon_route_name: string | null;
+}
+
+export interface ToteAddressListOut {
+  addresses: ToteAddressOut[];
+  disagreements: ToteDisagreementOut[];
+  unaddressed_bags: string[];
+  unaddressed: UnaddressedBagOut[];
+}
+
+/** One tote the BTR sheet says belongs on this truck (ADR-307 D1a). */
+export interface LoadRosterToteOut {
+  bag_id: string;
+  bag_color: string | null;
+  bag_color_name: string | null;
+  /** Reference only (ADR-290 D7): which Amazon route the sheet listed it under.
+   *  NOT a grouping key — a driver cannot tell a tote's Amazon route by eye. */
+  amazon_route_name: string | null;
+  checked: boolean;
+  checked_by_name: string | null;
+  checked_at: string | null;
+}
+
+/** What SHOULD be on the truck, and what the driver has confirmed. One call
+ *  answers both halves, because the question is a comparison: "the sheet says
+ *  25 totes — which do I actually have?" */
+export interface LoadRosterOut {
+  load_date: string;
+  truck_assignment_id: string;
+  btr_loading_zone: string | null;
+  /** True when no BTR sheet was imported: the tote list is UNKNOWABLE, which is
+   *  a different fact from "this truck has no totes". OVs are still returned —
+   *  a captain can add one with no sheet in sight (ADR-400 A5b). */
+  no_sheet?: boolean;
+  totes: LoadRosterToteOut[];
+  total: number;
+  checked_count: number;
+  /** Reported, never converted into a loss claim (ADR-307 D1b). */
+  unchecked_count: number;
+  /** ADR-400 A5a. Ordered zone-then-id: the driver's task is spatial. */
+  ovs: WorkforceOVOut[];
+  ov_total: number;
+  ov_unconfirmed_count: number;
+}
