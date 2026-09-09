@@ -33,7 +33,11 @@ import type {
 
 /** ADR-402 D4. The captain reads this one-handed in a truck, so a route is a
  *  card that stacks, never a table row that needs sideways scrolling. */
-function RouteCard({ r }: { r: WorkforceRouteOut }) {
+function RouteCard({ r, onAct, busy }: {
+  r: WorkforceRouteOut;
+  onAct: (action: 'depart' | 'close' | 'count', route: WorkforceRouteOut) => void;
+  busy: boolean;
+}) {
   const executor = r.participants.find(p => p.role === 'executor');
   const supervisors = r.participants.filter(p => p.role === 'supervisor');
 
@@ -125,6 +129,44 @@ function RouteCard({ r }: { r: WorkforceRouteOut }) {
         </div>
       )}
 
+      {/* The day's state transitions. The captain drives all of them: the
+          walker is on the street, and a button they cannot press is worse than
+          no button (ADR-300 D1).
+
+          A RESERVED route gets none of these — depart refuses a route whose
+          status is not `assigned`, so the buttons would only 409. */}
+      {!reserved && (r.status === 'assigned' || r.status === 'in_progress') && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {r.status === 'assigned' && (
+            <button
+              className="btn-primary text-sm"
+              onClick={() => onAct('depart', r)}
+              disabled={busy}
+            >
+              Send out
+            </button>
+          )}
+          {r.status === 'in_progress' && (
+            <>
+              <button
+                className="btn-ghost text-sm"
+                onClick={() => onAct('count', r)}
+                disabled={busy}
+              >
+                {r.flex_package_count === null ? 'Record Flex count' : 'Edit count'}
+              </button>
+              <button
+                className="btn-primary text-sm"
+                onClick={() => onAct('close', r)}
+                disabled={busy}
+              >
+                Close route
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* ADR-291 D11 / ADR-297 D5: flex_package_count is THE parcel count.
           package_count counts captain-entered ADDRESSES and is deliberately
           not shown — displaying both invites reading an address count as a
@@ -149,6 +191,10 @@ export default function WorkforceSort() {
   const [sorting, setSorting] = useState(false);
   const [error, setError] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
+  const [acting, setActing] = useState(false);
+  const [countFor, setCountFor] = useState<WorkforceRouteOut | null>(null);
+  const [countValue, setCountValue] = useState('');
+  const [closeNoCount, setCloseNoCount] = useState<WorkforceRouteOut | null>(null);
 
   /** The truck-assignment id is what every write here is keyed by, and no
    *  workforce endpoint hands it over: `my-truck` returns truck_id, and
@@ -207,6 +253,64 @@ export default function WorkforceSort() {
   useEffect(() => { if (taId) loadRoutes(taId); }, [taId, loadRoutes]);
 
   const assigned = useMemo(() => routes.filter(r => r.status === 'assigned'), [routes]);
+
+  const send = useCallback(async (
+    action: 'depart' | 'close', route: WorkforceRouteOut,
+  ) => {
+    setActing(true);
+    try {
+      await axiosClient.patch(`/workforce/routes/${route.id}/${action}`);
+      setError('');
+      if (taId) await loadRoutes(taId);
+    } catch (e: unknown) {
+      setError(errorText(e, `Could not ${action === 'depart' ? 'send that route out' : 'close that route'}.`));
+    } finally {
+      setActing(false);
+      setCloseNoCount(null);
+    }
+  }, [taId, loadRoutes]);
+
+  const act = useCallback(async (
+    action: 'depart' | 'close' | 'count', route: WorkforceRouteOut,
+  ) => {
+    if (action === 'count') {
+      setCountValue(route.flex_package_count?.toString() ?? '');
+      setCountFor(route);
+      return;
+    }
+    // ADR-401 D2. THE PRE-CLOSE WARNING. Closing FREEZES flex_package_count
+    // (ADR-300 D5): a route closed without one can never be given one, and its
+    // packages are then missing from every figure the day produces. The server
+    // does not refuse — a captain may have a real reason — so this is the only
+    // place the hole can be prevented rather than reported afterwards.
+    if (action === 'close' && route.flex_package_count === null) {
+      setCloseNoCount(route);
+      return;
+    }
+    await send(action, route);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveCount = useCallback(async () => {
+    if (!countFor) return;
+    const n = Number(countValue);
+    if (!Number.isInteger(n) || n < 0 || n > 2000) {
+      setError('Enter the package count Flex showed, between 0 and 2000.');
+      return;
+    }
+    setActing(true);
+    try {
+      await axiosClient.patch(
+        `/workforce/routes/${countFor.id}/package-count`, { package_count: n },
+      );
+      setCountFor(null);
+      setError('');
+      if (taId) await loadRoutes(taId);
+    } catch (e: unknown) {
+      setError(errorText(e, 'Could not record that count.'));
+    } finally {
+      setActing(false);
+    }
+  }, [countFor, countValue, taId, loadRoutes]);
 
   /** ADR-302 D2a. Clearing a route someone was told is theirs is an
    *  operational act, so `clearAll` is passed only from the confirm dialog —
@@ -335,11 +439,60 @@ export default function WorkforceSort() {
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {routes.map(r => <RouteCard key={r.id} r={r} />)}
+              {routes.map(r => <RouteCard key={r.id} r={r} onAct={act} busy={acting} />)}
             </div>
           )}
         </>
       )}
+
+      {/* ADR-291 D11. The count a captain reads off Amazon Flex while the
+          walker scans. AsheFlow's own package_count counts captain-entered
+          ADDRESSES — a tote with three addresses may hold fifty parcels — so
+          this transcription is the only true package number the day produces. */}
+      {countFor && (
+        <div className="card p-4 space-y-3">
+          <div className="font-medium">Route {countFor.route_number}: Flex count</div>
+          <p className="text-xs text-muted-foreground">
+            The number of packages Amazon Flex showed when this route was
+            scanned.
+          </p>
+          <input
+            className="input w-full"
+            inputMode="numeric"
+            value={countValue}
+            onChange={e => setCountValue(e.target.value)}
+            placeholder="e.g. 52"
+            autoFocus
+          />
+          <div className="flex gap-2">
+            <button className="btn-primary" onClick={saveCount} disabled={acting}>
+              {acting ? 'Saving…' : 'Save count'}
+            </button>
+            <button className="btn-ghost" onClick={() => setCountFor(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ADR-401 D2 / ADR-300 D5. The close FREEZES the Flex count, so a route
+          closed without one can never be given one. The server permits it — a
+          captain may have a real reason — which makes this the only place the
+          hole can be prevented rather than discovered in a report weeks later. */}
+      <ConfirmDialog
+        open={closeNoCount !== null}
+        title="Close without a Flex count?"
+        message={
+          `Route ${closeNoCount?.route_number} has no package count. Closing ` +
+          `locks that in: the count cannot be added afterwards, and this ` +
+          `route's packages will be missing from the day's totals.`
+        }
+        confirmLabel="Close anyway"
+        cancelLabel="Go back"
+        variant="warning"
+        onConfirm={() => closeNoCount && send('close', closeNoCount)}
+        onCancel={() => setCloseNoCount(null)}
+      />
 
       <ConfirmDialog
         open={confirmClear}
