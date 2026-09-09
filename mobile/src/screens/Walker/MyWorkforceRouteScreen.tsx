@@ -78,8 +78,20 @@ type RouteTote = {
   block_descriptions: string[];
 };
 
+/** A route held for this walker while they carry another (ADR-406 D2).
+ *  No start action: the depart endpoint refuses a route that is not `assigned`,
+ *  so a button could only produce a 409, and the sequencing is the captain's. */
+type ReservedRoute = {
+  route_id: string;
+  route_number: number;
+  tote_count: number;
+  block_keys: string[];
+};
+
 type MyRoute = {
   no_route_assigned: boolean;
+  /** ADR-406 D2. Waiting for this walker once they close the one they are on. */
+  reserved_routes: ReservedRoute[];
   route_id: string | null;
   route_number: number | null;
   status: string | null;
@@ -279,6 +291,31 @@ export default function MyWorkforceRouteScreen({ entryDate }: Props) {
               <Text style={s.emptyBody}>
                 This route has no totes listed. Check with your captain.
               </Text>
+            </Card>
+          ) : null}
+
+          {/* ADR-406 D2. A route with this walker's name on it, waiting.
+              Shown but never startable: the captain controls the sequence, and
+              the depart endpoint refuses a route that is not `assigned`. The
+              point is that the walker KNOWS — a reserved route unseen is a note
+              in the captain's head. */}
+          {data.reserved_routes?.length ? (
+            <Card style={s.header}>
+              <Text style={s.heroLabel}>RESERVED FOR YOU</Text>
+              <Text style={s.emptyBody}>
+                Yours to take once your captain closes this route.
+              </Text>
+              {data.reserved_routes.map(r => (
+                <View key={r.route_id} style={{ marginTop: 12 }}>
+                  <Text style={s.heroTitle}>Route {r.route_number}</Text>
+                  <Text style={s.heroSub}>
+                    {r.tote_count} {r.tote_count === 1 ? 'tote' : 'totes'}
+                    {r.block_keys.length
+                      ? `  ${r.block_keys.map(b => b.replace(/_/g, ' ')).join(', ')}`
+                      : ''}
+                  </Text>
+                </View>
+              ))}
             </Card>
           ) : null}
         </>

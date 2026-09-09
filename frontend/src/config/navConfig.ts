@@ -94,6 +94,10 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/gear',                  label: 'Gear',              icon: ShoppingBag,    roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/incidents',             label: 'Incidents',         icon: AlertTriangle,  roles: ['admin', 'dispatch', 'management', ...ALL_FIELD] },
   { path: '/my-route',              label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'], feature: 'route_sort' },
+  // ADR-297/406. The workforce twin of the line above, on the OPPOSITE feature
+  // gate — a tenant has one or the other, never both, so the two never appear
+  // together. Its data is totes and blocks, not stops.
+  { path: '/my-workforce-route',    label: 'My Route',          icon: Route,          roles: ['walker', 'trainee'], feature: 'workforce_sort' },
   { path: '/my-training',           label: 'My Training',       icon: ClipboardCheck, roles: ['trainee'] },
   { path: '/my-quiz',               label: 'Quiz',              icon: ClipboardCheck, roles: ['trainee'], when: c => c.hasActiveQuiz },
   { path: '/phase4-observation',    label: 'Phase 4',           icon: ClipboardCheck, roles: ['admin', 'trainer'], when: c => c.trainerPhase === 4 },

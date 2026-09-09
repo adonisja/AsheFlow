@@ -322,6 +322,13 @@ class WorkforceRouteOut(BaseModel):
     # Every person on the route, not just the executor's flattened name.
     participants: list[RouteParticipantOut] = []
 
+    # ADR-406 D1. "assigned" (take it now) or "reserved" (yours, but you are
+    # carrying something else). Null when nobody holds it. Derived at read time
+    # from whether the holder has a route out — never stored, because the flip
+    # from reserved to assigned happens when ANOTHER route closes and has no
+    # event of its own.
+    assignment_kind: Optional[str] = None
+
     # `wave_number` is deliberately ABSENT (ADR-402 D3). It reads as a truck-wide
     # cycle and is a monotonic counter of re-issues across the truck, so a
     # walker's FIRST re-issue can be labelled wave 3. `AssignmentMember.trip_count`
@@ -486,6 +493,22 @@ class MyRouteToteOut(BaseModel):
     block_descriptions: list[str] = []
 
 
+class ReservedRouteOut(BaseModel):
+    """A route held for this walker, shown as reserved and never as startable.
+
+    The depart endpoint already refuses a route whose status is not `assigned`,
+    so a reserved route could not be started anyway — this keeps the SCREEN
+    honest about a rule the server enforces, rather than offering an action that
+    would 409.
+    """
+    route_id: UUID
+    route_number: int
+    tote_count: int
+    # Block descriptions, never addresses: `block_key` survives the ADR-219
+    # purge precisely because it is not PII (dim 7).
+    block_keys: list[str] = []
+
+
 class MyRouteOut(BaseModel):
     """The walker's own route for a day (ADR-297).
 
@@ -496,6 +519,10 @@ class MyRouteOut(BaseModel):
     which is the confusion RequireMode's 404 already occupies.
     """
     no_route_assigned: bool = False
+    # ADR-406 D2. Routes waiting for this walker while they carry the one above.
+    # Enough to know what is coming and where, without duplicating a full route
+    # view for something they cannot start yet.
+    reserved_routes: list["ReservedRouteOut"] = []
     route_id: Optional[UUID] = None
     route_number: Optional[int] = None
     status: Optional[str] = None
@@ -1146,6 +1173,7 @@ def commit_workforce_sort(
     # lookup is done rather than assumed: commit-sort RETAINS in_progress routes
     # (ADR-302 D2), and a retained route very much has an executor.
     parts = _participants(db, caller.company_id, created)
+    kinds = _assignment_kind(db, caller.company_id, created)   # ADR-406 D1
 
     return CommitWorkforceSortOut(
         routes=[
@@ -1157,6 +1185,7 @@ def commit_workforce_sort(
                 flex_package_count=r.flex_package_count,
                 departed_at=r.departed_at, returned_at=r.returned_at,
                 participants=parts.get(r.id, []),
+                assignment_kind=kinds.get(r.id),
             )
             for r in created
         ],
@@ -1748,19 +1777,36 @@ def my_route(
     caller id: a captain who also walks a route is a real case, and the
     truck-wide view is a separate concern (`GET /workforce/routes/{date}`).
     """
-    route = (
+    # ADR-406 D2. This was `.order_by(route_number).first()` with NO status
+    # filter, which is two live bugs:
+    #
+    #   - a walker who finished route 2 and was given route 7 saw ROUTE 2, a
+    #     completed route, because it sorts lower;
+    #   - a walker OUT on route 7 with route 4 assigned saw ROUTE 4, not the one
+    #     in their hands.
+    #
+    # Route number reflects sort order, not sequence of work. So: live statuses
+    # only, and in_progress first — what they are physically carrying wins over
+    # anything merely assigned.
+    mine = (
         db.query(Route)
         .join(RouteParticipant, RouteParticipant.route_id == Route.id)
         .filter(
             Route.company_id == caller.company_id,
             Route.route_date == entry_date,
+            Route.status.in_(("assigned", "in_progress")),
             RouteParticipant.company_id == caller.company_id,
             RouteParticipant.employee_id == caller.id,
             RouteParticipant.role == "executor",
         )
         .order_by(Route.route_number.asc())
-        .first()
+        .all()
     )
+    in_progress = [r for r in mine if r.status == "in_progress"]
+    assigned = [r for r in mine if r.status == "assigned"]
+    route = (in_progress or assigned or [None])[0]
+    # Everything else they hold is waiting on this one (D1a caps it at one).
+    reserved = [r for r in mine if route is not None and r.id != route.id]
     if route is None:
         # D6: a real state, not an error. Same shape, flag set.
         return MyRouteOut(no_route_assigned=True)
@@ -1845,6 +1891,15 @@ def my_route(
         flex_package_count=route.flex_package_count,
         departed_at=route.departed_at,
         returned_at=route.returned_at,
+        reserved_routes=[
+            ReservedRouteOut(
+                route_id=r.id,
+                route_number=r.route_number,
+                tote_count=len(r.tote_ids or []),
+                block_keys=list(r.block_keys or []),
+            )
+            for r in reserved
+        ],
     )
 
 
@@ -1885,6 +1940,7 @@ def list_workforce_routes(
     )
     names = _participant_names(db, caller.company_id, routes)
     parts = _participants(db, caller.company_id, routes)      # ADR-402 D2
+    kinds = _assignment_kind(db, caller.company_id, routes)   # ADR-406 D1
 
     return [
         WorkforceRouteOut(
@@ -1902,6 +1958,7 @@ def list_workforce_routes(
             flex_package_count=r.flex_package_count,
             departed_at=r.departed_at, returned_at=r.returned_at,
             participants=parts.get(r.id, []),
+            assignment_kind=kinds.get(r.id),
         )
         for r in routes
     ]
@@ -1972,7 +2029,8 @@ def depart_route(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
-    parts = _participants(db, caller.company_id, [route])   # ADR-402 D2
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number,
         tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
@@ -1983,6 +2041,7 @@ def depart_route(
         flex_package_count=route.flex_package_count,
         departed_at=route.departed_at, returned_at=route.returned_at,
         participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -2067,7 +2126,8 @@ def close_route(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
-    parts = _participants(db, caller.company_id, [route])   # ADR-402 D2
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number,
         tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
@@ -2078,6 +2138,7 @@ def close_route(
         flex_package_count=route.flex_package_count,
         departed_at=route.departed_at, returned_at=route.returned_at,
         participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -2141,28 +2202,43 @@ def assign_walker(
     #
     # Scoped to the same route_date: yesterday's unclosed route is a data-hygiene
     # problem, not a reason to block today's assignment.
-    busy = (
+    # ADR-406 D0. This asked "is this WALKER out on anything" and refused if so.
+    # Two different fears were tangled in that one question: reassigning the
+    # route someone is CARRYING (a real hazard, and they cannot see it happen),
+    # and giving them a DIFFERENT route for later (strands nobody, because
+    # nothing has moved). Only the first deserves refusing, and the
+    # `status == "in_progress"` check above already covers it from the other
+    # direction — so narrowing here opens no gap.
+    #
+    # What the walker's other work still constrains is the RESERVATION CAP.
+    held = (
         db.query(Route.route_number)
         .join(RouteParticipant, RouteParticipant.route_id == Route.id)
         .filter(
             Route.company_id == caller.company_id,
             Route.route_date == route.route_date,
             Route.id != route.id,
-            Route.departed_at.isnot(None),
-            Route.returned_at.is_(None),
+            Route.status == "assigned",
             RouteParticipant.company_id == caller.company_id,
             RouteParticipant.employee_id == walker.id,
             RouteParticipant.role == "executor",
         )
-        .first()
+        .order_by(Route.route_number.asc())
+        .all()
     )
-    if busy is not None:
-        # Names the route: "this walker is busy" is useless without "...on 4".
+    # D1a — at most ONE route waiting. Enforced here, not in the UI: a
+    # client-side limit is a suggestion that survives until someone calls the
+    # API directly, or two captains assign at the same moment.
+    #
+    # "route 7 is yours" is a promise, and four promises are a backlog nobody
+    # reads — which is the whole reason a reservation is worth showing.
+    if held:
+        numbers = ", ".join(str(r.route_number) for r in held)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"{walker.name} is still out on route {busy.route_number}. "
-                f"Close that route first, or assign this one to someone else."
+                f"{walker.name} already has route {numbers} waiting. A walker "
+                f"can hold one route at a time plus one more."
             ),
         )
 
@@ -2199,6 +2275,7 @@ def assign_walker(
     # ADR-402 D2. Re-read after the assign so the row reflects the participant
     # this call just created, rather than the state before it.
     parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1
 
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
@@ -2209,6 +2286,7 @@ def assign_walker(
         flex_package_count=route.flex_package_count,
         departed_at=route.departed_at, returned_at=route.returned_at,
         participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -2281,7 +2359,8 @@ def record_flex_package_count(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
-    parts = _participants(db, caller.company_id, [route])   # ADR-402 D2
+    parts = _participants(db, caller.company_id, [route])
+    kinds = _assignment_kind(db, caller.company_id, [route])   # ADR-406 D1   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
         block_keys=list(route.block_keys or []), package_count=route.package_count,
@@ -2291,6 +2370,7 @@ def record_flex_package_count(
         flex_package_count=route.flex_package_count,
         departed_at=route.departed_at, returned_at=route.returned_at,
         participants=parts.get(route.id, []),
+        assignment_kind=kinds.get(route.id),
     )
 
 
@@ -2385,6 +2465,70 @@ def route_lookup(
         candidates=candidates,
         escalate=not candidates,
     )
+
+
+def _assignment_kind(
+    db: Session, company_id: UUID, routes: list[Route],
+) -> dict[UUID, str]:
+    """route_id -> "assigned" | "reserved", for routes someone holds (ADR-406 D1).
+
+    A reserved route is not a fourth status. It is what an `assigned` route LOOKS
+    LIKE while its walker is carrying something else:
+
+        walker has an in_progress route  ->  their assigned route is RESERVED
+        walker has none                  ->  it is ASSIGNED, take it now
+
+    Derived, never stored, because the flip has no event of its own. Closing the
+    in-progress route stamps `returned_at`, and the same row now reads
+    `assigned` because the condition that made it reserved is gone. A stored
+    value would need a writer on every close, and a close that forgot would
+    leave a route reserved for a walker standing free at the truck.
+
+    NOT ordered by route number. An earlier draft made the lowest-numbered route
+    "next", which would tell a walker out with route 7 that route 4 was theirs to
+    start. Route number reflects sort order, not sequence of work.
+    """
+    assigned = [r for r in routes if r.status == "assigned"]
+    if not assigned:
+        return {}
+
+    # Who holds each assigned route.
+    holder = {
+        rid: emp
+        for rid, emp in db.query(RouteParticipant.route_id, RouteParticipant.employee_id)
+        .filter(
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.route_id.in_([r.id for r in assigned]),
+            RouteParticipant.role == "executor",
+        )
+        .all()
+    }
+    if not holder:
+        return {}
+
+    # Which of those people are physically out. ADR-300 D2b's pair, read here
+    # rather than in the assign guard: departed and not yet returned.
+    dates = {r.route_date for r in assigned}
+    out = {
+        emp
+        for (emp,) in db.query(RouteParticipant.employee_id)
+        .join(Route, Route.id == RouteParticipant.route_id)
+        .filter(
+            Route.company_id == company_id,
+            Route.route_date.in_(dates),
+            Route.departed_at.isnot(None),
+            Route.returned_at.is_(None),
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.employee_id.in_(set(holder.values())),
+            RouteParticipant.role == "executor",
+        )
+        .all()
+    }
+    return {
+        r.id: ("reserved" if holder.get(r.id) in out else "assigned")
+        for r in assigned
+        if r.id in holder
+    }
 
 
 def _participants(

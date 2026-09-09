@@ -31,6 +31,7 @@ import CrewStatus from './pages/CrewStatus';
 import CaptainDashboard from './pages/CaptainDashboard';
 import WorkforceSort from './pages/WorkforceSort';
 import ToteAddresses from './pages/ToteAddresses';
+import MyWorkforceRoute from './pages/MyWorkforceRoute';
 import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
@@ -568,6 +569,18 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['driver', 'trainer', 'dispatch', 'management', 'admin', 'captain']}>
                   <WalkerSortMonitor />
+                </ProtectedRoute>
+              }
+            />
+            {/* ADR-297/406 — workforce mode's walker view. A separate page,
+                not a branch inside MyRoute: the unit of work is the tote, not
+                the stop, so a shared screen would spend its time hiding half of
+                itself. */}
+            <Route
+              path="/my-workforce-route"
+              element={
+                <ProtectedRoute allowedRoles={['walker', 'trainee']}>
+                  <MyWorkforceRoute />
                 </ProtectedRoute>
               }
             />

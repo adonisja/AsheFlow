@@ -48,9 +48,16 @@ function RouteCard({ r }: { r: WorkforceRouteOut }) {
     return mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`;
   }, [r.departed_at, r.returned_at]);
 
+  // ADR-406 D1. `reserved` is not a status — it is what an assigned route looks
+  // like while its walker is out with another. Shown distinctly because the
+  // captain's question is "what can be walked NOW", and a route held for
+  // someone mid-route answers that differently from one waiting to go.
+  const reserved = r.assignment_kind === 'reserved';
+  const label = reserved ? 'reserved' : r.status.replace('_', ' ');
   const tone =
     r.status === 'completed'   ? 'bg-success/10 text-success'
     : r.status === 'in_progress' ? 'bg-primary/10 text-primary'
+    : reserved                   ? 'bg-accent text-muted-foreground'
     : r.status === 'assigned'    ? 'bg-warning/10 text-warning'
     : 'bg-accent text-muted-foreground';
 
@@ -74,7 +81,7 @@ function RouteCard({ r }: { r: WorkforceRouteOut }) {
           </span>
         </div>
         <span className={`px-2 py-0.5 rounded-lg text-[11px] font-medium capitalize ${tone}`}>
-          {r.status.replace('_', ' ')}
+          {label}
         </span>
       </div>
 
@@ -88,6 +95,9 @@ function RouteCard({ r }: { r: WorkforceRouteOut }) {
         ) : (
           <div className="min-w-0">
             <span className="font-medium">{executor?.name ?? 'Unassigned'}</span>
+            {reserved && (
+              <span className="text-muted-foreground"> (waiting for them)</span>
+            )}
             {supervisors.length > 0 && (
               <span className="text-muted-foreground">
                 {' '}with {supervisors.map(s => s.name).join(', ')}
