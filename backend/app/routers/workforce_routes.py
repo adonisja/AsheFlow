@@ -28,6 +28,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
@@ -36,7 +37,9 @@ from app.models.assignment_member import AssignmentMember
 from app.models.employee import Employee
 from app.core.bag_colors import canonical_hex, color_name_for_hex
 from app.services.derive_block_key import describe_stored_block
-from app.models.btr_sheet import BTRBag, BTRSheet
+from app.models.btr_sheet import BTRBag, BTRSheet, BTRRoute, BTROVZone
+from app.models.workforce_ov import WorkforceOV, OV_SIZES
+from app.services.workforce_ov_mint import mint as mint_ov, is_ov_id
 from app.models.tote_address import ToteAddress
 from app.models.truck_assignment import TruckAssignment
 from app.models.walker_route import Route, RouteParticipant
@@ -333,6 +336,30 @@ class LoadRosterToteOut(BaseModel):
     checked: bool = False
     checked_by_name: Optional[str] = None
     checked_at: Optional[datetime] = None
+
+
+class WorkforceOVOut(BaseModel):
+    """One oversized package on this truck-day (ADR-400 A4)."""
+    ov_id: str
+    # A5a: the DRIVER's field. Where the station staged it, for the person
+    # loading the truck at 06:00. Null for a milk-run item, which never had one.
+    zone_label: Optional[str] = None
+    # Null until the captain measures it. The sort cannot cost the route without
+    # it, so it is asked for at address entry rather than guessed.
+    size: Optional[str] = None
+    source: str                       # sheet | milk_run | captain
+    # Null = expected from the sheet, not yet in hand. A presence fact, never a
+    # loss claim (A5c).
+    confirmed_at: Optional[datetime] = None
+    addressed: bool = False
+
+
+class SeedOVsOut(BaseModel):
+    """What seeding found, and what it added."""
+    expected: int          # OVs the sheet says belong on this truck
+    created: int           # newly minted this call
+    already_present: int   # already seeded — this endpoint is idempotent
+    no_sheet: bool = False
 
 
 class LoadRosterOut(BaseModel):
@@ -998,6 +1025,114 @@ def commit_workforce_sort(
             for d in built.disagreements
         ],
         overflowed_routes=overflowed,
+    )
+
+
+@router.post("/ovs/{entry_date}/seed", response_model=SeedOVsOut)
+def seed_ovs_from_sheet(
+    entry_date: date,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """Create the OV units the BTR sheet says belong on this truck (ADR-400 A2).
+
+    `BTROVZone` has been written at every BTR import since ADR-290 and read by
+    NOTHING. This is what reads it: "4 OVs at B-27.2Y" becomes four addressable
+    units, so a truck with forty OVs stops sorting as though it had none.
+
+    IDEMPOTENT on the truck-day. A re-import, a double tap, or a second captain
+    running it adds only what is missing — counted against the sheet's expected
+    total, not against a marker. There is no "seeded" flag to get out of sync.
+
+    Deliberately NOT automatic on BTR import: the sheet is imported by dispatch
+    before the truck is crewed, and an OV is scoped to a truck-day the captain
+    is standing at. Seeding at import would create rows for a truck-day that may
+    never happen.
+    """
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, entry_date, db)
+
+    sheet = (
+        db.query(BTRSheet)
+        .filter(
+            BTRSheet.company_id == caller.company_id,
+            BTRSheet.truck_id == ta.truck_id,
+            BTRSheet.sheet_date == entry_date,
+        )
+        .first()
+    )
+    if sheet is None:
+        # Same distinction the tote roster draws: "unknowable" is not "none".
+        return SeedOVsOut(expected=0, created=0, already_present=0, no_sheet=True)
+
+    # Every OV zone on every Amazon route on this sheet. Scoped on company_id at
+    # BOTH levels — the join alone would let another tenant's route drag its
+    # zones in if a sheet id were ever guessed (dim 1).
+    zones = (
+        db.query(BTROVZone)
+        .join(BTRRoute, BTRRoute.id == BTROVZone.btr_route_id)
+        .filter(
+            BTROVZone.company_id == caller.company_id,
+            BTRRoute.company_id == caller.company_id,
+            BTRRoute.btr_sheet_id == sheet.id,
+        )
+        .order_by(BTROVZone.zone_label.asc())
+        .all()
+    )
+    expected = sum(z.ov_count or 0 for z in zones)
+
+    existing = (
+        db.query(func.count(WorkforceOV.id))
+        .filter(
+            WorkforceOV.company_id == caller.company_id,
+            WorkforceOV.truck_id == ta.truck_id,
+            WorkforceOV.entry_date == entry_date,
+            WorkforceOV.source == "sheet",
+        )
+        .scalar()
+    ) or 0
+
+    # Count sheet-sourced rows only. A milk-run OV is an ARRIVAL, not part of the
+    # sheet's expectation (A5b) — counting it here would make the seed think it
+    # had already done its job and skip a genuinely missing unit.
+    to_create = max(0, expected - existing)
+    created = 0
+    if to_create:
+        # Walk the zones in order so the FIRST unseeded unit takes the FIRST
+        # zone. Re-running after a partial seed continues where it stopped
+        # rather than re-labelling what is already there.
+        slots: list[str] = []
+        for z in zones:
+            slots.extend([z.zone_label] * (z.ov_count or 0))
+        for zone_label in slots[existing:existing + to_create]:
+            mint_ov(
+                db,
+                company_id=caller.company_id,
+                truck_id=ta.truck_id,
+                entry_date=entry_date,
+                source="sheet",
+                zone_label=zone_label,
+            )
+            created += 1
+
+        write_audit(
+            db=db,
+            company_id=str(caller.company_id),
+            actor_id=str(caller.id),
+            action_type="workforce_ov.seed",
+            target_table="workforce_ovs",
+            target_id=str(ta.truck_id),
+            detail={"entry_date": entry_date.isoformat(), "created": created,
+                    "expected": expected},
+        )
+        db.commit()
+
+    return SeedOVsOut(
+        expected=expected,
+        created=created,
+        already_present=existing,
     )
 
 
