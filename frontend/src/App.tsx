@@ -30,6 +30,7 @@ import AnchorPoints from './pages/AnchorPoints';
 import CrewStatus from './pages/CrewStatus';
 import CaptainDashboard from './pages/CaptainDashboard';
 import WorkforceSort from './pages/WorkforceSort';
+import ToteAddresses from './pages/ToteAddresses';
 import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
@@ -446,6 +447,9 @@ function App() {
             {/* ADR-291/402 — workforce route building. The page itself checks
                 hasFeature('workforce_sort') and explains itself in full mode
                 rather than 404ing, since a full-mode admin may follow a link. */}
+            {/* ADR-296/400 — the workforce sort's INPUT. Same gate as
+                /build-routes: both are route-lead work on one truck-day. */}
+            <Route path="/tote-addresses" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><ToteAddresses /></ProtectedRoute>} />
             <Route path="/build-routes" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><WorkforceSort /></ProtectedRoute>} />
             <Route
               path="/crew-status"

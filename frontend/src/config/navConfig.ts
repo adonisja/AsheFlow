@@ -106,6 +106,11 @@ export const NAV_ITEMS: NavItem[] = [
   // ADR-273: cross-run algorithm telemetry used to justify a tenant-wide tuning
   // change. Management+admin only — dispatch is not management (ADR-242).
   { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'], feature: 'sort_metrics' },
+  // ADR-296/400. Where the day's geography enters the system: a captain opens
+  // each tote and records where it goes. Web never had this — mobile has had it
+  // since ADR-296 — and ADR-402 D4 makes the browser the field surface until an
+  // app ships, so a captain had no way to address a tote on their own phone.
+  { path: '/tote-addresses',        label: 'Tote Addresses',    icon: Package,        roles: ['admin', 'dispatch', 'management', 'captain', 'driver'], feature: 'workforce_sort' },
   // ADR-291/302/402. The workforce sort — gated on `workforce_sort` so a
   // full-mode tenant never sees it: there the manifest supplies the geography
   // and this screen would be duplicate, contradictory work. Route leads only,
