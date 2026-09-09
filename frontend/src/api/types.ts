@@ -2659,3 +2659,95 @@ export interface MfaStatus {
   days_remaining: number | null;
   blocked: boolean;
 }
+
+/* ── Workforce mode: the captain's truck-day (ADR-291/297/299/302) ────────────
+ *
+ * Hand-maintained, like the rest of this file — there is no codegen. These
+ * mirror `workforce_routes.py`; a field added there must be added here or the
+ * client silently drops it.
+ *
+ * Every one of these endpoints sits on the `_workforce_mode`-gated router, so a
+ * full-mode tenant 404s on all of them. Guard the calls on the capability, not
+ * on a role. */
+
+/** One person on a route (ADR-212). Exactly one `executor` — the walker, or the
+ *  trainee in a training pair — plus zero-or-more `supervisor` (their trainer).
+ *  A pair is therefore TWO rows on one route, which is what the captain sees on
+ *  the floor and what `assigned_to_name` alone cannot express. */
+export interface RouteParticipantOut {
+  employee_id: string;
+  name: string | null;
+  role: 'executor' | 'supervisor';
+}
+
+export interface WorkforceRouteOut {
+  id: string;
+  route_number: number;
+  tote_ids: string[];
+  block_keys: string[];
+  /** ADR-298: counts captain-entered ADDRESSES, not parcels. Not displayed in
+   *  workforce mode (ADR-297 D5) — `flex_package_count` is the parcel count. */
+  package_count: number;
+  slot_cost: number;
+  capacity_limit: number;
+  overflow_half_slots: number;
+  status: 'unassigned' | 'assigned' | 'in_progress' | 'completed';
+  assigned_to: string | null;
+  /** The executor's name, flattened. Kept for compatibility; prefer
+   *  `participants`, which can express a supervised pair. */
+  assigned_to_name: string | null;
+  /** ADR-291 D11. NULL = not recorded yet; 0 = genuinely carried nothing. */
+  flex_package_count: number | null;
+  /** ADR-402 D2. Null until the walker leaves / returns. Duration is derived
+   *  from the pair client-side, never stored. */
+  departed_at: string | null;
+  returned_at: string | null;
+  participants: RouteParticipantOut[];
+}
+
+/** One tote whose addresses disagreed about where it belongs (ADR-291 D4).
+ *  Surfaced, never averaged into a single wrong answer. */
+export interface ToteDisagreementOut {
+  bag_id: string;
+  block_keys: string[];
+  chosen_block_key: string | null;
+}
+
+export interface CommitWorkforceSortIn {
+  truck_assignment_id: string;
+  route_date: string;
+  /** D7: exceeding the capacity lock is always a deliberate act. */
+  allow_overflow?: boolean;
+  /** ADR-302 D2a. Re-planning a route someone was told is theirs is an
+   *  operational act, so it is stated explicitly. Omit both fields and the
+   *  server 409s while naming the assigned routes, rather than re-planning
+   *  silently. */
+  clear_assigned_route_ids?: string[];
+  clear_all_assigned?: boolean;
+}
+
+export interface CommitWorkforceSortOut {
+  routes: WorkforceRouteOut[];
+  /** ADR-302 D3. Skipped because a RETAINED route already carries them — these
+   *  are accounted for, unlike `unaddressed_bags`. Someone is carrying them now
+   *  or already delivered them. */
+  already_routed_bags: string[];
+  retained_routes: number;
+  totes_sorted: number;
+  /** Reported, never silently dropped. */
+  unaddressed_bags: string[];
+  unparseable: string[];
+  disagreements: ToteDisagreementOut[];
+  overflowed_routes: number;
+}
+
+export interface TruckDayTotalsOut {
+  route_date: string;
+  truck_assignment_id: string;
+  routes_total: number;
+  routes_closed: number;
+  /** ADR-299 D4. NULL — never a partial sum — while any closed route has no
+   *  Flex count: summing three of five reports a smaller truck than went out. */
+  packages_carried: number | null;
+  routes_missing_flex_count: number;
+}
