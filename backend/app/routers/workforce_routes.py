@@ -366,6 +366,10 @@ class LoadRosterToteOut(BaseModel):
     # Reference only: which Amazon route the sheet listed it under. NOT a
     # grouping key — a driver cannot tell a tote's Amazon route by looking.
     amazon_route_name: Optional[str] = None
+    # ADR-405. Where the station staged this bag, e.g. "H-9.1E". The DRIVER's
+    # field: it answers "where do I walk to find it", which colour alone cannot.
+    # Null when the sheet predates the column or omits it.
+    sort_zone: Optional[str] = None
 
     checked: bool = False
     checked_by_name: Optional[str] = None
@@ -1538,6 +1542,7 @@ def load_roster(
             bag_color=hexv,
             bag_color_name=color_name_for_hex(hexv),
             amazon_route_name=b.amazon_route_name,
+            sort_zone=b.sort_zone,
             checked=chk is not None,
             checked_by_name=chk.checked_by_name if chk else None,
             checked_at=chk.checked_at if chk else None,
