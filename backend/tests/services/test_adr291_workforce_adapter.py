@@ -76,11 +76,16 @@ def wf_db():
     from app.models.truck import Truck
     from app.models.tote_address import ToteAddress
     from app.models.btr_sheet import BTRSheet, BTRRoute, BTRBag, BTROVZone
+    # ADR-400 A2 step 5: the adapter now reads OV sizes, so this table must
+    # exist even for a fixture with no OVs in it. An explicit list catches that
+    # as a hard error rather than letting a missing table pass silently.
+    from app.models.workforce_ov import WorkforceOV
 
     meta = MetaData()
     for t in (Company.__table__, CompanyConfig.__table__, Employee.__table__,
               Truck.__table__, ToteAddress.__table__, BTRSheet.__table__,
-              BTRRoute.__table__, BTRBag.__table__, BTROVZone.__table__):
+              BTRRoute.__table__, BTRBag.__table__, BTROVZone.__table__,
+              WorkforceOV.__table__):
         t.to_metadata(meta)
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     meta.create_all(engine)

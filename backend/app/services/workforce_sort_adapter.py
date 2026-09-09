@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from app.models.btr_sheet import BTRBag, BTRSheet
 from app.models.tote_address import ToteAddress
+from app.models.workforce_ov import WorkforceOV
 from app.schemas.walker_routes import PackageInput
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,25 @@ def build_packages(
         .all()
     )
 
+    # ADR-400 A2 / ADR-404. An addressed OV already arrives here: it has a
+    # ToteAddress row keyed by its OV#### id, so the loop below groups it as its
+    # own bag. What is missing is its SIZE, and without a size the sort costs it
+    # as an ordinary tote — 2 half-slots for everything from an envelope to an
+    # XL. That is wrong in both directions: an XS envelope ends a route early
+    # (too many routes), and an XL is charged half what it occupies, so the BFS
+    # overfills and a walker gets a cart that does not physically hold it.
+    ov_sizes: dict[str, str] = {
+        ov_id: size
+        for ov_id, size in db.query(WorkforceOV.ov_id, WorkforceOV.size)
+        .filter(
+            WorkforceOV.company_id == company_id,
+            WorkforceOV.truck_id == truck_id,
+            WorkforceOV.entry_date == entry_date,
+            WorkforceOV.size.isnot(None),
+        )
+        .all()
+    }
+
     by_bag: dict[str, list[ToteAddress]] = {}
     for a in addresses:
         by_bag.setdefault(a.bag_id, []).append(a)
@@ -204,9 +224,24 @@ def build_packages(
                 lng=e.lng,
                 first_cross_street=e.first_cross_street,
                 second_cross_street=e.second_cross_street,
-                # No package_type: a captain enters a tote's geography, not its
-                # contents. OV sizing comes from the BTR sheet (ADR-291 D6),
-                # which the caller layers on separately.
+                # ADR-400 A2. `OV_{size}` for an OV, None for a tote.
+                #
+                # This is the whole capacity fix and it needs no new arithmetic:
+                # `_pair_ovs` already scans for the OV_ prefix and adds
+                # OV_HALF_SLOTS[tier], and `_Tote.half_slot_cost`'s all-OV
+                # branch already gives a standalone OV its own cost instead of a
+                # tote's base 2 — including the XS exemption (ADR-260), which
+                # returns 0 rather than flooring at 1 because an envelope
+                # genuinely occupies no cart slot.
+                #
+                # A captain enters geography, not contents, so a TOTE still gets
+                # None. The earlier comment here said OV sizing "comes from the
+                # BTR sheet, which the caller layers on separately" — no caller
+                # ever did, and the sheet carries only zone and count, never a
+                # size. The size comes from the captain at address entry.
+                package_type=(
+                    f"OV_{ov_sizes[bag_id]}" if bag_id in ov_sizes else None
+                ),
             ))
 
     # Excluded totes count as ADDRESSED for this purpose: they are on a retained
