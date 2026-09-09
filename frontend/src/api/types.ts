@@ -2753,3 +2753,36 @@ export interface TruckDayTotalsOut {
   packages_carried: number | null;
   routes_missing_flex_count: number;
 }
+
+/** One oversized package on a truck-day (ADR-400 A4).
+ *
+ *  Its own unit, never a package borrowing a tote's bag_id: only XS and S fit
+ *  inside a tote, and an OV wearing a tote's id gets counted as that tote's
+ *  contents by any reader that forgets to re-separate them. */
+export interface WorkforceOVOut {
+  /** "OV0012" — unique per company per day, reset daily, so "OV12" is today's
+   *  twelfth. Lives in `bag_id` once an address is entered against it. */
+  ov_id: string;
+  /** The DRIVER's field (A5a): where the station staged it, for the person
+   *  loading at 06:00. Null for a milk-run item, which never had a zone. */
+  zone_label: string | null;
+  /** XS | S | M | L | XL. Null until the captain measures it at address entry;
+   *  the sort cannot cost the route without it, so it is asked for, not
+   *  guessed. */
+  size: string | null;
+  /** sheet | milk_run | captain. A mid-day OV is an ARRIVAL, not evidence the
+   *  sheet was wrong (A5b) — collapsing these loses "how much extra freight
+   *  came in today". */
+  source: string;
+  /** Null = expected from the sheet, not yet in hand. Reported, never a loss
+   *  claim, and never blocks the day close (A5c). */
+  confirmed_at: string | null;
+  addressed: boolean;
+}
+
+export interface SeedOVsOut {
+  expected: number;
+  created: number;
+  already_present: number;
+  no_sheet: boolean;
+}

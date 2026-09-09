@@ -383,6 +383,20 @@ class LoadRosterOut(BaseModel):
     # what was lost.
     unchecked_count: int = 0
 
+    # ADR-400 A5. OVs are their own units, not bags, so they are a separate list
+    # rather than more entries in `totes` — a driver counting "25 totes" must not
+    # find OVs inflating that number.
+    #
+    # Ordered ZONE THEN ID: the driver's task is spatial. Every B-27.2Y item
+    # together, then B-27.3X, matching the walk through the station rather than
+    # the order the ids were minted.
+    ovs: list[WorkforceOVOut] = []
+    ov_total: int = 0
+    # Expected from the sheet, not yet in hand. Reported, never a loss claim —
+    # the same treatment `unchecked_count` gets for totes (ADR-307 D1b), and it
+    # never blocks the day close (A5c).
+    ov_unconfirmed_count: int = 0
+
     # True when no BTR sheet was imported: the tote list is then unknowable, and
     # an empty roster must not read as "the truck is empty".
     no_sheet: bool = False
@@ -1028,6 +1042,129 @@ def commit_workforce_sort(
     )
 
 
+@router.post("/ovs/{entry_date}/{ov_id}/confirm", response_model=WorkforceOVOut)
+def confirm_ov(
+    entry_date: date,
+    ov_id: str,
+    truck_assignment_id: UUID,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """The OV the sheet expected is physically in hand (ADR-400 A5c).
+
+    Deliberately separate from address entry, though both touch the same row.
+    They are different people at different hours: the DRIVER confirms while
+    loading at the station, and the CAPTAIN addresses it later at the truck.
+    Folding confirmation into addressing would mean an OV could not be counted
+    as present until someone knew where it was going.
+
+    Re-confirmable rather than a one-way stamp with a 409. A confirmation
+    describes a current physical fact, and there is nothing to protect: no
+    downstream record is frozen by it, unlike `returned_at` or a Flex count. A
+    second tap re-stamps the time and the person, which is more useful than an
+    error.
+    """
+    ta = _assignment(db, caller, truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, entry_date, db)
+
+    ov = (
+        db.query(WorkforceOV)
+        .filter(
+            WorkforceOV.company_id == caller.company_id,
+            WorkforceOV.truck_id == ta.truck_id,
+            WorkforceOV.entry_date == entry_date,
+            WorkforceOV.ov_id == ov_id,
+        )
+        .first()
+    )
+    if ov is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{ov_id} is not on this truck today.",
+        )
+
+    ov.confirmed_at = datetime.now(timezone.utc)
+    ov.confirmed_by = caller.id
+
+    db.flush()
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_ov.confirm",
+        target_table="workforce_ovs",
+        target_id=str(ov.id),
+        detail={"ov_id": ov.ov_id, "zone_label": ov.zone_label},
+    )
+    db.commit()
+    db.refresh(ov)
+
+    addressed = (
+        db.query(ToteAddress.id)
+        .filter(
+            ToteAddress.company_id == caller.company_id,
+            ToteAddress.truck_id == ta.truck_id,
+            ToteAddress.entry_date == entry_date,
+            ToteAddress.bag_id == ov.ov_id,
+        )
+        .first()
+        is not None
+    )
+    return WorkforceOVOut(
+        ov_id=ov.ov_id, zone_label=ov.zone_label, size=ov.size,
+        source=ov.source, confirmed_at=ov.confirmed_at, addressed=addressed,
+    )
+
+
+def _ovs_for_truck_day(
+    db: Session, company_id: UUID, truck_id: UUID, entry_date: date,
+) -> list["WorkforceOVOut"]:
+    """Every OV on this truck-day, ordered the way a driver walks the station.
+
+    ZONE THEN ID (A5a). The driver's question is spatial — pull everything from
+    B-27.2Y, then move to B-27.3X — so grouping by zone matches the physical
+    task, and the id orders within a zone so two items on one shelf are
+    distinguishable. Minting order is irrelevant to anybody holding a package.
+
+    A zoneless OV (a milk-run item, which never had a station zone) sorts LAST
+    rather than first: an empty string would put unplaced items at the head of
+    the list the driver reads top-down at 06:00, which is exactly wrong.
+    """
+    rows = (
+        db.query(WorkforceOV)
+        .filter(
+            WorkforceOV.company_id == company_id,
+            WorkforceOV.truck_id == truck_id,
+            WorkforceOV.entry_date == entry_date,
+        )
+        .all()
+    )
+    # Sorted in Python, not SQL: "nulls last" differs between Postgres and the
+    # SQLite used in tests, and a list this size does not need the database.
+    rows.sort(key=lambda o: (o.zone_label is None, o.zone_label or "", o.ov_id))
+
+    addressed = {
+        a.bag_id
+        for a in db.query(ToteAddress.bag_id).filter(
+            ToteAddress.company_id == company_id,
+            ToteAddress.truck_id == truck_id,
+            ToteAddress.entry_date == entry_date,
+        ).all()
+    }
+    return [
+        WorkforceOVOut(
+            ov_id=o.ov_id,
+            zone_label=o.zone_label,
+            size=o.size,
+            source=o.source,
+            confirmed_at=o.confirmed_at,
+            addressed=o.ov_id in addressed,
+        )
+        for o in rows
+    ]
+
+
 @router.post("/ovs/{entry_date}/seed", response_model=SeedOVsOut)
 def seed_ovs_from_sheet(
     entry_date: date,
@@ -1178,10 +1315,20 @@ def load_roster(
     if sheet is None:
         # No sheet imported: the tote list is UNKNOWABLE, which is a different
         # fact from "this truck has no totes". The flag says which.
+        #
+        # OVs are still returned. `no_sheet` means the DRIVER has no signal to
+        # load against — it does not mean there are no OVs, because a captain
+        # can add one at any point (A5b) and those exist independently of any
+        # sheet. Returning an empty list here would report captain-added OVs as
+        # absent, which is a different lie from the one `no_sheet` tells.
+        ovs = _ovs_for_truck_day(db, caller.company_id, ta.truck_id, load_date)
         return LoadRosterOut(
             load_date=load_date,
             truck_assignment_id=ta.id,
             no_sheet=True,
+            ovs=ovs,
+            ov_total=len(ovs),
+            ov_unconfirmed_count=sum(1 for o in ovs if o.confirmed_at is None),
         )
 
     bags = (
@@ -1217,6 +1364,7 @@ def load_roster(
         ))
 
     checked_count = sum(1 for t in totes if t.checked)
+    ovs = _ovs_for_truck_day(db, caller.company_id, ta.truck_id, load_date)
     return LoadRosterOut(
         load_date=load_date,
         truck_assignment_id=ta.id,
@@ -1225,6 +1373,9 @@ def load_roster(
         total=len(totes),
         checked_count=checked_count,
         unchecked_count=len(totes) - checked_count,
+        ovs=ovs,
+        ov_total=len(ovs),
+        ov_unconfirmed_count=sum(1 for o in ovs if o.confirmed_at is None),
     )
 
 
