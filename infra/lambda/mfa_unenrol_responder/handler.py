@@ -132,6 +132,34 @@ def handler(event, context):
     event_id = detail.get("eventID", "")
     params = detail.get("requestParameters", {}) or {}
 
+    # ADR-407 D1. A call that RETURNED AN ERROR changed nothing.
+    #
+    # CloudTrail logs every API call, successful or not. ADR-388's hourly health
+    # check probes this exact permission by calling it against a sentinel user
+    # that cannot exist, so the monitor was triggering the alarm it exists to
+    # protect — one email an hour for a day, 50 of 50 events being the probe.
+    #
+    # Filtering on the sentinel USERNAME is impossible: Cognito redacts it as
+    # "HIDDEN_DUE_TO_SECURITY_REASONS" in CloudTrail. The error code is the
+    # better key anyway — it is emitted by Cognito rather than chosen by a
+    # caller, so it cannot be spoofed by creating an account with a chosen name.
+    #
+    # D2: logged, never silently dropped. UserNotFoundException is the probe and
+    # is expected hourly; anything else is somebody attempting an unenrolment
+    # they could not complete, which is worth seeing in the logs even though no
+    # factor changed.
+    error_code = detail.get("errorCode")
+    if error_code:
+        if error_code == "UserNotFoundException":
+            logger.info("ignoring %s: call failed (%s)", event_name, error_code)
+        else:
+            logger.warning(
+                "ignoring %s: call FAILED (%s) — an attempt that changed nothing, "
+                "but somebody made it", event_name, error_code,
+            )
+        return {"action": "ignored", "reason": "call_failed",
+                "errorCode": error_code}
+
     if not _is_disable(params):
         # An ENABLE is the happy path: someone enrolling. Nothing to contain.
         logger.info("ignoring %s: not a disable", event_name)
