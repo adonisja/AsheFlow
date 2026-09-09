@@ -2710,7 +2710,9 @@ export interface WorkforceRouteOut {
 export interface ToteDisagreementOut {
   bag_id: string;
   block_keys: string[];
-  chosen_block_key: string | null;
+  /** The block the majority vote picked (ADR-291 D2). Non-null: a disagreement
+   *  always has a winner, which is why it is reported rather than refused. */
+  winning_block_key: string;
 }
 
 export interface CommitWorkforceSortIn {

@@ -106,6 +106,11 @@ export const NAV_ITEMS: NavItem[] = [
   // ADR-273: cross-run algorithm telemetry used to justify a tenant-wide tuning
   // change. Management+admin only — dispatch is not management (ADR-242).
   { path: '/sort-metrics',          label: 'Sort Metrics',      icon: Activity,       roles: ['admin', 'management'], feature: 'sort_metrics' },
+  // ADR-291/302/402. The workforce sort — gated on `workforce_sort` so a
+  // full-mode tenant never sees it: there the manifest supplies the geography
+  // and this screen would be duplicate, contradictory work. Route leads only,
+  // matching the endpoint's own gate.
+  { path: '/build-routes',          label: 'Build Routes',      icon: Route,          roles: ['admin', 'dispatch', 'management', 'captain', 'driver'], feature: 'workforce_sort' },
   { path: '/walker-sort',           label: 'AP Sort',           icon: Activity,       roles: ['admin', 'dispatch', 'management', 'driver', 'trainer', 'captain'], feature: 'route_sort' },
   { path: '/trainee-management',    label: 'Trainees',          icon: ClipboardCheck, roles: ['admin', 'management'] },
   // /trainer-dashboard has NO nav tab. It is a trainer's Dashboard landing

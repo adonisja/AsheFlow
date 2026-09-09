@@ -29,6 +29,7 @@ import DriverSurveys from './pages/DriverSurveys';
 import AnchorPoints from './pages/AnchorPoints';
 import CrewStatus from './pages/CrewStatus';
 import CaptainDashboard from './pages/CaptainDashboard';
+import WorkforceSort from './pages/WorkforceSort';
 import ScorecardEntry from './pages/ScorecardEntry';
 import CompanySettings from './pages/CompanySettings';
 import Account from './pages/Account';
@@ -442,6 +443,10 @@ function App() {
               }
             />
             <Route path="/captain-dashboard" element={<ProtectedRoute allowedRoles={['captain', 'admin']}><CaptainDashboard /></ProtectedRoute>} />
+            {/* ADR-291/402 — workforce route building. The page itself checks
+                hasFeature('workforce_sort') and explains itself in full mode
+                rather than 404ing, since a full-mode admin may follow a link. */}
+            <Route path="/build-routes" element={<ProtectedRoute allowedRoles={['admin', 'dispatch', 'management', 'captain', 'driver']}><WorkforceSort /></ProtectedRoute>} />
             <Route
               path="/crew-status"
               element={
