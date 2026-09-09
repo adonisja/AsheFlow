@@ -245,6 +245,19 @@ class ToteAddressListOut(BaseModel):
     unaddressed: list["UnaddressedBagOut"] = []
 
 
+class RouteParticipantOut(BaseModel):
+    """One person on a route (ADR-212).
+
+    Exactly one `executor` — the walker, or the trainee in a training pair —
+    plus zero-or-more `supervisor` (their trainer). A pair is therefore two rows
+    on one route, which is what the captain sees on the floor and what the
+    flattened `assigned_to_name` cannot express.
+    """
+    employee_id: UUID
+    name: Optional[str] = None
+    role: str                        # executor | supervisor
+
+
 class WorkforceRouteOut(BaseModel):
     id: UUID
     route_number: int
@@ -260,6 +273,21 @@ class WorkforceRouteOut(BaseModel):
     # D11. NULL = not recorded yet; 0 = genuinely carried nothing. package_count
     # above counts captain-entered ADDRESSES, which is not a parcel count.
     flex_package_count: Optional[int] = None
+
+    # ADR-402 D2 — the mid-day view needs to say when a route left and came
+    # back. Both are stored on Route already and were simply never returned.
+    # Duration is DERIVED from the pair client-side: a stored duration would be
+    # a second source for a fact these two timestamps already fix.
+    departed_at: Optional[datetime] = None
+    returned_at: Optional[datetime] = None
+    # Every person on the route, not just the executor's flattened name.
+    participants: list[RouteParticipantOut] = []
+
+    # `wave_number` is deliberately ABSENT (ADR-402 D3). It reads as a truck-wide
+    # cycle and is a monotonic counter of re-issues across the truck, so a
+    # walker's FIRST re-issue can be labelled wave 3. `AssignmentMember.trip_count`
+    # is the honest per-person measure. A field absent from the payload cannot be
+    # rendered by accident.
 
 
 class TruckDayTotalsOut(BaseModel):
@@ -929,6 +957,11 @@ def commit_workforce_sort(
     for route in created:
         db.refresh(route)
 
+    # ADR-402 D2. A freshly committed route has no participants yet, but the
+    # lookup is done rather than assumed: commit-sort RETAINS in_progress routes
+    # (ADR-302 D2), and a retained route very much has an executor.
+    parts = _participants(db, caller.company_id, created)
+
     return CommitWorkforceSortOut(
         routes=[
             WorkforceRouteOut(
@@ -937,6 +970,8 @@ def commit_workforce_sort(
                 slot_cost=r.slot_cost, capacity_limit=r.capacity_limit,
                 overflow_half_slots=r.overflow_half_slots, status=r.status,
                 flex_package_count=r.flex_package_count,
+                departed_at=r.departed_at, returned_at=r.returned_at,
+                participants=parts.get(r.id, []),
             )
             for r in created
         ],
@@ -1366,6 +1401,7 @@ def list_workforce_routes(
         .all()
     )
     names = _participant_names(db, caller.company_id, routes)
+    parts = _participants(db, caller.company_id, routes)      # ADR-402 D2
 
     return [
         WorkforceRouteOut(
@@ -1381,6 +1417,8 @@ def list_workforce_routes(
             assigned_to=None,
             assigned_to_name=names.get(r.id),
             flex_package_count=r.flex_package_count,
+            departed_at=r.departed_at, returned_at=r.returned_at,
+            participants=parts.get(r.id, []),
         )
         for r in routes
     ]
@@ -1451,6 +1489,7 @@ def depart_route(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
+    parts = _participants(db, caller.company_id, [route])   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number,
         tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
@@ -1459,6 +1498,8 @@ def depart_route(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=None, assigned_to_name=names.get(route.id),
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
     )
 
 
@@ -1543,6 +1584,7 @@ def close_route(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
+    parts = _participants(db, caller.company_id, [route])   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number,
         tote_ids=list(route.tote_ids or []), block_keys=list(route.block_keys or []),
@@ -1551,6 +1593,8 @@ def close_route(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=None, assigned_to_name=names.get(route.id),
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
     )
 
 
@@ -1669,6 +1713,10 @@ def assign_walker(
     db.commit()
     db.refresh(route)
 
+    # ADR-402 D2. Re-read after the assign so the row reflects the participant
+    # this call just created, rather than the state before it.
+    parts = _participants(db, caller.company_id, [route])
+
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
         block_keys=list(route.block_keys or []), package_count=route.package_count,
@@ -1676,6 +1724,8 @@ def assign_walker(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to=walker.id, assigned_to_name=walker.name,
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
     )
 
 
@@ -1748,6 +1798,7 @@ def record_flex_package_count(
     db.refresh(route)
 
     names = _participant_names(db, caller.company_id, [route])
+    parts = _participants(db, caller.company_id, [route])   # ADR-402 D2
     return WorkforceRouteOut(
         id=route.id, route_number=route.route_number, tote_ids=list(route.tote_ids or []),
         block_keys=list(route.block_keys or []), package_count=route.package_count,
@@ -1755,6 +1806,8 @@ def record_flex_package_count(
         overflow_half_slots=route.overflow_half_slots, status=route.status,
         assigned_to_name=names.get(route.id),
         flex_package_count=route.flex_package_count,
+        departed_at=route.departed_at, returned_at=route.returned_at,
+        participants=parts.get(route.id, []),
     )
 
 
@@ -1849,6 +1902,51 @@ def route_lookup(
         candidates=candidates,
         escalate=not candidates,
     )
+
+
+def _participants(
+    db: Session, company_id: UUID, routes: list[Route],
+) -> dict[UUID, list["RouteParticipantOut"]]:
+    """route_id -> every participant, executor AND supervisor (ADR-402 D2).
+
+    The sibling `_participant_names` returns only the executor, which is right
+    for a one-line summary and wrong for the mid-day view: a training pair is a
+    trainee executing with a trainer supervising, and showing only the executor
+    hides half of who is on that route.
+
+    Scoped on `company_id` for BOTH tables — the RouteParticipant filter and the
+    Employee join — because an unscoped join here would surface another tenant's
+    employee name against this tenant's route (dim 1).
+    """
+    if not routes:
+        return {}
+    rows = (
+        db.query(
+            RouteParticipant.route_id,
+            RouteParticipant.employee_id,
+            RouteParticipant.role,
+            Employee.name,
+        )
+        .join(
+            Employee,
+            (Employee.id == RouteParticipant.employee_id)
+            & (Employee.company_id == company_id),
+        )
+        .filter(
+            RouteParticipant.company_id == company_id,
+            RouteParticipant.route_id.in_([r.id for r in routes]),
+        )
+        .all()
+    )
+    out: dict[UUID, list[RouteParticipantOut]] = {}
+    for route_id, employee_id, role, name in rows:
+        out.setdefault(route_id, []).append(
+            RouteParticipantOut(employee_id=employee_id, name=name, role=role)
+        )
+    # Executor first, then supervisors — the person who ran it leads the row.
+    for v in out.values():
+        v.sort(key=lambda p: (p.role != "executor", p.name or ""))
+    return out
 
 
 def _participant_names(db: Session, company_id: UUID, routes: list[Route]) -> dict:
