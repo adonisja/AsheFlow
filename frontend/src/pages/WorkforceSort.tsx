@@ -59,8 +59,18 @@ function RouteCard({ r }: { r: WorkforceRouteOut }) {
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-lg font-semibold">Route {r.route_number}</span>
+          {/* ADR-400 A4: an OV is its own unit, so it is counted separately.
+              Folding it into "12 totes" would tell a captain to look for
+              twelve bags when two of them are loose packages. */}
           <span className="text-xs text-muted-foreground">
-            {r.tote_ids.length} {r.tote_ids.length === 1 ? 'tote' : 'totes'}
+            {(() => {
+              const ovs = r.tote_ids.filter(t => /^OV\d+$/.test(t)).length;
+              const totes = r.tote_ids.length - ovs;
+              const parts = [];
+              if (totes) parts.push(`${totes} ${totes === 1 ? 'tote' : 'totes'}`);
+              if (ovs) parts.push(`${ovs} OV`);
+              return parts.join(' + ') || 'empty';
+            })()}
           </span>
         </div>
         <span className={`px-2 py-0.5 rounded-lg text-[11px] font-medium capitalize ${tone}`}>
