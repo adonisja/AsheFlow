@@ -46,6 +46,7 @@ export default function ToteAddresses() {
   const { hasFeature } = useAuth();
   const [date] = useState(getLocalYMD());
   const [truckId, setTruckId] = useState<string | null>(null);
+  const [taId, setTaId] = useState<string | null>(null);
   const [data, setData] = useState<ToteAddressListOut | null>(null);
   const [ovs, setOvs] = useState<WorkforceOVOut[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,6 +58,46 @@ export default function ToteAddresses() {
   const [count, setCount] = useState(1);
   const [size, setSize] = useState<OVSize | null>(null);
   const [saving, setSaving] = useState(false);
+  const [addingOv, setAddingOv] = useState(false);
+
+  const beginEntry = (bagId: string) => {
+    setOpenBag(bagId);
+    setAddress('');
+    setCount(1);
+    // Pre-fill a known size so a re-address does not silently change it.
+    setSize((ovs.find(o => o.ov_id === bagId)?.size as OVSize) ?? null);
+    setError('');
+  };
+
+
+  /** ADR-400 A5b/A6c. A mid-day OV is an ARRIVAL, not evidence the sheet was
+   *  wrong. The client SUGGESTS which from the clock — the workday starts when
+   *  the truck reaches the AP, so hours later is almost certainly a milk-run —
+   *  and the captain confirms. The server never infers: a guessed origin would
+   *  be unauditable, since no later reader could tell it from a statement. */
+  const suggestedSource = (): 'milk_run' | 'captain' =>
+    new Date().getHours() >= 11 ? 'milk_run' : 'captain';
+
+  const addOv = async (source: 'milk_run' | 'captain') => {
+    if (!taId) return;
+    setAddingOv(false);
+    setSaving(true);
+    try {
+      const res = await axiosClient.post<WorkforceOVOut>('/workforce/ovs', {
+        truck_assignment_id: taId,
+        entry_date: date,
+        source,
+      });
+      await load();
+      // Straight into entry: the captain is holding the package they just
+      // added, and making them find it in the picker is a step for nothing.
+      beginEntry(res.data.ov_id);
+    } catch (e: unknown) {
+      setError(errorText(e, 'Could not add that OV.'));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,11 +123,25 @@ export default function ToteAddresses() {
         );
         const ta = tas.data.find(t => t.truck_id === id);
         if (ta) {
+          // Seed first. `BTROVZone` has carried the sheet's OVs since ADR-290
+          // and nothing ever read it, so without this call the OVs the sheet
+          // lists never become addressable units and the captain simply does
+          // not see them. Idempotent on the truck-day (ADR-400 A2), so running
+          // it on every page load adds only what is missing.
+          try {
+            await axiosClient.post(`/workforce/ovs/${date}/seed`, null,
+              { params: { truck_assignment_id: ta.id } });
+          } catch {
+            // No sheet, or already seeded. Either way the roster read below
+            // still reports the truth, so this must not block the page.
+          }
+
           const roster = await axiosClient.get<LoadRosterOut>(
             `/workforce/load-roster/${date}`,
             { params: { truck_assignment_id: ta.id } },
           );
           setOvs(roster.data.ovs ?? []);
+          setTaId(ta.id);
         }
       } catch { /* totes are the page; OVs are extra */ }
       setError('');
@@ -111,15 +166,6 @@ export default function ToteAddresses() {
 
   const openIsOv = openBag !== null && isOv(openBag);
   const openHasAddress = openBag !== null && (byBag.get(openBag)?.length ?? 0) > 0;
-
-  const beginEntry = (bagId: string) => {
-    setOpenBag(bagId);
-    setAddress('');
-    setCount(1);
-    // Pre-fill a known size so a re-address does not silently change it.
-    setSize((ovs.find(o => o.ov_id === bagId)?.size as OVSize) ?? null);
-    setError('');
-  };
 
   const submit = async () => {
     if (!truckId || !openBag) return;
@@ -303,10 +349,46 @@ export default function ToteAddresses() {
             <button className="btn-ghost flex items-center gap-2" onClick={load}>
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
+            {taId && (
+              <button
+                className="btn-ghost flex items-center gap-2"
+                onClick={() => setAddingOv(true)}
+                disabled={saving}
+              >
+                <Plus className="w-4 h-4" /> Add OV
+              </button>
+            )}
             <span className="text-xs text-muted-foreground ml-auto tabular-nums">
               {unaddressed.length + unaddressedOvs.length} left
             </span>
           </div>
+
+          {/* A6c: the clock suggests, the captain decides. Presented as two
+              plain choices rather than a pre-ticked default, because a
+              pre-selected wrong answer is worse than no answer — the captain is
+              standing there and knows how the package arrived. */}
+          {addingOv && (
+            <div className="card p-4 space-y-3">
+              <div className="text-sm font-medium">Where did this package come from?</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className={suggestedSource() === 'milk_run' ? 'btn-primary' : 'btn-ghost'}
+                  onClick={() => addOv('milk_run')}
+                >
+                  A station run
+                </button>
+                <button
+                  className={suggestedSource() === 'captain' ? 'btn-primary' : 'btn-ghost'}
+                  onClick={() => addOv('captain')}
+                >
+                  It was on the truck
+                </button>
+                <button className="btn-ghost ml-auto" onClick={() => setAddingOv(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {data && data.disagreements.length > 0 && (
             <div className="card p-4 text-sm space-y-1">
