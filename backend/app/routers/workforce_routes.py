@@ -23,12 +23,13 @@ from __future__ import annotations
 import logging
 import uuid as _uuid
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import RoleChecker, get_caller_employee
@@ -67,15 +68,48 @@ _allow_read = RoleChecker(
 # ── request schemas (dim 9) ───────────────────────────────────────────────────
 
 class ToteAddressIn(BaseModel):
-    """One address a captain typed against one tote."""
+    """One address a captain typed against one tote, or against one OV."""
     model_config = ConfigDict(extra="forbid")
 
     truck_id: UUID
     entry_date: date
+    # A tote's bag id ("6800") or an OV's ("OV0012"). One field, because an OV
+    # takes an address exactly as a tote does — the namespaces cannot collide,
+    # since a bag id is bare digits once parse_bag_label strips the colour word.
     bag_id: str = Field(..., min_length=1, max_length=50)
     # A street address. Bounded because it lands in a String(300) column and is
     # attacker-controlled free text.
     raw_address: str = Field(..., min_length=3, max_length=300)
+
+    # ADR-403 D1a. Packages in this tote going to THIS address. `ge=1` matters:
+    # a zero would silently drop the block from the vote and a negative would
+    # subtract from it. Capped well above any real tote so a fat-fingered entry
+    # cannot swamp every other block.
+    package_count: int = Field(default=1, ge=1, le=500)
+
+    # ADR-400 A2. Required for an OV, forbidden for a tote — enforced in the
+    # validator below rather than by the type, because which one applies depends
+    # on another field.
+    ov_size: Optional[Literal["XS", "S", "M", "L", "XL"]] = None
+
+    @model_validator(mode="after")
+    def _size_matches_the_unit(self) -> "ToteAddressIn":
+        """An OV needs a size; a tote must not carry one.
+
+        Both directions are errors rather than one being ignored. A missing OV
+        size cannot be defaulted — `OV_HALF_SLOTS` spans 0 to 4 half-slots, so
+        guessing "M" silently mis-costs the route in whichever direction the
+        guess was wrong. A size on a tote would store a value nothing reads,
+        which is how a field acquires a second meaning later.
+        """
+        if is_ov_id(self.bag_id) and self.ov_size is None:
+            raise ValueError(
+                "ov_size is required for an OV: the sort cannot cost a route "
+                "without it."
+            )
+        if not is_ov_id(self.bag_id) and self.ov_size is not None:
+            raise ValueError("ov_size applies to an OV, not a tote.")
+        return self
 
 
 class CommitWorkforceSortIn(BaseModel):
@@ -354,6 +388,25 @@ class WorkforceOVOut(BaseModel):
     addressed: bool = False
 
 
+class AddOVIn(BaseModel):
+    """A6a. An OV that is on the truck but not on the sheet."""
+    model_config = ConfigDict(extra="forbid")
+
+    truck_assignment_id: UUID
+    entry_date: date
+    # A6c. The CLIENT suggests from timing — the workday start is known, so an
+    # OV added 3+ hours later is almost certainly a milk-run — and the captain
+    # confirms. The SERVER never infers: a guessed origin would be unauditable,
+    # since no later reader could tell an inference from a statement.
+    #
+    # "system" is reserved for automated creation and is rejected here: a
+    # human-facing endpoint must not be able to claim a row was machine-made.
+    source: Literal["milk_run", "captain"]
+    # Optional. A milk-run item has no station zone, and a captain adding one
+    # off the truck floor usually does not know it either.
+    zone_label: Optional[str] = Field(default=None, max_length=30)
+
+
 class SeedOVsOut(BaseModel):
     """What seeding found, and what it added."""
     expected: int          # OVs the sheet says belong on this truck
@@ -584,12 +637,45 @@ def add_tote_address(
         .count()
     ) + 1
 
+    # ADR-400 A2. An OV must EXIST before it can be addressed — seeded from the
+    # sheet or added by the captain — because its id is minted, not typed. A
+    # bare 404 would read as "wrong address"; this names the actual problem.
+    ov_row = None
+    if is_ov_id(payload.bag_id):
+        ov_row = (
+            db.query(WorkforceOV)
+            .filter(
+                WorkforceOV.company_id == caller.company_id,
+                WorkforceOV.truck_id == payload.truck_id,
+                WorkforceOV.entry_date == payload.entry_date,
+                WorkforceOV.ov_id == payload.bag_id,
+            )
+            .first()
+        )
+        if ov_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"{payload.bag_id} is not on this truck today. Add the OV "
+                    f"first, then give it an address."
+                ),
+            )
+        # One package, one address (A2). A tote takes several that vote on its
+        # block; an OV has nothing to vote about, so a second address is a
+        # mistake rather than more evidence.
+        if next_seq > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{payload.bag_id} already has an address.",
+            )
+
     row = ToteAddress(
         company_id=caller.company_id,
         truck_id=payload.truck_id,
         entry_date=payload.entry_date,
         bag_id=payload.bag_id,
         raw_address=payload.raw_address,
+        package_count=payload.package_count,
         normalised_address=resolved.normalised_address,
         block_key=resolved.block_key,
         lat=resolved.lat,
@@ -608,8 +694,50 @@ def add_tote_address(
         entered_by=caller.id,
         entered_by_name=(caller.name or "")[:100],
     )
+    # ADR-403 D1a. The OV's size lives on the OV, not on the address: an address
+    # row is identical for both units, and a size column there would be
+    # meaningless for the great majority of rows.
+    if ov_row is not None:
+        ov_row.size = payload.ov_size
+        # Addressing an OV means it is physically in hand, so confirm it if the
+        # driver never did. A5c keeps confirmation reportable rather than
+        # blocking, and this closes the case where a captain addresses an OV the
+        # driver forgot to tick off.
+        if ov_row.confirmed_at is None:
+            ov_row.confirmed_at = datetime.now(timezone.utc)
+            ov_row.confirmed_by = caller.id
+
     db.add(row)
-    db.flush()
+    # ADR-403 D2. `uq_tote_addresses_bag_address` forbids the same address twice
+    # for one tote, and the endpoint did not catch the violation — a captain
+    # double-tapping on a phone got a 500.
+    #
+    # It is REFUSED rather than counted. Under D1a a duplicate would otherwise be
+    # a way to weight the vote without saying so, and `package_count` is the
+    # honest way to express "several packages here".
+    try:
+        with db.begin_nested():
+            db.flush()
+    except IntegrityError:
+        existing = (
+            db.query(ToteAddress)
+            .filter(
+                ToteAddress.company_id == caller.company_id,
+                ToteAddress.truck_id == payload.truck_id,
+                ToteAddress.entry_date == payload.entry_date,
+                ToteAddress.bag_id == payload.bag_id,
+                ToteAddress.raw_address == payload.raw_address,
+            )
+            .first()
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"That address is already recorded for {payload.bag_id}"
+                + (f" (entry {existing.entry_sequence})." if existing else ".")
+                + " Use the package count if several packages go there."
+            ),
+        )
     write_audit(
         db=db,
         company_id=str(caller.company_id),
@@ -1163,6 +1291,58 @@ def _ovs_for_truck_day(
         )
         for o in rows
     ]
+
+
+@router.post("/ovs", response_model=WorkforceOVOut,
+             status_code=status.HTTP_201_CREATED)
+def add_ov(
+    payload: AddOVIn,
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_route_lead),
+    db: Session = Depends(get_db),
+):
+    """Add an OV that the sheet did not list (ADR-400 A6a).
+
+    Two calls rather than one: this mints the id and creates the row, then the
+    captain addresses it through the normal address endpoint. Minting on the fly
+    during address entry was rejected — it would overload an endpoint that
+    otherwise only records addresses, and put id-generation in two places when
+    one of them already handles the race.
+
+    Confirmed on creation. Somebody is holding the package; there is nothing to
+    confirm later, unlike a sheet-seeded OV which exists as an expectation
+    before anyone has seen it.
+    """
+    ta = _assignment(db, caller, payload.truck_assignment_id)
+    _assert_truck_member(caller, ta.truck_id, payload.entry_date, db)
+
+    ov = mint_ov(
+        db,
+        company_id=caller.company_id,
+        truck_id=ta.truck_id,
+        entry_date=payload.entry_date,
+        source=payload.source,
+        zone_label=payload.zone_label,
+        confirmed_at=datetime.now(timezone.utc),
+        confirmed_by=caller.id,
+    )
+    write_audit(
+        db=db,
+        company_id=str(caller.company_id),
+        actor_id=str(caller.id),
+        action_type="workforce_ov.add",
+        target_table="workforce_ovs",
+        target_id=str(ov.id),
+        detail={"ov_id": ov.ov_id, "source": payload.source,
+                "entry_date": payload.entry_date.isoformat()},
+    )
+    db.commit()
+    db.refresh(ov)
+
+    return WorkforceOVOut(
+        ov_id=ov.ov_id, zone_label=ov.zone_label, size=ov.size,
+        source=ov.source, confirmed_at=ov.confirmed_at, addressed=False,
+    )
 
 
 @router.post("/ovs/{entry_date}/seed", response_model=SeedOVsOut)

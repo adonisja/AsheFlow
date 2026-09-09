@@ -2786,3 +2786,32 @@ export interface SeedOVsOut {
   already_present: number;
   no_sheet: boolean;
 }
+
+/** Recording one address against a tote or an OV (ADR-291 D2, ADR-400 A2,
+ *  ADR-403 D1a). */
+export interface ToteAddressIn {
+  truck_id: string;
+  entry_date: string;
+  /** A tote's bag id ("6800") or an OV's ("OV0012"). */
+  bag_id: string;
+  raw_address: string;
+  /** ADR-403 D1a. Packages in this tote going to THIS address. A drop of eight
+   *  outvotes a single package on another block, which is the signal a
+   *  per-address count threw away. Omit for 1. */
+  package_count?: number;
+  /** ADR-400 A2. REQUIRED when bag_id is an OV, and rejected for a tote. The
+   *  sort cannot cost a route without it, and guessing a middle size silently
+   *  mis-costs every unmeasured OV. */
+  ov_size?: 'XS' | 'S' | 'M' | 'L' | 'XL';
+}
+
+/** Adding an OV the sheet never listed (ADR-400 A6a). Minted here, addressed by
+ *  a separate call. `source` is SUGGESTED by the client from timing — the
+ *  workday start is known, so 3+ hours in is almost certainly a milk-run — and
+ *  CONFIRMED by the captain. The server never infers it. */
+export interface AddOVIn {
+  truck_assignment_id: string;
+  entry_date: string;
+  source: 'milk_run' | 'captain';
+  zone_label?: string | null;
+}
