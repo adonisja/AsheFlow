@@ -2860,6 +2860,9 @@ export interface LoadRosterToteOut {
   /** Reference only (ADR-290 D7): which Amazon route the sheet listed it under.
    *  NOT a grouping key — a driver cannot tell a tote's Amazon route by eye. */
   amazon_route_name: string | null;
+  /** ADR-405. Where the station staged this bag, e.g. "H-9.1E". The DRIVER's
+   *  field: colour tells them WHICH tote, this tells them WHERE to walk. */
+  sort_zone: string | null;
   checked: boolean;
   checked_by_name: string | null;
   checked_at: string | null;

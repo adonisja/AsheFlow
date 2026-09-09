@@ -372,6 +372,7 @@ def confirm_btr_sheet(
                 btr_route_id=route.id,
                 bag_id=b.bag_id,
                 bag_color=canonical_hex(b.bag_color),
+                sort_zone=b.sort_zone,          # ADR-405
                 amazon_route_name=r.amazon_route_name,
             ))
             bag_total += 1

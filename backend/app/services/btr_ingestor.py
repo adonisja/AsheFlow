@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 class BTRBagRead:
     bag_id: str
     bag_color: Optional[str] = None
+    # ADR-405. Where the station staged this bag. Parallel to the label in its
+    # own column, so it is zipped in by position rather than parsed out of the
+    # label cell.
+    sort_zone: Optional[str] = None
 
 
 @dataclass
@@ -110,7 +114,39 @@ def parse_anchor(text: str | None) -> tuple[Optional[float], Optional[float]]:
 
 
 # "A-27.2W | 2" repeated, sometimes with a leading "OV" line between entries.
-_OV_ZONE_RE = re.compile(r"([A-Z]-[\d.]+[A-Z])\s*\|\s*(\d+)")
+#
+# The middle section is [A-Z0-9.]+, not [\d.]+. The verified export (2026-09-09)
+# contains `H-2.AZ | 3 OV`, and a digits-only pattern dropped that entry
+# SILENTLY — the route reported 7 OVs where the sheet said 10. Found by ADR-290's
+# reconciliation check running over every route of a real file rather than the
+# one route on the original photograph.
+#
+# A dropped zone is not a cosmetic loss: ADR-400 seeds one addressable OV unit
+# per zone-count, so three OVs simply never existed for that route.
+_OV_ZONE_RE = re.compile(r"([A-Z]-[A-Z0-9.]+[A-Z])\s*\|\s*(\d+)")
+
+
+def _with_sort_zones(
+    bags: list["BTRBagRead"], cell: str | None,
+) -> list["BTRBagRead"]:
+    """Attach ADR-405 sort zones to already-parsed bags, BY POSITION.
+
+    Labels and zones are two parallel columns that wrap together — one label per
+    line, one zone per line — so the nth zone belongs to the nth bag. There is no
+    key linking them, which is why this is positional and why a length mismatch
+    must not guess.
+
+    A short or absent zone column leaves the remaining bags with `sort_zone=None`
+    rather than shifting the alignment: a bag pointed at the wrong shelf is worse
+    than a bag with no shelf, because the driver walks to it and finds someone
+    else's tote.
+    """
+    if not cell:
+        return bags
+    zones = [z.strip() for z in str(cell).replace("_x000D_", "").splitlines() if z.strip()]
+    for bag, zone in zip(bags, zones):
+        bag.sort_zone = zone
+    return bags
 
 
 def parse_ov_zones(cell: str | None) -> list[BTROVZoneRead]:
@@ -219,6 +255,8 @@ DEFAULT_COLUMN_MAP = {
     "ov_count":      "OV Count",
     "ov_sort_zones": "OV Sort Zones",
     "bag_labels":    "Bag Labels",
+    # ADR-405. Column I of the verified export — per-bag station location.
+    "bag_sort_zones": "Bag Sort Zones",
 }
 
 
@@ -269,7 +307,10 @@ def _sheet_from_rows(rows: list[dict], cm: dict) -> BTRSheetRead:
             package_count=_to_int(_pick(row, cm["package_count"])),
             bag_count=_to_int(_pick(row, cm["bag_count"])),
             ov_count=_to_int(_pick(row, cm["ov_count"])),
-            bags=parse_bag_labels(_pick(row, cm["bag_labels"])),
+            bags=_with_sort_zones(
+                parse_bag_labels(_pick(row, cm["bag_labels"])),
+                _pick(row, cm.get("bag_sort_zones", "Bag Sort Zones")),
+            ),
             ov_zones=parse_ov_zones(_pick(row, cm["ov_sort_zones"])),
         ))
 
