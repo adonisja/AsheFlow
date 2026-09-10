@@ -44,6 +44,16 @@ _BUILDING_LIBRARY_ALLOWED = {
     # NOT HERE") and ADR-237 D5's nomination rule stays intact only while it
     # stays that way.
     "app/services/place_geometry.py",
+    # ADR-409's health check. Spans BOTH datasets deliberately — that is what
+    # makes it a health check for the PRODUCT rather than for one table — so it
+    # cannot live inside either client without breaking the ownership rule each
+    # client enforces. It first lived in segment_map and this test rejected it
+    # twice in one run, which is the boundary working.
+    #
+    # Admissible because it is NOT a reader: nothing routes on it, so it may
+    # know what the readers must not (which transport is configured, whether the
+    # store answered). It counts rows and returns a dict.
+    "app/services/placetype_health.py",
 }
 
 _STREET_SEGMENT_ALLOWED = {
@@ -51,6 +61,16 @@ _STREET_SEGMENT_ALLOWED = {
     "app/services/segment_map.py",
     "app/models/__init__.py",
     "app/models/street_segment.py",
+    # ADR-409's health check. Spans BOTH datasets deliberately — that is what
+    # makes it a health check for the PRODUCT rather than for one table — so it
+    # cannot live inside either client without breaking the ownership rule each
+    # client enforces. It first lived in segment_map and this test rejected it
+    # twice in one run, which is the boundary working.
+    #
+    # Admissible because it is NOT a reader: nothing routes on it, so it may
+    # know what the readers must not (which transport is configured, whether the
+    # store answered). It counts rows and returns a dict.
+    "app/services/placetype_health.py",
 }
 
 
@@ -148,3 +168,86 @@ class TestClientContract:
             assert not any(banned in ln for ln in code), (
                 f"the Library client must not reference tenant model {banned!r}"
             )
+
+
+# ── ADR-409: the boundary must survive becoming cross-environment ─────────────
+
+class TestPlaceTypeCanBecomeRemote:
+    """ADR-409 moves these two tables to a datastore every environment reads.
+
+    That turns two properties from "true today by accident" into requirements:
+    an unreachable store must degrade rather than raise, and no reader may
+    branch on whether the store is remote.
+    """
+
+    def _client_src(self) -> str:
+        from pathlib import Path
+        import app.library.client as c
+        return Path(c.__file__).read_text()
+
+    def _segment_src(self) -> str:
+        from pathlib import Path
+        import app.services.segment_map as m
+        return Path(m.__file__).read_text()
+
+    def test_every_reader_degrades_when_the_store_is_unreachable(self):
+        """D4. EMPTY is already safe — production runs with zero rows and sorts
+        fine. UNREACHABLE was not: the readers called through a Session with no
+        guard, so a connection failure failed the whole sort.
+
+        The two are indistinguishable only while PlaceType shares AsheFlow's
+        database. Separating them makes the distinction real, which is why the
+        guard is a prerequisite of the move rather than a follow-up.
+        """
+        import app.library.client as c
+        for name in ("all_active", "by_address", "by_addresses"):
+            fn = getattr(c, name)
+            assert hasattr(fn, "__wrapped__"), (
+                f"library_client.{name} lost its degradation guard — an "
+                f"unreachable PlaceType would fail every sort (ADR-409 D4)"
+            )
+
+    def test_the_guard_does_not_swallow_bugs(self):
+        """A ProgrammingError is a bug in this module, not an outage. Swallowing
+        it would route every tenant on the fallback graph forever while looking
+        healthy.
+
+        This is not hypothetical: the first version caught `DBAPIError`, which is
+        the PARENT of ProgrammingError, and did exactly that.
+        """
+        from unittest.mock import MagicMock
+        from sqlalchemy.exc import OperationalError, ProgrammingError
+        import app.library.client as c
+
+        def failing(exc):
+            db = MagicMock()
+            db.query.side_effect = exc
+            return db
+
+        assert c.all_active(failing(OperationalError("x", "y", "z"))) == []
+
+        with pytest.raises(ProgrammingError):
+            c.all_active(failing(ProgrammingError("bad sql", "y", "z")))
+
+    def test_no_reader_branches_on_whether_the_store_is_remote(self):
+        """`PLACETYPE_IS_REMOTE` exists for the health check and for tests.
+
+        A reader that branched on it would take an untested path in exactly the
+        deployment that matters, and the two modes would drift — which is the
+        failure a single boundary exists to prevent.
+        """
+        for src, who in ((self._client_src(), "library/client"),
+                         (self._segment_src(), "segment_map")):
+            assert "PLACETYPE_IS_REMOTE" not in src, (
+                f"{who} branches on the transport; both modes must behave "
+                f"identically (ADR-409 D4)"
+            )
+
+    def test_both_datasets_share_one_guard(self):
+        """PlaceType is ONE product with two datasets (ADR-237 D6), so both
+        halves must fail the same way. A second copy of the decorator would
+        drift the moment one is fixed."""
+        assert "from app.library.client import _degrades_to" in self._segment_src(), (
+            "segment_map defines or omits its own degradation guard; the two "
+            "PlaceType datasets must degrade identically"
+        )
