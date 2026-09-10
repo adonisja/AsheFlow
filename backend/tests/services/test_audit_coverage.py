@@ -73,6 +73,11 @@ _NO_AUDIT = {
     # test_preview_endpoint_has_no_write_path asserts that structurally.
     # The write it precedes, confirm_btr_sheet, IS audited.
     "btr_sheets.py::preview_btr_sheet",
+    # ADR-411 D3: the workbook form of the same thing — one .xlsx, one worksheet
+    # per truck, each reported as parsed-or-failed. Reads Truck rows to resolve
+    # anchors and to list the trucks no worksheet claimed; persists nothing.
+    # Confirmation stays per-truck (D4) and confirm_btr_sheet IS audited.
+    "btr_sheets.py::preview_btr_workbook",
     # ADR-291 D9: a lookup, not a write. It geocodes an address the captain is
     # holding and RANKS today's routes by block adjacency — no INSERT, no UPDATE.
     # POST only because the address is a request body; a GET would put a customer

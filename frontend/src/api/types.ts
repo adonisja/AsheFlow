@@ -49,6 +49,80 @@ export interface TruckAmazonAnchorPatch {
   lng: number | null;
 }
 
+/** A bag as printed on the BTR sheet (ADR-290 / ADR-405). */
+export interface BTRBagPreview {
+  bag_id: string;
+  bag_color: string | null;
+  amazon_route_name: string | null;
+}
+
+/** "B-27.2Y | 4 OV" — a station zone and how many OVs sit there (ADR-400 A2). */
+export interface BTROVZonePreview {
+  zone_label: string;
+  ov_count: number;
+}
+
+/** One Amazon route on the sheet. Counts are nullable because an unread cell is
+ *  UNKNOWN — zero is a measurement and would make reconciliation lie (ADR-290). */
+export interface BTRRoutePreview {
+  amazon_route_name: string;
+  package_count: number | null;
+  bag_count: number | null;
+  ov_count: number | null;
+  bags: BTRBagPreview[];
+  ov_zones: BTROVZonePreview[];
+}
+
+/** POST /btr-sheets/preview (and each entry of a workbook preview). Nothing here
+ *  is persisted until /confirm — an OCR read is a suggestion (ADR-290 D3). */
+export interface BTRSheetPreview {
+  btr_loading_zone: string | null;
+  service_type: string | null;
+  dsp: string | null;
+  amazon_route_count: number | null;
+  amazon_anchor_lat: number | null;
+  amazon_anchor_lng: number | null;
+  routes: BTRRoutePreview[];
+  /** Non-blocking: counts that do not reconcile against the printed totals. */
+  warnings: string[];
+  confidence: number | null;
+  dsp_mismatch: string | null;
+  total_bags: number;
+  truck_match: TruckMatch | null;
+}
+
+/** One worksheet's outcome in a workbook preview (ADR-411 D3). Either `sheet`
+ *  or `error` is set, never both — a bad worksheet reports while the rest import. */
+export interface WorkbookSheetResult {
+  worksheet: string;
+  sheet: BTRSheetPreview | null;
+  error: string | null;
+}
+
+/** A truck registered at an anchor that no worksheet in this workbook claimed
+ *  (ADR-411 D6). Offered as a candidate for an unmatched worksheet BEFORE the
+ *  create-a-truck path: a reassigned anchor looks exactly like a new truck until
+ *  you can see the whole fleet at once.
+ *
+ *  `distance_m` is present only when exactly one worksheet is unmatched. It
+ *  DESCRIBES the candidate and must not preselect it — the UI asks, it never
+ *  adopts on proximity. */
+export interface UnclaimedTruck {
+  truck_id: string;
+  truck_name: string;
+  amazon_anchor_lat: number;
+  amazon_anchor_lng: number;
+  distance_m: number | null;
+}
+
+/** POST /btr-sheets/preview-workbook — a whole .xlsx, one worksheet per truck. */
+export interface WorkbookPreview {
+  sheets: WorkbookSheetResult[];
+  unclaimed_trucks: UnclaimedTruck[];
+  parsed: number;
+  failed: number;
+}
+
 /** The truck a BTR sheet's anchor point resolved to (ADR-410 D5).
  *  A SUGGESTION — /btr-sheets/confirm still requires an explicit truck_id.
  *  truck_name is present so the UI never shows a UUID. */
