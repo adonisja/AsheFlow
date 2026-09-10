@@ -49,17 +49,68 @@ directly.
 """
 from __future__ import annotations
 
+import functools
+import logging
 from typing import Iterable, Optional
 
+from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.building_profile_library import BuildingProfileLibrary
+
+logger = logging.getLogger(__name__)
 
 # The one invariant every read shares. Deprecated and conflicted rows exist in
 # the table and must never reach routing.
 _ACTIVE = "active"
 
 
+def _degrades_to(empty):
+    """Turn an UNREACHABLE PlaceType into an EMPTY one (ADR-409 D4).
+
+    An empty Library is already proven safe — production runs with zero rows
+    today and sorts fine, because routing falls back to same-street and parallel
+    edges (ADR-291). An unreachable one was NOT: every reader here calls through
+    a Session with no guard, so a connection failure raised and failed the whole
+    sort.
+
+    Those two cases are indistinguishable today only because the Library shares
+    AsheFlow's database. ADR-409 D1 moves it, which makes the distinction real —
+    so this guard is a PREREQUISITE of that move, not a follow-up. Without it,
+    a network blip becomes a failed sort for every tenant.
+
+    Degrading at the BOUNDARY rather than at each call site is the property
+    ADR-237 D1 built this module to make possible: one place to change when the
+    transport becomes remote.
+
+    Deliberately narrow: OperationalError (the connection dropped, the host is
+    unreachable) and InterfaceError (the connection was already closed). A
+    ProgrammingError from a bad query is a bug in this module and must still
+    raise, or a schema mistake would silently route every tenant on the fallback
+    graph forever.
+
+    NOT `DBAPIError` — it is the PARENT of ProgrammingError as well, so catching
+    it swallows exactly the bugs this comment says must escape. Caught by a test
+    that asserts a ProgrammingError still propagates.
+    """
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except (OperationalError, InterfaceError) as exc:
+                # No stack trace and no exception text: this is an expected
+                # degradation, and a traceback per sort would bury real errors.
+                logger.warning(
+                    "placetype_unreachable: %s degraded to empty; routing on the "
+                    "fallback graph (%s)", fn.__name__, type(exc).__name__,
+                )
+                return empty() if callable(empty) else empty
+        return wrapper
+    return decorate
+
+
+@_degrades_to(list)
 def all_active(db: Session) -> list[BuildingProfileLibrary]:
     """Every active Library record.
 
@@ -77,6 +128,7 @@ def all_active(db: Session) -> list[BuildingProfileLibrary]:
     )
 
 
+@_degrades_to(None)
 def by_address(db: Session, normalised_address: str) -> Optional[BuildingProfileLibrary]:
     """One active Library record, or None.
 
@@ -93,6 +145,7 @@ def by_address(db: Session, normalised_address: str) -> Optional[BuildingProfile
     )
 
 
+@_degrades_to(dict)
 def by_addresses(
     db: Session, normalised_addresses: Iterable[str]
 ) -> dict[str, BuildingProfileLibrary]:
