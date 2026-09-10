@@ -42,6 +42,7 @@ from app.services.audit import write_audit
 from app.services.resolve_truck_anchor import anchor_key, haversine_m, resolve_truck_by_anchor
 from app.core.bag_colors import canonical_hex
 from app.services.btr_ingestor import (
+    XLSXBTRIngestor,
     BTRSheetRead, CSVBTRIngestor, ImageBTRIngestor, ManualBTRIngestor, reconcile,
 )
 
@@ -58,6 +59,10 @@ _allow_read = RoleChecker(
 )
 
 _CSV_EXTS = {"csv"}
+_XLSX_EXTS = {"xlsx", "xlsm"}
+# ADR-411 D7 — an unbounded workbook is an unbounded write. The verified
+# exports carry 6 worksheets; the cap is generous but finite.
+_MAX_WORKSHEETS = 40
 _IMAGE_EXTS = {"pdf", "jpg", "jpeg", "png"}
 
 # A BTR sheet is one page. 10 MB is generous for a phone photo and small enough
@@ -171,6 +176,40 @@ class BTRSheetOut(BaseModel):
     # reviewer picks by name, and the client may offer to create a truck
     # pre-filled with amazon_anchor_lat/lng above.
     truck_match: Optional[TruckMatchOut] = None
+
+
+class WorkbookSheetOut(BaseModel):
+    """One worksheet's outcome — ADR-411 D3.
+
+    Either `sheet` is present or `error` is; never both. A worksheet that fails
+    to parse, or carries another DSP, reports here and the rest still import.
+    """
+    worksheet: str
+    sheet: Optional[BTRSheetOut] = None
+    error: Optional[str] = None
+
+
+class UnclaimedTruckOut(BaseModel):
+    """A truck with a registered anchor and no worksheet in this workbook.
+
+    ADR-411 D6: a workbook is the whole fleet at once, so a truck missing from it
+    is information. These are the candidates offered for an unmatched worksheet
+    before the create-a-truck path.
+    """
+    truck_id: UUID
+    truck_name: str
+    amazon_anchor_lat: float
+    amazon_anchor_lng: float
+    distance_m: Optional[float] = None
+
+
+class WorkbookPreviewOut(BaseModel):
+    """A whole workbook: one entry per worksheet, plus the fleet-level view."""
+    sheets: list[WorkbookSheetOut] = []
+    # Trucks registered at an anchor that no worksheet in this workbook claims.
+    unclaimed_trucks: list[UnclaimedTruckOut] = []
+    parsed: int = 0
+    failed: int = 0
 
 
 class BTRSheetSaved(BaseModel):
@@ -324,6 +363,165 @@ async def preview_btr_sheet(
     )
 
     return _to_out(sheet, _check_dsp(db, caller.company_id, sheet.dsp), truck_match)
+
+
+def _unclaimed_trucks(
+    db: Session,
+    company_id: UUID,
+    matched_truck_ids: set[UUID],
+    entries: list["WorkbookSheetOut"],
+) -> list["UnclaimedTruckOut"]:
+    """Registered trucks that no worksheet in this workbook claimed — ADR-411 D6.
+
+    A workbook is the whole fleet at once, so a truck absent from it is
+    information: an anchor that moved looks exactly like a new truck until you
+    can see every sheet together. These are offered as candidates for an
+    unmatched worksheet BEFORE the create-a-truck path.
+
+    `distance_m` is present only when exactly one worksheet is unmatched, and it
+    describes the candidate — it never selects one. Auto-adopting on proximity
+    would rewrite a truck's identity on a guess, and the wrong guess mis-files
+    that truck's totes every morning after (D6).
+    """
+    registered = (
+        db.query(Truck)
+        .filter(
+            Truck.company_id == company_id,
+            Truck.is_active.is_(True),
+            Truck.amazon_anchor_lat.isnot(None),
+            Truck.amazon_anchor_lng.isnot(None),
+        )
+        .all()
+    )
+    unclaimed = [t for t in registered if t.id not in matched_truck_ids]
+    if not unclaimed:
+        return []
+
+    # Only describe a distance when the pairing is unambiguous on both sides.
+    orphan_anchors = [
+        (e.sheet.amazon_anchor_lat, e.sheet.amazon_anchor_lng)
+        for e in entries
+        if e.sheet is not None
+        and e.sheet.truck_match is None
+        and e.sheet.amazon_anchor_lat is not None
+        and e.sheet.amazon_anchor_lng is not None
+    ]
+    lone = orphan_anchors[0] if len(orphan_anchors) == 1 else None
+
+    return [
+        UnclaimedTruckOut(
+            truck_id=t.id,
+            truck_name=t.name,
+            amazon_anchor_lat=t.amazon_anchor_lat,
+            amazon_anchor_lng=t.amazon_anchor_lng,
+            distance_m=(
+                round(haversine_m(t.amazon_anchor_lat, t.amazon_anchor_lng, *lone), 1)
+                if lone is not None else None
+            ),
+        )
+        for t in sorted(unclaimed, key=lambda t: t.name)
+    ]
+
+
+@router.post("/preview-workbook", response_model=WorkbookPreviewOut)
+async def preview_btr_workbook(
+    file: UploadFile = File(...),
+    caller: Employee = Depends(get_caller_employee),
+    _: dict = Depends(_allow_ingest),
+    db: Session = Depends(get_db),
+):
+    """Parse a whole .xlsx workbook — one worksheet per truck. **Writes nothing.**
+
+    ADR-411 D3: a bad worksheet does not sink the good ones. Each entry is either
+    a parsed sheet or an error naming the worksheet; five import while the sixth
+    reports. ADR-290 D6's DSP refusal still applies, scoped per worksheet so a
+    foreign sheet no longer blocks the whole morning's fleet.
+
+    Confirmation stays per-truck (D4): the client confirms each sheet in turn.
+    """
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in _XLSX_EXTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload an .xlsx workbook. For a single sheet use /preview.",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File is too large.",
+        )
+
+    try:
+        sheets = XLSXBTRIngestor(content).ingest()
+    except Exception:
+        # Dim 6: never surface the parser's exception text — it carries file
+        # paths and library internals.
+        logger.warning(
+            "btr_workbook_parse_failed",
+            extra={"company_id": str(caller.company_id)},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Could not read that workbook. Check it is a BTR export.",
+        )
+
+    if not sheets:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="That workbook has no worksheets.",
+        )
+    if len(sheets) > _MAX_WORKSHEETS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"That workbook has more than {_MAX_WORKSHEETS} worksheets.",
+        )
+
+    out: list[WorkbookSheetOut] = []
+    matched_truck_ids: set[UUID] = set()
+
+    for idx, sheet in enumerate(sheets, start=1):
+        label = sheet.btr_loading_zone or f"sheet {idx}"
+
+        if not sheet.routes:
+            out.append(WorkbookSheetOut(
+                worksheet=label,
+                error="No routes found on this worksheet.",
+            ))
+            continue
+
+        # D3 — per-worksheet DSP refusal, not per-workbook.
+        mismatch = _check_dsp(db, caller.company_id, sheet.dsp)
+        if mismatch:
+            out.append(WorkbookSheetOut(worksheet=label, error=mismatch))
+            continue
+
+        matched = resolve_truck_by_anchor(
+            db, caller.company_id, sheet.amazon_anchor_lat, sheet.amazon_anchor_lng,
+        )
+        if matched is not None:
+            matched_truck_ids.add(matched.id)
+
+        out.append(WorkbookSheetOut(
+            worksheet=label,
+            sheet=_to_out(
+                sheet,
+                None,
+                TruckMatchOut(truck_id=matched.id, truck_name=matched.name)
+                if matched is not None else None,
+            ),
+        ))
+
+    return WorkbookPreviewOut(
+        sheets=out,
+        unclaimed_trucks=_unclaimed_trucks(db, caller.company_id, matched_truck_ids, out),
+        parsed=sum(1 for e in out if e.sheet is not None),
+        failed=sum(1 for e in out if e.error is not None),
+    )
 
 
 @router.post("/confirm", response_model=BTRSheetSaved,
